@@ -15,14 +15,21 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Plus, Search, Eye, Wallet, IndianRupee, TrendingUp, Clock, AlertCircle, RefreshCcw } from 'lucide-react';
 import { LOCATIONS } from '@/data/yards';
-import { format } from 'date-fns';
+import { format } from '@/lib/dateFormat';
 import type { MarketFee } from '@shared/schema';
 
 export default function FeeCollection() {
   const [search, setSearch] = useState('');
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
+  const [viewEntry, setViewEntry] = useState<MarketFee | null>(null);
 
   const { data: marketFees, isLoading, isError, refetch } = useQuery<MarketFee[]>({
     queryKey: ['/api/marketfees'],
@@ -208,7 +215,13 @@ export default function FeeCollection() {
                           <TableCell>{entry.paymentMode}</TableCell>
                           <TableCell className="text-muted-foreground text-xs">{entry.locationName}</TableCell>
                           <TableCell>
-                            <Button variant="ghost" size="icon" data-testid={`button-view-${entry.id}`}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setViewEntry(entry)}
+                              data-testid={`button-view-${entry.id}`}
+                              aria-label="View entry"
+                            >
                               <Eye className="h-4 w-4" />
                             </Button>
                           </TableCell>
@@ -221,6 +234,65 @@ export default function FeeCollection() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog open={!!viewEntry} onOpenChange={(open) => !open && setViewEntry(null)}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Market Fee Entry</DialogTitle>
+            </DialogHeader>
+            {viewEntry && (
+              <div className="grid gap-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Receipt No</span>
+                  <span className="font-mono">{viewEntry.receiptNo}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Date</span>
+                  <span>{format(new Date(viewEntry.entryDate), 'dd MMM yyyy')}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Type</span>
+                  <Badge variant={viewEntry.entryType === 'Import' ? 'default' : 'secondary'}>
+                    {viewEntry.entryType}
+                  </Badge>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Trader</span>
+                  <span className="font-medium">{viewEntry.traderName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Commodity</span>
+                  <span>{viewEntry.commodity}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Quantity</span>
+                  <span>{viewEntry.quantity} {viewEntry.unit}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Rate</span>
+                  <span>₹{viewEntry.ratePerUnit?.toLocaleString()}/unit</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Total Value</span>
+                  <span>₹{viewEntry.totalValue.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between pt-2 border-t font-semibold">
+                  <span>Market Fee</span>
+                  <span className="text-accent">₹{viewEntry.marketFee.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Location</span>
+                  <span>{viewEntry.locationName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Payment</span>
+                  <span>{viewEntry.paymentMode}</span>
+                </div>
+                <Button variant="outline" size="sm" className="mt-2" onClick={() => setViewEntry(null)}>Close</Button>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </AppShell>
   );

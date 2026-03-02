@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -90,14 +91,20 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
+  const host = process.env.HOST || "0.0.0.0";
+
+  function onListen() {
+    log(`serving on http://${host === "0.0.0.0" ? "localhost" : host}:${port}`);
+  }
+
+  httpServer.once("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOTSUP" && host === "0.0.0.0") {
+      log("Binding to 0.0.0.0 not supported, trying 127.0.0.1...");
+      httpServer.listen(port, "127.0.0.1", onListen);
+    } else {
+      throw err;
+    }
+  });
+
+  httpServer.listen(port, host, onListen);
 })();

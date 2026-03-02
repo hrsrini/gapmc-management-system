@@ -15,7 +15,7 @@ import {
   Wallet,
   UserPlus
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { format } from '@/lib/dateFormat';
 import type { ActivityLog } from '@shared/schema';
 
 interface Stats {

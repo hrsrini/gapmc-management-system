@@ -1,3 +1,4 @@
+import { useLayoutEffect, useEffect } from 'react';
 import { useLocation, Link } from 'wouter';
 import {
   Sidebar,
@@ -9,7 +10,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarHeader,
-  SidebarFooter,
 } from '@/components/ui/sidebar';
 import { 
   LayoutDashboard, 
@@ -24,10 +24,7 @@ import {
   PlusCircle,
   BookOpen,
   Leaf,
-  PanelLeftClose
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { useSidebar } from '@/components/ui/sidebar';
 
 const menuItems = [
   {
@@ -68,9 +65,50 @@ const menuItems = [
   },
 ];
 
+const SIDEBAR_CONTENT_SELECTOR = '[data-sidebar="content"]';
+const SIDEBAR_SCROLL_KEY = 'gapmc_sidebar_scroll';
+
 export function AppSidebar() {
   const [location] = useLocation();
-  const { toggleSidebar } = useSidebar();
+
+  // Save sidebar scroll position to sessionStorage (survives unmount on route change)
+  useEffect(() => {
+    const el = document.querySelector(SIDEBAR_CONTENT_SELECTOR);
+    if (!el) return;
+    const onScroll = () => {
+      try {
+        sessionStorage.setItem(SIDEBAR_SCROLL_KEY, String(el.scrollTop));
+      } catch (_) {}
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Restore sidebar scroll position when this sidebar mounts (after route change)
+  useLayoutEffect(() => {
+    const saved = (() => {
+      try {
+        return sessionStorage.getItem(SIDEBAR_SCROLL_KEY);
+      } catch {
+        return null;
+      }
+    })();
+    if (saved === null) return;
+    const top = parseInt(saved, 10);
+    if (!Number.isFinite(top) || top <= 0) return;
+
+    const el = document.querySelector(SIDEBAR_CONTENT_SELECTOR);
+    if (el) {
+      el.scrollTop = top;
+    } else {
+      // Sidebar content may not be in DOM yet; restore on next frame
+      const id = requestAnimationFrame(() => {
+        const el2 = document.querySelector(SIDEBAR_CONTENT_SELECTOR);
+        if (el2) el2.scrollTop = top;
+      });
+      return () => cancelAnimationFrame(id);
+    }
+  }, [location]);
 
   return (
     <Sidebar className="border-r border-sidebar-border">
@@ -120,19 +158,6 @@ export function AppSidebar() {
           </SidebarGroup>
         ))}
       </SidebarContent>
-
-      <SidebarFooter className="p-4 border-t border-sidebar-border">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={toggleSidebar}
-          className="w-full justify-start text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-          data-testid="button-collapse-sidebar"
-        >
-          <PanelLeftClose className="h-4 w-4 mr-2" />
-          <span>Collapse</span>
-        </Button>
-      </SidebarFooter>
     </Sidebar>
   );
 }

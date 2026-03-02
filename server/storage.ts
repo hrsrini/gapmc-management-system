@@ -291,4 +291,10 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+// Always use database. DATABASE_URL is required; in-memory storage is disabled.
+if (!process.env.DATABASE_URL) {
+  throw new Error(
+    "DATABASE_URL is required. Add it to .env (see .env.example). In-memory storage is disabled."
+  );
+}
+export const storage: IStorage = new (await import("./db-storage")).DbStorage();

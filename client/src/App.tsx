@@ -10,9 +10,11 @@ import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import RentInvoiceList from "@/pages/rent/RentInvoiceList";
 import RentInvoiceForm from "@/pages/rent/RentInvoiceForm";
+import RentInvoiceEditPage from "@/pages/rent/RentInvoiceEditPage";
 import RentReports from "@/pages/rent/RentReports";
 import TraderList from "@/pages/traders/TraderList";
 import TraderForm from "@/pages/traders/TraderForm";
+import TraderEditPage from "@/pages/traders/TraderEditPage";
 import TraderAgreements from "@/pages/traders/TraderAgreements";
 import FeeCollection from "@/pages/market-fee/FeeCollection";
 import ImportExport from "@/pages/market-fee/ImportExport";
@@ -35,6 +37,9 @@ function Router() {
       <Route path="/rent/new">
         <ProtectedRoute><RentInvoiceForm /></ProtectedRoute>
       </Route>
+      <Route path="/rent/edit/:id">
+        <ProtectedRoute><RentInvoiceEditPage /></ProtectedRoute>
+      </Route>
       <Route path="/rent/reports">
         <ProtectedRoute><RentReports /></ProtectedRoute>
       </Route>
@@ -43,6 +48,9 @@ function Router() {
       </Route>
       <Route path="/traders/new">
         <ProtectedRoute><TraderForm /></ProtectedRoute>
+      </Route>
+      <Route path="/traders/edit/:id">
+        <ProtectedRoute><TraderEditPage /></ProtectedRoute>
       </Route>
       <Route path="/traders/agreements">
         <ProtectedRoute><TraderAgreements /></ProtectedRoute>

@@ -20,33 +20,40 @@ import { UserPlus, Save, X, Check } from 'lucide-react';
 import { YARDS, COMMODITIES } from '@/data/yards';
 import { Badge } from '@/components/ui/badge';
 import { apiRequest, queryClient } from '@/lib/queryClient';
+import type { Trader } from '@shared/schema';
 
-export default function TraderForm() {
+interface TraderFormProps {
+  traderId?: string;
+  initialData?: Trader | null;
+}
+
+export default function TraderForm({ traderId, initialData }: TraderFormProps = {}) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const isEdit = !!traderId && !!initialData;
 
-  const [applicantType, setApplicantType] = useState<string>('Individual');
-  const [name, setName] = useState('');
+  const [applicantType, setApplicantType] = useState<string>(initialData?.type ?? 'Individual');
+  const [name, setName] = useState(initialData?.name ?? '');
   const [proprietorName, setProprietorName] = useState('');
-  const [firmName, setFirmName] = useState('');
-  const [residentialAddress, setResidentialAddress] = useState('');
-  const [businessAddress, setBusinessAddress] = useState('');
-  const [mobile, setMobile] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
-  const [aadhaar, setAadhaar] = useState('');
-  const [pan, setPan] = useState('');
-  const [gst, setGst] = useState('');
-  const [epic, setEpic] = useState('');
-  const [bankName, setBankName] = useState('');
-  const [accountNumber, setAccountNumber] = useState('');
-  const [ifsc, setIfsc] = useState('');
-  const [branchName, setBranchName] = useState('');
-  const [yardId, setYardId] = useState<string>('');
-  const [premises, setPremises] = useState('');
-  const [premisesType, setPremisesType] = useState<string>('Stall');
-  const [registrationType, setRegistrationType] = useState<string>('Temporary');
-  const [selectedCommodities, setSelectedCommodities] = useState<string[]>([]);
+  const [firmName, setFirmName] = useState(initialData?.firmName ?? '');
+  const [residentialAddress, setResidentialAddress] = useState(initialData?.residentialAddress ?? '');
+  const [businessAddress, setBusinessAddress] = useState(initialData?.businessAddress ?? '');
+  const [mobile, setMobile] = useState(initialData?.mobile ?? '');
+  const [phone, setPhone] = useState(initialData?.phone ?? '');
+  const [email, setEmail] = useState(initialData?.email ?? '');
+  const [aadhaar, setAadhaar] = useState(initialData?.aadhaar ?? '');
+  const [pan, setPan] = useState(initialData?.pan ?? '');
+  const [gst, setGst] = useState(initialData?.gst ?? '');
+  const [epic, setEpic] = useState(initialData?.epicVoterId ?? '');
+  const [bankName, setBankName] = useState(initialData?.bankName ?? '');
+  const [accountNumber, setAccountNumber] = useState(initialData?.accountNumber ?? '');
+  const [ifsc, setIfsc] = useState(initialData?.ifscCode ?? '');
+  const [branchName, setBranchName] = useState(initialData?.branchName ?? '');
+  const [yardId, setYardId] = useState<string>(initialData?.yardId?.toString() ?? '');
+  const [premises, setPremises] = useState(initialData?.premises ?? '');
+  const [premisesType, setPremisesType] = useState<string>(initialData?.premisesType ?? 'Stall');
+  const [registrationType, setRegistrationType] = useState<string>(initialData?.registrationType ?? 'Temporary');
+  const [selectedCommodities, setSelectedCommodities] = useState<string[]>(initialData?.commodities ?? []);
 
   const selectedYard = YARDS.find(y => y.id.toString() === yardId);
 
@@ -63,6 +70,23 @@ export default function TraderForm() {
         variant: 'destructive' 
       });
       console.error('Trader creation error:', error);
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (data: any) => apiRequest('PUT', `/api/traders/${traderId}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/traders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/traders', traderId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
+    },
+    onError: (error) => {
+      toast({ 
+        title: 'Error', 
+        description: 'Failed to update trader. Please check all required fields.',
+        variant: 'destructive' 
+      });
+      console.error('Trader update error:', error);
     },
   });
 
@@ -84,10 +108,7 @@ export default function TraderForm() {
       return;
     }
 
-    const assetId = `TRD-${selectedYard?.code || 'YARD'}-${Date.now().toString().slice(-6)}`;
-
-    createMutation.mutate({
-      assetId,
+    const payload = {
       name,
       firmName: firmName || undefined,
       type: applicantType as 'Individual' | 'Firm' | 'Pvt Ltd' | 'Public Ltd',
@@ -111,28 +132,45 @@ export default function TraderForm() {
       registrationType: registrationType as 'Temporary' | 'Permanent',
       commodities: selectedCommodities.length > 0 ? selectedCommodities : ['General'],
       status: isDraft ? 'Pending' : 'Active',
-      rentAmount: 5000,
-      securityDeposit: 10000,
-    }, {
-      onSuccess: () => {
-        toast({
-          title: isDraft ? 'Draft Saved' : 'Registration Submitted',
-          description: isDraft ? 'Trader saved as draft' : 'Trader registration submitted successfully',
-        });
-        setLocation('/traders');
-      },
-    });
+      rentAmount: initialData?.rentAmount ?? 5000,
+      securityDeposit: initialData?.securityDeposit ?? 10000,
+    };
+
+    if (isEdit && traderId) {
+      updateMutation.mutate(payload, {
+        onSuccess: () => {
+          toast({
+            title: isDraft ? 'Draft Saved' : 'Trader Updated',
+            description: isDraft ? 'Trader draft updated' : 'Trader updated successfully',
+          });
+          setLocation('/traders');
+        },
+      });
+    } else {
+      const assetId = `TRD-${selectedYard?.code || 'YARD'}-${Date.now().toString().slice(-6)}`;
+      createMutation.mutate({ ...payload, assetId }, {
+        onSuccess: () => {
+          toast({
+            title: isDraft ? 'Draft Saved' : 'Registration Submitted',
+            description: isDraft ? 'Trader saved as draft' : 'Trader registration submitted successfully',
+          });
+          setLocation('/traders');
+        },
+      });
+    }
   };
 
+  const isPending = createMutation.isPending || updateMutation.isPending;
+
   return (
-    <AppShell breadcrumbs={[{ label: 'Traders', href: '/traders' }, { label: 'Register New' }]}>
+    <AppShell breadcrumbs={[{ label: 'Traders', href: '/traders' }, { label: isEdit ? 'Edit Trader' : 'Register New' }]}>
       <div className="space-y-6 max-w-4xl">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <UserPlus className="h-6 w-6 text-primary" />
-            Register New Trader
+            {isEdit ? 'Edit Trader' : 'Register New Trader'}
           </h1>
-          <p className="text-muted-foreground">Add a new trader to the system</p>
+          <p className="text-muted-foreground">{isEdit ? 'Update trader details' : 'Add a new trader to the system'}</p>
         </div>
 
         <Card>
@@ -435,7 +473,7 @@ export default function TraderForm() {
           <Button 
             variant="secondary" 
             onClick={() => handleSubmit(true)} 
-            disabled={createMutation.isPending}
+            disabled={isPending}
             data-testid="button-save-draft"
           >
             <Save className="h-4 w-4 mr-2" />
@@ -443,7 +481,7 @@ export default function TraderForm() {
           </Button>
           <Button 
             onClick={() => handleSubmit(false)} 
-            disabled={createMutation.isPending}
+            disabled={isPending}
             data-testid="button-submit"
           >
             <Check className="h-4 w-4 mr-2" />

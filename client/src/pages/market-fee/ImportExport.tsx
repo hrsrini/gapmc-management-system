@@ -18,7 +18,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { ArrowLeftRight, Save, Printer, X, AlertCircle } from 'lucide-react';
 import { LOCATIONS, COMMODITIES, VEHICLE_TYPES, UNITS } from '@/data/yards';
-import { format } from 'date-fns';
+import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Trader } from '@shared/schema';
 

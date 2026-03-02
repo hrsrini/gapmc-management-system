@@ -1,0 +1,155 @@
+-- Creates only the gapmc schema and GAPMC app tables. Does not modify or drop any existing tables.
+CREATE SCHEMA IF NOT EXISTS gapmc;
+
+CREATE TABLE IF NOT EXISTS gapmc.traders (
+  id text PRIMARY KEY,
+  asset_id text NOT NULL,
+  name text NOT NULL,
+  firm_name text,
+  type text NOT NULL,
+  mobile text NOT NULL,
+  phone text,
+  email text NOT NULL,
+  residential_address text,
+  business_address text,
+  aadhaar text NOT NULL,
+  pan text NOT NULL,
+  gst text,
+  epic_voter_id text,
+  bank_name text,
+  account_number text,
+  ifsc_code text,
+  branch_name text,
+  yard_id integer NOT NULL,
+  yard_name text NOT NULL,
+  premises text NOT NULL,
+  premises_type text NOT NULL,
+  registration_type text NOT NULL,
+  commodities jsonb NOT NULL,
+  status text NOT NULL,
+  agreement_start text,
+  agreement_end text,
+  rent_amount double precision NOT NULL,
+  security_deposit double precision NOT NULL,
+  created_at text,
+  updated_at text
+);
+
+CREATE TABLE IF NOT EXISTS gapmc.invoices (
+  id text PRIMARY KEY,
+  trader_id text NOT NULL,
+  trader_name text NOT NULL,
+  premises text NOT NULL,
+  yard text NOT NULL,
+  yard_id integer NOT NULL,
+  month text NOT NULL,
+  invoice_date text NOT NULL,
+  base_rent double precision NOT NULL,
+  cgst double precision NOT NULL,
+  sgst double precision NOT NULL,
+  interest double precision NOT NULL,
+  total double precision NOT NULL,
+  tds_applicable boolean NOT NULL,
+  tds_amount double precision NOT NULL,
+  status text NOT NULL,
+  notes text,
+  created_at text,
+  updated_at text
+);
+
+CREATE TABLE IF NOT EXISTS gapmc.receipts (
+  id text PRIMARY KEY,
+  receipt_no text NOT NULL,
+  receipt_date text NOT NULL,
+  type text NOT NULL,
+  trader_id text NOT NULL,
+  trader_name text NOT NULL,
+  head text NOT NULL,
+  amount double precision NOT NULL,
+  cgst double precision,
+  sgst double precision,
+  interest double precision,
+  security_deposit double precision,
+  tds_amount double precision,
+  total double precision NOT NULL,
+  payment_mode text NOT NULL,
+  cheque_no text,
+  cheque_bank text,
+  cheque_date text,
+  transaction_ref text,
+  narration text,
+  yard_id integer NOT NULL,
+  yard_name text NOT NULL,
+  issued_by text NOT NULL,
+  status text NOT NULL,
+  created_at text,
+  updated_at text
+);
+
+CREATE TABLE IF NOT EXISTS gapmc.market_fees (
+  id text PRIMARY KEY,
+  receipt_no text NOT NULL,
+  entry_date text NOT NULL,
+  entry_type text NOT NULL,
+  trader_id text NOT NULL,
+  trader_name text NOT NULL,
+  license_no text NOT NULL,
+  address text,
+  gst_pan text,
+  commodity text NOT NULL,
+  commodity_type text NOT NULL,
+  quantity double precision NOT NULL,
+  unit text NOT NULL,
+  rate_per_unit double precision NOT NULL,
+  total_value double precision NOT NULL,
+  market_fee double precision NOT NULL,
+  vehicle_type text NOT NULL,
+  vehicle_number text NOT NULL,
+  location_id integer NOT NULL,
+  location_name text NOT NULL,
+  payment_mode text NOT NULL,
+  created_at text,
+  updated_at text
+);
+
+CREATE TABLE IF NOT EXISTS gapmc.agreements (
+  id text PRIMARY KEY,
+  agreement_id text NOT NULL,
+  trader_id text NOT NULL,
+  trader_name text NOT NULL,
+  premises text NOT NULL,
+  yard_id integer NOT NULL,
+  yard_name text NOT NULL,
+  start_date text NOT NULL,
+  end_date text NOT NULL,
+  rent_amount double precision NOT NULL,
+  security_deposit double precision NOT NULL,
+  status text NOT NULL,
+  created_at text,
+  updated_at text
+);
+
+CREATE TABLE IF NOT EXISTS gapmc.stock_returns (
+  id text PRIMARY KEY,
+  trader_id text NOT NULL,
+  trader_name text NOT NULL,
+  period text NOT NULL,
+  commodity text NOT NULL,
+  opening_balance double precision NOT NULL,
+  locally_procured double precision NOT NULL,
+  purchased_from_trader double precision NOT NULL,
+  sales double precision NOT NULL,
+  closing_balance double precision NOT NULL,
+  status text NOT NULL,
+  created_at text,
+  updated_at text
+);
+
+CREATE TABLE IF NOT EXISTS gapmc.activity_logs (
+  id text PRIMARY KEY,
+  action text NOT NULL,
+  module text NOT NULL,
+  "user" text NOT NULL,
+  timestamp text NOT NULL,
+  details text
+);

@@ -19,7 +19,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { PlusCircle, Save, Printer, X, AlertCircle } from 'lucide-react';
 import { RECEIPT_HEADS } from '@/data/yards';
-import { format } from 'date-fns';
+import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Trader } from '@shared/schema';
 

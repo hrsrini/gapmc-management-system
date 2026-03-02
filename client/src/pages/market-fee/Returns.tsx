@@ -15,11 +15,11 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import { ClipboardList, Save, Send, AlertCircle } from 'lucide-react';
+import { ClipboardList, Save, Send, AlertCircle, Database } from 'lucide-react';
 import { COMMODITIES } from '@/data/yards';
-import { format } from 'date-fns';
+import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
-import type { Trader } from '@shared/schema';
+import type { Trader, StockReturn } from '@shared/schema';
 
 interface ReturnEntry {
   commodity: string;
@@ -40,13 +40,60 @@ export default function Returns() {
     queryKey: ['/api/traders'],
   });
 
+  const { data: submittedReturns = [], isLoading: returnsLoading } = useQuery<StockReturn[]>({
+    queryKey: ['/api/stockreturns'],
+  });
+
+  const seedSampleMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/seed-sample-stock-returns', { method: 'POST', credentials: 'include' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error || res.statusText || 'Failed to load sample data');
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/stockreturns'] });
+      toast({ title: 'Sample data loaded', description: 'Sample stock returns have been added.' });
+    },
+    onError: (err: Error) => {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    },
+  });
+
   const createMutation = useMutation({
-    mutationFn: (data: any) => apiRequest('POST', '/api/stockreturns', data),
+    mutationFn: async (data: unknown) => {
+      try {
+        const res = await apiRequest('POST', '/api/stockreturns', data);
+        return await res.json();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        const serverError = msg.includes(':') ? (() => {
+          try {
+            const jsonStr = msg.replace(/^\d+:\s*/, '').trim();
+            const body = jsonStr.startsWith('{') ? JSON.parse(jsonStr) : null;
+            return body?.error || body?.message || null;
+          } catch {
+            return null;
+          }
+        })() : null;
+        throw new Error(serverError || msg || 'Failed to submit returns');
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/stockreturns'] });
     },
-    onError: () => {
-      toast({ title: 'Error', description: 'Failed to submit returns', variant: 'destructive' });
+    onError: (err: Error) => {
+      const msg = err?.message || 'Failed to submit returns';
+      const isNetworkError = msg === 'Failed to fetch' || msg.includes('NetworkError');
+      toast({
+        title: isNetworkError ? 'Connection error' : 'Validation Error',
+        description: isNetworkError
+          ? 'Cannot reach server. Make sure the app is running (npm run dev) and try again.'
+          : msg,
+        variant: 'destructive',
+      });
     },
   });
 
@@ -67,13 +114,26 @@ export default function Returns() {
 
   const addCommodity = (commodity: string) => {
     if (!entries.find(e => e.commodity === commodity)) {
+      const prevClosing =
+        selectedTraderId && period
+          ? submittedReturns
+              .filter(
+                (r) =>
+                  r.traderId === selectedTraderId &&
+                  r.commodity === commodity &&
+                  r.period &&
+                  r.period < period
+              )
+              .sort((a, b) => (b.period ?? "").localeCompare(a.period ?? ""))[0]?.closingBalance
+          : undefined;
+      const opening = typeof prevClosing === "number" && !Number.isNaN(prevClosing) ? prevClosing : 0;
       setEntries(prev => [...prev, {
         commodity,
-        openingBalance: 0,
+        openingBalance: opening,
         locallyProcured: 0,
         purchasedFromTrader: 0,
         sales: 0,
-        closingBalance: 0,
+        closingBalance: opening,
       }]);
     }
   };
@@ -87,15 +147,31 @@ export default function Returns() {
       });
       return;
     }
+    if (!isDraft && entries.length === 0) {
+      toast({
+        title: 'Validation Error',
+        description: 'Add at least one commodity before submitting returns',
+        variant: 'destructive',
+      });
+      return;
+    }
 
-    createMutation.mutate({
-      traderId: selectedTraderId,
-      traderName: selectedTrader?.name || '',
-      period,
-      entries,
-      status: isDraft ? 'Draft' : 'Submitted',
+    const payload = {
+      traderId: String(selectedTraderId),
+      traderName: String(selectedTrader?.name ?? ''),
+      period: String(period || format(new Date(), 'yyyy-MM')),
+      entries: entries.map((e) => ({
+        commodity: String(e.commodity),
+        openingBalance: Number(e.openingBalance) || 0,
+        locallyProcured: Number(e.locallyProcured) || 0,
+        purchasedFromTrader: Number(e.purchasedFromTrader) || 0,
+        sales: Number(e.sales) || 0,
+        closingBalance: Number(e.closingBalance) || 0,
+      })),
+      status: (isDraft ? 'Draft' : 'Submitted') as const,
       submittedAt: new Date().toISOString(),
-    }, {
+    };
+    createMutation.mutate(payload, {
       onSuccess: () => {
         toast({
           title: isDraft ? 'Draft Saved' : 'Returns Submitted',
@@ -128,6 +204,69 @@ export default function Returns() {
           </h1>
           <p className="text-muted-foreground">Submit periodic stock returns for traders</p>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Submitted returns</CardTitle>
+            <CardDescription>Previously submitted stock returns (sample and your entries)</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {returnsLoading ? (
+              <Skeleton className="h-24 w-full" />
+            ) : submittedReturns.length === 0 ? (
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 py-4">
+                <p className="text-sm text-muted-foreground">No submitted returns yet. Submit one using the form below, or load sample data.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => seedSampleMutation.mutate()}
+                  disabled={seedSampleMutation.isPending}
+                  data-testid="button-load-sample-returns"
+                >
+                  <Database className="h-4 w-4 mr-2" />
+                  {seedSampleMutation.isPending ? 'Loading…' : 'Load sample data'}
+                </Button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Trader</TableHead>
+                      <TableHead>Period</TableHead>
+                      <TableHead>Commodity</TableHead>
+                      <TableHead className="text-right">Opening</TableHead>
+                      <TableHead className="text-right">Locally procured</TableHead>
+                      <TableHead className="text-right">Purchased</TableHead>
+                      <TableHead className="text-right">Sales</TableHead>
+                      <TableHead className="text-right">Closing</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {submittedReturns.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="font-medium">{r.traderName}</TableCell>
+                        <TableCell>{r.period}</TableCell>
+                        <TableCell>{r.commodity}</TableCell>
+                        <TableCell className="text-right">{Number(r.openingBalance ?? 0)}</TableCell>
+                        <TableCell className="text-right">{Number(r.locallyProcured ?? 0)}</TableCell>
+                        <TableCell className="text-right">{Number(r.purchasedFromTrader ?? 0)}</TableCell>
+                        <TableCell className="text-right">{Number(r.sales ?? 0)}</TableCell>
+                        <TableCell className="text-right font-medium">{Number(r.closingBalance ?? 0)}</TableCell>
+                        <TableCell>
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded ${r.status === 'Submitted' ? 'bg-accent/10 text-accent' : 'bg-muted text-muted-foreground'}`}>
+                            {r.status}
+                          </span>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
@@ -221,8 +360,9 @@ export default function Returns() {
                             <Input
                               type="number"
                               value={entry.openingBalance}
-                              readOnly
-                              className="w-24 text-right bg-muted"
+                              onChange={(e) => updateEntry(index, 'openingBalance', Number(e.target.value) || 0)}
+                              className="w-24 text-right"
+                              data-testid={`input-opening-balance-${index}`}
                             />
                           </TableCell>
                           <TableCell>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,6 +15,12 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { 
   Plus, 
   Search, 
@@ -26,7 +32,7 @@ import {
   RefreshCcw
 } from 'lucide-react';
 import { YARDS } from '@/data/yards';
-import { format } from 'date-fns';
+import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import type { Invoice } from '@shared/schema';
@@ -40,9 +46,11 @@ const statusColors: Record<string, string> = {
 
 export default function RentInvoiceList() {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [search, setSearch] = useState('');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null);
 
   const { data: invoices, isLoading, isError, refetch } = useQuery<Invoice[]>({
     queryKey: ['/api/invoices'],
@@ -203,10 +211,22 @@ export default function RentInvoiceList() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center justify-end gap-1">
-                            <Button variant="ghost" size="icon" data-testid={`button-view-${invoice.id}`}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setViewInvoice(invoice)}
+                              data-testid={`button-view-${invoice.id}`}
+                              aria-label="View invoice"
+                            >
                               <Eye className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" size="icon" data-testid={`button-edit-${invoice.id}`}>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setLocation(`/rent/edit/${invoice.id}`)}
+                              data-testid={`button-edit-${invoice.id}`}
+                              aria-label="Edit invoice"
+                            >
                               <Pencil className="h-4 w-4" />
                             </Button>
                             <Button 
@@ -229,6 +249,73 @@ export default function RentInvoiceList() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog open={!!viewInvoice} onOpenChange={(open) => !open && setViewInvoice(null)}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Invoice {viewInvoice?.id}</DialogTitle>
+            </DialogHeader>
+            {viewInvoice && (
+              <div className="grid gap-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Trader</span>
+                  <span className="font-medium">{viewInvoice.traderName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Premises</span>
+                  <span>{viewInvoice.premises}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Yard</span>
+                  <span>{viewInvoice.yard}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Month</span>
+                  <span>{viewInvoice.month}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Invoice Date</span>
+                  <span>{format(new Date(viewInvoice.invoiceDate), 'dd MMM yyyy')}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Base Rent</span>
+                  <span>₹{viewInvoice.baseRent.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">CGST + SGST</span>
+                  <span>₹{(viewInvoice.cgst + viewInvoice.sgst).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Interest</span>
+                  <span>₹{viewInvoice.interest.toLocaleString()}</span>
+                </div>
+                {viewInvoice.tdsApplicable && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">TDS</span>
+                    <span>₹{viewInvoice.tdsAmount.toLocaleString()}</span>
+                  </div>
+                )}
+                <div className="flex justify-between pt-2 border-t font-semibold">
+                  <span>Total</span>
+                  <span>₹{viewInvoice.total.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Status</span>
+                  <Badge variant="outline" className={statusColors[viewInvoice.status]}>
+                    {viewInvoice.status}
+                  </Badge>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <Button variant="outline" size="sm" onClick={() => setViewInvoice(null)}>Close</Button>
+                  <Button size="sm" onClick={() => { setViewInvoice(null); setLocation(`/rent/edit/${viewInvoice.id}`); }} data-testid="button-edit-from-view">
+                    <Pencil className="h-4 w-4 mr-1" />
+                    Edit
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </AppShell>
   );

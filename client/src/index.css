@@ -241,3 +241,26 @@
     inset: -1px;
   }
 }
+
+/* Print: show only receipt content */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .receipt-print-content,
+  .receipt-print-content * {
+    visibility: visible;
+  }
+  .receipt-print-content {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none;
+    box-shadow: none;
+    border: 1px solid #000;
+  }
+  .receipt-print-content .no-print {
+    display: none !important;
+  }
+}

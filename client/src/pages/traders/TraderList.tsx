@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,6 +15,12 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Plus, Search, Eye, Pencil, Trash2, Users, AlertCircle, RefreshCcw } from 'lucide-react';
 import { YARDS } from '@/data/yards';
 import { apiRequest, queryClient } from '@/lib/queryClient';
@@ -29,10 +35,12 @@ const statusColors: Record<string, string> = {
 
 export default function TraderList() {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [search, setSearch] = useState('');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
+  const [viewTrader, setViewTrader] = useState<Trader | null>(null);
 
   const { data: traders, isLoading, isError, refetch } = useQuery<Trader[]>({
     queryKey: ['/api/traders'],
@@ -201,10 +209,22 @@ export default function TraderList() {
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center justify-end gap-1">
-                              <Button variant="ghost" size="icon" data-testid={`button-view-${trader.id}`}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setViewTrader(trader)}
+                                data-testid={`button-view-${trader.id}`}
+                                aria-label="View trader"
+                              >
                                 <Eye className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="icon" data-testid={`button-edit-${trader.id}`}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setLocation(`/traders/edit/${trader.id}`)}
+                                data-testid={`button-edit-${trader.id}`}
+                                aria-label="Edit trader"
+                              >
                                 <Pencil className="h-4 w-4" />
                               </Button>
                               <Button 
@@ -228,6 +248,59 @@ export default function TraderList() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog open={!!viewTrader} onOpenChange={(open) => !open && setViewTrader(null)}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Trader details</DialogTitle>
+            </DialogHeader>
+            {viewTrader && (
+              <div className="grid gap-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Asset ID</span>
+                  <span className="font-mono">{viewTrader.assetId}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Name</span>
+                  <span className="font-medium">{viewTrader.name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Firm / Type</span>
+                  <span>{viewTrader.firmName || viewTrader.type}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Yard</span>
+                  <span>{viewTrader.yardName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Premises</span>
+                  <span>{viewTrader.premises} ({viewTrader.premisesType})</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Mobile</span>
+                  <span>{viewTrader.mobile}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Email</span>
+                  <span>{viewTrader.email}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Status</span>
+                  <Badge variant="outline" className={statusColors[viewTrader.status]}>
+                    {viewTrader.status}
+                  </Badge>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <Button variant="outline" size="sm" onClick={() => setViewTrader(null)}>Close</Button>
+                  <Button size="sm" onClick={() => { setViewTrader(null); setLocation(`/traders/edit/${viewTrader.id}`); }} data-testid="button-edit-from-view">
+                    <Pencil className="h-4 w-4 mr-1" />
+                    Edit
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </AppShell>
   );

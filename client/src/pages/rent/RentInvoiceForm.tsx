@@ -18,22 +18,28 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { FileText, Save, X, Check, AlertCircle } from 'lucide-react';
-import { format } from 'date-fns';
+import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
-import type { Trader } from '@shared/schema';
+import type { Trader, Invoice } from '@shared/schema';
 
-export default function RentInvoiceForm() {
+interface RentInvoiceFormProps {
+  invoiceId?: string;
+  initialData?: Invoice | null;
+}
+
+export default function RentInvoiceForm({ invoiceId, initialData }: RentInvoiceFormProps = {}) {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const isEdit = !!invoiceId && !!initialData;
 
-  const [selectedTraderId, setSelectedTraderId] = useState<string>('');
-  const [invoiceDate, setInvoiceDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [billingMonth, setBillingMonth] = useState(format(new Date(), 'yyyy-MM'));
-  const [baseRent, setBaseRent] = useState<number>(0);
-  const [interest, setInterest] = useState<number>(0);
-  const [tdsApplicable, setTdsApplicable] = useState(false);
-  const [tdsAmount, setTdsAmount] = useState<number>(0);
-  const [notes, setNotes] = useState('');
+  const [selectedTraderId, setSelectedTraderId] = useState<string>(initialData?.traderId ?? '');
+  const [invoiceDate, setInvoiceDate] = useState(initialData?.invoiceDate ?? format(new Date(), 'yyyy-MM-dd'));
+  const [billingMonth, setBillingMonth] = useState(initialData?.month ?? format(new Date(), 'yyyy-MM'));
+  const [baseRent, setBaseRent] = useState<number>(initialData?.baseRent ?? 0);
+  const [interest, setInterest] = useState<number>(initialData?.interest ?? 0);
+  const [tdsApplicable, setTdsApplicable] = useState(!!initialData?.tdsApplicable);
+  const [tdsAmount, setTdsAmount] = useState<number>(initialData?.tdsAmount ?? 0);
+  const [notes, setNotes] = useState(initialData?.notes ?? '');
 
   const { data: traders, isLoading, isError } = useQuery<Trader[]>({
     queryKey: ['/api/traders'],
@@ -63,6 +69,23 @@ export default function RentInvoiceForm() {
     },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: (data: any) => apiRequest('PUT', `/api/invoices/${invoiceId}`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/invoices'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/invoices', invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ['/api/stats'] });
+    },
+    onError: (error) => {
+      toast({ 
+        title: 'Error', 
+        description: 'Failed to update invoice. Please check all fields.',
+        variant: 'destructive' 
+      });
+      console.error('Invoice update error:', error);
+    },
+  });
+
   const handleTraderChange = (traderId: string) => {
     setSelectedTraderId(traderId);
     const trader = (traders ?? []).find(t => t.id === traderId);
@@ -81,7 +104,7 @@ export default function RentInvoiceForm() {
       return;
     }
 
-    createMutation.mutate({
+    const payload = {
       traderId: selectedTraderId,
       traderName: selectedTrader.name,
       premises: selectedTrader.premises,
@@ -98,20 +121,36 @@ export default function RentInvoiceForm() {
       tdsAmount: tdsApplicable ? tdsAmount : 0,
       status: isDraft ? 'Draft' : 'Pending',
       notes: notes || undefined,
-    }, {
-      onSuccess: () => {
-        toast({
-          title: isDraft ? 'Draft Saved' : 'Invoice Generated',
-          description: isDraft ? 'Invoice saved as draft' : 'Invoice has been generated successfully',
-        });
-        setLocation('/rent');
-      },
-    });
+    };
+
+    if (isEdit && invoiceId) {
+      updateMutation.mutate(payload, {
+        onSuccess: () => {
+          toast({
+            title: isDraft ? 'Draft Saved' : 'Invoice Updated',
+            description: isDraft ? 'Invoice draft updated' : 'Invoice has been updated successfully',
+          });
+          setLocation('/rent');
+        },
+      });
+    } else {
+      createMutation.mutate(payload, {
+        onSuccess: () => {
+          toast({
+            title: isDraft ? 'Draft Saved' : 'Invoice Generated',
+            description: isDraft ? 'Invoice saved as draft' : 'Invoice has been generated successfully',
+          });
+          setLocation('/rent');
+        },
+      });
+    }
   };
+
+  const isPending = createMutation.isPending || updateMutation.isPending;
 
   if (isError) {
     return (
-      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: 'Create Invoice' }]}>
+      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: isEdit ? 'Edit Invoice' : 'Create Invoice' }]}>
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
@@ -123,14 +162,14 @@ export default function RentInvoiceForm() {
   }
 
   return (
-    <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: 'Create Invoice' }]}>
+    <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: isEdit ? 'Edit Invoice' : 'Create Invoice' }]}>
       <div className="space-y-6 max-w-4xl">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <FileText className="h-6 w-6 text-primary" />
-            Create Rent Invoice
+            {isEdit ? 'Edit Rent Invoice' : 'Create Rent Invoice'}
           </h1>
-          <p className="text-muted-foreground">Generate a new rent/tax invoice</p>
+          <p className="text-muted-foreground">{isEdit ? 'Update invoice details' : 'Generate a new rent/tax invoice'}</p>
         </div>
 
         <Card>
@@ -297,7 +336,7 @@ export default function RentInvoiceForm() {
           <Button 
             variant="secondary" 
             onClick={() => handleSubmit(true)} 
-            disabled={createMutation.isPending}
+            disabled={isPending}
             data-testid="button-save-draft"
           >
             <Save className="h-4 w-4 mr-2" />
@@ -305,11 +344,11 @@ export default function RentInvoiceForm() {
           </Button>
           <Button 
             onClick={() => handleSubmit(false)} 
-            disabled={createMutation.isPending}
+            disabled={isPending}
             data-testid="button-generate"
           >
             <Check className="h-4 w-4 mr-2" />
-            Generate Invoice
+            {isEdit ? 'Update Invoice' : 'Generate Invoice'}
           </Button>
         </div>
       </div>

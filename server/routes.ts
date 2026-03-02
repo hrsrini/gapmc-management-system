@@ -11,10 +11,61 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 
+/** Human-readable labels for common validation paths */
+const STOCK_RETURN_PATH_LABELS: Record<string, string> = {
+  traderId: "Trader",
+  traderName: "Trader name",
+  period: "Period",
+  entries: "Commodity entries",
+  status: "Status",
+  commodity: "Commodity",
+  openingBalance: "Opening balance",
+  locallyProcured: "Locally procured",
+  purchasedFromTrader: "Purchased from trader",
+  sales: "Sales",
+  closingBalance: "Closing balance",
+};
+
+/** Format Zod validation errors into a single user-friendly message */
+function formatZodError(zodError: z.ZodError, pathLabels?: Record<string, string>): string {
+  const labels = pathLabels ?? {};
+  const parts = zodError.errors.map((e) => {
+    const pathKey = e.path.join(".");
+    const pathParts = e.path.map((p, i) => {
+      const key = e.path.slice(0, i + 1).join(".");
+      return labels[key] ?? (typeof p === "number" ? `Entry ${p + 1}` : String(p));
+    });
+    const label = pathParts.length ? pathParts.join(" → ") : "Form";
+    return `${label}: ${e.message}`;
+  });
+  return parts.length === 1 ? parts[0]! : parts.join(". ");
+}
+
+function formatStockReturnValidationError(zodError: z.ZodError): string {
+  return formatZodError(zodError, STOCK_RETURN_PATH_LABELS);
+}
+
 const updateTraderSchema = insertTraderSchema.partial();
 const updateInvoiceSchema = insertInvoiceSchema.partial();
 const updateReceiptSchema = insertReceiptSchema.partial();
 const updateAgreementSchema = insertAgreementSchema.partial();
+
+const stockReturnEntrySchema = z.object({
+  commodity: z.string(),
+  openingBalance: z.coerce.number(),
+  locallyProcured: z.coerce.number(),
+  purchasedFromTrader: z.coerce.number(),
+  sales: z.coerce.number(),
+  closingBalance: z.coerce.number(),
+});
+const bulkStockReturnSchema = z.object({
+  traderId: z.string(),
+  traderName: z.string(),
+  period: z.string(),
+  entries: z.array(stockReturnEntrySchema),
+  status: z.enum(["Draft", "Submitted"]),
+  submittedAt: z.string().optional(),
+});
 
 export async function registerRoutes(
   httpServer: Server,
@@ -287,22 +338,78 @@ export async function registerRoutes(
     }
   });
 
+  const sampleStockReturns = [
+    { traderId: "TRD001", traderName: "Ramesh Naik", period: "2026-01", commodity: "Vegetables", openingBalance: 100, locallyProcured: 50, purchasedFromTrader: 20, sales: 120, closingBalance: 50, status: "Submitted" as const },
+    { traderId: "TRD001", traderName: "Ramesh Naik", period: "2026-01", commodity: "Fruits", openingBalance: 80, locallyProcured: 40, purchasedFromTrader: 15, sales: 90, closingBalance: 45, status: "Submitted" as const },
+    { traderId: "TRD003", traderName: "Santosh Kamat", period: "2026-01", commodity: "Vegetables", openingBalance: 60, locallyProcured: 30, purchasedFromTrader: 10, sales: 70, closingBalance: 30, status: "Submitted" as const },
+  ];
+
+  app.post("/api/seed-sample-stock-returns", async (_req, res) => {
+    try {
+      const existing = await storage.getStockReturns();
+      if (existing.length > 0) {
+        return res.status(200).json({ message: "Sample data already exists", count: existing.length });
+      }
+      const created = [];
+      for (const sr of sampleStockReturns) {
+        const one = await storage.createStockReturn(sr);
+        created.push(one);
+      }
+      res.status(201).json({ message: "Sample stock returns added", created: created.length });
+    } catch (error) {
+      console.error("Seed sample stock returns error:", error);
+      const msg = error instanceof Error ? error.message : "Failed to seed sample data";
+      res.status(500).json({ error: msg });
+    }
+  });
+
   app.post("/api/stockreturns", async (req, res) => {
     try {
-      const validatedData = insertStockReturnSchema.parse(req.body);
-      const stockReturn = await storage.createStockReturn(validatedData);
-      await storage.createActivityLog({
-        action: 'Stock Returns Submitted',
-        module: 'Market Fee',
-        user: 'Super Admin',
-        timestamp: new Date().toISOString(),
-      });
-      res.status(201).json(stockReturn);
+      const parsed = bulkStockReturnSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const message = formatStockReturnValidationError(parsed.error);
+        return res.status(400).json({
+          error: message,
+          details: parsed.error.errors,
+        });
+      }
+      const { traderId, traderName, period, entries, status } = parsed.data;
+      if (entries.length === 0 && status !== "Draft") {
+        return res.status(400).json({ error: "At least one commodity entry is required to submit" });
+      }
+      const created = [];
+      for (const entry of entries) {
+        const one = await storage.createStockReturn({
+          traderId,
+          traderName,
+          period,
+          commodity: entry.commodity,
+          openingBalance: Number(entry.openingBalance) || 0,
+          locallyProcured: Number(entry.locallyProcured) || 0,
+          purchasedFromTrader: Number(entry.purchasedFromTrader) || 0,
+          sales: Number(entry.sales) || 0,
+          closingBalance: Number(entry.closingBalance) || 0,
+          status,
+        });
+        created.push(one);
+      }
+      if (created.length > 0) {
+        await storage.createActivityLog({
+          action: "Stock Returns Submitted",
+          module: "Market Fee",
+          user: "Super Admin",
+          timestamp: new Date().toISOString(),
+        });
+      }
+      res.status(201).json(created);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
+        const message = formatStockReturnValidationError(error);
+        return res.status(400).json({ error: message, details: error.errors });
       }
-      res.status(500).json({ error: "Failed to create stock return" });
+      console.error("POST /api/stockreturns error:", error);
+      const message = error instanceof Error ? error.message : "Failed to create stock return";
+      res.status(500).json({ error: message });
     }
   });
 

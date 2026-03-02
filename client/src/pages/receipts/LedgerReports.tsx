@@ -17,7 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { BookOpen, Download } from 'lucide-react';
 import { YARDS } from '@/data/yards';
 import { useToast } from '@/hooks/use-toast';
-import { format } from 'date-fns';
+import { format } from '@/lib/dateFormat';
 import type { Receipt, Trader } from '@shared/schema';
 
 type ReportType = 'trader' | 'head' | 'yard' | 'daily' | 'payment';

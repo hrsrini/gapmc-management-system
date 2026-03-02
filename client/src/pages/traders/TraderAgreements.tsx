@@ -14,9 +14,15 @@ import {
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Search, FileText, RefreshCcw, XCircle, FileSignature, AlertCircle } from 'lucide-react';
 import { YARDS } from '@/data/yards';
-import { format } from 'date-fns';
+import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import type { Agreement } from '@shared/schema';
@@ -33,6 +39,7 @@ export default function TraderAgreements() {
   const [search, setSearch] = useState('');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [viewAgreement, setViewAgreement] = useState<Agreement | null>(null);
 
   const { data: agreements, isLoading, isError } = useQuery<Agreement[]>({
     queryKey: ['/api/agreements'],
@@ -59,7 +66,9 @@ export default function TraderAgreements() {
   });
 
   const handleAction = (action: string, agreement: Agreement) => {
-    if (action === 'Terminate') {
+    if (action === 'View') {
+      setViewAgreement(agreement);
+    } else if (action === 'Terminate') {
       updateMutation.mutate({
         id: agreement.id,
         data: { status: 'Terminated' },
@@ -75,11 +84,6 @@ export default function TraderAgreements() {
       toast({
         title: 'Renew Agreement',
         description: `Agreement ${agreement.agreementId} renewal initiated`,
-      });
-    } else {
-      toast({
-        title: `${action} Agreement`,
-        description: `Agreement ${agreement.agreementId} ${action.toLowerCase()} action initiated`,
       });
     }
   };
@@ -248,6 +252,57 @@ export default function TraderAgreements() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog open={!!viewAgreement} onOpenChange={(open) => !open && setViewAgreement(null)}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Agreement details</DialogTitle>
+            </DialogHeader>
+            {viewAgreement && (
+              <div className="grid gap-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Agreement ID</span>
+                  <span className="font-mono">{viewAgreement.agreementId}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Trader</span>
+                  <span className="font-medium">{viewAgreement.traderName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Premises</span>
+                  <span>{viewAgreement.premises}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Yard</span>
+                  <span>{viewAgreement.yardName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Start</span>
+                  <span>{format(new Date(viewAgreement.startDate), 'dd MMM yyyy')}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">End</span>
+                  <span>{format(new Date(viewAgreement.endDate), 'dd MMM yyyy')}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Rent</span>
+                  <span>₹{viewAgreement.rentAmount.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Security Deposit</span>
+                  <span>₹{viewAgreement.securityDeposit.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Status</span>
+                  <Badge variant="outline" className={statusColors[viewAgreement.status]}>
+                    {viewAgreement.status}
+                  </Badge>
+                </div>
+                <Button variant="outline" size="sm" className="mt-2" onClick={() => setViewAgreement(null)}>Close</Button>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
     </AppShell>
   );

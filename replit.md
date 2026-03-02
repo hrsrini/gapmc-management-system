@@ -10,7 +10,7 @@ A complete internal government management system for the Goa Agricultural Market
 ## Tech Stack
 - **Frontend**: React 18 with TypeScript, Vite, Tailwind CSS
 - **Backend**: Express.js with TypeScript
-- **Storage**: In-memory storage (MemStorage class)
+- **Storage**: PostgreSQL (Supabase) only. `DATABASE_URL` is required in `.env`; in-memory storage is disabled. GAPMC tables live in the `gapmc` schema so existing DB tables are untouched.
 - **Styling**: Shadcn/UI components with custom government-style theme (Indigo/Emerald)
 - **Routing**: Wouter (client-side), Express (server-side)
 - **State Management**: React Context (Auth), TanStack Query (data fetching)
@@ -144,8 +144,14 @@ shared/
 
 ## Development Notes
 
+### Environment
+- Copy `.env.example` to `.env` and set `DATABASE_URL`, `PORT`, and `NODE_ENV`.
+- If `DATABASE_URL` is set, the app uses PostgreSQL (only the `gapmc` schema). Run `npm run db:push` once to create the GAPMC tables; existing database tables are not modified.
+
 ### Running the Application
 ```bash
+npm install
+npm run db:push   # only when using PostgreSQL (DATABASE_URL set)
 npm run dev
 ```
 Server starts on port 5000 with both frontend and backend.

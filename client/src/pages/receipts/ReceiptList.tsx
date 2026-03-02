@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'wouter';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
@@ -15,6 +15,13 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { 
   Plus, 
   Search, 
@@ -26,7 +33,7 @@ import {
   RefreshCcw
 } from 'lucide-react';
 import { YARDS } from '@/data/yards';
-import { format } from 'date-fns';
+import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import type { Receipt } from '@shared/schema';
@@ -43,6 +50,17 @@ export default function ReceiptList() {
   const [search, setSearch] = useState('');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
+  const [viewReceipt, setViewReceipt] = useState<Receipt | null>(null);
+  const [autoPrint, setAutoPrint] = useState(false);
+
+  useEffect(() => {
+    if (!viewReceipt || !autoPrint) return;
+    const t = setTimeout(() => {
+      window.print();
+      setAutoPrint(false);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [viewReceipt, autoPrint]);
 
   const { data: receipts, isLoading, isError, refetch } = useQuery<Receipt[]>({
     queryKey: ['/api/receipts'],
@@ -199,10 +217,22 @@ export default function ReceiptList() {
                           <TableCell className="text-muted-foreground">{receipt.issuedBy}</TableCell>
                           <TableCell>
                             <div className="flex items-center justify-end gap-1">
-                              <Button variant="ghost" size="icon" data-testid={`button-view-${receipt.id}`}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => { setViewReceipt(receipt); setAutoPrint(false); }}
+                                data-testid={`button-view-${receipt.id}`}
+                                aria-label="View receipt"
+                              >
                                 <Eye className="h-4 w-4" />
                               </Button>
-                              <Button variant="ghost" size="icon" data-testid={`button-print-${receipt.id}`}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => { setViewReceipt(receipt); setAutoPrint(true); }}
+                                data-testid={`button-print-${receipt.id}`}
+                                aria-label="Print receipt"
+                              >
                                 <Printer className="h-4 w-4" />
                               </Button>
                               {receipt.status === 'Active' && (
@@ -228,6 +258,98 @@ export default function ReceiptList() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog open={!!viewReceipt} onOpenChange={(open) => !open && setViewReceipt(null)}>
+          <DialogContent className="max-w-lg receipt-print-content">
+            <DialogHeader className="no-print">
+              <DialogTitle>Receipt</DialogTitle>
+            </DialogHeader>
+            {viewReceipt && (
+              <div className="space-y-4">
+                <div className="border-b pb-3 flex justify-between items-start">
+                  <div>
+                    <p className="text-2xl font-bold font-mono">{viewReceipt.receiptNo}</p>
+                    <p className="text-sm text-muted-foreground">{viewReceipt.yardName}</p>
+                  </div>
+                  <Badge variant={viewReceipt.status === 'Voided' ? 'destructive' : 'default'}>
+                    {viewReceipt.status}
+                  </Badge>
+                </div>
+                <div className="grid gap-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Date</span>
+                    <span>{format(new Date(viewReceipt.receiptDate), 'dd MMM yyyy')}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Type</span>
+                    <span>{viewReceipt.type}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Trader</span>
+                    <span className="font-medium">{viewReceipt.traderName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Head</span>
+                    <span>{viewReceipt.head}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Amount</span>
+                    <span>₹{viewReceipt.amount?.toLocaleString() ?? '—'}</span>
+                  </div>
+                  {(viewReceipt.cgst != null && viewReceipt.cgst > 0) && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">CGST</span>
+                      <span>₹{viewReceipt.cgst.toLocaleString()}</span>
+                    </div>
+                  )}
+                  {(viewReceipt.sgst != null && viewReceipt.sgst > 0) && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">SGST</span>
+                      <span>₹{viewReceipt.sgst.toLocaleString()}</span>
+                    </div>
+                  )}
+                  {(viewReceipt.interest != null && viewReceipt.interest > 0) && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Interest</span>
+                      <span>₹{viewReceipt.interest.toLocaleString()}</span>
+                    </div>
+                  )}
+                  {(viewReceipt.tdsAmount != null && viewReceipt.tdsAmount > 0) && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">TDS</span>
+                      <span>₹{viewReceipt.tdsAmount.toLocaleString()}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between pt-2 border-t font-semibold text-base">
+                    <span>Total</span>
+                    <span>₹{viewReceipt.total.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Payment</span>
+                    <span>{viewReceipt.paymentMode}</span>
+                  </div>
+                  {viewReceipt.transactionRef && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Ref</span>
+                      <span className="font-mono text-xs">{viewReceipt.transactionRef}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between pt-1">
+                    <span className="text-muted-foreground">Issued by</span>
+                    <span>{viewReceipt.issuedBy}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            <DialogFooter className="no-print">
+              <Button variant="outline" onClick={() => setViewReceipt(null)}>Close</Button>
+              <Button onClick={() => window.print()} data-testid="button-dialog-print">
+                <Printer className="h-4 w-4 mr-2" />
+                Print
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </AppShell>
   );
