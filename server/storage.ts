@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { DbStorage } from "./db-storage";
 import type { 
   Trader, InsertTrader,
   Invoice, InsertInvoice,
@@ -297,4 +298,4 @@ if (!process.env.DATABASE_URL) {
     "DATABASE_URL is required. Add it to .env (see .env.example). In-memory storage is disabled."
   );
 }
-export const storage: IStorage = new (await import("./db-storage")).DbStorage();
+export const storage: IStorage = new DbStorage();

@@ -2,6 +2,9 @@ import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
 
+const POSTCSS_FROM_WARNING =
+  "A PostCSS plugin did not pass the `from` option to `postcss.parse`";
+
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
 const allowlist = [
@@ -36,7 +39,14 @@ async function buildAll() {
   await rm("dist", { recursive: true, force: true });
 
   console.log("building client...");
+  const origWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    const msg = args[0];
+    if (typeof msg === "string" && msg.includes(POSTCSS_FROM_WARNING)) return;
+    origWarn.apply(console, args);
+  };
   await viteBuild();
+  console.warn = origWarn;
 
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));
