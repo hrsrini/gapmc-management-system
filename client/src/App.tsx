@@ -22,6 +22,7 @@ import Returns from "@/pages/market-fee/Returns";
 import ReceiptList from "@/pages/receipts/ReceiptList";
 import ReceiptForm from "@/pages/receipts/ReceiptForm";
 import LedgerReports from "@/pages/receipts/LedgerReports";
+import Health from "@/pages/Health";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -73,6 +74,7 @@ function Router() {
       <Route path="/receipts/ledger">
         <ProtectedRoute><LedgerReports /></ProtectedRoute>
       </Route>
+      <Route path="/health" component={Health} />
       <Route component={NotFound} />
     </Switch>
   );

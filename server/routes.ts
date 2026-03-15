@@ -1,6 +1,8 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { sql } from "drizzle-orm";
 import { storage } from "./storage";
+import { db } from "./db";
 import { 
   insertTraderSchema, 
   insertInvoiceSchema, 
@@ -67,11 +69,32 @@ const bulkStockReturnSchema = z.object({
   submittedAt: z.string().optional(),
 });
 
+const startTime = Date.now();
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
   await storage.seedData();
+
+  // Health check (public, no auth)
+  app.get("/api/health", async (_req, res) => {
+    const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
+    let database: "ok" | "error" = "error";
+    try {
+      await db.execute(sql`SELECT 1`);
+      database = "ok";
+    } catch {
+      // database unreachable or not configured
+    }
+    const status = database === "ok" ? "ok" : "degraded";
+    res.status(database === "ok" ? 200 : 503).json({
+      status,
+      database,
+      uptimeSeconds,
+      timestamp: new Date().toISOString(),
+    });
+  });
 
   // Traders
   app.get("/api/traders", async (req, res) => {
