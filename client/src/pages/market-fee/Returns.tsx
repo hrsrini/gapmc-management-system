@@ -168,7 +168,7 @@ export default function Returns() {
         sales: Number(e.sales) || 0,
         closingBalance: Number(e.closingBalance) || 0,
       })),
-      status: (isDraft ? 'Draft' : 'Submitted') as const,
+      status: isDraft ? 'Draft' : 'Submitted',
       submittedAt: new Date().toISOString(),
     };
     createMutation.mutate(payload, {

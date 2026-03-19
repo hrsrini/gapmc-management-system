@@ -49,5 +49,12 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+    // If you open the app on Vite's port (e.g. 5173), /api requests go to Express
+    proxy: {
+      "/api": {
+        target: `http://localhost:${process.env.PORT || "5000"}`,
+        changeOrigin: true,
+      },
+    },
   },
 });

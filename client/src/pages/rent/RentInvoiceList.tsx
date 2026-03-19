@@ -35,6 +35,7 @@ import { YARDS } from '@/data/yards';
 import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/context/AuthContext';
 import type { Invoice } from '@shared/schema';
 
 const statusColors: Record<string, string> = {
@@ -46,6 +47,10 @@ const statusColors: Record<string, string> = {
 
 export default function RentInvoiceList() {
   const { toast } = useToast();
+  const { can } = useAuth();
+  const canCreate = can('M-03', 'Create');
+  const canUpdate = can('M-03', 'Update');
+  const canDelete = can('M-03', 'Delete');
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState('');
   const [selectedYard, setSelectedYard] = useState<string>('all');
@@ -107,12 +112,14 @@ export default function RentInvoiceList() {
             </h1>
             <p className="text-muted-foreground">Manage rent and tax invoices</p>
           </div>
-          <Button asChild data-testid="button-create-invoice">
-            <Link href="/rent/new">
-              <Plus className="h-4 w-4 mr-2" />
-              Create Invoice
-            </Link>
-          </Button>
+          {canCreate && (
+            <Button asChild data-testid="button-create-invoice">
+              <Link href="/rent/new">
+                <Plus className="h-4 w-4 mr-2" />
+                Create Invoice
+              </Link>
+            </Button>
+          )}
         </div>
 
         <Card>
@@ -220,25 +227,29 @@ export default function RentInvoiceList() {
                             >
                               <Eye className="h-4 w-4" />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => setLocation(`/rent/edit/${invoice.id}`)}
-                              data-testid={`button-edit-${invoice.id}`}
-                              aria-label="Edit invoice"
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              className="text-destructive"
-                              onClick={() => deleteMutation.mutate(invoice.id)}
-                              disabled={deleteMutation.isPending}
-                              data-testid={`button-delete-${invoice.id}`}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            {canUpdate && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setLocation(`/rent/edit/${invoice.id}`)}
+                                data-testid={`button-edit-${invoice.id}`}
+                                aria-label="Edit invoice"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            )}
+                            {canDelete && (
+                              <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="text-destructive"
+                                onClick={() => deleteMutation.mutate(invoice.id)}
+                                disabled={deleteMutation.isPending}
+                                data-testid={`button-delete-${invoice.id}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -307,10 +318,12 @@ export default function RentInvoiceList() {
                 </div>
                 <div className="flex gap-2 pt-2">
                   <Button variant="outline" size="sm" onClick={() => setViewInvoice(null)}>Close</Button>
-                  <Button size="sm" onClick={() => { setViewInvoice(null); setLocation(`/rent/edit/${viewInvoice.id}`); }} data-testid="button-edit-from-view">
-                    <Pencil className="h-4 w-4 mr-1" />
-                    Edit
-                  </Button>
+                  {canUpdate && (
+                    <Button size="sm" onClick={() => { setViewInvoice(null); setLocation(`/rent/edit/${viewInvoice.id}`); }} data-testid="button-edit-from-view">
+                      <Pencil className="h-4 w-4 mr-1" />
+                      Edit
+                    </Button>
+                  )}
                 </div>
               </div>
             )}

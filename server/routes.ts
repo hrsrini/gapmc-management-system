@@ -1,8 +1,23 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { sql } from "drizzle-orm";
+import { sql, inArray } from "drizzle-orm";
 import { storage } from "./storage";
 import { db } from "./db";
+import { registerAdminRoutes } from "./routes-admin";
+import { registerReceiptsIomsRoutes } from "./routes-receipts-ioms";
+import { registerHrRoutes } from "./routes-hr";
+import { registerTradersAssetsRoutes } from "./routes-traders-assets";
+import { registerRentIomsRoutes } from "./routes-rent-ioms";
+import { registerMarketIomsRoutes } from "./routes-market-ioms";
+import { registerVoucherRoutes } from "./routes-vouchers";
+import { registerFleetRoutes } from "./routes-fleet";
+import { registerConstructionRoutes } from "./routes-construction";
+import { registerDakRoutes } from "./routes-dak";
+import { registerReportsRoutes } from "./routes-reports";
+import { registerAuthRoutes } from "./routes-auth";
+import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermissionByPath } from "./auth";
+import { writeAuditLog } from "./audit";
+import { yards } from "@shared/db-schema";
 import { 
   insertTraderSchema, 
   insertInvoiceSchema, 
@@ -77,6 +92,82 @@ export async function registerRoutes(
 ): Promise<Server> {
   await storage.seedData();
 
+  // Auth: login, me, logout (session set on login)
+  registerAuthRoutes(app);
+
+  // Cron trigger: M-03 rent invoice generation (secured by CRON_SECRET; call before requireAuthApi)
+  app.post("/api/cron/rent-invoice-generation", async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers["x-cron-secret"] !== secret) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      const { generateRentInvoicesForCurrentMonth } = await import("./cron-rent-invoices");
+      const result = await generateRentInvoicesForCurrentMonth();
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("Cron rent invoice generation failed:", e);
+      return res.status(500).json({ error: "Cron job failed" });
+    }
+  });
+
+  // Require session for all other /api routes; attach req.user and req.scopedLocationIds
+  app.use(requireAuthApi);
+
+  // IOMS M-10: Admin — require M-10 permission by method (Read/Create/Update/Delete) from role_permissions
+  app.use("/api/admin", requireAdminPermissionByMethod);
+
+  // Role permissions for all other modules (M-01 .. M-09): path → module, method → action; ADMIN full access, READ_ONLY only Read
+  app.use(requireModulePermissionByPath);
+
+  // Yards scoped to current user's assigned locations (for dropdowns, filters)
+  app.get("/api/yards", async (req, res) => {
+    try {
+      const ids = req.scopedLocationIds ?? [];
+      if (ids.length === 0) {
+        return res.json([]);
+      }
+      const list = await db.select().from(yards).where(inArray(yards.id, ids)).orderBy(yards.name);
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to fetch yards" });
+    }
+  });
+
+  // IOMS M-10: Admin (RBAC) routes — yards, users, roles, config, audit
+  registerAdminRoutes(app);
+
+  // IOMS M-05: Receipts Online — central receipt engine
+  registerReceiptsIomsRoutes(app);
+
+  // IOMS M-01: HRMS
+  registerHrRoutes(app);
+
+  // IOMS M-02: Trader & Asset ID Management
+  registerTradersAssetsRoutes(app);
+
+  // IOMS M-03: Rent / GST Tax Invoice (rent_invoices, ledger, credit_notes; does not touch gapmc.invoices)
+  registerRentIomsRoutes(app);
+
+  // IOMS M-04: Market Fee & Commodities (commodities, fee rates, farmers, transactions, check post; does not touch gapmc.market_fees)
+  registerMarketIomsRoutes(app);
+
+  // IOMS M-06: Payment Vouchers
+  registerVoucherRoutes(app);
+
+  // IOMS M-07: Vehicle Fleet
+  registerFleetRoutes(app);
+
+  // IOMS M-08: Construction & Maintenance
+  registerConstructionRoutes(app);
+
+  // IOMS M-09: Correspondence (Dak)
+  registerDakRoutes(app);
+
+  // IOMS yard-scoped reports and CSV export
+  registerReportsRoutes(app);
+
   // Health check (public, no auth)
   app.get("/api/health", async (_req, res) => {
     const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
@@ -123,9 +214,10 @@ export async function registerRoutes(
       await storage.createActivityLog({
         action: 'Trader Registered',
         module: 'Traders',
-        user: 'Super Admin',
+        user: req.user?.name ?? 'System',
         timestamp: new Date().toISOString(),
       });
+      writeAuditLog(req, { module: 'Traders', action: 'Create', recordId: trader.id, afterValue: trader }).catch((e) => console.error('Audit log failed:', e));
       res.status(201).json(trader);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -137,9 +229,11 @@ export async function registerRoutes(
 
   app.put("/api/traders/:id", async (req, res) => {
     try {
+      const before = await storage.getTrader(req.params.id);
       const validatedData = updateTraderSchema.parse(req.body);
       const trader = await storage.updateTrader(req.params.id, validatedData);
       if (!trader) return res.status(404).json({ error: "Trader not found" });
+      writeAuditLog(req, { module: 'Traders', action: 'Update', recordId: req.params.id, beforeValue: before ?? undefined, afterValue: trader }).catch((e) => console.error('Audit log failed:', e));
       res.json(trader);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -151,8 +245,10 @@ export async function registerRoutes(
 
   app.delete("/api/traders/:id", async (req, res) => {
     try {
+      const before = await storage.getTrader(req.params.id);
       const deleted = await storage.deleteTrader(req.params.id);
       if (!deleted) return res.status(404).json({ error: "Trader not found" });
+      writeAuditLog(req, { module: 'Traders', action: 'Delete', recordId: req.params.id, beforeValue: before ?? undefined }).catch((e) => console.error('Audit log failed:', e));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete trader" });
@@ -186,9 +282,10 @@ export async function registerRoutes(
       await storage.createActivityLog({
         action: 'Invoice Generated',
         module: 'Rent/Tax',
-        user: 'Super Admin',
+        user: req.user?.name ?? 'System',
         timestamp: new Date().toISOString(),
       });
+      writeAuditLog(req, { module: 'Rent/Tax', action: 'Create', recordId: invoice.id, afterValue: invoice }).catch((e) => console.error('Audit log failed:', e));
       res.status(201).json(invoice);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -200,9 +297,11 @@ export async function registerRoutes(
 
   app.put("/api/invoices/:id", async (req, res) => {
     try {
+      const before = await storage.getInvoice(req.params.id);
       const validatedData = updateInvoiceSchema.parse(req.body);
       const invoice = await storage.updateInvoice(req.params.id, validatedData);
       if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+      writeAuditLog(req, { module: 'Rent/Tax', action: 'Update', recordId: req.params.id, beforeValue: before ?? undefined, afterValue: invoice }).catch((e) => console.error('Audit log failed:', e));
       res.json(invoice);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -214,8 +313,10 @@ export async function registerRoutes(
 
   app.delete("/api/invoices/:id", async (req, res) => {
     try {
+      const before = await storage.getInvoice(req.params.id);
       const deleted = await storage.deleteInvoice(req.params.id);
       if (!deleted) return res.status(404).json({ error: "Invoice not found" });
+      writeAuditLog(req, { module: 'Rent/Tax', action: 'Delete', recordId: req.params.id, beforeValue: before ?? undefined }).catch((e) => console.error('Audit log failed:', e));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete invoice" });
@@ -249,9 +350,10 @@ export async function registerRoutes(
       await storage.createActivityLog({
         action: 'Receipt Created',
         module: 'Receipts',
-        user: 'Super Admin',
+        user: req.user?.name ?? 'System',
         timestamp: new Date().toISOString(),
       });
+      writeAuditLog(req, { module: 'Receipts', action: 'Create', recordId: receipt.id, afterValue: receipt }).catch((e) => console.error('Audit log failed:', e));
       res.status(201).json(receipt);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -302,9 +404,10 @@ export async function registerRoutes(
       await storage.createActivityLog({
         action: 'Market Fee Entry',
         module: 'Market Fee',
-        user: 'Super Admin',
+        user: req.user?.name ?? 'System',
         timestamp: new Date().toISOString(),
       });
+      writeAuditLog(req, { module: 'Market Fee', action: 'Create', recordId: marketFee.id, afterValue: marketFee }).catch((e) => console.error('Audit log failed:', e));
       res.status(201).json(marketFee);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -420,9 +523,10 @@ export async function registerRoutes(
         await storage.createActivityLog({
           action: "Stock Returns Submitted",
           module: "Market Fee",
-          user: "Super Admin",
+          user: req.user?.name ?? "System",
           timestamp: new Date().toISOString(),
         });
+        writeAuditLog(req, { module: 'Market Fee', action: 'StockReturnsSubmit', recordId: created[0]?.id, afterValue: { count: created.length, ids: created.map((r) => r.id) } }).catch((e) => console.error('Audit log failed:', e));
       }
       res.status(201).json(created);
     } catch (error) {

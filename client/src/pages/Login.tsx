@@ -10,7 +10,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Leaf } from 'lucide-react';
 
 export default function Login() {
-  const [username, setUsername] = useState('');
+  const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -21,11 +21,8 @@ export default function Login() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-
-    await new Promise(resolve => setTimeout(resolve, 300));
-    
-    const success = login(username, password);
-    if (success) {
+    const result = await login(loginId, password);
+    if (result.ok) {
       toast({
         title: 'Welcome back!',
         description: 'You have successfully signed in.',
@@ -34,7 +31,9 @@ export default function Login() {
     } else {
       toast({
         title: 'Invalid credentials',
-        description: 'Please check your username and password.',
+        description:
+          result.error ??
+          'Invalid email/username or password. Try full email or the part before @ (e.g. admin).',
         variant: 'destructive',
       });
       setIsLoading(false);
@@ -63,19 +62,20 @@ export default function Login() {
           <CardHeader className="space-y-1 pb-4">
             <CardTitle className="text-xl text-center">Sign In</CardTitle>
             <CardDescription className="text-center">
-              Enter your credentials to access the system
+              Enter your credentials to access the system.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="username">Username</Label>
+                <Label htmlFor="login">Email or username</Label>
                 <Input
-                  id="username"
+                  id="login"
                   type="text"
-                  placeholder="Enter your username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="username"
+                  placeholder="e.g. admin@gapmc.local or admin"
+                  value={loginId}
+                  onChange={(e) => setLoginId(e.target.value)}
                   required
                   data-testid="input-username"
                 />

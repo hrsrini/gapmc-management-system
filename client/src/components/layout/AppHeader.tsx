@@ -70,6 +70,16 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
     setNotificationsOpen(false);
   };
 
+  const initials = user?.name
+    ? user.name
+        .trim()
+        .split(/\s+/)
+        .map((w) => w[0])
+        .slice(0, 2)
+        .join("")
+        .toUpperCase() || "?"
+    : "?";
+
   return (
     <header className="flex items-center justify-between h-16 px-4 border-b bg-card">
       <div className="flex items-center gap-4">
@@ -138,16 +148,23 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
             <Button variant="ghost" className="flex items-center gap-2 px-2" data-testid="button-user-menu">
               <Avatar className="h-8 w-8">
                 <AvatarFallback className="bg-primary text-primary-foreground text-sm">
-                  SA
+                  {initials}
                 </AvatarFallback>
               </Avatar>
               <span className="text-sm font-medium hidden sm:inline-block">
-                {user?.name || 'Super Admin'}
+                {user?.name ?? user?.email ?? "User"}
               </span>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuLabel>My Account</DropdownMenuLabel>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel className="font-normal">
+              <div className="flex flex-col gap-0.5">
+                <span className="font-medium">{user?.name ?? "User"}</span>
+                {user?.email && (
+                  <span className="text-xs text-muted-foreground font-normal">{user.email}</span>
+                )}
+              </div>
+            </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem data-testid="menu-profile">
               <User className="h-4 w-4 mr-2" />

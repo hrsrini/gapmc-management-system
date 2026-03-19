@@ -25,6 +25,7 @@ import { Plus, Search, Eye, Pencil, Trash2, Users, AlertCircle, RefreshCcw } fro
 import { YARDS } from '@/data/yards';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/context/AuthContext';
 import type { Trader } from '@shared/schema';
 
 const statusColors: Record<string, string> = {
@@ -35,6 +36,10 @@ const statusColors: Record<string, string> = {
 
 export default function TraderList() {
   const { toast } = useToast();
+  const { can } = useAuth();
+  const canCreate = can('M-02', 'Create');
+  const canUpdate = can('M-02', 'Update');
+  const canDelete = can('M-02', 'Delete');
   const [, setLocation] = useLocation();
   const [search, setSearch] = useState('');
   const [selectedYard, setSelectedYard] = useState<string>('all');
@@ -99,12 +104,14 @@ export default function TraderList() {
             </h1>
             <p className="text-muted-foreground">Manage registered traders and licensees</p>
           </div>
-          <Button asChild data-testid="button-register-trader">
-            <Link href="/traders/new">
-              <Plus className="h-4 w-4 mr-2" />
-              Register Trader
-            </Link>
-          </Button>
+          {canCreate && (
+            <Button asChild data-testid="button-register-trader">
+              <Link href="/traders/new">
+                <Plus className="h-4 w-4 mr-2" />
+                Register Trader
+              </Link>
+            </Button>
+          )}
         </div>
 
         <Card>
@@ -218,25 +225,29 @@ export default function TraderList() {
                               >
                                 <Eye className="h-4 w-4" />
                               </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => setLocation(`/traders/edit/${trader.id}`)}
-                                data-testid={`button-edit-${trader.id}`}
-                                aria-label="Edit trader"
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                              <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="text-destructive"
-                                onClick={() => deleteMutation.mutate(trader.id)}
-                                disabled={deleteMutation.isPending}
-                                data-testid={`button-delete-${trader.id}`}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
+                              {canUpdate && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => setLocation(`/traders/edit/${trader.id}`)}
+                                  data-testid={`button-edit-${trader.id}`}
+                                  aria-label="Edit trader"
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              )}
+                              {canDelete && (
+                                <Button 
+                                  variant="ghost" 
+                                  size="icon" 
+                                  className="text-destructive"
+                                  onClick={() => deleteMutation.mutate(trader.id)}
+                                  disabled={deleteMutation.isPending}
+                                  data-testid={`button-delete-${trader.id}`}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
                             </div>
                           </TableCell>
                         </TableRow>
@@ -292,10 +303,12 @@ export default function TraderList() {
                 </div>
                 <div className="flex gap-2 pt-2">
                   <Button variant="outline" size="sm" onClick={() => setViewTrader(null)}>Close</Button>
-                  <Button size="sm" onClick={() => { setViewTrader(null); setLocation(`/traders/edit/${viewTrader.id}`); }} data-testid="button-edit-from-view">
-                    <Pencil className="h-4 w-4 mr-1" />
-                    Edit
-                  </Button>
+                  {canUpdate && (
+                    <Button size="sm" onClick={() => { setViewTrader(null); setLocation(`/traders/edit/${viewTrader.id}`); }} data-testid="button-edit-from-view">
+                      <Pencil className="h-4 w-4 mr-1" />
+                      Edit
+                    </Button>
+                  )}
                 </div>
               </div>
             )}

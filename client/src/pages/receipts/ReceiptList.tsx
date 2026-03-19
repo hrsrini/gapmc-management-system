@@ -36,6 +36,7 @@ import { YARDS } from '@/data/yards';
 import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/context/AuthContext';
 import type { Receipt } from '@shared/schema';
 
 const typeColors: Record<string, string> = {
@@ -47,6 +48,8 @@ const typeColors: Record<string, string> = {
 
 export default function ReceiptList() {
   const { toast } = useToast();
+  const { can } = useAuth();
+  const canCreate = can('M-05', 'Create');
   const [search, setSearch] = useState('');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
@@ -116,12 +119,14 @@ export default function ReceiptList() {
             </h1>
             <p className="text-muted-foreground">View and manage all receipts</p>
           </div>
-          <Button asChild data-testid="button-new-receipt">
-            <Link href="/receipts/new">
-              <Plus className="h-4 w-4 mr-2" />
-              New Receipt
-            </Link>
-          </Button>
+          {canCreate && (
+            <Button asChild data-testid="button-new-receipt">
+              <Link href="/receipts/new">
+                <Plus className="h-4 w-4 mr-2" />
+                New Receipt
+              </Link>
+            </Button>
+          )}
         </div>
 
         <Card>

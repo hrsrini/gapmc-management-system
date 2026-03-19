@@ -1,5 +1,6 @@
-import { useLayoutEffect, useEffect } from 'react';
+import { useLayoutEffect, useEffect, useMemo } from 'react';
 import { useLocation, Link } from 'wouter';
+import { useAuth } from '@/context/AuthContext';
 import {
   Sidebar,
   SidebarContent,
@@ -24,9 +25,42 @@ import {
   PlusCircle,
   BookOpen,
   Leaf,
+  Settings,
+  MapPin,
+  Shield,
+  ScrollText,
+  UserCircle,
+  Briefcase,
+  FileCheck,
+  Building2,
+  StickyNote,
+  Package,
+  Percent,
+  ArrowRightLeft,
+  LogIn,
+  Banknote,
+  Truck,
+  HardHat,
+  Mail,
+  Calendar,
+  CalendarDays,
+  Send,
+  Grid3X3,
+  Clock,
+  Store,
+  KeyRound,
+  ShieldAlert,
 } from 'lucide-react';
 
-const menuItems = [
+type MenuItem = {
+  title: string;
+  icon: typeof LayoutDashboard;
+  href: string;
+  /** If set, menu item is only shown when user has this permission. */
+  requirePermission?: { module: string; action: 'Read' | 'Create' | 'Update' | 'Delete' };
+};
+
+const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
   {
     group: 'Dashboard',
     items: [
@@ -38,6 +72,9 @@ const menuItems = [
     items: [
       { title: 'Invoices', icon: FileText, href: '/rent' },
       { title: 'Reports', icon: BarChart3, href: '/rent/reports' },
+      { title: 'IOMS Rent (M-03)', icon: FileText, href: '/rent/ioms' },
+      { title: 'Credit Notes (M-03)', icon: StickyNote, href: '/rent/ioms/credit-notes' },
+      { title: 'Rent deposit ledger', icon: BookOpen, href: '/rent/ioms/ledger' },
     ]
   },
   {
@@ -45,6 +82,16 @@ const menuItems = [
     items: [
       { title: 'Trader Directory', icon: Users, href: '/traders' },
       { title: 'Agreements', icon: FileSignature, href: '/traders/agreements' },
+      { title: 'Licences (IOMS M-02)', icon: FileCheck, href: '/traders/licences' },
+      { title: 'Blocking log', icon: ShieldAlert, href: '/traders/blocking-log' },
+    ]
+  },
+  {
+    group: 'Assets (IOMS M-02)',
+    items: [
+      { title: 'Asset Register', icon: Building2, href: '/assets' },
+      { title: 'Shop Allotments', icon: KeyRound, href: '/assets/allotments' },
+      { title: 'Shop Vacant', icon: Store, href: '/assets/vacant' },
     ]
   },
   {
@@ -53,14 +100,85 @@ const menuItems = [
       { title: 'Fee Collection', icon: Wallet, href: '/market-fee' },
       { title: 'Import/Export', icon: ArrowLeftRight, href: '/market-fee/entry' },
       { title: 'Returns', icon: ClipboardList, href: '/market-fee/returns' },
+      { title: 'Commodities (M-04)', icon: Package, href: '/market/commodities', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Fee rates (M-04)', icon: Percent, href: '/market/fee-rates', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Farmers (M-04)', icon: Users, href: '/market/farmers', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Transactions (M-04)', icon: ArrowRightLeft, href: '/market/transactions', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'MSP settings (M-02)', icon: Percent, href: '/market/msp' },
+    ]
+  },
+  {
+    group: 'Check Post (IOMS M-04)',
+    items: [
+      { title: 'Inward', icon: LogIn, href: '/checkpost/inward', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Outward', icon: Send, href: '/checkpost/outward', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Exit permits', icon: FileCheck, href: '/checkpost/exit-permits', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Bank deposits', icon: Banknote, href: '/checkpost/bank-deposits', requirePermission: { module: 'M-04', action: 'Read' } },
     ]
   },
   {
     group: 'Receipts',
     items: [
       { title: 'All Receipts', icon: Receipt, href: '/receipts' },
-      { title: 'Create Receipt', icon: PlusCircle, href: '/receipts/new' },
+      { title: 'Create Receipt', icon: PlusCircle, href: '/receipts/new', requirePermission: { module: 'M-05', action: 'Create' } },
       { title: 'Ledger Reports', icon: BookOpen, href: '/receipts/ledger' },
+      { title: 'IOMS Receipts (M-05)', icon: Receipt, href: '/receipts/ioms' },
+      { title: 'Receipt reconciliation', icon: FileSignature, href: '/receipts/ioms/reconciliation', requirePermission: { module: 'M-05', action: 'Read' } },
+      { title: 'IOMS Reports & Export', icon: BarChart3, href: '/reports/ioms' },
+    ]
+  },
+  {
+    group: 'Vouchers (IOMS M-06)',
+    items: [
+      { title: 'Payment Vouchers', icon: Banknote, href: '/vouchers' },
+      { title: 'Create voucher', icon: PlusCircle, href: '/vouchers/create', requirePermission: { module: 'M-06', action: 'Create' } },
+      { title: 'Advance requests', icon: Wallet, href: '/vouchers/advances' },
+    ]
+  },
+  {
+    group: 'Fleet (IOMS M-07)',
+    items: [
+      { title: 'Vehicles', icon: Truck, href: '/fleet' },
+    ]
+  },
+  {
+    group: 'Construction (IOMS M-08)',
+    items: [
+      { title: 'Works', icon: HardHat, href: '/construction' },
+      { title: 'AMC contracts', icon: FileCheck, href: '/construction/amc' },
+      { title: 'Land records', icon: MapPin, href: '/construction/land' },
+      { title: 'Fixed assets', icon: Building2, href: '/construction/fixed-assets' },
+    ]
+  },
+  {
+    group: 'Correspondence (IOMS M-09)',
+    items: [
+      { title: 'Dak Inward', icon: Mail, href: '/correspondence/inward' },
+      { title: 'Dak Outward', icon: Send, href: '/correspondence/outward' },
+    ]
+  },
+  {
+    group: 'HR (IOMS M-01)',
+    items: [
+      { title: 'Employees', icon: UserCircle, href: '/hr/employees' },
+      { title: 'Leave requests (M-01)', icon: Calendar, href: '/hr/leaves' },
+      { title: 'Claims (LTC / TA-DA)', icon: Wallet, href: '/hr/claims' },
+      { title: 'Attendance', icon: Clock, href: '/hr/attendance' },
+      { title: 'Timesheets', icon: CalendarDays, href: '/hr/timesheets' },
+      { title: 'Recruitment', icon: Briefcase, href: '/hr/recruitment' },
+    ]
+  },
+  {
+    group: 'Admin (IOMS)',
+    adminOnly: true,
+    items: [
+      { title: 'Users', icon: Users, href: '/admin/users' },
+      { title: 'Roles', icon: Shield, href: '/admin/roles' },
+      { title: 'Locations', icon: MapPin, href: '/admin/locations' },
+      { title: 'Config', icon: Settings, href: '/admin/config' },
+      { title: 'Audit Log', icon: ScrollText, href: '/admin/audit' },
+      { title: 'Permission matrix', icon: Grid3X3, href: '/admin/permissions' },
+      { title: 'SLA config', icon: Clock, href: '/admin/sla-config' },
     ]
   },
 ];
@@ -68,8 +186,27 @@ const menuItems = [
 const SIDEBAR_CONTENT_SELECTOR = '[data-sidebar="content"]';
 const SIDEBAR_SCROLL_KEY = 'gapmc_sidebar_scroll';
 
+/** Show Admin section if user has ADMIN role or any M-10 permission (from permission matrix). */
+function hasAdminAccess(roles: { tier: string }[] | undefined, permissions: { module: string; action: string }[] | undefined): boolean {
+  if (roles?.some((r) => r.tier === 'ADMIN')) return true;
+  return Boolean(permissions?.some((p) => p.module === 'M-10'));
+}
+
 export function AppSidebar() {
   const [location] = useLocation();
+  const { user, can } = useAuth();
+  const isAdmin = hasAdminAccess(user?.roles, user?.permissions);
+  const visibleGroups = useMemo(() => {
+    return menuItems
+      .filter((g) => !('adminOnly' in g && g.adminOnly) || isAdmin)
+      .map((g) => ({
+        ...g,
+        items: g.items.filter(
+          (item) => !item.requirePermission || can(item.requirePermission.module, item.requirePermission.action)
+        ),
+      }))
+      .filter((g) => g.items.length > 0);
+  }, [isAdmin, can]);
 
   // Save sidebar scroll position to sessionStorage (survives unmount on route change)
   useEffect(() => {
@@ -128,7 +265,7 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent className="px-2">
-        {menuItems.map((group) => (
+        {visibleGroups.map((group) => (
           <SidebarGroup key={group.group}>
             <SidebarGroupLabel className="text-sidebar-foreground/60 text-xs uppercase tracking-wider px-3">
               {group.group}

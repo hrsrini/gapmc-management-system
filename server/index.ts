@@ -1,8 +1,17 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
+import session from "express-session";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+
+// Suppress known PostCSS plugin warning (same as in script/build.ts)
+const postcssFromWarning = "A PostCSS plugin did not pass the `from` option to `postcss.parse`";
+const origWarn = console.warn;
+console.warn = (...args: unknown[]) => {
+  if (typeof args[0] === "string" && args[0].includes(postcssFromWarning)) return;
+  origWarn.apply(console, args);
+};
 
 const app = express();
 const httpServer = createServer(app);
@@ -22,6 +31,21 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+app.use(
+  session({
+    name: "gapmc.sid",
+    secret: process.env.SESSION_SECRET || "gapmc-dev-secret-change-in-production",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      sameSite: "lax",
+    },
+  })
+);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -62,6 +86,21 @@ app.use((req, res, next) => {
 
 (async () => {
   await registerRoutes(httpServer, app);
+
+  // M-03: Rent invoice auto-generation on 1st of each month at 00:01 (optional)
+  if (process.env.CRON_RENT_INVOICE === "true") {
+    const cron = await import("node-cron");
+    const { generateRentInvoicesForCurrentMonth } = await import("./cron-rent-invoices");
+    cron.default.schedule("1 0 1 * *", async () => {
+      try {
+        const { created, skipped } = await generateRentInvoicesForCurrentMonth();
+        log(`Cron M-03: rent invoices created=${created} skipped=${skipped}`);
+      } catch (e) {
+        console.error("Cron M-03 rent invoice generation failed:", e);
+      }
+    });
+    log("Cron M-03 rent invoice generation scheduled (1st of month 00:01)");
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

@@ -43,6 +43,8 @@
    ```
    Then open the URL shown (e.g. http://localhost:5000).
 
+6. **Sign in** — Use **email** or **username** (case-insensitive). Seeded users include usernames such as `admin`, `do`, `dv`, `da`, `readonly` (run `npm run db:seed-ioms-m10` / `db:seed-ioms-sample` after `db:push`). New installs need `db:push` so the `users.username` column exists.
+
 ## Scripts
 
 | Script | Description |
