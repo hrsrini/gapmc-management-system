@@ -1,9 +1,11 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { pool } from "./db";
 
 // Suppress known PostCSS plugin warning (same as in script/build.ts)
 const postcssFromWarning = "A PostCSS plugin did not pass the `from` option to `postcss.parse`";
@@ -14,6 +16,12 @@ console.warn = (...args: unknown[]) => {
 };
 
 const app = express();
+
+/** Behind nginx / TLS terminator: needed for correct req.secure and cookie.secure "auto". */
+if (process.env.NODE_ENV === "production" && process.env.TRUST_PROXY !== "false") {
+  app.set("trust proxy", 1);
+}
+
 const httpServer = createServer(app);
 
 declare module "http" {
@@ -32,20 +40,33 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
-app.use(
-  session({
-    name: "gapmc.sid",
-    secret: process.env.SESSION_SECRET || "gapmc-dev-secret-change-in-production",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      sameSite: "lax",
-    },
-  })
-);
+const sessionSecret = process.env.SESSION_SECRET || "gapmc-dev-secret-change-in-production";
+
+const sessionOptions: session.SessionOptions = {
+  name: "gapmc.sid",
+  secret: sessionSecret,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    // "auto" uses req.secure — requires trust proxy when TLS ends at nginx
+    secure: process.env.NODE_ENV === "production" ? "auto" : false,
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    sameSite: "lax",
+  },
+};
+
+/** Production: persist sessions in Postgres so load-balanced instances share login state. */
+if (process.env.NODE_ENV === "production") {
+  const PgStore = connectPgSimple(session);
+  sessionOptions.store = new PgStore({
+    pool,
+    tableName: "session",
+    createTableIfMissing: true,
+  });
+}
+
+app.use(session(sessionOptions));
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {

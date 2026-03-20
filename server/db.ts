@@ -4,7 +4,8 @@ import * as schema from "@shared/db-schema";
 
 const connectionString = process.env.DATABASE_URL!;
 
-const pool = new Pool({ connectionString });
+/** Shared pool — also used by express-session (connect-pg-simple) in production. */
+export const pool = new Pool({ connectionString });
 
 /**
  * Drizzle client for the gapmc schema. Only GAPMC tables (gapmc.*) are used;
