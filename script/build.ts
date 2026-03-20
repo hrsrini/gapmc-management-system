@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile } from "fs/promises";
+import { rm, readFile, copyFile } from "fs/promises";
+import { join } from "path";
 
 const POSTCSS_FROM_WARNING =
   "A PostCSS plugin did not pass the `from` option to `postcss.parse`";
@@ -69,6 +70,14 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
+
+  // connect-pg-simple reads table.sql via path.resolve(__dirname, "./table.sql").
+  // When bundled into dist/index.cjs, __dirname is dist/, so the file must exist there.
+  await copyFile(
+    join("node_modules", "connect-pg-simple", "table.sql"),
+    join("dist", "table.sql"),
+  );
+  console.log("copied connect-pg-simple table.sql -> dist/table.sql");
 }
 
 buildAll().catch((err) => {
