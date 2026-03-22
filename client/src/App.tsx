@@ -208,6 +208,12 @@ function Router() {
       <Route path="/construction/amc">
         <ProtectedRoute><ConstructionAmc /></ProtectedRoute>
       </Route>
+      <Route path="/construction/land">
+        <ProtectedRoute><ConstructionLandRecords /></ProtectedRoute>
+      </Route>
+      <Route path="/construction/fixed-assets">
+        <ProtectedRoute><ConstructionFixedAssets /></ProtectedRoute>
+      </Route>
       <Route path="/correspondence/inward">
         <ProtectedRoute><DakInward /></ProtectedRoute>
       </Route>
@@ -238,15 +244,16 @@ function Router() {
       <Route path="/receipts/ioms">
         <ProtectedRoute><IomsReceiptList /></ProtectedRoute>
       </Route>
-      <Route path="/receipts/ioms/:id">
-        <ProtectedRoute><IomsReceiptDetail /></ProtectedRoute>
-      </Route>
+      {/* Must be before /receipts/ioms/:id or "reconciliation" is captured as an id */}
       <Route path="/receipts/ioms/reconciliation">
         <ProtectedRoute>
           <RequirePermission module="M-05" action="Read">
             <IomsReceiptReconciliation />
           </RequirePermission>
         </ProtectedRoute>
+      </Route>
+      <Route path="/receipts/ioms/:id">
+        <ProtectedRoute><IomsReceiptDetail /></ProtectedRoute>
       </Route>
       <Route path="/reports/ioms">
         <ProtectedRoute><IomsReports /></ProtectedRoute>

@@ -4,6 +4,7 @@
  */
 import type { Express } from "express";
 import { eq, desc, and, sql } from "drizzle-orm";
+import { hash } from "bcryptjs";
 import { db } from "./db";
 import {
   yards,
@@ -205,7 +206,43 @@ export function registerAdminRoutes(app: Express) {
   app.get("/api/admin/users", async (_req, res) => {
     try {
       const list = await db.select().from(users).orderBy(users.name);
-      res.json(list);
+      const roleAssignments = await db
+        .select({
+          userId: userRoles.userId,
+          id: roles.id,
+          name: roles.name,
+          tier: roles.tier,
+        })
+        .from(userRoles)
+        .innerJoin(roles, eq(roles.id, userRoles.roleId));
+      const yardAssignments = await db
+        .select({
+          userId: userYards.userId,
+          id: yards.id,
+          name: yards.name,
+        })
+        .from(userYards)
+        .innerJoin(yards, eq(yards.id, userYards.yardId));
+
+      const rolesByUser = new Map<string, { id: string; name: string; tier: string }[]>();
+      for (const r of roleAssignments) {
+        const arr = rolesByUser.get(r.userId) ?? [];
+        arr.push({ id: r.id, name: r.name, tier: r.tier });
+        rolesByUser.set(r.userId, arr);
+      }
+      const yardsByUser = new Map<string, { id: string; name: string }[]>();
+      for (const y of yardAssignments) {
+        const arr = yardsByUser.get(y.userId) ?? [];
+        arr.push({ id: y.id, name: y.name });
+        yardsByUser.set(y.userId, arr);
+      }
+
+      const enriched = list.map((u) => ({
+        ...u,
+        roles: rolesByUser.get(u.id) ?? [],
+        yards: yardsByUser.get(u.id) ?? [],
+      }));
+      res.json(enriched);
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: "Failed to fetch users" });
@@ -214,13 +251,18 @@ export function registerAdminRoutes(app: Express) {
 
   app.post("/api/admin/users", async (req, res) => {
     try {
-      const { email, username, name, phone, roleIds, yardIds } = req.body;
+      const { email, username, name, phone, roleIds, yardIds, password } = req.body;
       if (!email || !name) {
         return res.status(400).json({ error: "email, name required" });
+      }
+      const passwordStr = password != null ? String(password) : "";
+      if (passwordStr.length < 8) {
+        return res.status(400).json({ error: "password required (min 8 characters)" });
       }
       const emailNorm = String(email).trim().toLowerCase();
       const rawU = username != null ? String(username).trim().toLowerCase() : "";
       const usernameVal = rawU === "" ? null : rawU;
+      const passwordHash = await hash(passwordStr, 10);
       const id = nanoid();
       await db.insert(users).values({
         id,
@@ -228,6 +270,7 @@ export function registerAdminRoutes(app: Express) {
         username: usernameVal,
         name: String(name),
         phone: phone ? String(phone) : null,
+        passwordHash,
         isActive: true,
         createdAt: now(),
         updatedAt: now(),
@@ -244,8 +287,12 @@ export function registerAdminRoutes(app: Express) {
       }
       const [row] = await db.select().from(users).where(eq(users.id, id));
       res.status(201).json(row);
-    } catch (e) {
+    } catch (e: unknown) {
       console.error(e);
+      const code = e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code) : "";
+      if (code === "23505") {
+        return res.status(409).json({ error: "Email or username already exists" });
+      }
       res.status(500).json({ error: "Failed to create user" });
     }
   });
@@ -253,7 +300,7 @@ export function registerAdminRoutes(app: Express) {
   app.put("/api/admin/users/:id", async (req, res) => {
     try {
       const id = req.params.id;
-      const { email, username, name, phone, isActive, roleIds, yardIds } = req.body;
+      const { email, username, name, phone, isActive, roleIds, yardIds, password } = req.body;
       const usernameUpdate =
         username === undefined
           ? {}
@@ -263,12 +310,21 @@ export function registerAdminRoutes(app: Express) {
                   ? null
                   : String(username).trim().toLowerCase(),
             };
+      let passwordUpdate: { passwordHash: string } | Record<string, never> = {};
+      if (password !== undefined && password !== null && String(password) !== "") {
+        const passwordStr = String(password);
+        if (passwordStr.length < 8) {
+          return res.status(400).json({ error: "password must be at least 8 characters" });
+        }
+        passwordUpdate = { passwordHash: await hash(passwordStr, 10) };
+      }
       await db.update(users).set({
         ...(email != null && { email: String(email).trim().toLowerCase() }),
         ...usernameUpdate,
         ...(name != null && { name: String(name) }),
         ...(phone !== undefined && { phone: phone ? String(phone) : null }),
         ...(isActive !== undefined && { isActive: Boolean(isActive) }),
+        ...passwordUpdate,
         updatedAt: now(),
       }).where(eq(users.id, id));
       if (Array.isArray(roleIds)) {
@@ -286,8 +342,12 @@ export function registerAdminRoutes(app: Express) {
       const [row] = await db.select().from(users).where(eq(users.id, id));
       if (!row) return res.status(404).json({ error: "User not found" });
       res.json(row);
-    } catch (e) {
+    } catch (e: unknown) {
       console.error(e);
+      const code = e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code) : "";
+      if (code === "23505") {
+        return res.status(409).json({ error: "Email or username already exists" });
+      }
       res.status(500).json({ error: "Failed to update user" });
     }
   });
