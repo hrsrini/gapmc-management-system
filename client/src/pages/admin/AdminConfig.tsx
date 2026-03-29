@@ -9,13 +9,16 @@ import { Settings, AlertCircle } from "lucide-react";
 import { useState, useEffect } from "react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import {
+  SYSTEM_CONFIG_KEYS,
+  SYSTEM_CONFIG_LABELS,
+  type SystemConfigKey,
+} from "@shared/system-config-defaults";
 
-const CONFIG_KEYS = [
-  { key: "market_fee_percent", label: "Market Fee %" },
-  { key: "msp_rate", label: "MSP Rate" },
-  { key: "admin_charges", label: "Admin Charges" },
-  { key: "licence_fee", label: "Licence Fee" },
-];
+const CONFIG_FIELDS: { key: SystemConfigKey; label: string }[] = SYSTEM_CONFIG_KEYS.map((key) => ({
+  key,
+  label: SYSTEM_CONFIG_LABELS[key],
+}));
 
 export default function AdminConfig() {
   const { toast } = useToast();
@@ -32,10 +35,15 @@ export default function AdminConfig() {
     mutationFn: (body: Record<string, string>) => apiRequest("PUT", "/api/admin/config", body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/config"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/system/config"] });
       toast({ title: "Config updated", description: "System configuration saved." });
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to update config", variant: "destructive" });
+    onError: (e: Error) => {
+      toast({
+        title: "Failed to update config",
+        description: e.message,
+        variant: "destructive",
+      });
     },
   });
 
@@ -64,24 +72,34 @@ export default function AdminConfig() {
             <Settings className="h-5 w-5" />
             System Config
           </CardTitle>
-          <p className="text-sm text-muted-foreground">Default values: Market Fee %, MSP Rate, Admin Charges, Licence Fee.</p>
+          <p className="text-sm text-muted-foreground">
+            Default values used across the app (market fee %, MSP rate, admin charges, licence fee). Changes apply to new
+            fee rates, MSP rows, and licences when amounts are omitted. Authenticated users can read merged values via{" "}
+            <code className="text-xs bg-muted px-1 rounded">GET /api/system/config</code>.
+          </p>
         </CardHeader>
         <CardContent className="space-y-4">
           {isLoading ? (
             <Skeleton className="h-48 w-full" />
           ) : (
             <>
-              {CONFIG_KEYS.map(({ key, label }) => (
+              {CONFIG_FIELDS.map(({ key, label }) => (
                 <div key={key} className="grid grid-cols-1 md:grid-cols-3 gap-2 items-center">
-                  <Label className="md:col-span-1">{label}</Label>
+                  <Label className="md:col-span-1" htmlFor={`cfg-${key}`}>
+                    {label}
+                  </Label>
                   <Input
+                    id={`cfg-${key}`}
                     className="md:col-span-2"
+                    inputMode="decimal"
                     value={values[key] ?? ""}
                     onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
                   />
                 </div>
               ))}
-              <Button onClick={handleSave} disabled={updateMutation.isPending}>Save</Button>
+              <Button onClick={handleSave} disabled={updateMutation.isPending}>
+                Save
+              </Button>
             </>
           )}
         </CardContent>

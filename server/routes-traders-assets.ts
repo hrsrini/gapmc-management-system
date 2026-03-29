@@ -16,6 +16,7 @@ import {
   iomsReceipts,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
+import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { writeAuditLog } from "./audit";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 
@@ -52,6 +53,10 @@ export function registerTradersAssetsRoutes(app: Express) {
     try {
       const body = req.body;
       const id = nanoid();
+      const sys = await getMergedSystemConfig();
+      const feeFromBody =
+        body.feeAmount != null && String(body.feeAmount).trim() !== "" ? Number(body.feeAmount) : null;
+      const feeAmount = feeFromBody != null && !Number.isNaN(feeFromBody) ? feeFromBody : parseSystemConfigNumber(sys, "licence_fee");
       await db.insert(traderLicences).values({
         id,
         firmName: String(body.firmName ?? ""),
@@ -66,7 +71,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         aadhaarToken: body.aadhaarToken ? String(body.aadhaarToken) : null,
         pan: body.pan ? String(body.pan) : null,
         gstin: body.gstin ? String(body.gstin) : null,
-        feeAmount: body.feeAmount != null ? Number(body.feeAmount) : null,
+        feeAmount,
         receiptId: body.receiptId ? String(body.receiptId) : null,
         validFrom: body.validFrom ? String(body.validFrom) : null,
         validTo: body.validTo ? String(body.validTo) : null,
@@ -420,11 +425,14 @@ export function registerTradersAssetsRoutes(app: Express) {
   app.post("/api/ioms/msp-settings", async (req, res) => {
     try {
       const body = req.body;
+      const sys = await getMergedSystemConfig();
+      const defaultMsp = parseSystemConfigNumber(sys, "msp_rate");
       const id = nanoid();
       await db.insert(mspSettings).values({
         id,
         commodity: String(body.commodity ?? ""),
-        mspRate: Number(body.mspRate ?? 0),
+        mspRate:
+          body.mspRate != null && String(body.mspRate).trim() !== "" ? Number(body.mspRate) : defaultMsp,
         validFrom: String(body.validFrom ?? ""),
         validTo: String(body.validTo ?? ""),
         updatedBy: body.updatedBy ? String(body.updatedBy) : null,

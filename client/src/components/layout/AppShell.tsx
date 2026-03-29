@@ -1,5 +1,6 @@
 import { AppSidebar } from './AppSidebar';
 import { AppHeader } from './AppHeader';
+import { BugReportFab } from '@/components/BugReportFab';
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar';
 
 interface AppShellProps {
@@ -22,6 +23,7 @@ export function AppShell({ children, breadcrumbs = [] }: AppShellProps) {
           <main className="flex-1 overflow-auto p-6 bg-background">
             {children}
           </main>
+          <BugReportFab />
         </SidebarInset>
       </div>
     </SidebarProvider>

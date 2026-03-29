@@ -1,5 +1,6 @@
 import { Link } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '@/context/AuthContext';
 import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -57,6 +58,9 @@ const quickActions = [
 ];
 
 export default function Dashboard() {
+  const { user } = useAuth();
+  const displayName = user?.name?.trim() || user?.email || 'there';
+
   const { data: stats, isLoading: statsLoading } = useQuery<Stats>({
     queryKey: ['/api/stats'],
   });
@@ -102,7 +106,7 @@ export default function Dashboard() {
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground" data-testid="text-welcome">
-            Welcome back, Super Admin
+            Welcome back, {displayName}
           </h1>
           <p className="text-muted-foreground">
             Goa APMC Management System Overview

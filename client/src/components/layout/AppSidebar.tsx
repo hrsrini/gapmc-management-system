@@ -50,6 +50,7 @@ import {
   Store,
   KeyRound,
   ShieldAlert,
+  Bug,
 } from 'lucide-react';
 
 type MenuItem = {
@@ -60,11 +61,32 @@ type MenuItem = {
   requirePermission?: { module: string; action: 'Read' | 'Create' | 'Update' | 'Delete' };
 };
 
+/** True if this menu href is a prefix of the current location (exact or child path). */
+function menuHrefMatchesLocation(location: string, href: string): boolean {
+  if (location === href) return true;
+  if (href === '/dashboard') return false;
+  return location.startsWith(`${href}/`);
+}
+
+/** Among visible sidebar links, the most specific href that matches wins (e.g. /bugs/dashboard over /bugs). */
+function pickActiveMenuHref(location: string, hrefs: string[]): string | null {
+  const matches = hrefs.filter((h) => menuHrefMatchesLocation(location, h));
+  if (matches.length === 0) return null;
+  return matches.reduce((a, b) => (a.length >= b.length ? a : b));
+}
+
 const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
   {
     group: 'Dashboard',
     items: [
       { title: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
+    ]
+  },
+  {
+    group: 'Support',
+    items: [
+      { title: 'Bugs', icon: Bug, href: '/bugs' },
+      { title: 'Bug dashboard', icon: LayoutDashboard, href: '/bugs/dashboard' },
     ]
   },
   {
@@ -208,6 +230,15 @@ export function AppSidebar() {
       .filter((g) => g.items.length > 0);
   }, [isAdmin, can]);
 
+  const visibleMenuHrefs = useMemo(
+    () => visibleGroups.flatMap((g) => g.items.map((i) => i.href)),
+    [visibleGroups]
+  );
+  const activeMenuHref = useMemo(
+    () => pickActiveMenuHref(location, visibleMenuHrefs),
+    [location, visibleMenuHrefs]
+  );
+
   // Save sidebar scroll position to sessionStorage (survives unmount on route change)
   useEffect(() => {
     const el = document.querySelector(SIDEBAR_CONTENT_SELECTOR);
@@ -273,8 +304,7 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 {group.items.map((item) => {
-                  const isActive = location === item.href || 
-                    (item.href !== '/dashboard' && location.startsWith(item.href));
+                  const isActive = item.href === activeMenuHref;
                   return (
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton

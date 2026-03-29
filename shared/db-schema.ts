@@ -909,3 +909,47 @@ export const dakEscalations = gapmc.table("dak_escalations", {
   escalatedAt: text("escalated_at").notNull(),
   resolvedAt: text("resolved_at"),
 });
+
+// ----- Bug tracking (all authenticated users may report; ADMIN manages lifecycle) -----
+export const bugTicketSeq = gapmc.table("bug_ticket_seq", {
+  year: text("year").primaryKey(),
+  lastSeq: integer("last_seq").notNull().default(0),
+});
+
+export const bugTickets = gapmc.table("bug_tickets", {
+  id: text("id").primaryKey(),
+  ticketNo: text("ticket_no").notNull().unique(),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  bugType: text("bug_type").notNull(),
+  bugSubtype: text("bug_subtype").notNull(),
+  severity: text("severity").notNull(), // low | medium | high | critical
+  status: text("status").notNull(), // open | in_progress | resolved | closed
+  reporterUserId: text("reporter_user_id").notNull(),
+  assignedToUserId: text("assigned_to_user_id"),
+  resolutionSummary: text("resolution_summary"),
+  closedByUserId: text("closed_by_user_id"),
+  resolvedAt: text("resolved_at"),
+  closedAt: text("closed_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const bugAttachments = gapmc.table("bug_attachments", {
+  id: text("id").primaryKey(),
+  bugTicketId: text("bug_ticket_id").notNull(),
+  uploadedByUserId: text("uploaded_by_user_id").notNull(),
+  originalFilename: text("original_filename").notNull(),
+  storedFilename: text("stored_filename").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const bugComments = gapmc.table("bug_comments", {
+  id: text("id").primaryKey(),
+  bugTicketId: text("bug_ticket_id").notNull(),
+  userId: text("user_id").notNull(),
+  body: text("body").notNull(),
+  createdAt: text("created_at").notNull(),
+});

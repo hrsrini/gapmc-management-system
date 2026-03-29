@@ -264,8 +264,8 @@ export default function AdminUsers() {
         username: username.trim() === "" ? null : username.trim().toLowerCase(),
         phone: phone.trim() === "" ? null : phone.trim(),
         isActive,
-        roleIds: [...selectedRoleIds],
-        yardIds: [...selectedYardIds],
+        roleIds: Array.from(selectedRoleIds),
+        yardIds: Array.from(selectedYardIds),
       };
       if (password.length >= 8) body.password = password;
       updateMutation.mutate({ id: editingUserId, body });
@@ -286,8 +286,8 @@ export default function AdminUsers() {
       username: username.trim() || undefined,
       phone: phone.trim() || undefined,
       password,
-      roleIds: [...selectedRoleIds],
-      yardIds: [...selectedYardIds],
+      roleIds: Array.from(selectedRoleIds),
+      yardIds: Array.from(selectedYardIds),
     });
   }
 

@@ -13,8 +13,10 @@ import { registerVoucherRoutes } from "./routes-vouchers";
 import { registerFleetRoutes } from "./routes-fleet";
 import { registerConstructionRoutes } from "./routes-construction";
 import { registerDakRoutes } from "./routes-dak";
+import { registerBugRoutes } from "./routes-bugs";
 import { registerReportsRoutes } from "./routes-reports";
 import { registerAuthRoutes } from "./routes-auth";
+import { getMergedSystemConfig } from "./system-config";
 import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermissionByPath } from "./auth";
 import { writeAuditLog } from "./audit";
 import { yards } from "@shared/db-schema";
@@ -92,9 +94,6 @@ export async function registerRoutes(
 ): Promise<Server> {
   await storage.seedData();
 
-  // Auth: login, me, logout (session set on login)
-  registerAuthRoutes(app);
-
   // Cron trigger: M-03 rent invoice generation (secured by CRON_SECRET; call before requireAuthApi)
   app.post("/api/cron/rent-invoice-generation", async (req, res) => {
     const secret = process.env.CRON_SECRET;
@@ -113,6 +112,9 @@ export async function registerRoutes(
 
   // Require session for all other /api routes; attach req.user and req.scopedLocationIds
   app.use(requireAuthApi);
+
+  // Auth: login (public via isPublicApi), me, logout — must run after requireAuthApi so /me sees req.user
+  registerAuthRoutes(app);
 
   // IOMS M-10: Admin — require M-10 permission by method (Read/Create/Update/Delete) from role_permissions
   app.use("/api/admin", requireAdminPermissionByMethod);
@@ -137,6 +139,17 @@ export async function registerRoutes(
 
   // IOMS M-10: Admin (RBAC) routes — yards, users, roles, config, audit
   registerAdminRoutes(app);
+
+  /** Merged system_config + code defaults; any authenticated user (forms use for suggested values). */
+  app.get("/api/system/config", async (_req, res) => {
+    try {
+      const merged = await getMergedSystemConfig();
+      res.json(merged);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Failed to load system configuration" });
+    }
+  });
 
   // IOMS M-05: Receipts Online — central receipt engine
   registerReceiptsIomsRoutes(app);
@@ -164,6 +177,9 @@ export async function registerRoutes(
 
   // IOMS M-09: Correspondence (Dak)
   registerDakRoutes(app);
+
+  // Bug tracking (all authenticated users)
+  registerBugRoutes(app);
 
   // IOMS yard-scoped reports and CSV export
   registerReportsRoutes(app);

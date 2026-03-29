@@ -80,7 +80,7 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
   };
 }
 
-export function requireAuthApi(req: Request, res: Response, next: NextFunction): void {
+export async function requireAuthApi(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (!req.path.startsWith("/api")) {
     next();
     return;
@@ -94,21 +94,20 @@ export function requireAuthApi(req: Request, res: Response, next: NextFunction):
     res.status(401).json({ error: "Not authenticated" });
     return;
   }
-  loadAuthUser(userId)
-    .then((user) => {
-      if (!user) {
-        (req.session as any) = null;
-        res.status(401).json({ error: "Session invalid" });
-        return;
-      }
-      req.user = user;
-      req.scopedLocationIds = user.yardIds;
-      next();
-    })
-    .catch((err) => {
-      console.error(err);
-      res.status(500).json({ error: "Auth failed" });
-    });
+  try {
+    const user = await loadAuthUser(userId);
+    if (!user) {
+      (req.session as any) = null;
+      res.status(401).json({ error: "Session invalid" });
+      return;
+    }
+    req.user = user;
+    req.scopedLocationIds = user.yardIds;
+    next();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Auth failed" });
+  }
 }
 
 /** Use after requireAuthApi. Returns 403 if user has none of the given role tiers (e.g. "ADMIN", "DA"). */
@@ -159,6 +158,10 @@ const METHOD_TO_ACTION: Record<string, string> = {
 
 /** Map API path prefix to module code (M-01 .. M-10). Returns null if path is not tied to a single module. */
 export function getModuleForPath(path: string): string | null {
+  /** Bug tracking: all authenticated users; not tied to IOMS module permissions. */
+  if (path.startsWith("/api/bugs")) return null;
+  /** Read-only merged system defaults for any logged-in user (Admin edits via /api/admin/config). */
+  if (path.startsWith("/api/system")) return null;
   if (path.startsWith("/api/hr")) return "M-01";
   if (path.startsWith("/api/ioms/rent")) return "M-03";
   if (path.startsWith("/api/ioms/receipts")) return "M-05";

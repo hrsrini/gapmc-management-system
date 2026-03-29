@@ -22,6 +22,40 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+/** Message shown when admin API returns 403 (user not ADMIN). */
+export const ADMIN_403_MESSAGE =
+  "Access denied. Log in as administrator (admin@gapmc.local / Apmc@2026) to use Users, Roles, and Permission matrix. Run npm run db:seed-ioms-m10 if the admin user does not exist.";
+
+/** GET /api/... with the same 401/403 handling as the default queryFn (for custom query keys). */
+export async function fetchApiGet<T>(url: string): Promise<T> {
+  const res = await fetch(url, {
+    method: "GET",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+
+  if (res.status === 401) {
+    notify401();
+    const text = (await res.text()) || res.statusText;
+    throw new Error(`${res.status}: ${text}`);
+  }
+  if (res.status === 403) {
+    notify403();
+    const text = await res.text();
+    let msg = ADMIN_403_MESSAGE;
+    try {
+      const d = JSON.parse(text) as { error?: string };
+      if (typeof d?.error === "string") msg = d.error;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(msg);
+  }
+
+  await throwIfResNotOk(res);
+  return res.json() as Promise<T>;
+}
+
 export async function apiRequest(
   method: string,
   url: string,
@@ -40,43 +74,24 @@ export async function apiRequest(
   return res;
 }
 
-/** Message shown when admin API returns 403 (user not ADMIN). */
-export const ADMIN_403_MESSAGE =
-  "Access denied. Log in as administrator (admin@gapmc.local / Apmc@2026) to use Users, Roles, and Permission matrix. Run npm run db:seed-ioms-m10 if the admin user does not exist.";
-
 type UnauthorizedBehavior = "returnNull" | "throw";
-export const getQueryFn: <T>(options: {
+
+export function getQueryFn<T>(options: {
   on401: UnauthorizedBehavior;
-}) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior }) =>
-  async ({ queryKey }) => {
+}): QueryFunction<T> {
+  const { on401: unauthorizedBehavior } = options;
+  return async ({ queryKey }) => {
     const url = (Array.isArray(queryKey) ? queryKey.join("/") : queryKey) as string;
-    const res = await fetch(url, {
-      method: "GET",
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    });
-
-    if (res.status === 401) {
-      notify401();
-      if (unauthorizedBehavior === "returnNull") return null;
-    }
-    if (res.status === 403) {
-      notify403();
-      const text = await res.text();
-      let msg = ADMIN_403_MESSAGE;
-      try {
-        const d = JSON.parse(text) as { error?: string };
-        if (typeof d?.error === "string") msg = d.error;
-      } catch {
-        // use default msg
+    try {
+      return await fetchApiGet<T>(url);
+    } catch (e) {
+      if (unauthorizedBehavior === "returnNull" && e instanceof Error && e.message.startsWith("401:")) {
+        return null as T;
       }
-      throw new Error(msg);
+      throw e;
     }
-
-    await throwIfResNotOk(res);
-    return await res.json();
   };
+}
 
 export const queryClient = new QueryClient({
   defaultOptions: {

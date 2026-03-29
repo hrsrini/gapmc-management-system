@@ -24,6 +24,7 @@ import { nanoid } from "nanoid";
 import { canCreatePurchaseTransaction, canEditDraftPurchaseTransaction, canTransitionPurchaseTransaction, canVerifyCheckPostInward } from "./workflow";
 import { writeAuditLog } from "./audit";
 import { createIomsReceipt } from "./routes-receipts-ioms";
+import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 
 export function registerMarketIomsRoutes(app: Express) {
   const isScopedCheckPost = (req: { scopedLocationIds?: string[] }, checkPostId: string) => {
@@ -113,13 +114,15 @@ export function registerMarketIomsRoutes(app: Express) {
       if (yardId && scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
         return res.status(403).json({ error: "You do not have access to this yard" });
       }
+      const sys = await getMergedSystemConfig();
+      const defaultPct = parseSystemConfigNumber(sys, "market_fee_percent");
       const id = nanoid();
       await db.insert(marketFeeRates).values({
         id,
         commodityId: String(body.commodityId ?? ""),
         validFrom: String(body.validFrom ?? ""),
         validTo: String(body.validTo ?? ""),
-        feePercent: body.feePercent != null ? Number(body.feePercent) : 1,
+        feePercent: body.feePercent != null && body.feePercent !== "" ? Number(body.feePercent) : defaultPct,
         yardId,
       });
       const [row] = await db.select().from(marketFeeRates).where(eq(marketFeeRates.id, id));

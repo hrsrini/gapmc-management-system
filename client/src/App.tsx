@@ -86,6 +86,10 @@ import DakOutwardForm from "@/pages/correspondence/DakOutwardForm";
 import AccessDenied from "@/pages/AccessDenied";
 import IomsReports from "@/pages/reports/IomsReports";
 import NotFound from "@/pages/not-found";
+import BugList from "@/pages/bugs/BugList";
+import BugNew from "@/pages/bugs/BugNew";
+import BugDetail from "@/pages/bugs/BugDetail";
+import BugDashboard from "@/pages/bugs/BugDashboard";
 
 function Router() {
   return (
@@ -93,6 +97,18 @@ function Router() {
       <Route path="/" component={Login} />
       <Route path="/dashboard">
         <ProtectedRoute><Dashboard /></ProtectedRoute>
+      </Route>
+      <Route path="/bugs/dashboard">
+        <ProtectedRoute><BugDashboard /></ProtectedRoute>
+      </Route>
+      <Route path="/bugs/new">
+        <ProtectedRoute><BugNew /></ProtectedRoute>
+      </Route>
+      <Route path="/bugs/:id">
+        <ProtectedRoute><BugDetail /></ProtectedRoute>
+      </Route>
+      <Route path="/bugs">
+        <ProtectedRoute><BugList /></ProtectedRoute>
       </Route>
       <Route path="/rent">
         <ProtectedRoute><RentInvoiceList /></ProtectedRoute>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Percent, AlertCircle, Plus } from "lucide-react";
+import { SYSTEM_CONFIG_DEFAULTS } from "@shared/system-config-defaults";
 
 interface FeeRate {
   id: string;
@@ -35,8 +36,16 @@ export default function FeeRatesList() {
   const [commodityId, setCommodityId] = useState("");
   const [validFrom, setValidFrom] = useState("");
   const [validTo, setValidTo] = useState("");
-  const [feePercent, setFeePercent] = useState("1");
+  const [feePercent, setFeePercent] = useState<string>(SYSTEM_CONFIG_DEFAULTS.market_fee_percent);
   const [yardId, setYardId] = useState("");
+
+  const { data: sysCfg } = useQuery<Record<string, string>>({
+    queryKey: ["/api/system/config"],
+  });
+  useEffect(() => {
+    const p = sysCfg?.market_fee_percent;
+    if (p != null && p !== "") setFeePercent(p);
+  }, [sysCfg?.market_fee_percent]);
 
   const { data: list, isLoading, isError } = useQuery<FeeRate[]>({
     queryKey: ["/api/ioms/market/fee-rates"],
@@ -88,7 +97,8 @@ export default function FeeRatesList() {
       setCommodityId("");
       setValidFrom("");
       setValidTo("");
-      setFeePercent("1");
+      const cfg = queryClient.getQueryData<Record<string, string>>(["/api/system/config"]);
+      setFeePercent(cfg?.market_fee_percent ?? SYSTEM_CONFIG_DEFAULTS.market_fee_percent);
       setYardId("");
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),

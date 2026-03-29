@@ -19,6 +19,9 @@ import {
   rolePermissions,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
+import { SYSTEM_CONFIG_KEYS } from "@shared/system-config-defaults";
+import { getMergedSystemConfig } from "./system-config";
+import { writeAuditLog } from "./audit";
 
 export function registerAdminRoutes(app: Express) {
   const now = () => new Date().toISOString();
@@ -81,13 +84,11 @@ export function registerAdminRoutes(app: Express) {
     }
   });
 
-  // ----- System config -----
+  // ----- System config (defaults merged for UI; PUT only allows known keys) -----
   app.get("/api/admin/config", async (_req, res) => {
     try {
-      const rows = await db.select().from(systemConfig);
-      const config: Record<string, string> = {};
-      for (const r of rows) config[r.key] = r.value;
-      res.json(config);
+      const merged = await getMergedSystemConfig();
+      res.json(merged);
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: "Failed to fetch config" });
@@ -96,21 +97,34 @@ export function registerAdminRoutes(app: Express) {
 
   app.put("/api/admin/config", async (req, res) => {
     try {
-      const body = req.body as Record<string, string>;
-      for (const [key, value] of Object.entries(body)) {
-        await db.insert(systemConfig).values({
-          key,
-          value: String(value),
-          updatedAt: now(),
-        }).onConflictDoUpdate({
-          target: systemConfig.key,
-          set: { value: String(value), updatedAt: now() },
-        });
+      const userId = req.user!.id;
+      const body = req.body as Record<string, unknown>;
+      const before = await getMergedSystemConfig();
+      for (const key of SYSTEM_CONFIG_KEYS) {
+        if (!(key in body)) continue;
+        const value = String(body[key] ?? "");
+        await db
+          .insert(systemConfig)
+          .values({
+            key,
+            value,
+            updatedBy: userId,
+            updatedAt: now(),
+          })
+          .onConflictDoUpdate({
+            target: systemConfig.key,
+            set: { value, updatedBy: userId, updatedAt: now() },
+          });
       }
-      const rows = await db.select().from(systemConfig);
-      const config: Record<string, string> = {};
-      for (const r of rows) config[r.key] = r.value;
-      res.json(config);
+      const after = await getMergedSystemConfig();
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "Update",
+        recordId: "system_config",
+        beforeValue: before,
+        afterValue: after,
+      }).catch((err) => console.error("Audit log failed:", err));
+      res.json(after);
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: "Failed to update config" });

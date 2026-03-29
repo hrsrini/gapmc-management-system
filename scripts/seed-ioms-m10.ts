@@ -17,6 +17,7 @@ import {
 } from "../shared/db-schema";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { SYSTEM_CONFIG_DEFAULTS } from "../shared/system-config-defaults";
 
 const DEFAULT_ADMIN_PASSWORD = "Apmc@2026";
 
@@ -36,13 +37,6 @@ const LOCATIONS = [
   { name: "Sanquelim", code: "SANQ", type: "Yard" },
   { name: "Valpoi", code: "VALP", type: "Yard" },
 ];
-
-const DEFAULT_CONFIG: Record<string, string> = {
-  "market_fee_percent": "1.00",
-  "msp_rate": "10.00",
-  "admin_charges": "0.00",
-  "licence_fee": "300.00",
-};
 
 const ROLE_TIERS = [
   { name: "Data Originator", tier: "DO", description: "Creates and submits records" },
@@ -74,7 +68,7 @@ async function seed() {
   console.log("Seeded yards/check posts");
 
   // 2. System config
-  for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
+  for (const [key, value] of Object.entries(SYSTEM_CONFIG_DEFAULTS)) {
     await db.insert(systemConfig).values({
       key,
       value,
