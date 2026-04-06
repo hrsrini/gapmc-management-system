@@ -37,6 +37,7 @@ import AdminConfig from "@/pages/admin/AdminConfig";
 import AdminAudit from "@/pages/admin/AdminAudit";
 import AdminPermissionMatrix from "@/pages/admin/AdminPermissionMatrix";
 import AdminSlaConfig from "@/pages/admin/AdminSlaConfig";
+import AdminFinanceMappings from "@/pages/admin/AdminFinanceMappings";
 import HrEmployees from "@/pages/hr/HrEmployees";
 import HrEmployeeDetail from "@/pages/hr/HrEmployeeDetail";
 import HrEmployeeForm from "@/pages/hr/HrEmployeeForm";
@@ -69,6 +70,7 @@ import VouchersList from "@/pages/vouchers/VouchersList";
 import VoucherCreate from "@/pages/vouchers/VoucherCreate";
 import VoucherDetail from "@/pages/vouchers/VoucherDetail";
 import VouchersAdvances from "@/pages/vouchers/VouchersAdvances";
+import VoucherMonthlyStatement from "@/pages/vouchers/VoucherMonthlyStatement";
 import FleetVehicles from "@/pages/fleet/FleetVehicles";
 import FleetVehicleForm from "@/pages/fleet/FleetVehicleForm";
 import FleetVehicleDetail from "@/pages/fleet/FleetVehicleDetail";
@@ -79,10 +81,14 @@ import ConstructionAmc from "@/pages/construction/ConstructionAmc";
 import ConstructionLandRecords from "@/pages/construction/ConstructionLandRecords";
 import ConstructionFixedAssets from "@/pages/construction/ConstructionFixedAssets";
 import DakInward from "@/pages/correspondence/DakInward";
+import DakMyPending from "@/pages/correspondence/DakMyPending";
+import DakEscalations from "@/pages/correspondence/DakEscalations";
+import DakSubjectIndex from "@/pages/correspondence/DakSubjectIndex";
 import DakInwardForm from "@/pages/correspondence/DakInwardForm";
 import DakInwardDetail from "@/pages/correspondence/DakInwardDetail";
 import DakOutward from "@/pages/correspondence/DakOutward";
 import DakOutwardForm from "@/pages/correspondence/DakOutwardForm";
+import DakSlaReport from "@/pages/correspondence/DakSlaReport";
 import AccessDenied from "@/pages/AccessDenied";
 import IomsReports from "@/pages/reports/IomsReports";
 import NotFound from "@/pages/not-found";
@@ -194,6 +200,9 @@ function Router() {
       <Route path="/vouchers/create">
         <ProtectedRoute><RequirePermission module="M-06" action="Create"><VoucherCreate /></RequirePermission></ProtectedRoute>
       </Route>
+      <Route path="/vouchers/monthly-statement">
+        <ProtectedRoute><VoucherMonthlyStatement /></ProtectedRoute>
+      </Route>
       <Route path="/vouchers/:id">
         <ProtectedRoute><VoucherDetail /></ProtectedRoute>
       </Route>
@@ -229,6 +238,30 @@ function Router() {
       </Route>
       <Route path="/construction/fixed-assets">
         <ProtectedRoute><ConstructionFixedAssets /></ProtectedRoute>
+      </Route>
+      <Route path="/correspondence/sla-report">
+        <ProtectedRoute><RequirePermission module="M-09" action="Read"><DakSlaReport /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/correspondence/inward/my-pending">
+        <ProtectedRoute>
+          <RequirePermission module="M-09" action="Read">
+            <DakMyPending />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/correspondence/inward/escalations">
+        <ProtectedRoute>
+          <RequirePermission module="M-09" action="Read">
+            <DakEscalations />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/correspondence/inward/subjects">
+        <ProtectedRoute>
+          <RequirePermission module="M-09" action="Read">
+            <DakSubjectIndex />
+          </RequirePermission>
+        </ProtectedRoute>
       </Route>
       <Route path="/correspondence/inward">
         <ProtectedRoute><DakInward /></ProtectedRoute>
@@ -299,6 +332,9 @@ function Router() {
       </Route>
       <Route path="/admin/sla-config">
         <AdminRoute><AdminSlaConfig /></AdminRoute>
+      </Route>
+      <Route path="/admin/finance-mappings">
+        <AdminRoute><AdminFinanceMappings /></AdminRoute>
       </Route>
       <Route path="/hr/employees/new">
         <ProtectedRoute><RequirePermission module="M-01" action="Create"><HrEmployeeForm /></RequirePermission></ProtectedRoute>

@@ -6,10 +6,27 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollText, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 
-const MODULE_OPTIONS = ["", "Traders", "Rent/Tax", "Receipts", "Market Fee", "Vouchers"];
+/** Values must match `audit_log.module` written by the API. */
+const MODULE_OPTIONS = [
+  "",
+  "Agreements",
+  "Construction",
+  "Cron",
+  "Dak",
+  "HR",
+  "M-01",
+  "M-10",
+  "Market",
+  "Market Fee",
+  "Receipts",
+  "Rent/Tax",
+  "Traders",
+  "Vouchers",
+];
 const LIMIT_OPTIONS = [50, 100, 200];
 
 interface AuditEntry {
@@ -28,10 +45,12 @@ interface AuditEntry {
 
 export default function AdminAudit() {
   const [moduleFilter, setModuleFilter] = useState("");
+  const [userIdFilter, setUserIdFilter] = useState("");
   const [limit, setLimit] = useState(100);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const params = new URLSearchParams();
   if (moduleFilter) params.set("module", moduleFilter);
+  if (userIdFilter.trim()) params.set("userId", userIdFilter.trim());
   params.set("limit", String(limit));
   const url = `/api/admin/audit?${params.toString()}`;
   const { data: entries, isLoading, isError } = useQuery<AuditEntry[]>({
@@ -64,7 +83,7 @@ export default function AdminAudit() {
             <div className="flex items-center gap-2">
               <Label className="text-xs text-muted-foreground">Module</Label>
               <Select value={moduleFilter || "all"} onValueChange={(v) => setModuleFilter(v === "all" ? "" : v)}>
-                <SelectTrigger className="w-[140px] h-8">
+                <SelectTrigger className="w-[200px] h-8">
                   <SelectValue placeholder="All" />
                 </SelectTrigger>
                 <SelectContent>
@@ -76,6 +95,15 @@ export default function AdminAudit() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground">User ID</Label>
+              <Input
+                className="h-8 w-[180px] font-mono text-xs"
+                placeholder="Filter by user id"
+                value={userIdFilter}
+                onChange={(e) => setUserIdFilter(e.target.value)}
+              />
             </div>
             <div className="flex items-center gap-2">
               <Label className="text-xs text-muted-foreground">Limit</Label>

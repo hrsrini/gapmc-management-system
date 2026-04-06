@@ -294,6 +294,8 @@ async function seed() {
       transactionDate: new Date().toISOString().slice(0, 10),
       status: "Draft",
       farmerId,
+      parentTransactionId: null,
+      entryKind: "Original",
     });
     console.log("Seeded sample purchase transaction");
   }
@@ -414,6 +416,7 @@ async function seed() {
           .update(users)
           .set({ passwordHash, employeeId: emp.id, updatedAt: now })
           .where(eq(users.id, ex.id));
+        await db.update(employees).set({ userId: ex.id, updatedAt: now }).where(eq(employees.id, emp.id));
       } else if (!ex.username) {
         await db.update(users).set({ username: spec.username, updatedAt: now }).where(eq(users.id, ex.id));
       }
@@ -435,6 +438,7 @@ async function seed() {
     for (const yid of yardIds) {
       await db.insert(userYards).values({ userId: uid, yardId: yid }).onConflictDoNothing();
     }
+    await db.update(employees).set({ userId: uid, updatedAt: now }).where(eq(employees.id, emp.id));
   }
   console.log(`Seeded employee users (do/dv/da/readonly@gapmc.local) with roles; password: ${EMPLOYEE_USER_PASSWORD}`);
 
@@ -695,9 +699,35 @@ async function seed() {
   // ----- Leave requests (M-01) -----
   const leaveCount = await db.select().from(leaveRequests).limit(2);
   if (leaveCount.length === 0 && empIdForClaims) {
+    const [doRow] = await db.select({ id: users.id }).from(users).where(eq(users.email, "do@gapmc.local")).limit(1);
+    const [dvRow] = await db.select({ id: users.id }).from(users).where(eq(users.email, "dv@gapmc.local")).limit(1);
     await db.insert(leaveRequests).values([
-      { id: nanoid(), employeeId: empIdForClaims, leaveType: "CL", fromDate: "2025-02-15", toDate: "2025-02-15", status: "Pending", approvedBy: null },
-      { id: nanoid(), employeeId: empIdForClaims, leaveType: "EL", fromDate: "2025-03-01", toDate: "2025-03-03", status: "Approved", approvedBy: userId },
+      {
+        id: nanoid(),
+        employeeId: empIdForClaims,
+        leaveType: "CL",
+        fromDate: "2025-02-15",
+        toDate: "2025-02-15",
+        status: "Pending",
+        doUser: doRow?.id ?? null,
+        dvUser: null,
+        approvedBy: null,
+        workflowRevisionCount: 0,
+        dvReturnRemarks: null,
+      },
+      {
+        id: nanoid(),
+        employeeId: empIdForClaims,
+        leaveType: "EL",
+        fromDate: "2025-03-01",
+        toDate: "2025-03-03",
+        status: "Verified",
+        doUser: doRow?.id ?? null,
+        dvUser: dvRow?.id ?? null,
+        approvedBy: null,
+        workflowRevisionCount: 0,
+        dvReturnRemarks: null,
+      },
     ]);
     console.log("Seeded leave requests");
   }
@@ -739,6 +769,7 @@ async function seed() {
     await db.insert(slaConfig).values([
       { id: nanoid(), workflow: "VoucherApproval", hours: 48, alertRole: "DV" },
       { id: nanoid(), workflow: "RentInvoiceApproval", hours: 24, alertRole: "DA" },
+      { id: nanoid(), workflow: "M-09 Dak deadline", hours: 24, alertRole: "DA" },
     ]);
     console.log("Seeded SLA config");
   }

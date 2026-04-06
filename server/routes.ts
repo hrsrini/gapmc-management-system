@@ -15,10 +15,12 @@ import { registerConstructionRoutes } from "./routes-construction";
 import { registerDakRoutes } from "./routes-dak";
 import { registerBugRoutes } from "./routes-bugs";
 import { registerReportsRoutes } from "./routes-reports";
+import { registerFinanceReferenceRoutes } from "./routes-finance-reference";
 import { registerAuthRoutes } from "./routes-auth";
 import { getMergedSystemConfig } from "./system-config";
 import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermissionByPath } from "./auth";
 import { writeAuditLog } from "./audit";
+import { sendApiError } from "./api-errors";
 import { yards } from "@shared/db-schema";
 import { 
   insertTraderSchema, 
@@ -98,7 +100,7 @@ export async function registerRoutes(
   app.post("/api/cron/rent-invoice-generation", async (req, res) => {
     const secret = process.env.CRON_SECRET;
     if (secret && req.headers["x-cron-secret"] !== secret) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return sendApiError(res, 401, "CRON_UNAUTHORIZED", "Unauthorized");
     }
     try {
       const { generateRentInvoicesForCurrentMonth } = await import("./cron-rent-invoices");
@@ -106,7 +108,67 @@ export async function registerRoutes(
       return res.json({ ok: true, ...result });
     } catch (e) {
       console.error("Cron rent invoice generation failed:", e);
-      return res.status(500).json({ error: "Cron job failed" });
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
+    }
+  });
+
+  app.post("/api/cron/licence-expiry-auto-block", async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers["x-cron-secret"] !== secret) {
+      return sendApiError(res, 401, "CRON_UNAUTHORIZED", "Unauthorized");
+    }
+    try {
+      const { autoBlockExpiredTraderLicences } = await import("./cron-licence-expiry");
+      const result = await autoBlockExpiredTraderLicences();
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("Cron licence expiry auto-block failed:", e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
+    }
+  });
+
+  app.post("/api/cron/hr-retirement-reminders", async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers["x-cron-secret"] !== secret) {
+      return sendApiError(res, 401, "CRON_UNAUTHORIZED", "Unauthorized");
+    }
+    try {
+      const { runHrRetirementReminders } = await import("./cron-hr-retirement");
+      const result = await runHrRetirementReminders();
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("Cron HR retirement reminders failed:", e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
+    }
+  });
+
+  app.post("/api/cron/operational-reminders-digest", async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers["x-cron-secret"] !== secret) {
+      return sendApiError(res, 401, "CRON_UNAUTHORIZED", "Unauthorized");
+    }
+    try {
+      const { runOperationalRemindersDigest } = await import("./cron-operational-reminders");
+      const result = await runOperationalRemindersDigest();
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("Cron operational digest failed:", e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
+    }
+  });
+
+  app.post("/api/cron/amc-renewal-digest", async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers["x-cron-secret"] !== secret) {
+      return sendApiError(res, 401, "CRON_UNAUTHORIZED", "Unauthorized");
+    }
+    try {
+      const { runAmcRenewalDigest } = await import("./cron-amc-renewal-digest");
+      const result = await runAmcRenewalDigest();
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("Cron AMC renewal digest failed:", e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
     }
   });
 
@@ -133,7 +195,7 @@ export async function registerRoutes(
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch yards" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch yards");
     }
   });
 
@@ -147,7 +209,18 @@ export async function registerRoutes(
       res.json(merged);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to load system configuration" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load system configuration");
+    }
+  });
+
+  app.get("/api/system/payment-gateway", async (_req, res) => {
+    try {
+      const { getPaymentGatewayAdapter } = await import("./payment-gateway");
+      const a = getPaymentGatewayAdapter();
+      res.json({ mode: a.mode, description: a.describe() });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read payment gateway config");
     }
   });
 
@@ -181,6 +254,9 @@ export async function registerRoutes(
   // Bug tracking (all authenticated users)
   registerBugRoutes(app);
 
+  // Finance reference data (authenticated; no module code)
+  registerFinanceReferenceRoutes(app);
+
   // IOMS yard-scoped reports and CSV export
   registerReportsRoutes(app);
 
@@ -209,17 +285,17 @@ export async function registerRoutes(
       const traders = await storage.getTraders();
       res.json(traders);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch traders" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch traders");
     }
   });
 
   app.get("/api/traders/:id", async (req, res) => {
     try {
       const trader = await storage.getTrader(req.params.id);
-      if (!trader) return res.status(404).json({ error: "Trader not found" });
+      if (!trader) return sendApiError(res, 404, "LEGACY_TRADER_NOT_FOUND", "Trader not found");
       res.json(trader);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch trader" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch trader");
     }
   });
 
@@ -237,9 +313,9 @@ export async function registerRoutes(
       res.status(201).json(trader);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
+        return sendApiError(res, 400, "LEGACY_VALIDATION_FAILED", "Validation failed", error.errors);
       }
-      res.status(500).json({ error: "Failed to create trader" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create trader");
     }
   });
 
@@ -248,14 +324,14 @@ export async function registerRoutes(
       const before = await storage.getTrader(req.params.id);
       const validatedData = updateTraderSchema.parse(req.body);
       const trader = await storage.updateTrader(req.params.id, validatedData);
-      if (!trader) return res.status(404).json({ error: "Trader not found" });
+      if (!trader) return sendApiError(res, 404, "LEGACY_TRADER_NOT_FOUND", "Trader not found");
       writeAuditLog(req, { module: 'Traders', action: 'Update', recordId: req.params.id, beforeValue: before ?? undefined, afterValue: trader }).catch((e) => console.error('Audit log failed:', e));
       res.json(trader);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
+        return sendApiError(res, 400, "LEGACY_VALIDATION_FAILED", "Validation failed", error.errors);
       }
-      res.status(500).json({ error: "Failed to update trader" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update trader");
     }
   });
 
@@ -263,11 +339,11 @@ export async function registerRoutes(
     try {
       const before = await storage.getTrader(req.params.id);
       const deleted = await storage.deleteTrader(req.params.id);
-      if (!deleted) return res.status(404).json({ error: "Trader not found" });
+      if (!deleted) return sendApiError(res, 404, "LEGACY_TRADER_NOT_FOUND", "Trader not found");
       writeAuditLog(req, { module: 'Traders', action: 'Delete', recordId: req.params.id, beforeValue: before ?? undefined }).catch((e) => console.error('Audit log failed:', e));
       res.json({ success: true });
     } catch (error) {
-      res.status(500).json({ error: "Failed to delete trader" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete trader");
     }
   });
 
@@ -277,17 +353,17 @@ export async function registerRoutes(
       const invoices = await storage.getInvoices();
       res.json(invoices);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch invoices" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch invoices");
     }
   });
 
   app.get("/api/invoices/:id", async (req, res) => {
     try {
       const invoice = await storage.getInvoice(req.params.id);
-      if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+      if (!invoice) return sendApiError(res, 404, "LEGACY_INVOICE_NOT_FOUND", "Invoice not found");
       res.json(invoice);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch invoice" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch invoice");
     }
   });
 
@@ -305,9 +381,9 @@ export async function registerRoutes(
       res.status(201).json(invoice);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
+        return sendApiError(res, 400, "LEGACY_VALIDATION_FAILED", "Validation failed", error.errors);
       }
-      res.status(500).json({ error: "Failed to create invoice" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create invoice");
     }
   });
 
@@ -316,14 +392,14 @@ export async function registerRoutes(
       const before = await storage.getInvoice(req.params.id);
       const validatedData = updateInvoiceSchema.parse(req.body);
       const invoice = await storage.updateInvoice(req.params.id, validatedData);
-      if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+      if (!invoice) return sendApiError(res, 404, "LEGACY_INVOICE_NOT_FOUND", "Invoice not found");
       writeAuditLog(req, { module: 'Rent/Tax', action: 'Update', recordId: req.params.id, beforeValue: before ?? undefined, afterValue: invoice }).catch((e) => console.error('Audit log failed:', e));
       res.json(invoice);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
+        return sendApiError(res, 400, "LEGACY_VALIDATION_FAILED", "Validation failed", error.errors);
       }
-      res.status(500).json({ error: "Failed to update invoice" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update invoice");
     }
   });
 
@@ -331,11 +407,11 @@ export async function registerRoutes(
     try {
       const before = await storage.getInvoice(req.params.id);
       const deleted = await storage.deleteInvoice(req.params.id);
-      if (!deleted) return res.status(404).json({ error: "Invoice not found" });
+      if (!deleted) return sendApiError(res, 404, "LEGACY_INVOICE_NOT_FOUND", "Invoice not found");
       writeAuditLog(req, { module: 'Rent/Tax', action: 'Delete', recordId: req.params.id, beforeValue: before ?? undefined }).catch((e) => console.error('Audit log failed:', e));
       res.json({ success: true });
     } catch (error) {
-      res.status(500).json({ error: "Failed to delete invoice" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete invoice");
     }
   });
 
@@ -345,17 +421,17 @@ export async function registerRoutes(
       const receipts = await storage.getReceipts();
       res.json(receipts);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch receipts" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipts");
     }
   });
 
   app.get("/api/receipts/:id", async (req, res) => {
     try {
       const receipt = await storage.getReceipt(req.params.id);
-      if (!receipt) return res.status(404).json({ error: "Receipt not found" });
+      if (!receipt) return sendApiError(res, 404, "LEGACY_RECEIPT_NOT_FOUND", "Receipt not found");
       res.json(receipt);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch receipt" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipt");
     }
   });
 
@@ -373,33 +449,37 @@ export async function registerRoutes(
       res.status(201).json(receipt);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
+        return sendApiError(res, 400, "LEGACY_VALIDATION_FAILED", "Validation failed", error.errors);
       }
-      res.status(500).json({ error: "Failed to create receipt" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create receipt");
     }
   });
 
   app.put("/api/receipts/:id", async (req, res) => {
     try {
       const validatedData = updateReceiptSchema.parse(req.body);
+      const before = await storage.getReceipt(req.params.id);
       const receipt = await storage.updateReceipt(req.params.id, validatedData);
-      if (!receipt) return res.status(404).json({ error: "Receipt not found" });
+      if (!receipt) return sendApiError(res, 404, "LEGACY_RECEIPT_NOT_FOUND", "Receipt not found");
+      writeAuditLog(req, { module: 'Receipts', action: 'Update', recordId: req.params.id, beforeValue: before ?? undefined, afterValue: receipt }).catch((e) => console.error('Audit log failed:', e));
       res.json(receipt);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
+        return sendApiError(res, 400, "LEGACY_VALIDATION_FAILED", "Validation failed", error.errors);
       }
-      res.status(500).json({ error: "Failed to update receipt" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update receipt");
     }
   });
 
   app.delete("/api/receipts/:id", async (req, res) => {
     try {
+      const before = await storage.getReceipt(req.params.id);
       const deleted = await storage.deleteReceipt(req.params.id);
-      if (!deleted) return res.status(404).json({ error: "Receipt not found" });
+      if (!deleted) return sendApiError(res, 404, "LEGACY_RECEIPT_NOT_FOUND", "Receipt not found");
+      writeAuditLog(req, { module: 'Receipts', action: 'Delete', recordId: req.params.id, beforeValue: before ?? undefined }).catch((e) => console.error('Audit log failed:', e));
       res.json({ success: true });
     } catch (error) {
-      res.status(500).json({ error: "Failed to delete receipt" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete receipt");
     }
   });
 
@@ -409,7 +489,7 @@ export async function registerRoutes(
       const marketFees = await storage.getMarketFees();
       res.json(marketFees);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch market fees" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch market fees");
     }
   });
 
@@ -427,9 +507,9 @@ export async function registerRoutes(
       res.status(201).json(marketFee);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
+        return sendApiError(res, 400, "LEGACY_VALIDATION_FAILED", "Validation failed", error.errors);
       }
-      res.status(500).json({ error: "Failed to create market fee entry" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create market fee entry");
     }
   });
 
@@ -439,7 +519,7 @@ export async function registerRoutes(
       const agreements = await storage.getAgreements();
       res.json(agreements);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch agreements" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch agreements");
     }
   });
 
@@ -447,26 +527,29 @@ export async function registerRoutes(
     try {
       const validatedData = insertAgreementSchema.parse(req.body);
       const agreement = await storage.createAgreement(validatedData);
+      writeAuditLog(req, { module: 'Agreements', action: 'Create', recordId: agreement.id, afterValue: agreement }).catch((e) => console.error('Audit log failed:', e));
       res.status(201).json(agreement);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
+        return sendApiError(res, 400, "LEGACY_VALIDATION_FAILED", "Validation failed", error.errors);
       }
-      res.status(500).json({ error: "Failed to create agreement" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create agreement");
     }
   });
 
   app.put("/api/agreements/:id", async (req, res) => {
     try {
       const validatedData = updateAgreementSchema.parse(req.body);
+      const before = await storage.getAgreement(req.params.id);
       const agreement = await storage.updateAgreement(req.params.id, validatedData);
-      if (!agreement) return res.status(404).json({ error: "Agreement not found" });
+      if (!agreement) return sendApiError(res, 404, "LEGACY_AGREEMENT_NOT_FOUND", "Agreement not found");
+      writeAuditLog(req, { module: 'Agreements', action: 'Update', recordId: req.params.id, beforeValue: before ?? undefined, afterValue: agreement }).catch((e) => console.error('Audit log failed:', e));
       res.json(agreement);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
+        return sendApiError(res, 400, "LEGACY_VALIDATION_FAILED", "Validation failed", error.errors);
       }
-      res.status(500).json({ error: "Failed to update agreement" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update agreement");
     }
   });
 
@@ -476,7 +559,7 @@ export async function registerRoutes(
       const stockReturns = await storage.getStockReturns();
       res.json(stockReturns);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch stock returns" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch stock returns");
     }
   });
 
@@ -501,7 +584,7 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Seed sample stock returns error:", error);
       const msg = error instanceof Error ? error.message : "Failed to seed sample data";
-      res.status(500).json({ error: msg });
+      sendApiError(res, 500, "INTERNAL_ERROR", msg);
     }
   });
 
@@ -510,14 +593,11 @@ export async function registerRoutes(
       const parsed = bulkStockReturnSchema.safeParse(req.body);
       if (!parsed.success) {
         const message = formatStockReturnValidationError(parsed.error);
-        return res.status(400).json({
-          error: message,
-          details: parsed.error.errors,
-        });
+        return sendApiError(res, 400, "STOCK_RETURN_VALIDATION_FAILED", message, parsed.error.errors);
       }
       const { traderId, traderName, period, entries, status } = parsed.data;
       if (entries.length === 0 && status !== "Draft") {
-        return res.status(400).json({ error: "At least one commodity entry is required to submit" });
+        return sendApiError(res, 400, "STOCK_RETURN_ENTRIES_REQUIRED", "At least one commodity entry is required to submit");
       }
       const created = [];
       for (const entry of entries) {
@@ -548,11 +628,11 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         const message = formatStockReturnValidationError(error);
-        return res.status(400).json({ error: message, details: error.errors });
+        return sendApiError(res, 400, "STOCK_RETURN_VALIDATION_FAILED", message, error.errors);
       }
       console.error("POST /api/stockreturns error:", error);
       const message = error instanceof Error ? error.message : "Failed to create stock return";
-      res.status(500).json({ error: message });
+      sendApiError(res, 500, "INTERNAL_ERROR", message);
     }
   });
 
@@ -562,7 +642,7 @@ export async function registerRoutes(
       const logs = await storage.getActivityLogs();
       res.json(logs);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch activity logs" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch activity logs");
     }
   });
 
@@ -580,7 +660,7 @@ export async function registerRoutes(
         todaysCollection: receipts.reduce((sum, r) => sum + r.total, 0),
       });
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch stats" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch stats");
     }
   });
 

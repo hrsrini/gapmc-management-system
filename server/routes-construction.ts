@@ -9,6 +9,10 @@ import { db } from "./db";
 import { works, worksBills, amcContracts, amcBills, landRecords, fixedAssets } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import { writeAuditLog } from "./audit";
+import { sendApiError } from "./api-errors";
+import { assertRecordDoDvDaSeparation, hasRole } from "./workflow";
+import type { AuthUser } from "./auth";
+import { computeAmcRenewalAlerts } from "./operational-alerts";
 
 function yardInScope(req: Express.Request, yardId: string): boolean {
   const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
@@ -28,19 +32,19 @@ export function registerConstructionRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch works" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch works");
     }
   });
 
   app.get("/api/ioms/works/:id", async (req, res) => {
     try {
       const [row] = await db.select().from(works).where(eq(works.id, req.params.id)).limit(1);
-      if (!row) return res.status(404).json({ error: "Work not found" });
-      if (!yardInScope(req, row.yardId)) return res.status(404).json({ error: "Work not found" });
+      if (!row) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      if (!yardInScope(req, row.yardId)) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch work" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch work");
     }
   });
 
@@ -48,7 +52,8 @@ export function registerConstructionRoutes(app: Express) {
     try {
       const body = req.body;
       const yardId = String(body.yardId ?? "");
-      if (!yardInScope(req, yardId)) return res.status(403).json({ error: "You do not have access to this yard" });
+      if (!yardInScope(req, yardId))
+        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
       const id = nanoid();
       await db.insert(works).values({
         id,
@@ -76,7 +81,7 @@ export function registerConstructionRoutes(app: Express) {
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create work" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create work");
     }
   });
 
@@ -84,38 +89,46 @@ export function registerConstructionRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(works).where(eq(works.id, id));
-      if (!existing) return res.status(404).json({ error: "Work not found" });
-      if (!yardInScope(req, existing.yardId)) return res.status(404).json({ error: "Work not found" });
+      if (!existing) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
       const body = req.body;
       const newYardId = body.yardId !== undefined ? String(body.yardId) : existing.yardId;
-      if (body.yardId !== undefined && !yardInScope(req, newYardId)) return res.status(403).json({ error: "You do not have access to this yard" });
+      if (body.yardId !== undefined && !yardInScope(req, newYardId))
+        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
       const updates: Record<string, unknown> = {};
       ["workNo", "yardId", "workType", "description", "location", "contractorName", "contractorContact", "estimateAmount", "tenderValue", "workOrderNo", "workOrderDate", "startDate", "endDate", "completionDate", "status", "doUser", "dvUser", "daUser"].forEach((k) => {
         if (body[k] === undefined) return;
         if (["estimateAmount", "tenderValue"].includes(k)) updates[k] = body[k] == null ? null : Number(body[k]);
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
+      const mergedRoles = {
+        doUser: updates.doUser !== undefined ? (updates.doUser as string | null) : existing.doUser,
+        dvUser: updates.dvUser !== undefined ? (updates.dvUser as string | null) : existing.dvUser,
+        daUser: updates.daUser !== undefined ? (updates.daUser as string | null) : existing.daUser,
+      };
+      const seg = assertRecordDoDvDaSeparation(req.user, mergedRoles);
+      if (!seg.ok) return sendApiError(res, 403, "WORK_DO_DV_DA_SEGREGATION", seg.error);
       await db.update(works).set(updates as Record<string, string | number | null>).where(eq(works.id, id));
       const [row] = await db.select().from(works).where(eq(works.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "WORK_NOT_FOUND", "Not found");
       writeAuditLog(req, { module: "Construction", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update work" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update work");
     }
   });
 
   app.get("/api/ioms/works/:workId/bills", async (req, res) => {
     try {
       const [work] = await db.select().from(works).where(eq(works.id, req.params.workId)).limit(1);
-      if (!work) return res.status(404).json({ error: "Work not found" });
-      if (!yardInScope(req, work.yardId)) return res.status(404).json({ error: "Work not found" });
+      if (!work) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      if (!yardInScope(req, work.yardId)) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
       const list = await db.select().from(worksBills).where(eq(worksBills.workId, req.params.workId)).orderBy(desc(worksBills.billDate));
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch bills" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch bills");
     }
   });
 
@@ -124,8 +137,9 @@ export function registerConstructionRoutes(app: Express) {
       const body = req.body;
       const workId = String(body.workId ?? "");
       const [work] = await db.select().from(works).where(eq(works.id, workId)).limit(1);
-      if (!work) return res.status(404).json({ error: "Work not found" });
-      if (!yardInScope(req, work.yardId)) return res.status(403).json({ error: "You do not have access to this work's yard" });
+      if (!work) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      if (!yardInScope(req, work.yardId))
+        return sendApiError(res, 403, "WORK_RECORD_YARD_ACCESS_DENIED", "You do not have access to this work's yard");
       const id = nanoid();
       await db.insert(worksBills).values({
         id,
@@ -139,10 +153,27 @@ export function registerConstructionRoutes(app: Express) {
         billNo: body.billNo ? String(body.billNo) : null,
       });
       const [row] = await db.select().from(worksBills).where(eq(worksBills.id, id));
+      if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create bill" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create bill");
+    }
+  });
+
+  app.get("/api/ioms/amc/renewal-alerts", async (req, res) => {
+    try {
+      const yardId = req.query.yardId as string | undefined;
+      const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+      const conditions = [];
+      if (scopedIds && scopedIds.length > 0) conditions.push(inArray(amcContracts.yardId, scopedIds));
+      if (yardId) conditions.push(eq(amcContracts.yardId, yardId));
+      const base = db.select().from(amcContracts);
+      const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
+      res.json({ alerts: computeAmcRenewalAlerts(list) });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch AMC renewal alerts");
     }
   });
 
@@ -158,7 +189,7 @@ export function registerConstructionRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch AMC contracts" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch AMC contracts");
     }
   });
 
@@ -166,7 +197,8 @@ export function registerConstructionRoutes(app: Express) {
     try {
       const body = req.body;
       const yardId = String(body.yardId ?? "");
-      if (!yardInScope(req, yardId)) return res.status(403).json({ error: "You do not have access to this yard" });
+      if (!yardInScope(req, yardId))
+        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
       const id = nanoid();
       await db.insert(amcContracts).values({
         id,
@@ -181,10 +213,11 @@ export function registerConstructionRoutes(app: Express) {
         daUser: body.daUser ? String(body.daUser) : null,
       });
       const [row] = await db.select().from(amcContracts).where(eq(amcContracts.id, id));
+      if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create AMC" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create AMC");
     }
   });
 
@@ -200,7 +233,7 @@ export function registerConstructionRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch land records" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch land records");
     }
   });
 
@@ -208,7 +241,8 @@ export function registerConstructionRoutes(app: Express) {
     try {
       const body = req.body;
       const yardId = String(body.yardId ?? "");
-      if (!yardInScope(req, yardId)) return res.status(403).json({ error: "You do not have access to this yard" });
+      if (!yardInScope(req, yardId))
+        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
       const id = nanoid();
       const now = new Date().toISOString();
       await db.insert(landRecords).values({
@@ -227,10 +261,11 @@ export function registerConstructionRoutes(app: Express) {
         remarks: body.remarks ? String(body.remarks) : null,
       });
       const [row] = await db.select().from(landRecords).where(eq(landRecords.id, id));
+      if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create land record" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create land record");
     }
   });
 
@@ -246,7 +281,7 @@ export function registerConstructionRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch fixed assets" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch fixed assets");
     }
   });
 
@@ -254,7 +289,8 @@ export function registerConstructionRoutes(app: Express) {
     try {
       const body = req.body;
       const yardId = String(body.yardId ?? "");
-      if (!yardInScope(req, yardId)) return res.status(403).json({ error: "You do not have access to this yard" });
+      if (!yardInScope(req, yardId))
+        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
       const id = nanoid();
       await db.insert(fixedAssets).values({
         id,
@@ -273,10 +309,74 @@ export function registerConstructionRoutes(app: Express) {
         worksId: body.worksId ? String(body.worksId) : null,
       });
       const [row] = await db.select().from(fixedAssets).where(eq(fixedAssets.id, id));
+      if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create fixed asset" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create fixed asset");
+    }
+  });
+
+  app.put("/api/ioms/fixed-assets/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const [existing] = await db.select().from(fixedAssets).where(eq(fixedAssets.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "FIXED_ASSET_NOT_FOUND", "Not found");
+      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "FIXED_ASSET_NOT_FOUND", "Not found");
+      const user = (req as Express.Request & { user?: AuthUser }).user;
+      const body = req.body;
+      const touchesDisposal =
+        body.disposalDate !== undefined ||
+        body.disposalValue !== undefined ||
+        body.disposalApprovedBy !== undefined;
+      if (touchesDisposal && !hasRole(user, "DA") && !hasRole(user, "ADMIN")) {
+        return sendApiError(
+          res,
+          403,
+          "FIXED_ASSET_DISPOSAL_DA_ONLY",
+          "Recording disposal requires Data Approver or Admin",
+        );
+      }
+      const updates: Record<string, unknown> = {};
+      [
+        "yardId",
+        "assetType",
+        "acquisitionDate",
+        "acquisitionValue",
+        "status",
+        "description",
+        "usefulLifeYears",
+        "depreciationMethod",
+        "currentBookValue",
+        "worksId",
+      ].forEach((k) => {
+        if (body[k] === undefined) return;
+        if (["acquisitionValue", "usefulLifeYears", "currentBookValue", "disposalValue"].includes(k)) {
+          updates[k] = body[k] == null ? null : Number(body[k]);
+        } else updates[k] = body[k] == null ? null : String(body[k]);
+      });
+      if (body.disposalDate !== undefined) updates.disposalDate = body.disposalDate == null ? null : String(body.disposalDate);
+      if (body.disposalValue !== undefined) updates.disposalValue = body.disposalValue == null ? null : Number(body.disposalValue);
+      if (body.disposalApprovedBy !== undefined) {
+        updates.disposalApprovedBy = body.disposalApprovedBy == null ? null : String(body.disposalApprovedBy);
+      }
+      if (updates.yardId && !yardInScope(req, String(updates.yardId))) {
+        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
+      if (Object.keys(updates).length === 0) {
+        const [row] = await db.select().from(fixedAssets).where(eq(fixedAssets.id, id)).limit(1);
+        return res.json(row!);
+      }
+      await db.update(fixedAssets).set(updates as Record<string, string | number | null>).where(eq(fixedAssets.id, id));
+      const [row] = await db.select().from(fixedAssets).where(eq(fixedAssets.id, id)).limit(1);
+      if (!row) return sendApiError(res, 404, "FIXED_ASSET_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "Construction", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update fixed asset");
     }
   });
 }

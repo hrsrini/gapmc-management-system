@@ -266,6 +266,24 @@ GAPMC does **not** create or alter tables outside the `gapmc` schema. If you use
 
 ---
 
+## IOMS extensions (Drizzle `shared/db-schema.ts`)
+
+The live app schema includes additional `gapmc` tables and columns beyond the legacy GAPMC tables documented above, including for example:
+
+| Area | Tables / notes |
+|------|----------------|
+| M-01 HR | `leave_requests` with `do_user`, `dv_user`, `workflow_revision_count`, `dv_return_remarks`; service book entries |
+| M-04 Market | `purchase_transactions` with `parent_transaction_id`, `entry_kind` (Original \| Adjustment) |
+| M-09 Dak | `dak_inward`, `dak_outward`, `dak_action_log`, `dak_escalations` |
+| M-08 Construction | `land_records`, `fixed_assets`, works, AMC, bills |
+| M-10 Admin | `yards` (text `id`, `type` e.g. Yard \| CheckPost), `users`, roles, `system_config`, etc. |
+
+### `gapmc.land_records` (append-only)
+
+Application code does not expose UPDATE/DELETE for land records. For database-level enforcement, run **`npm run db:apply-land-immutable`** (applies `scripts/migrations/002-land-records-immutable.sql`; blocks UPDATE/DELETE on `gapmc.land_records`). Confirm with **`npm run db:verify-schema`**.
+
+---
+
 ## Creating the schema
 
 - **Drizzle:** `npm run db:push` (uses `shared/db-schema.ts` and `DATABASE_URL`).

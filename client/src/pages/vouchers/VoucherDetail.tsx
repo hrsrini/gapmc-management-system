@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -6,9 +6,26 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Receipt, ArrowLeft, ShieldCheck, CheckCircle, XCircle, Banknote, AlertCircle } from "lucide-react";
+import { Receipt, ArrowLeft, ShieldCheck, CheckCircle, XCircle, Banknote, AlertCircle, SendHorizontal } from "lucide-react";
+import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 
 interface Voucher {
   id: string;
@@ -25,6 +42,10 @@ interface Voucher {
   paidAt?: string | null;
   paymentRef?: string | null;
   createdAt?: string | null;
+  rejectionReasonCode?: string | null;
+  rejectionRemarks?: string | null;
+  workflowRevisionCount?: number | null;
+  dvReturnRemarks?: string | null;
 }
 interface YardRef {
   id: string;
@@ -41,6 +62,8 @@ export default function VoucherDetail() {
   const roles = user?.roles?.map((r) => r.tier) ?? [];
   const canVerify = (roles.includes("DV") || roles.includes("ADMIN")) && canUpdate;
   const canApprove = (roles.includes("DA") || roles.includes("ADMIN")) && canUpdate;
+  const canReturnSubmittedToDraft =
+    canUpdate && (roles.includes("DO") || roles.includes("ADMIN"));
 
   const { data: voucher, isLoading, isError } = useQuery<Voucher>({
     queryKey: ["/api/ioms/vouchers", id],
@@ -51,12 +74,18 @@ export default function VoucherDetail() {
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
 
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectCode, setRejectCode] = useState<string>(REJECTION_REASON_CODES[0]);
+  const [rejectRemarks, setRejectRemarks] = useState("");
+  const [returnDraftOpen, setReturnDraftOpen] = useState(false);
+  const [returnDraftRemarks, setReturnDraftRemarks] = useState("");
+
   const statusMutation = useMutation({
-    mutationFn: async (status: string) => {
+    mutationFn: async (payload: { status: string } & Record<string, unknown>) => {
       const res = await fetch(`/api/ioms/vouchers/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(payload),
         credentials: "include",
       });
       if (!res.ok) {
@@ -65,10 +94,16 @@ export default function VoucherDetail() {
       }
       return res.json();
     },
-    onSuccess: (_, status) => {
+    onSuccess: (_, payload) => {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/vouchers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/vouchers", id] });
-      toast({ title: "Status updated", description: `Voucher set to ${status}.` });
+      toast({ title: "Status updated", description: `Voucher set to ${payload.status}.` });
+      setRejectOpen(false);
+      setRejectRemarks("");
+      if (payload.status === "Draft" && "returnRemarks" in payload) {
+        setReturnDraftOpen(false);
+        setReturnDraftRemarks("");
+      }
     },
     onError: (e: Error) => {
       toast({ title: "Update failed", description: e.message, variant: "destructive" });
@@ -111,25 +146,30 @@ export default function VoucherDetail() {
                 <Receipt className="h-5 w-5" />
                 {voucher.voucherNo ?? "Voucher"} — <Badge variant="secondary">{voucher.status}</Badge>
               </CardTitle>
-              {(canVerify || canApprove) && (
+              {(canVerify || canApprove || (canReturnSubmittedToDraft && voucher.status === "Submitted")) && (
                 <div className="flex flex-wrap gap-2 pt-2">
                   {canVerify && (voucher.status === "Draft" || voucher.status === "Submitted") && (
-                    <Button size="sm" variant="outline" onClick={() => statusMutation.mutate("Verified")} disabled={statusMutation.isPending}>
+                    <Button size="sm" variant="outline" onClick={() => statusMutation.mutate({ status: "Verified" })} disabled={statusMutation.isPending}>
                       <ShieldCheck className="h-3.5 w-3.5 mr-1" /> Verify
+                    </Button>
+                  )}
+                  {canReturnSubmittedToDraft && voucher.status === "Submitted" && (
+                    <Button size="sm" variant="outline" onClick={() => setReturnDraftOpen(true)} disabled={statusMutation.isPending}>
+                      <SendHorizontal className="h-3.5 w-3.5 mr-1" /> Return to draft
                     </Button>
                   )}
                   {canApprove && voucher.status === "Verified" && (
                     <>
-                      <Button size="sm" onClick={() => statusMutation.mutate("Approved")} disabled={statusMutation.isPending}>
+                      <Button size="sm" onClick={() => statusMutation.mutate({ status: "Approved" })} disabled={statusMutation.isPending}>
                         <CheckCircle className="h-3.5 w-3.5 mr-1" /> Approve
                       </Button>
-                      <Button size="sm" variant="destructive" onClick={() => statusMutation.mutate("Rejected")} disabled={statusMutation.isPending}>
+                      <Button size="sm" variant="destructive" onClick={() => setRejectOpen(true)} disabled={statusMutation.isPending}>
                         <XCircle className="h-3.5 w-3.5 mr-1" /> Reject
                       </Button>
                     </>
                   )}
                   {canApprove && voucher.status === "Approved" && (
-                    <Button size="sm" variant="secondary" onClick={() => statusMutation.mutate("Paid")} disabled={statusMutation.isPending}>
+                    <Button size="sm" variant="secondary" onClick={() => statusMutation.mutate({ status: "Paid" })} disabled={statusMutation.isPending}>
                       <Banknote className="h-3.5 w-3.5 mr-1" /> Mark Paid
                     </Button>
                   )}
@@ -146,9 +186,116 @@ export default function VoucherDetail() {
               {voucher.paymentRef && <div><span className="text-muted-foreground">Payment ref</span><p>{voucher.paymentRef}</p></div>}
               {voucher.paidAt && <div><span className="text-muted-foreground">Paid at</span><p>{voucher.paidAt}</p></div>}
               {voucher.description && <div className="md:col-span-2"><span className="text-muted-foreground">Description</span><p>{voucher.description}</p></div>}
+              {voucher.status === "Rejected" && (voucher.rejectionReasonCode || voucher.rejectionRemarks) && (
+                <div className="md:col-span-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+                  <span className="text-muted-foreground">Rejection</span>
+                  <p className="font-medium">{voucher.rejectionReasonCode}</p>
+                  {voucher.rejectionRemarks && <p className="mt-1 whitespace-pre-wrap">{voucher.rejectionRemarks}</p>}
+                </div>
+              )}
+              {voucher.workflowRevisionCount != null && voucher.workflowRevisionCount > 0 && (
+                <div><span className="text-muted-foreground">Return-to-draft count</span><p>{voucher.workflowRevisionCount}</p></div>
+              )}
+              {voucher.dvReturnRemarks && (
+                <div className="md:col-span-2">
+                  <span className="text-muted-foreground">Last return-to-draft remarks</span>
+                  <p className="mt-1 whitespace-pre-wrap text-sm">{voucher.dvReturnRemarks}</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         ) : null}
+
+        <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Reject voucher</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label>Reason code</Label>
+                <Select value={rejectCode} onValueChange={setRejectCode}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {REJECTION_REASON_CODES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c.replace(/_/g, " ")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="reject-remarks">Remarks (min {MIN_WORKFLOW_REMARKS_LENGTH} characters)</Label>
+                <Textarea
+                  id="reject-remarks"
+                  value={rejectRemarks}
+                  onChange={(e) => setRejectRemarks(e.target.value)}
+                  rows={4}
+                  placeholder="Explain the rejection for audit trail"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setRejectOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={rejectRemarks.trim().length < MIN_WORKFLOW_REMARKS_LENGTH || statusMutation.isPending}
+                onClick={() =>
+                  statusMutation.mutate({
+                    status: "Rejected",
+                    rejectionReasonCode: rejectCode,
+                    rejectionRemarks: rejectRemarks.trim(),
+                  })
+                }
+              >
+                Reject
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={returnDraftOpen} onOpenChange={setReturnDraftOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Return to draft</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Record why the voucher is withdrawn from Submitted (min {MIN_WORKFLOW_REMARKS_LENGTH} characters).
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="v-return-draft-remarks">Return remarks</Label>
+              <Textarea
+                id="v-return-draft-remarks"
+                value={returnDraftRemarks}
+                onChange={(e) => setReturnDraftRemarks(e.target.value)}
+                rows={4}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setReturnDraftOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={returnDraftRemarks.trim().length < MIN_WORKFLOW_REMARKS_LENGTH || statusMutation.isPending}
+                onClick={() =>
+                  statusMutation.mutate({
+                    status: "Draft",
+                    returnRemarks: returnDraftRemarks.trim(),
+                  })
+                }
+              >
+                Return to draft
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </AppShell>
   );

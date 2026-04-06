@@ -15,6 +15,10 @@ export interface AuditEntry {
   afterValue?: unknown;
 }
 
+function serializeAuditField(value: unknown): unknown {
+  return value != null ? JSON.parse(JSON.stringify(value)) : null;
+}
+
 function getClientIp(req: Request): string | null {
   const forwarded = req.headers["x-forwarded-for"];
   if (forwarded) {
@@ -36,9 +40,26 @@ export async function writeAuditLog(req: Request, entry: AuditEntry): Promise<vo
     module: entry.module,
     action: entry.action,
     recordId: entry.recordId ?? null,
-    beforeValue: entry.beforeValue != null ? JSON.parse(JSON.stringify(entry.beforeValue)) : null,
-    afterValue: entry.afterValue != null ? JSON.parse(JSON.stringify(entry.afterValue)) : null,
+    beforeValue: serializeAuditField(entry.beforeValue) as Record<string, unknown> | null,
+    afterValue: serializeAuditField(entry.afterValue) as Record<string, unknown> | null,
     ip,
+    createdAt: now,
+  });
+}
+
+/** For cron/batch jobs with no authenticated user. userId from AUDIT_SYSTEM_USER_ID or `"system"`. */
+export async function writeAuditLogSystem(entry: AuditEntry): Promise<void> {
+  const userId = process.env.AUDIT_SYSTEM_USER_ID ?? "system";
+  const now = new Date().toISOString();
+  await db.insert(auditLog).values({
+    id: nanoid(),
+    userId,
+    module: entry.module,
+    action: entry.action,
+    recordId: entry.recordId ?? null,
+    beforeValue: serializeAuditField(entry.beforeValue) as Record<string, unknown> | null,
+    afterValue: serializeAuditField(entry.afterValue) as Record<string, unknown> | null,
+    ip: null,
     createdAt: now,
   });
 }

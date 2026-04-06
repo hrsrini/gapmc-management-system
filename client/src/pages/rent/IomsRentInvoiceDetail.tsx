@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -6,10 +6,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Link } from "wouter";
-import { FileText, ArrowLeft, ShieldCheck, CheckCircle, XCircle, AlertCircle, SendHorizontal, Banknote, Ban } from "lucide-react";
+import { FileText, ArrowLeft, ShieldCheck, CheckCircle, AlertCircle, SendHorizontal, Banknote, Ban } from "lucide-react";
+import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 
 interface RentInvoice {
   id: string;
@@ -30,6 +39,8 @@ interface RentInvoice {
   daUser?: string | null;
   generatedAt?: string | null;
   approvedAt?: string | null;
+  workflowRevisionCount?: number | null;
+  dvReturnRemarks?: string | null;
 }
 interface YardRef {
   id: string;
@@ -82,12 +93,15 @@ export default function IomsRentInvoiceDetail() {
     licences.map((l) => [l.id, l.licenceNo ? `${l.licenceNo}${l.firmName ? ` — ${l.firmName}` : ""}` : (l.firmName ?? l.id)]),
   );
 
+  const [sendBackOpen, setSendBackOpen] = useState(false);
+  const [returnRemarks, setReturnRemarks] = useState("");
+
   const statusMutation = useMutation({
-    mutationFn: async (status: string) => {
+    mutationFn: async (body: Record<string, unknown>) => {
       const res = await fetch(`/api/ioms/rent/invoices/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(body),
         credentials: "include",
       });
       if (!res.ok) {
@@ -96,10 +110,12 @@ export default function IomsRentInvoiceDetail() {
       }
       return res.json();
     },
-    onSuccess: (_, status) => {
+    onSuccess: (_, body) => {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/invoices"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/invoices", id] });
-      toast({ title: "Status updated", description: `Invoice set to ${status}.` });
+      toast({ title: "Status updated", description: `Invoice set to ${String(body.status)}.` });
+      setSendBackOpen(false);
+      setReturnRemarks("");
     },
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
@@ -171,36 +187,82 @@ export default function IomsRentInvoiceDetail() {
             {invoice.isGovtEntity && <div><span className="text-muted-foreground">Govt entity</span><br />Yes</div>}
             {invoice.generatedAt && <div><span className="text-muted-foreground">Generated at</span><br />{invoice.generatedAt}</div>}
             {invoice.approvedAt && <div><span className="text-muted-foreground">Approved at</span><br />{invoice.approvedAt}</div>}
+            {invoice.workflowRevisionCount != null && invoice.workflowRevisionCount > 0 && (
+              <div><span className="text-muted-foreground">DV return count</span><br />{invoice.workflowRevisionCount}</div>
+            )}
+            {invoice.dvReturnRemarks && (
+              <div className="md:col-span-2">
+                <span className="text-muted-foreground">Last DV return remarks</span>
+                <p className="mt-1 whitespace-pre-wrap text-sm">{invoice.dvReturnRemarks}</p>
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap gap-2 pt-2">
             {canDoVerify && (
-              <Button size="sm" variant="outline" onClick={() => statusMutation.mutate("Verified")} disabled={statusMutation.isPending}>
+              <Button size="sm" variant="outline" onClick={() => statusMutation.mutate({ status: "Verified" })} disabled={statusMutation.isPending}>
                 <ShieldCheck className="h-4 w-4 mr-1" /> Verify
               </Button>
             )}
             {canDoApprove && (
-              <Button size="sm" onClick={() => statusMutation.mutate("Approved")} disabled={statusMutation.isPending}>
+              <Button size="sm" onClick={() => statusMutation.mutate({ status: "Approved" })} disabled={statusMutation.isPending}>
                 <CheckCircle className="h-4 w-4 mr-1" /> Approve
               </Button>
             )}
             {canSendBack && (
-              <Button size="sm" variant="outline" onClick={() => statusMutation.mutate("Draft")} disabled={statusMutation.isPending}>
+              <Button size="sm" variant="outline" onClick={() => setSendBackOpen(true)} disabled={statusMutation.isPending}>
                 <SendHorizontal className="h-4 w-4 mr-1" /> Send back
               </Button>
             )}
             {canMarkPaid && (
-              <Button size="sm" variant="default" onClick={() => statusMutation.mutate("Paid")} disabled={statusMutation.isPending}>
+              <Button size="sm" variant="default" onClick={() => statusMutation.mutate({ status: "Paid" })} disabled={statusMutation.isPending}>
                 <Banknote className="h-4 w-4 mr-1" /> Mark Paid
               </Button>
             )}
             {canCancel && (
-              <Button size="sm" variant="destructive" onClick={() => statusMutation.mutate("Cancelled")} disabled={statusMutation.isPending}>
+              <Button size="sm" variant="destructive" onClick={() => statusMutation.mutate({ status: "Cancelled" })} disabled={statusMutation.isPending}>
                 <Ban className="h-4 w-4 mr-1" /> Cancel
               </Button>
             )}
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={sendBackOpen} onOpenChange={setSendBackOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Send back to Draft</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            DV must record why the invoice is returned (min {MIN_WORKFLOW_REMARKS_LENGTH} characters).
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="return-remarks">Return remarks</Label>
+            <Textarea
+              id="return-remarks"
+              value={returnRemarks}
+              onChange={(e) => setReturnRemarks(e.target.value)}
+              rows={4}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setSendBackOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={returnRemarks.trim().length < MIN_WORKFLOW_REMARKS_LENGTH || statusMutation.isPending}
+              onClick={() =>
+                statusMutation.mutate({
+                  status: "Draft",
+                  returnRemarks: returnRemarks.trim(),
+                })
+              }
+            >
+              Send back
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

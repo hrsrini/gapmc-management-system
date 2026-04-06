@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -5,9 +6,27 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Calendar, AlertCircle, CheckCircle, XCircle } from "lucide-react";
+import { Calendar, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal } from "lucide-react";
+import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 
 interface LeaveRequest {
   id: string;
@@ -16,7 +35,13 @@ interface LeaveRequest {
   fromDate: string;
   toDate: string;
   status: string;
+  doUser?: string | null;
+  dvUser?: string | null;
   approvedBy?: string | null;
+  rejectionReasonCode?: string | null;
+  rejectionRemarks?: string | null;
+  workflowRevisionCount?: number | null;
+  dvReturnRemarks?: string | null;
 }
 interface Employee {
   id: string;
@@ -30,9 +55,18 @@ export default function LeaveRequests() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const roles = user?.roles?.map((r) => r.tier) ?? [];
+  const canVerify = roles.includes("DV") || roles.includes("ADMIN");
   const canApprove = roles.includes("DA") || roles.includes("ADMIN");
+  const [pendingOnly, setPendingOnly] = useState(false);
+  const [rejectId, setRejectId] = useState<string | null>(null);
+  const [rejectCode, setRejectCode] = useState<string>(REJECTION_REASON_CODES[0]);
+  const [rejectRemarks, setRejectRemarks] = useState("");
+  const [returnLeaveId, setReturnLeaveId] = useState<string | null>(null);
+  const [returnRemarks, setReturnRemarks] = useState("");
+
+  const listUrl = pendingOnly ? "/api/hr/leaves?pendingMyAction=1" : "/api/hr/leaves";
   const { data: list, isLoading, isError } = useQuery<LeaveRequest[]>({
-    queryKey: ["/api/hr/leaves"],
+    queryKey: [listUrl],
   });
   const { data: employees = [] } = useQuery<Employee[]>({
     queryKey: ["/api/hr/employees"],
@@ -41,11 +75,12 @@ export default function LeaveRequests() {
     employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
   );
   const statusMutation = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+    mutationFn: async (vars: { id: string; status: string } & Record<string, unknown>) => {
+      const { id, ...body } = vars;
       const res = await fetch(`/api/hr/leaves/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(body),
         credentials: "include",
       });
       if (!res.ok) {
@@ -54,9 +89,14 @@ export default function LeaveRequests() {
       }
       return res.json();
     },
-    onSuccess: (_, { status }) => {
+    onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/hr/leaves"] });
-      toast({ title: "Status updated", description: `Leave request set to ${status}.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/leaves?pendingMyAction=1"] });
+      toast({ title: "Status updated", description: `Leave request set to ${vars.status}.` });
+      setRejectId(null);
+      setRejectRemarks("");
+      setReturnLeaveId(null);
+      setReturnRemarks("");
     },
     onError: (e: Error) => {
       toast({ title: "Update failed", description: e.message, variant: "destructive" });
@@ -76,6 +116,8 @@ export default function LeaveRequests() {
     );
   }
 
+  const showActions = canVerify || canApprove;
+
   return (
     <AppShell breadcrumbs={[{ label: "HR", href: "/hr/employees" }, { label: "Leave requests (M-01)" }]}>
       <Card>
@@ -85,9 +127,18 @@ export default function LeaveRequests() {
             Leave requests (IOMS M-01)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Employee leave applications. DA/Admin can approve or reject Pending requests.
-            {canApprove && <span className="block mt-1">You can approve or reject Pending requests.</span>}
+            Workflow: Pending (DO) → Verified (DV) → Approved or Rejected (DA). DV may return Verified → Pending with remarks.
           </p>
+          <div className="flex items-center gap-2 pt-2">
+            <Checkbox
+              id="leave-pending-me"
+              checked={pendingOnly}
+              onCheckedChange={(c) => setPendingOnly(c === true)}
+            />
+            <Label htmlFor="leave-pending-me" className="text-sm font-normal cursor-pointer">
+              Pending my action (DV/DA queue)
+            </Label>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -101,7 +152,7 @@ export default function LeaveRequests() {
                   <TableHead>From</TableHead>
                   <TableHead>To</TableHead>
                   <TableHead>Status</TableHead>
-                  {canApprove && <TableHead className="w-[200px]">Actions</TableHead>}
+                  {showActions && <TableHead className="w-[280px]">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -111,10 +162,49 @@ export default function LeaveRequests() {
                     <TableCell>{r.leaveType}</TableCell>
                     <TableCell>{r.fromDate}</TableCell>
                     <TableCell>{r.toDate}</TableCell>
-                    <TableCell><Badge variant="secondary">{r.status}</Badge></TableCell>
-                    {canApprove && (
-                      <TableCell className="space-x-2">
-                        {r.status === "Pending" && (
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        <Badge variant="secondary">{r.status}</Badge>
+                        {r.status === "Rejected" && r.rejectionRemarks && (
+                          <span className="text-xs text-muted-foreground line-clamp-2" title={r.rejectionRemarks}>
+                            {r.rejectionReasonCode}: {r.rejectionRemarks}
+                          </span>
+                        )}
+                        {r.dvReturnRemarks && (
+                          <span className="text-xs text-muted-foreground line-clamp-2" title={r.dvReturnRemarks}>
+                            DV return: {r.dvReturnRemarks}
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                    {showActions && (
+                      <TableCell className="flex flex-wrap gap-1">
+                        {canVerify && r.status === "Pending" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => statusMutation.mutate({ id: r.id, status: "Verified" })}
+                            disabled={statusMutation.isPending}
+                          >
+                            <ShieldCheck className="h-3.5 w-3.5 mr-1" />
+                            Verify
+                          </Button>
+                        )}
+                        {canVerify && r.status === "Verified" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setReturnLeaveId(r.id);
+                              setReturnRemarks("");
+                            }}
+                            disabled={statusMutation.isPending}
+                          >
+                            <SendHorizontal className="h-3.5 w-3.5 mr-1" />
+                            Send back
+                          </Button>
+                        )}
+                        {canApprove && r.status === "Verified" && (
                           <>
                             <Button
                               size="sm"
@@ -128,7 +218,11 @@ export default function LeaveRequests() {
                             <Button
                               size="sm"
                               variant="destructive"
-                              onClick={() => statusMutation.mutate({ id: r.id, status: "Rejected" })}
+                              onClick={() => {
+                                setRejectId(r.id);
+                                setRejectCode(REJECTION_REASON_CODES[0]);
+                                setRejectRemarks("");
+                              }}
                               disabled={statusMutation.isPending}
                             >
                               <XCircle className="h-3.5 w-3.5 mr-1" />
@@ -148,6 +242,108 @@ export default function LeaveRequests() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={rejectId != null} onOpenChange={(o) => !o && setRejectId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reject leave request</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Reason code</Label>
+              <Select value={rejectCode} onValueChange={setRejectCode}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {REJECTION_REASON_CODES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c.replace(/_/g, " ")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="leave-reject-remarks">Remarks (min {MIN_WORKFLOW_REMARKS_LENGTH} characters)</Label>
+              <Textarea
+                id="leave-reject-remarks"
+                value={rejectRemarks}
+                onChange={(e) => setRejectRemarks(e.target.value)}
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRejectId(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={
+                rejectId == null ||
+                rejectRemarks.trim().length < MIN_WORKFLOW_REMARKS_LENGTH ||
+                statusMutation.isPending
+              }
+              onClick={() => {
+                if (!rejectId) return;
+                statusMutation.mutate({
+                  id: rejectId,
+                  status: "Rejected",
+                  rejectionReasonCode: rejectCode,
+                  rejectionRemarks: rejectRemarks.trim(),
+                });
+              }}
+            >
+              Reject
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={returnLeaveId != null} onOpenChange={(o) => !o && setReturnLeaveId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Return leave to Pending</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Remarks are required (min {MIN_WORKFLOW_REMARKS_LENGTH} characters).
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="leave-return-remarks">Return remarks</Label>
+            <Textarea
+              id="leave-return-remarks"
+              value={returnRemarks}
+              onChange={(e) => setReturnRemarks(e.target.value)}
+              rows={4}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setReturnLeaveId(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                returnLeaveId == null ||
+                returnRemarks.trim().length < MIN_WORKFLOW_REMARKS_LENGTH ||
+                statusMutation.isPending
+              }
+              onClick={() => {
+                if (!returnLeaveId) return;
+                statusMutation.mutate({
+                  id: returnLeaveId,
+                  status: "Pending",
+                  returnRemarks: returnRemarks.trim(),
+                });
+              }}
+            >
+              Send back to Pending
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

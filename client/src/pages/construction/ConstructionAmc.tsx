@@ -14,6 +14,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FileCheck, AlertCircle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 interface AmcContract {
   id: string;
@@ -33,6 +34,14 @@ interface Yard {
   name?: string | null;
 }
 
+interface AmcRenewalAlert {
+  contractId: string;
+  contractorName: string;
+  contractEnd: string;
+  daysRemaining: number;
+  urgency: "overdue" | "30d" | "60d";
+}
+
 export default function ConstructionAmc() {
   const [yardId, setYardId] = useState("all");
 
@@ -42,6 +51,14 @@ export default function ConstructionAmc() {
 
   const { data: list = [], isLoading, isError } = useQuery<AmcContract[]>({ queryKey: [url] });
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+
+  const alertsUrl =
+    yardId && yardId !== "all"
+      ? `/api/ioms/amc/renewal-alerts?yardId=${encodeURIComponent(yardId)}`
+      : "/api/ioms/amc/renewal-alerts";
+  const { data: amcAlertsPayload } = useQuery<{ alerts: AmcRenewalAlert[] }>({ queryKey: [alertsUrl] });
+  const amcAlerts = amcAlertsPayload?.alerts ?? [];
+  const overdueAmc = amcAlerts.filter((a) => a.urgency === "overdue").length;
 
   if (isError) {
     return (
@@ -65,6 +82,15 @@ export default function ConstructionAmc() {
             AMC contracts
           </CardTitle>
           <p className="text-sm text-muted-foreground">Annual / periodic maintenance contracts by yard.</p>
+          {amcAlerts.length > 0 && (
+            <Alert variant={overdueAmc > 0 ? "destructive" : "default"} className="mt-3">
+              <AlertTitle>Contract end reminders</AlertTitle>
+              <AlertDescription>
+                {amcAlerts.length} active AMC contract(s) ending within 60 days or overdue
+                {overdueAmc > 0 ? ` (${overdueAmc} overdue).` : "."}
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="pt-2">
             <Label>Yard</Label>
             <Select value={yardId} onValueChange={setYardId}>

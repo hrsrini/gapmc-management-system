@@ -40,6 +40,26 @@ export default function IomsReports() {
     },
   });
 
+  const downloadTallyExportCsv = async () => {
+    try {
+      const params = new URLSearchParams({ format: "csv" });
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      const res = await fetch(`/api/ioms/reports/tally-export?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "tally-export.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Download started", description: "tally-export.csv (receipts + vouchers with ledger names)." });
+    } catch (e) {
+      toast({ title: "Download failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+    }
+  };
+
   const downloadCsv = async (report: "rent-summary" | "voucher-summary" | "receipt-register", filename: string) => {
     try {
       const params = new URLSearchParams({ format: "csv" });
@@ -163,6 +183,23 @@ export default function IomsReports() {
               <Button onClick={() => downloadCsv("receipt-register", "receipt-register.csv")} variant="outline" className="w-full">
                 <Download className="h-4 w-4 mr-2" />
                 Download CSV
+              </Button>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5" />
+                Tally export (CC-14)
+              </CardTitle>
+              <CardDescription>
+                Receipts and payment vouchers with mapped Tally ledger names; optional date range and yard filter above.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={downloadTallyExportCsv} variant="outline" className="w-full">
+                <Download className="h-4 w-4 mr-2" />
+                Download tally-export.csv
               </Button>
             </CardContent>
           </Card>

@@ -19,6 +19,7 @@ import {
 } from "@shared/db-schema";
 import { createBugBodySchema, patchBugSchema, bugCommentSchema, BUG_STATUSES } from "@shared/bug-taxonomy";
 import { writeAuditLog } from "./audit";
+import { sendApiError } from "./api-errors";
 import type { AuthUser } from "./auth";
 
 const UPLOAD_ROOT = path.resolve(process.cwd(), "uploads", "bugs");
@@ -99,7 +100,7 @@ function multerBugCreate(req: Request, res: Response, next: NextFunction): void 
   upload.array("files", 5)(req, res, (err: unknown) => {
     if (err) {
       const msg = err instanceof Error ? err.message : "Upload failed";
-      res.status(400).json({ error: msg });
+      sendApiError(res, 400, "BUG_UPLOAD_INVALID", msg);
       return;
     }
     next();
@@ -152,7 +153,7 @@ export function registerBugRoutes(app: Express): void {
       console.error(e);
       const code = e && typeof e === "object" && "code" in e ? String((e as { code: unknown }).code) : "";
       const hint = code === "42P01" ? " Run npm run db:push to create gapmc tables (including bug tracking)." : "";
-      res.status(500).json({ error: `Failed to list bugs.${hint}` });
+      sendApiError(res, 500, "INTERNAL_ERROR", `Failed to list bugs.${hint}`);
     }
   });
 
@@ -245,14 +246,14 @@ export function registerBugRoutes(app: Express): void {
       console.error(e);
       const code = e && typeof e === "object" && "code" in e ? String((e as { code: unknown }).code) : "";
       const hint = code === "42P01" ? " Run npm run db:push to create gapmc tables (including bug tracking)." : "";
-      res.status(500).json({ error: `Failed to load dashboard.${hint}` });
+      sendApiError(res, 500, "INTERNAL_ERROR", `Failed to load dashboard.${hint}`);
     }
   });
 
   app.get("/api/bugs/:id", async (req, res) => {
     try {
       const [ticket] = await db.select().from(bugTickets).where(eq(bugTickets.id, req.params.id)).limit(1);
-      if (!ticket) return res.status(404).json({ error: "Bug not found" });
+      if (!ticket) return sendApiError(res, 404, "BUG_NOT_FOUND", "Bug not found");
 
       const [reporter] = await db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, ticket.reporterUserId)).limit(1);
       let assignee: { name: string; email: string } | null = null;
@@ -296,7 +297,7 @@ export function registerBugRoutes(app: Express): void {
       });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to load bug" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load bug");
     }
   });
 
@@ -335,6 +336,7 @@ export function registerBugRoutes(app: Express): void {
       });
 
       const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      let attachmentCount = 0;
       for (const f of files) {
         const ext = path.extname(f.originalname).toLowerCase();
         if (!ALLOWED_EXT.has(ext) || !ALLOWED_MIMES.has(f.mimetype)) {
@@ -351,33 +353,34 @@ export function registerBugRoutes(app: Express): void {
           sizeBytes: f.size,
           createdAt: ts,
         });
+        attachmentCount += 1;
       }
 
+      const [row] = await db.select().from(bugTickets).where(eq(bugTickets.id, id));
+      if (!row) return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load created bug");
       writeAuditLog(req, {
         module: "Bugs",
         action: "Create",
         recordId: id,
-        afterValue: { ticketNo, title: body.title },
+        afterValue: { ...row, attachmentCount },
       }).catch((err) => console.error("Audit log failed:", err));
-
-      const [row] = await db.select().from(bugTickets).where(eq(bugTickets.id, id));
       res.status(201).json(row);
     } catch (e) {
       if (e instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: e.errors });
+        return sendApiError(res, 400, "BUG_CREATE_VALIDATION", "Validation failed", e.errors);
       }
       console.error(e);
-      res.status(500).json({ error: "Failed to create bug" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create bug");
     }
   });
 
   app.patch("/api/bugs/:id", async (req, res) => {
     try {
       if (!isAdmin(req.user)) {
-        return res.status(403).json({ error: "Only administrators can update bug tickets" });
+        return sendApiError(res, 403, "BUG_UPDATE_ADMIN_ONLY", "Only administrators can update bug tickets");
       }
       const [existing] = await db.select().from(bugTickets).where(eq(bugTickets.id, req.params.id)).limit(1);
-      if (!existing) return res.status(404).json({ error: "Bug not found" });
+      if (!existing) return sendApiError(res, 404, "BUG_NOT_FOUND", "Bug not found");
 
       const patch = patchBugSchema.parse(req.body);
       const ts = now();
@@ -390,7 +393,7 @@ export function registerBugRoutes(app: Express): void {
           updates.assignedToUserId = null;
         } else {
           const [u] = await db.select({ id: users.id }).from(users).where(eq(users.id, patch.assignedToUserId)).limit(1);
-          if (!u) return res.status(400).json({ error: "Assignee user not found" });
+          if (!u) return sendApiError(res, 400, "BUG_ASSIGNEE_NOT_FOUND", "Assignee user not found");
           updates.assignedToUserId = patch.assignedToUserId;
         }
       }
@@ -421,19 +424,19 @@ export function registerBugRoutes(app: Express): void {
       res.json(row);
     } catch (e) {
       if (e instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: e.errors });
+        return sendApiError(res, 400, "BUG_PATCH_VALIDATION", "Validation failed", e.errors);
       }
       console.error(e);
-      res.status(500).json({ error: "Failed to update bug" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update bug");
     }
   });
 
   app.post("/api/bugs/:id/comments", async (req, res) => {
     try {
       const [ticket] = await db.select().from(bugTickets).where(eq(bugTickets.id, req.params.id)).limit(1);
-      if (!ticket) return res.status(404).json({ error: "Bug not found" });
+      if (!ticket) return sendApiError(res, 404, "BUG_NOT_FOUND", "Bug not found");
       if (!canCommentOnTicket(req.user, ticket.reporterUserId)) {
-        return res.status(403).json({ error: "You can only comment on bugs you reported" });
+        return sendApiError(res, 403, "BUG_COMMENT_DENIED", "You can only comment on bugs you reported");
       }
 
       const { body } = bugCommentSchema.parse(req.body);
@@ -465,17 +468,17 @@ export function registerBugRoutes(app: Express): void {
       });
     } catch (e) {
       if (e instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: e.errors });
+        return sendApiError(res, 400, "BUG_COMMENT_VALIDATION", "Validation failed", e.errors);
       }
       console.error(e);
-      res.status(500).json({ error: "Failed to add comment" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to add comment");
     }
   });
 
   app.get("/api/bugs/:id/attachments/:attachmentId/download", async (req, res) => {
     try {
       const [ticket] = await db.select().from(bugTickets).where(eq(bugTickets.id, req.params.id)).limit(1);
-      if (!ticket) return res.status(404).json({ error: "Bug not found" });
+      if (!ticket) return sendApiError(res, 404, "BUG_NOT_FOUND", "Bug not found");
 
       const [att] = await db
         .select()
@@ -487,21 +490,21 @@ export function registerBugRoutes(app: Express): void {
           ),
         )
         .limit(1);
-      if (!att) return res.status(404).json({ error: "Attachment not found" });
+      if (!att) return sendApiError(res, 404, "BUG_ATTACHMENT_NOT_FOUND", "Attachment not found");
 
       const safeName = path.basename(att.storedFilename);
       const fullPath = path.join(UPLOAD_ROOT, safeName);
       if (!fullPath.startsWith(UPLOAD_ROOT) || !fs.existsSync(fullPath)) {
-        return res.status(404).json({ error: "File not found" });
+        return sendApiError(res, 404, "BUG_ATTACHMENT_FILE_MISSING", "File not found");
       }
 
       res.setHeader("Content-Type", att.mimeType);
       res.download(fullPath, att.originalFilename, (err) => {
-        if (err && !res.headersSent) res.status(500).json({ error: "Download failed" });
+        if (err && !res.headersSent) sendApiError(res, 500, "INTERNAL_ERROR", "Download failed");
       });
     } catch (e) {
       console.error(e);
-      if (!res.headersSent) res.status(500).json({ error: "Download failed" });
+      if (!res.headersSent) sendApiError(res, 500, "INTERNAL_ERROR", "Download failed");
     }
   });
 }

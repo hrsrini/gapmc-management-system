@@ -7,6 +7,7 @@ import { eq, and, desc, gte, lte } from "drizzle-orm";
 import { db } from "./db";
 import { assetAllotments, assets, rentInvoices } from "@shared/db-schema";
 import { nanoid } from "nanoid";
+import { writeAuditLogSystem } from "./audit";
 
 function getFirstAndLastDayOfMonth(yyyy: number, mm: number): { first: string; last: string } {
   const first = `${yyyy}-${String(mm).padStart(2, "0")}-01`;
@@ -44,6 +45,7 @@ export async function generateRentInvoicesForCurrentMonth(): Promise<{ created: 
 
   let created = 0;
   let skipped = 0;
+  const createdInvoiceIds: string[] = [];
 
   for (const allotment of activeAllotments) {
     if (existingAllotmentIds.has(allotment.id)) {
@@ -87,7 +89,21 @@ export async function generateRentInvoicesForCurrentMonth(): Promise<{ created: 
       generatedAt: null,
       approvedAt: null,
     });
+    createdInvoiceIds.push(id);
     created += 1;
+  }
+
+  if (createdInvoiceIds.length > 0) {
+    writeAuditLogSystem({
+      module: "Rent/Tax",
+      action: "CronGenerateMonthlyDrafts",
+      recordId: periodMonth,
+      afterValue: {
+        periodMonth,
+        createdCount: createdInvoiceIds.length,
+        invoiceIds: createdInvoiceIds,
+      },
+    }).catch((e) => console.error("Audit log failed:", e));
   }
 
   return { created, skipped };

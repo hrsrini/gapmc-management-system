@@ -9,6 +9,9 @@ import { db } from "./db";
 import { vehicles, vehicleTripLog, vehicleFuelRegister, vehicleMaintenance } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import { writeAuditLog } from "./audit";
+import { sendApiError } from "./api-errors";
+import { assertRecordDoDvDaSeparation } from "./workflow";
+import { computeFleetRenewalAlerts } from "./operational-alerts";
 
 function vehicleInScope(req: Express.Request, yardId: string): boolean {
   const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
@@ -16,6 +19,22 @@ function vehicleInScope(req: Express.Request, yardId: string): boolean {
 }
 
 export function registerFleetRoutes(app: Express) {
+  app.get("/api/ioms/fleet/renewal-alerts", async (req, res) => {
+    try {
+      const yardId = req.query.yardId as string | undefined;
+      const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+      const conditions = [];
+      if (scopedIds && scopedIds.length > 0) conditions.push(inArray(vehicles.yardId, scopedIds));
+      if (yardId) conditions.push(eq(vehicles.yardId, yardId));
+      const base = db.select().from(vehicles);
+      const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
+      res.json({ alerts: computeFleetRenewalAlerts(list) });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch fleet renewal alerts");
+    }
+  });
+
   app.get("/api/ioms/fleet/vehicles", async (req, res) => {
     try {
       const yardId = req.query.yardId as string | undefined;
@@ -28,19 +47,19 @@ export function registerFleetRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch vehicles" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch vehicles");
     }
   });
 
   app.get("/api/ioms/fleet/vehicles/:id", async (req, res) => {
     try {
       const [row] = await db.select().from(vehicles).where(eq(vehicles.id, req.params.id)).limit(1);
-      if (!row) return res.status(404).json({ error: "Vehicle not found" });
-      if (!vehicleInScope(req, row.yardId)) return res.status(404).json({ error: "Vehicle not found" });
+      if (!row) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
+      if (!vehicleInScope(req, row.yardId)) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch vehicle" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch vehicle");
     }
   });
 
@@ -48,7 +67,8 @@ export function registerFleetRoutes(app: Express) {
     try {
       const body = req.body;
       const yardId = String(body.yardId ?? "");
-      if (!vehicleInScope(req, yardId)) return res.status(403).json({ error: "You do not have access to this yard" });
+      if (!vehicleInScope(req, yardId))
+        return sendApiError(res, 403, "FLEET_YARD_ACCESS_DENIED", "You do not have access to this yard");
       const id = nanoid();
       await db.insert(vehicles).values({
         id,
@@ -69,7 +89,7 @@ export function registerFleetRoutes(app: Express) {
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create vehicle" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create vehicle");
     }
   });
 
@@ -77,38 +97,45 @@ export function registerFleetRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(vehicles).where(eq(vehicles.id, id));
-      if (!existing) return res.status(404).json({ error: "Vehicle not found" });
-      if (!vehicleInScope(req, existing.yardId)) return res.status(404).json({ error: "Vehicle not found" });
+      if (!existing) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
+      if (!vehicleInScope(req, existing.yardId)) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       const body = req.body;
       const yardId = body.yardId !== undefined ? String(body.yardId) : existing.yardId;
-      if (body.yardId !== undefined && !vehicleInScope(req, yardId)) return res.status(403).json({ error: "You do not have access to this yard" });
+      if (body.yardId !== undefined && !vehicleInScope(req, yardId))
+        return sendApiError(res, 403, "FLEET_YARD_ACCESS_DENIED", "You do not have access to this yard");
       const updates: Record<string, unknown> = {};
       ["registrationNo", "vehicleType", "yardId", "capacity", "purchaseDate", "purchaseValue", "insuranceExpiry", "fitnessExpiry", "status", "doUser", "daUser"].forEach((k) => {
         if (body[k] === undefined) return;
         if (["purchaseValue"].includes(k)) updates[k] = body[k] == null ? null : Number(body[k]);
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
+      const mergedRoles = {
+        doUser: updates.doUser !== undefined ? (updates.doUser as string | null) : existing.doUser,
+        daUser: updates.daUser !== undefined ? (updates.daUser as string | null) : existing.daUser,
+      };
+      const seg = assertRecordDoDvDaSeparation(req.user, mergedRoles);
+      if (!seg.ok) return sendApiError(res, 403, "FLEET_DO_DV_DA_SEGREGATION", seg.error);
       await db.update(vehicles).set(updates as Record<string, string | number | null>).where(eq(vehicles.id, id));
       const [row] = await db.select().from(vehicles).where(eq(vehicles.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Not found");
       writeAuditLog(req, { module: "Fleet", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update vehicle" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update vehicle");
     }
   });
 
   app.get("/api/ioms/fleet/vehicles/:vehicleId/trips", async (req, res) => {
     try {
       const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, req.params.vehicleId)).limit(1);
-      if (!vehicle) return res.status(404).json({ error: "Vehicle not found" });
-      if (!vehicleInScope(req, vehicle.yardId)) return res.status(404).json({ error: "Vehicle not found" });
+      if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
+      if (!vehicleInScope(req, vehicle.yardId)) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       const list = await db.select().from(vehicleTripLog).where(eq(vehicleTripLog.vehicleId, req.params.vehicleId)).orderBy(desc(vehicleTripLog.tripDate));
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch trips" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch trips");
     }
   });
 
@@ -117,8 +144,9 @@ export function registerFleetRoutes(app: Express) {
       const body = req.body;
       const vehicleId = String(body.vehicleId ?? "");
       const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, vehicleId)).limit(1);
-      if (!vehicle) return res.status(404).json({ error: "Vehicle not found" });
-      if (!vehicleInScope(req, vehicle.yardId)) return res.status(403).json({ error: "You do not have access to this vehicle's yard" });
+      if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
+      if (!vehicleInScope(req, vehicle.yardId))
+        return sendApiError(res, 403, "FLEET_VEHICLE_YARD_ACCESS_DENIED", "You do not have access to this vehicle's yard");
       const id = nanoid();
       await db.insert(vehicleTripLog).values({
         id,
@@ -134,23 +162,24 @@ export function registerFleetRoutes(app: Express) {
         officerId: body.officerId ? String(body.officerId) : null,
       });
       const [row] = await db.select().from(vehicleTripLog).where(eq(vehicleTripLog.id, id));
+      if (row) writeAuditLog(req, { module: "Fleet", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create trip" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create trip");
     }
   });
 
   app.get("/api/ioms/fleet/vehicles/:vehicleId/fuel", async (req, res) => {
     try {
       const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, req.params.vehicleId)).limit(1);
-      if (!vehicle) return res.status(404).json({ error: "Vehicle not found" });
-      if (!vehicleInScope(req, vehicle.yardId)) return res.status(404).json({ error: "Vehicle not found" });
+      if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
+      if (!vehicleInScope(req, vehicle.yardId)) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       const list = await db.select().from(vehicleFuelRegister).where(eq(vehicleFuelRegister.vehicleId, req.params.vehicleId)).orderBy(desc(vehicleFuelRegister.fuelDate));
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch fuel register" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch fuel register");
     }
   });
 
@@ -159,8 +188,9 @@ export function registerFleetRoutes(app: Express) {
       const body = req.body;
       const vehicleId = String(body.vehicleId ?? "");
       const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, vehicleId)).limit(1);
-      if (!vehicle) return res.status(404).json({ error: "Vehicle not found" });
-      if (!vehicleInScope(req, vehicle.yardId)) return res.status(403).json({ error: "You do not have access to this vehicle's yard" });
+      if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
+      if (!vehicleInScope(req, vehicle.yardId))
+        return sendApiError(res, 403, "FLEET_VEHICLE_YARD_ACCESS_DENIED", "You do not have access to this vehicle's yard");
       const id = nanoid();
       await db.insert(vehicleFuelRegister).values({
         id,
@@ -173,23 +203,24 @@ export function registerFleetRoutes(app: Express) {
         officerId: body.officerId ? String(body.officerId) : null,
       });
       const [row] = await db.select().from(vehicleFuelRegister).where(eq(vehicleFuelRegister.id, id));
+      if (row) writeAuditLog(req, { module: "Fleet", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create fuel entry" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create fuel entry");
     }
   });
 
   app.get("/api/ioms/fleet/vehicles/:vehicleId/maintenance", async (req, res) => {
     try {
       const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, req.params.vehicleId)).limit(1);
-      if (!vehicle) return res.status(404).json({ error: "Vehicle not found" });
-      if (!vehicleInScope(req, vehicle.yardId)) return res.status(404).json({ error: "Vehicle not found" });
+      if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
+      if (!vehicleInScope(req, vehicle.yardId)) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       const list = await db.select().from(vehicleMaintenance).where(eq(vehicleMaintenance.vehicleId, req.params.vehicleId)).orderBy(desc(vehicleMaintenance.serviceDate));
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch maintenance" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch maintenance");
     }
   });
 
@@ -198,8 +229,9 @@ export function registerFleetRoutes(app: Express) {
       const body = req.body;
       const vehicleId = String(body.vehicleId ?? "");
       const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, vehicleId)).limit(1);
-      if (!vehicle) return res.status(404).json({ error: "Vehicle not found" });
-      if (!vehicleInScope(req, vehicle.yardId)) return res.status(403).json({ error: "You do not have access to this vehicle's yard" });
+      if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
+      if (!vehicleInScope(req, vehicle.yardId))
+        return sendApiError(res, 403, "FLEET_VEHICLE_YARD_ACCESS_DENIED", "You do not have access to this vehicle's yard");
       const id = nanoid();
       await db.insert(vehicleMaintenance).values({
         id,
@@ -214,10 +246,11 @@ export function registerFleetRoutes(app: Express) {
         officerId: body.officerId ? String(body.officerId) : null,
       });
       const [row] = await db.select().from(vehicleMaintenance).where(eq(vehicleMaintenance.id, id));
+      if (row) writeAuditLog(req, { module: "Fleet", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create maintenance" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create maintenance");
     }
   });
 }

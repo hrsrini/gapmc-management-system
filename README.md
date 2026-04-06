@@ -53,6 +53,8 @@
 | `npm run build` | Production build |
 | `npm run start` | Run production server |
 | `npm run db:push` | Apply Drizzle schema to database |
+| `npm run db:verify-schema` | Read-only check: IOMS columns + optional land triggers |
+| `npm run db:apply-land-immutable` | Install `land_records` UPDATE/DELETE block triggers |
 | `npm run db:create-gapmc` | Create/seed GAPMC schema |
 
 ## Tech stack

@@ -12,7 +12,11 @@ import {
   canCreateRentInvoice,
   canEditDraftRentInvoice,
   canTransitionRentInvoice,
+  assertSegregationDoDvDa,
 } from "./workflow";
+import { tenantLicenceIsGstExempt } from "./gst-exempt";
+import { validateDvReturnToDraft } from "@shared/workflow-rejection";
+import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 
@@ -32,51 +36,68 @@ export function registerRentIomsRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch rent invoices" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch rent invoices");
     }
   });
 
   app.get("/api/ioms/rent/invoices/:id", async (req, res) => {
     try {
       const [row] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, req.params.id)).limit(1);
-      if (!row) return res.status(404).json({ error: "Rent invoice not found" });
+      if (!row) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(row.yardId)) {
-        return res.status(404).json({ error: "Rent invoice not found" });
+        return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       }
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch rent invoice" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch rent invoice");
     }
   });
 
   app.post("/api/ioms/rent/invoices", async (req, res) => {
     try {
       if (!canCreateRentInvoice(req.user)) {
-        return res.status(403).json({ error: "Only Data Originator or Admin can create rent invoices" });
+        return sendApiError(
+          res,
+          403,
+          "RENT_INVOICE_CREATE_DENIED",
+          "Only Data Originator or Admin can create rent invoices",
+        );
       }
       const body = req.body;
       const yardId = String(body.yardId ?? "");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
-        return res.status(403).json({ error: "You do not have access to this yard" });
+        return sendApiError(res, 403, "RENT_INVOICE_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
       const id = nanoid();
       const now = new Date().toISOString();
+      const tenantLicenceId = String(body.tenantLicenceId ?? "");
+      let rentAmount = Number(body.rentAmount ?? 0);
+      let cgst = Number(body.cgst ?? 0);
+      let sgst = Number(body.sgst ?? 0);
+      let totalAmount = Number(body.totalAmount ?? 0);
+      let isGovtEntity = Boolean(body.isGovtEntity ?? false);
+      if (tenantLicenceId && (await tenantLicenceIsGstExempt(tenantLicenceId))) {
+        cgst = 0;
+        sgst = 0;
+        totalAmount = rentAmount;
+        isGovtEntity = true;
+      }
       await db.insert(rentInvoices).values({
         id,
         allotmentId: String(body.allotmentId ?? ""),
-        tenantLicenceId: String(body.tenantLicenceId ?? ""),
+        tenantLicenceId,
         assetId: String(body.assetId ?? ""),
         yardId,
         periodMonth: String(body.periodMonth ?? ""),
-        rentAmount: Number(body.rentAmount ?? 0),
-        cgst: Number(body.cgst ?? 0),
-        sgst: Number(body.sgst ?? 0),
-        totalAmount: Number(body.totalAmount ?? 0),
+        rentAmount,
+        cgst,
+        sgst,
+        totalAmount,
         status: "Draft",
-        isGovtEntity: Boolean(body.isGovtEntity ?? false),
+        isGovtEntity,
         invoiceNo: body.invoiceNo ? String(body.invoiceNo) : null,
         doUser: req.user?.id ?? null,
         dvUser: null,
@@ -89,7 +110,7 @@ export function registerRentIomsRoutes(app: Express) {
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create rent invoice" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create rent invoice");
     }
   });
 
@@ -97,24 +118,47 @@ export function registerRentIomsRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, id)).limit(1);
-      if (!existing) return res.status(404).json({ error: "Rent invoice not found" });
+      if (!existing) {
+        return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      }
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(existing.yardId)) {
-        return res.status(404).json({ error: "Rent invoice not found" });
+        return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       }
       const body = req.body;
       const newStatus = body.status !== undefined ? String(body.status) : existing.status;
       const statusChange = newStatus !== existing.status;
       const transition = statusChange ? canTransitionRentInvoice(req.user, existing.status, newStatus) : null;
 
+      let dvReturnRemarks: string | null = null;
       if (statusChange) {
         if (!transition?.allowed) {
-          return res.status(403).json({
-            error: `You cannot change status from ${existing.status} to ${newStatus}. Only DV can verify; only DA can approve.`,
-          });
+          return sendApiError(
+            res,
+            403,
+            "RENT_INVOICE_STATUS_TRANSITION_DENIED",
+            `You cannot change status from ${existing.status} to ${newStatus}. Only DV can verify; only DA can approve.`,
+          );
+        }
+        const seg = assertSegregationDoDvDa(req.user, existing, {
+          setDvUser: transition?.setDvUser,
+          setDaUser: transition?.setDaUser,
+        });
+        if (!seg.ok) {
+          return sendApiError(res, 403, "RENT_INVOICE_DO_DV_DA_SEGREGATION", seg.error);
+        }
+        if (existing.status === "Verified" && newStatus === "Draft") {
+          const ret = validateDvReturnToDraft(body as Record<string, unknown>);
+          if (!ret.ok) return sendApiError(res, 400, "RENT_INVOICE_DV_RETURN_INVALID", ret.error);
+          dvReturnRemarks = ret.remarks;
         }
       } else if (existing.status === "Draft" && !canEditDraftRentInvoice(req.user)) {
-        return res.status(403).json({ error: "Only Data Originator or Admin can edit draft invoices" });
+        return sendApiError(
+          res,
+          403,
+          "RENT_INVOICE_DRAFT_EDIT_DENIED",
+          "Only Data Originator or Admin can edit draft invoices",
+        );
       }
 
       const updates: Record<string, unknown> = {};
@@ -132,9 +176,27 @@ export function registerRentIomsRoutes(app: Express) {
         if (newStatus === "Approved") updates.approvedAt = now;
       }
 
+      if (dvReturnRemarks !== null) {
+        updates.dvReturnRemarks = dvReturnRemarks;
+        updates.workflowRevisionCount = Number(existing.workflowRevisionCount ?? 0) + 1;
+      }
+
+      const finalTenant =
+        (updates.tenantLicenceId as string | undefined) ?? existing.tenantLicenceId;
+      const finalRent =
+        updates.rentAmount != null ? Number(updates.rentAmount) : Number(existing.rentAmount ?? 0);
+      if (existing.status === "Draft" && !statusChange && finalTenant) {
+        if (await tenantLicenceIsGstExempt(finalTenant)) {
+          updates.cgst = 0;
+          updates.sgst = 0;
+          updates.totalAmount = finalRent;
+          updates.isGovtEntity = true;
+        }
+      }
+
       await db.update(rentInvoices).set(updates as Record<string, string | number | boolean | null>).where(eq(rentInvoices.id, id));
       const [row] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Not found");
 
       // Phase-1 linkage: when a rent invoice becomes Approved/Paid, ensure a matching IOMS receipt exists.
       // Note: current UI doesn't expose a "Mark Paid" flow for M-03 yet; this keeps receipts ready for later payment wiring.
@@ -199,7 +261,7 @@ export function registerRentIomsRoutes(app: Express) {
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update rent invoice" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update rent invoice");
     }
   });
 
@@ -214,7 +276,7 @@ export function registerRentIomsRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch ledger" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch ledger");
     }
   });
 
@@ -235,10 +297,11 @@ export function registerRentIomsRoutes(app: Express) {
         receiptId: body.receiptId ? String(body.receiptId) : null,
       });
       const [row] = await db.select().from(rentDepositLedger).where(eq(rentDepositLedger.id, id));
+      if (row) writeAuditLog(req, { module: "Rent/Tax", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create ledger entry" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create ledger entry");
     }
   });
 
@@ -248,7 +311,12 @@ export function registerRentIomsRoutes(app: Express) {
       const fromMonth = (req.query.fromMonth as string) || "";
       const toMonth = (req.query.toMonth as string) || "";
       if (!fromMonth || !toMonth) {
-        return res.status(400).json({ error: "Query params fromMonth and toMonth required (YYYY-MM)" });
+        return sendApiError(
+          res,
+          400,
+          "RENT_GSTR1_QUERY_INVALID",
+          "Query params fromMonth and toMonth required (YYYY-MM)",
+        );
       }
       const scopedIds = req.scopedLocationIds;
       const conditions = [
@@ -293,7 +361,7 @@ export function registerRentIomsRoutes(app: Express) {
       });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to generate GSTR-1 export" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate GSTR-1 export");
     }
   });
 
@@ -306,18 +374,18 @@ export function registerRentIomsRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch credit notes" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch credit notes");
     }
   });
 
   app.get("/api/ioms/rent/credit-notes/:id", async (req, res) => {
     try {
       const [row] = await db.select().from(creditNotes).where(eq(creditNotes.id, req.params.id)).limit(1);
-      if (!row) return res.status(404).json({ error: "Credit note not found" });
+      if (!row) return sendApiError(res, 404, "RENT_CREDIT_NOTE_NOT_FOUND", "Credit note not found");
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch credit note" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch credit note");
     }
   });
 
@@ -325,14 +393,25 @@ export function registerRentIomsRoutes(app: Express) {
     try {
       const body = req.body;
       const invoiceId = String(body.invoiceId ?? "");
-      if (!invoiceId) return res.status(400).json({ error: "invoiceId is required" });
+      if (!invoiceId) {
+        return sendApiError(res, 400, "RENT_CREDIT_NOTE_INVOICE_ID_REQUIRED", "invoiceId is required");
+      }
       const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
-      if (!inv) return res.status(404).json({ error: "Rent invoice not found" });
-      if (inv.status === "Paid") return res.status(400).json({ error: "Credit note not allowed for paid invoice" });
-      if (inv.status !== "Approved") return res.status(400).json({ error: "Credit note only for approved invoices" });
+      if (!inv) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      if (inv.status === "Paid") {
+        return sendApiError(res, 400, "RENT_CREDIT_NOTE_PAID_INVOICE", "Credit note not allowed for paid invoice");
+      }
+      if (inv.status !== "Approved") {
+        return sendApiError(
+          res,
+          400,
+          "RENT_CREDIT_NOTE_INVOICE_NOT_APPROVED",
+          "Credit note only for approved invoices",
+        );
+      }
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
-        return res.status(404).json({ error: "Rent invoice not found" });
+        return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       }
       const id = nanoid();
       await db.insert(creditNotes).values({
@@ -346,16 +425,19 @@ export function registerRentIomsRoutes(app: Express) {
         approvedAt: body.approvedAt ? String(body.approvedAt) : null,
       });
       const [row] = await db.select().from(creditNotes).where(eq(creditNotes.id, id));
+      if (row) writeAuditLog(req, { module: "Rent/Tax", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create credit note" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create credit note");
     }
   });
 
   app.put("/api/ioms/rent/credit-notes/:id", async (req, res) => {
     try {
       const id = req.params.id;
+      const [existingCn] = await db.select().from(creditNotes).where(eq(creditNotes.id, id)).limit(1);
+      if (!existingCn) return sendApiError(res, 404, "RENT_CREDIT_NOTE_NOT_FOUND", "Not found");
       const body = req.body;
       const updates: Record<string, unknown> = {};
       ["creditNoteNo", "invoiceId", "reason", "amount", "status", "daUser", "approvedAt"].forEach((k) => {
@@ -363,13 +445,33 @@ export function registerRentIomsRoutes(app: Express) {
         if (k === "amount") updates.amount = Number(body.amount);
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
+      const targetInvoiceId =
+        updates.invoiceId != null ? String(updates.invoiceId) : existingCn.invoiceId;
+      const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, targetInvoiceId)).limit(1);
+      if (!inv) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      if (inv.status === "Paid") {
+        return sendApiError(res, 400, "RENT_CREDIT_NOTE_PAID_INVOICE", "Credit note not allowed for paid invoice");
+      }
+      if (inv.status !== "Approved") {
+        return sendApiError(
+          res,
+          400,
+          "RENT_CREDIT_NOTE_INVOICE_NOT_APPROVED",
+          "Credit note only for approved invoices",
+        );
+      }
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
+        return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      }
       await db.update(creditNotes).set(updates as Record<string, string | number | null>).where(eq(creditNotes.id, id));
       const [row] = await db.select().from(creditNotes).where(eq(creditNotes.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "RENT_CREDIT_NOTE_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "Rent/Tax", action: "Update", recordId: id, beforeValue: existingCn, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update credit note" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update credit note");
     }
   });
 }

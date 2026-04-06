@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,17 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert } from "lucide-react";
+import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert, Loader2 } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/hooks/use-toast";
 
 interface Licence {
   id: string;
@@ -31,8 +41,15 @@ interface Licence {
   doUser?: string | null;
   dvUser?: string | null;
   daUser?: string | null;
+  govtGstExemptCategoryId?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
+}
+
+interface GstExemptCategory {
+  id: string;
+  code: string;
+  name: string;
 }
 interface BlockingLogEntry {
   id: string;
@@ -54,6 +71,11 @@ interface ReceiptRef {
 export default function TraderLicenceDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
+  const { can } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const canUpdateLicence = can("M-02", "Update");
+  const [exemptCategoryId, setExemptCategoryId] = useState<string>("__none__");
 
   const { data: licence, isLoading, isError } = useQuery<Licence>({
     queryKey: ["/api/ioms/traders/licences", id],
@@ -74,12 +96,45 @@ export default function TraderLicenceDetail() {
   const { data: receipts = [] } = useQuery<ReceiptRef[]>({
     queryKey: ["/api/ioms/receipts"],
   });
+  const { data: gstCategories = [] } = useQuery<GstExemptCategory[]>({
+    queryKey: ["/api/ioms/reference/govt-gst-exempt-categories"],
+  });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
   const receiptById = Object.fromEntries(receipts.map((r) => [r.id, r.receiptNo]));
+  const exemptCategoryName =
+    licence?.govtGstExemptCategoryId != null
+      ? gstCategories.find((c) => c.id === licence.govtGstExemptCategoryId)?.name
+      : undefined;
 
   useEffect(() => {
     if (!id) setLocation("/traders/licences");
   }, [id, setLocation]);
+
+  useEffect(() => {
+    if (!licence) return;
+    setExemptCategoryId(licence.govtGstExemptCategoryId ?? "__none__");
+  }, [licence?.id, licence?.govtGstExemptCategoryId]);
+
+  const saveExemptMutation = useMutation({
+    mutationFn: async (govtGstExemptCategoryId: string | null) => {
+      const res = await fetch(`/api/ioms/traders/licences/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ govtGstExemptCategoryId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
+      return data as Licence;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/traders/licences", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/traders/licences"] });
+      toast({ title: "Licence updated", description: "GST exemption category saved." });
+    },
+    onError: (e: Error) =>
+      toast({ title: "Update failed", description: e.message, variant: "destructive" }),
+  });
   if (!id) return null;
   if (isLoading || licence === undefined) {
     return (
@@ -138,12 +193,65 @@ export default function TraderLicenceDetail() {
               <div><span className="text-muted-foreground">Valid to</span><br />{licence.validTo ?? "—"}</div>
               <div><span className="text-muted-foreground">Fee amount</span><br />{licence.feeAmount != null ? `₹${licence.feeAmount}` : "—"}</div>
               <div><span className="text-muted-foreground">Receipt</span><br />{licence.receiptId ? (receiptById[licence.receiptId] ?? licence.receiptId) : "—"}</div>
+              <div className="md:col-span-2">
+                <span className="text-muted-foreground">Govt. GST exempt category (office/godown)</span>
+                <br />
+                {exemptCategoryName ?? (licence.govtGstExemptCategoryId ? licence.govtGstExemptCategoryId : "— (taxable)")}
+              </div>
               {licence.isBlocked && licence.blockReason && (
                 <div className="md:col-span-2"><span className="text-muted-foreground">Block reason</span><br /><span className="text-destructive">{licence.blockReason}</span></div>
               )}
             </div>
           </CardContent>
         </Card>
+
+        {canUpdateLicence && (
+          <Card>
+            <CardHeader>
+              <CardTitle>GST exemption (M-02 / M-03)</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                If a category is set, rent invoices and linked receipts use zero CGST/SGST for this tenant licence per SRS Track B.
+              </p>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-end">
+              <div className="flex-1 space-y-2">
+                <Label>Exempt category</Label>
+                <Select value={exemptCategoryId} onValueChange={setExemptCategoryId}>
+                  <SelectTrigger className="max-w-md">
+                    <SelectValue placeholder="Taxable (no exemption)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None (standard GST)</SelectItem>
+                    {gstCategories.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                type="button"
+                disabled={
+                  saveExemptMutation.isPending ||
+                  exemptCategoryId === (licence.govtGstExemptCategoryId ?? "__none__")
+                }
+                onClick={() =>
+                  saveExemptMutation.mutate(exemptCategoryId === "__none__" ? null : exemptCategoryId)
+                }
+              >
+                {saveExemptMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  "Save category"
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

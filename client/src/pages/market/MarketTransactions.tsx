@@ -7,12 +7,21 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowRightLeft, AlertCircle, ShieldCheck, CheckCircle, Plus } from "lucide-react";
+import { ArrowRightLeft, AlertCircle, ShieldCheck, CheckCircle, Plus, SendHorizontal } from "lucide-react";
+import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 
 interface Transaction {
   id: string;
@@ -26,6 +35,10 @@ interface Transaction {
   marketFeeAmount: number;
   transactionDate: string;
   status: string;
+  workflowRevisionCount?: number | null;
+  dvReturnRemarks?: string | null;
+  parentTransactionId?: string | null;
+  entryKind?: string | null;
 }
 
 export default function MarketTransactions() {
@@ -44,9 +57,19 @@ export default function MarketTransactions() {
   const [transactionDate, setTransactionDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const roles = user?.roles?.map((r) => r.tier) ?? [];
-  const canVerify = roles.includes("DV") || roles.includes("ADMIN");
-  const canApprove = roles.includes("DA") || roles.includes("ADMIN");
+  const canUpdate = can("M-04", "Update");
+  const canVerify = (roles.includes("DV") || roles.includes("ADMIN")) && canUpdate;
+  const canApprove = (roles.includes("DA") || roles.includes("ADMIN")) && canUpdate;
   const canCreate = can("M-04", "Create");
+
+  const [returnDraftTxnId, setReturnDraftTxnId] = useState<string | null>(null);
+  const [returnDraftRemarks, setReturnDraftRemarks] = useState("");
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjustParent, setAdjustParent] = useState<Transaction | null>(null);
+  const [adjustFee, setAdjustFee] = useState("");
+  const [adjustDeclared, setAdjustDeclared] = useState("");
+  const [adjustQty, setAdjustQty] = useState("");
+  const [adjustDate, setAdjustDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const { data: list, isLoading, isError } = useQuery<Transaction[]>({
     queryKey: ["/api/ioms/market/transactions"],
@@ -148,11 +171,12 @@ export default function MarketTransactions() {
   });
 
   const statusMutation = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+    mutationFn: async (vars: { id: string } & Record<string, unknown>) => {
+      const { id, ...body } = vars;
       const res = await fetch(`/api/ioms/market/transactions/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(body),
         credentials: "include",
       });
       if (!res.ok) {
@@ -161,14 +185,66 @@ export default function MarketTransactions() {
       }
       return res.json();
     },
-    onSuccess: (_, { status }) => {
+    onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/market/transactions"] });
-      toast({ title: "Status updated", description: `Transaction set to ${status}.` });
+      toast({ title: "Status updated", description: `Transaction set to ${String(vars.status)}.` });
+      if (vars.status === "Draft" && "returnRemarks" in vars) {
+        setReturnDraftTxnId(null);
+        setReturnDraftRemarks("");
+      }
     },
     onError: (e: Error) => {
       toast({ title: "Update failed", description: e.message, variant: "destructive" });
     },
   });
+
+  const adjustmentMutation = useMutation({
+    mutationFn: async () => {
+      if (!adjustParent) throw new Error("No parent transaction");
+      const fee = Number(adjustFee);
+      if (Number.isNaN(fee) || fee >= 0) throw new Error("Adjustment fee must be a negative number (credit).");
+      const dv = adjustDeclared.trim() === "" ? 0 : Number(adjustDeclared);
+      if (Number.isNaN(dv) || dv < 0) throw new Error("Declared value must be non-negative.");
+      const q = adjustQty.trim() === "" ? adjustParent.quantity : Number(adjustQty);
+      if (Number.isNaN(q) || q <= 0) throw new Error("Quantity must be greater than 0.");
+      const res = await fetch("/api/ioms/market/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          parentTransactionId: adjustParent.id,
+          marketFeeAmount: fee,
+          declaredValue: dv,
+          quantity: q,
+          transactionDate: adjustDate,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/market/transactions"] });
+      toast({ title: "Adjustment created", description: "Draft adjustment row linked to the original purchase." });
+      setAdjustOpen(false);
+      setAdjustParent(null);
+      setAdjustFee("");
+      setAdjustDeclared("");
+      setAdjustQty("");
+    },
+    onError: (e: Error) => toast({ title: "Adjustment failed", description: e.message, variant: "destructive" }),
+  });
+
+  function openAdjust(t: Transaction) {
+    setAdjustParent(t);
+    setAdjustFee(t.marketFeeAmount > 0 ? String(-Math.abs(t.marketFeeAmount)) : "-1");
+    setAdjustDeclared(String(t.declaredValue));
+    setAdjustQty(String(t.quantity));
+    setAdjustDate(new Date().toISOString().slice(0, 10));
+    setAdjustOpen(true);
+  }
 
   if (isError) {
     return (
@@ -194,7 +270,9 @@ export default function MarketTransactions() {
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             Purchase/transaction entries at yards; market fee computation.
-            {canVerify && <span className="block mt-1">You can verify Draft → Verified.</span>}
+            {canVerify && (
+              <span className="block mt-1">You can verify Draft → Verified, or return Verified → Draft with remarks.</span>
+            )}
             {canApprove && <span className="block mt-1">You can approve Verified → Approved.</span>}
           </p>
           </div>
@@ -315,8 +393,9 @@ export default function MarketTransactions() {
                   <TableHead>Qty</TableHead>
                   <TableHead>Value</TableHead>
                   <TableHead>Fee</TableHead>
+                  <TableHead>Kind</TableHead>
                   <TableHead>Status</TableHead>
-                  {(canVerify || canApprove) && <TableHead className="w-[180px]">Actions</TableHead>}
+                  {(canVerify || canApprove || canCreate) && <TableHead className="w-[260px]">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -329,9 +408,19 @@ export default function MarketTransactions() {
                     <TableCell>{t.quantity} {t.unit}</TableCell>
                     <TableCell>{t.declaredValue}</TableCell>
                     <TableCell>{t.marketFeeAmount}</TableCell>
+                    <TableCell>
+                      <Badge variant={t.entryKind === "Adjustment" ? "outline" : "secondary"}>
+                        {t.entryKind ?? "Original"}
+                      </Badge>
+                    </TableCell>
                     <TableCell><Badge variant="secondary">{t.status}</Badge></TableCell>
-                    {(canVerify || canApprove) && (
-                      <TableCell className="space-x-2">
+                    {(canVerify || canApprove || canCreate) && (
+                      <TableCell className="flex flex-wrap gap-1">
+                        {canCreate && t.status === "Approved" && t.entryKind !== "Adjustment" && (
+                          <Button size="sm" variant="secondary" onClick={() => openAdjust(t)}>
+                            Adjust
+                          </Button>
+                        )}
                         {canVerify && t.status === "Draft" && (
                           <Button
                             size="sm"
@@ -341,6 +430,20 @@ export default function MarketTransactions() {
                           >
                             <ShieldCheck className="h-3.5 w-3.5 mr-1" />
                             {statusMutation.isPending ? "Updating..." : "Verify"}
+                          </Button>
+                        )}
+                        {canVerify && t.status === "Verified" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setReturnDraftTxnId(t.id);
+                              setReturnDraftRemarks("");
+                            }}
+                            disabled={statusMutation.isPending}
+                          >
+                            <SendHorizontal className="h-3.5 w-3.5 mr-1" />
+                            Send back
                           </Button>
                         )}
                         {canApprove && t.status === "Verified" && (
@@ -366,6 +469,94 @@ export default function MarketTransactions() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={returnDraftTxnId !== null}
+        onOpenChange={(open) => {
+          if (!open) setReturnDraftTxnId(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Send back to Draft</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            DV must record why the transaction is returned (min {MIN_WORKFLOW_REMARKS_LENGTH} characters).
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="m04-return-remarks">Return remarks</Label>
+            <Textarea
+              id="m04-return-remarks"
+              value={returnDraftRemarks}
+              onChange={(e) => setReturnDraftRemarks(e.target.value)}
+              rows={4}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setReturnDraftTxnId(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                !returnDraftTxnId ||
+                returnDraftRemarks.trim().length < MIN_WORKFLOW_REMARKS_LENGTH ||
+                statusMutation.isPending
+              }
+              onClick={() => {
+                if (!returnDraftTxnId) return;
+                statusMutation.mutate({
+                  id: returnDraftTxnId,
+                  status: "Draft",
+                  returnRemarks: returnDraftRemarks.trim(),
+                });
+              }}
+            >
+              Send back
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={adjustOpen} onOpenChange={(o) => !o && setAdjustOpen(false)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Adjusted return (fee credit)</DialogTitle>
+          </DialogHeader>
+          {adjustParent && (
+            <p className="text-sm text-muted-foreground">
+              Links to Approved purchase <span className="font-mono">{adjustParent.transactionNo ?? adjustParent.id}</span>.
+              Market fee amount must be negative.
+            </p>
+          )}
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label>Market fee amount (negative)</Label>
+              <Input type="number" value={adjustFee} onChange={(e) => setAdjustFee(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Declared value (non-negative)</Label>
+              <Input type="number" value={adjustDeclared} onChange={(e) => setAdjustDeclared(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Quantity</Label>
+              <Input type="number" value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Transaction date</Label>
+              <Input type="date" value={adjustDate} onChange={(e) => setAdjustDate(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAdjustOpen(false)} disabled={adjustmentMutation.isPending}>
+              Cancel
+            </Button>
+            <Button onClick={() => adjustmentMutation.mutate()} disabled={adjustmentMutation.isPending}>
+              {adjustmentMutation.isPending ? "Creating..." : "Create draft adjustment"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

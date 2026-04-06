@@ -14,7 +14,8 @@ import {
   ArrowRight,
   Receipt,
   Wallet,
-  UserPlus
+  UserPlus,
+  Calendar
 } from 'lucide-react';
 import { format } from '@/lib/dateFormat';
 import type { ActivityLog } from '@shared/schema';
@@ -58,8 +59,9 @@ const quickActions = [
 ];
 
 export default function Dashboard() {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const displayName = user?.name?.trim() || user?.email || 'there';
+  const canHrRead = can('M-01', 'Read');
 
   const { data: stats, isLoading: statsLoading } = useQuery<Stats>({
     queryKey: ['/api/stats'],
@@ -67,6 +69,11 @@ export default function Dashboard() {
 
   const { data: activityLogs, isLoading: logsLoading } = useQuery<ActivityLog[]>({
     queryKey: ['/api/activity'],
+  });
+
+  const { data: retirementSummary } = useQuery<{ count: number; until: string; days: number }>({
+    queryKey: ['/api/hr/retirement-upcoming?days=90'],
+    enabled: canHrRead,
   });
 
   const statCards = [
@@ -136,6 +143,35 @@ export default function Dashboard() {
             </Card>
           ))}
         </div>
+
+        {canHrRead && retirementSummary != null && (
+          <Card className={retirementSummary.count > 0 ? 'border-amber-500/40 bg-amber-500/5' : ''}>
+            <CardHeader className="flex flex-row items-center justify-between gap-4 pb-2">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-primary/10">
+                  <Calendar className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <CardTitle className="text-base">HR: retirements in next {retirementSummary.days} days</CardTitle>
+                  <CardDescription>
+                    Active employees with a retirement date on or before {retirementSummary.until}.
+                  </CardDescription>
+                </div>
+              </div>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/hr/employees">Employees</Link>
+              </Button>
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl font-semibold tabular-nums">{retirementSummary.count}</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {retirementSummary.count === 0
+                  ? 'No matches in this window.'
+                  : 'Review employee records and succession planning.'}
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         <div>
           <h2 className="text-lg font-semibold mb-4">Quick Actions</h2>

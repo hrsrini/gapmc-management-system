@@ -4,6 +4,7 @@
  */
 import type { Express } from "express";
 import { compare } from "bcryptjs";
+import { sendApiError } from "./api-errors";
 import { loadAuthUser } from "./auth";
 import { findUserForLogin } from "./auth-login-lookup";
 
@@ -20,47 +21,50 @@ export function registerAuthRoutes(app: Express) {
             ? body.email.trim()
             : "";
       if (!identifier || password === "") {
-        return res.status(400).json({ error: "email (or username) and password required" });
+        return sendApiError(res, 400, "AUTH_LOGIN_FIELDS_REQUIRED", "email (or username) and password required");
       }
       const lower = identifier.toLowerCase();
       const { user, ambiguousLocalPart } = await findUserForLogin(lower);
       if (ambiguousLocalPart) {
-        return res.status(401).json({
-          error: "Several accounts share that short name; sign in with your full email address.",
-        });
+        return sendApiError(
+          res,
+          401,
+          "AUTH_LOGIN_AMBIGUOUS_IDENTIFIER",
+          "Several accounts share that short name; sign in with your full email address.",
+        );
       }
       if (!user) {
-        return res.status(401).json({ error: "Invalid email/username or password" });
+        return sendApiError(res, 401, "AUTH_LOGIN_INVALID", "Invalid email/username or password");
       }
       if (!user.isActive) {
-        return res.status(401).json({ error: "Account is inactive" });
+        return sendApiError(res, 401, "AUTH_LOGIN_INACTIVE", "Account is inactive");
       }
       if (!user.passwordHash) {
-        return res.status(401).json({ error: "Invalid email/username or password" });
+        return sendApiError(res, 401, "AUTH_LOGIN_INVALID", "Invalid email/username or password");
       }
       const match = await compare(password, user.passwordHash);
       if (!match) {
-        return res.status(401).json({ error: "Invalid email/username or password" });
+        return sendApiError(res, 401, "AUTH_LOGIN_INVALID", "Invalid email/username or password");
       }
       req.session.userId = user.id;
       req.session.save(async (err) => {
         if (err) {
           console.error(err);
-          return res.status(500).json({ error: "Login failed" });
+          return sendApiError(res, 500, "INTERNAL_ERROR", "Login failed");
         }
         const authUser = await loadAuthUser(user.id);
-        if (!authUser) return res.status(500).json({ error: "Login failed" });
+        if (!authUser) return sendApiError(res, 500, "INTERNAL_ERROR", "Login failed");
         res.json({ user: authUser });
       });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Login failed" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Login failed");
     }
   });
 
   app.get("/api/auth/me", (req, res) => {
     if (!req.user) {
-      return res.status(401).json({ error: "Not authenticated" });
+      return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
     }
     res.json({ user: req.user });
   });
@@ -69,7 +73,7 @@ export function registerAuthRoutes(app: Express) {
     req.session.destroy((err) => {
       if (err) {
         console.error(err);
-        return res.status(500).json({ error: "Logout failed" });
+        return sendApiError(res, 500, "INTERNAL_ERROR", "Logout failed");
       }
       res.clearCookie("gapmc.sid");
       res.json({ ok: true });

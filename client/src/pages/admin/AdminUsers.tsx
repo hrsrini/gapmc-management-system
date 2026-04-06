@@ -17,6 +17,13 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Users, AlertCircle, Plus, Loader2, Pencil } from "lucide-react";
 import { ADMIN_403_MESSAGE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -39,10 +46,20 @@ interface User {
   username?: string | null;
   name: string;
   phone?: string | null;
+  employeeId?: string | null;
   isActive: boolean;
   createdAt?: string | null;
   roles?: UserRoleRef[];
   yards?: UserYardRef[];
+}
+
+interface EmployeeRow {
+  id: string;
+  empId?: string | null;
+  firstName: string;
+  surname: string;
+  status: string;
+  userId?: string | null;
 }
 
 interface Role {
@@ -75,6 +92,7 @@ export default function AdminUsers() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [selectedRoleIds, setSelectedRoleIds] = useState<Set<string>>(new Set());
   const [selectedYardIds, setSelectedYardIds] = useState<Set<string>>(new Set());
+  const [employeeId, setEmployeeId] = useState<string>("");
 
   const { data: users, isLoading, isError, error } = useQuery<User[]>({
     queryKey: ["/api/admin/users"],
@@ -101,6 +119,9 @@ export default function AdminUsers() {
     queryKey: ["/api/admin/yards"],
   });
 
+  const { data: employees = [] } = useQuery<EmployeeRow[]>({
+    queryKey: ["/api/hr/employees"],
+  });
 
   const isAccessDenied =
     isError &&
@@ -119,6 +140,26 @@ export default function AdminUsers() {
     setConfirmPassword("");
     setSelectedRoleIds(new Set());
     setSelectedYardIds(new Set());
+    setEmployeeId("");
+  }
+
+  function employeeLabel(e: EmployeeRow): string {
+    const tag = e.empId ?? e.id;
+    return `${tag} — ${e.firstName} ${e.surname}`;
+  }
+
+  /** Create: Active + unlinked. Edit: Active + unlinked or linked to this user; always include currentEmployeeId if set. */
+  function selectableEmployees(forUserId: string | null, currentEmployeeId: string): EmployeeRow[] {
+    const byRule = employees.filter((e) => {
+      if (e.status !== "Active") return false;
+      if (!e.userId) return true;
+      if (forUserId && e.userId === forUserId) return true;
+      return false;
+    });
+    if (!currentEmployeeId) return byRule;
+    const cur = employees.find((e) => e.id === currentEmployeeId);
+    if (!cur || byRule.some((e) => e.id === currentEmployeeId)) return byRule;
+    return [cur, ...byRule];
   }
 
   function loadUserIntoForm(u: User) {
@@ -131,6 +172,7 @@ export default function AdminUsers() {
     setConfirmPassword("");
     setSelectedRoleIds(new Set((u.roles ?? []).map((r) => r.id)));
     setSelectedYardIds(new Set((u.yards ?? []).map((y) => y.id)));
+    setEmployeeId(u.employeeId ?? "");
   }
 
   function handleDialogOpenChange(v: boolean) {
@@ -178,6 +220,7 @@ export default function AdminUsers() {
       username?: string;
       phone?: string;
       password: string;
+      employeeId: string;
       roleIds: string[];
       yardIds: string[];
     }) => {
@@ -209,6 +252,7 @@ export default function AdminUsers() {
         username: string | null;
         phone: string | null;
         isActive: boolean;
+        employeeId: string;
         roleIds: string[];
         yardIds: string[];
         password?: string;
@@ -239,6 +283,10 @@ export default function AdminUsers() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (isEditMode && editingUserId) {
+      if (!employeeId.trim()) {
+        toast({ title: "Employee required", description: "Link this user to an active employee (SRS §1.4).", variant: "destructive" });
+        return;
+      }
       if (password !== "" || confirmPassword !== "") {
         if (password.length < 8) {
           toast({ title: "Password too short", description: "Use at least 8 characters or leave both blank.", variant: "destructive" });
@@ -255,6 +303,7 @@ export default function AdminUsers() {
         username: string | null;
         phone: string | null;
         isActive: boolean;
+        employeeId: string;
         roleIds: string[];
         yardIds: string[];
         password?: string;
@@ -264,6 +313,7 @@ export default function AdminUsers() {
         username: username.trim() === "" ? null : username.trim().toLowerCase(),
         phone: phone.trim() === "" ? null : phone.trim(),
         isActive,
+        employeeId: employeeId.trim(),
         roleIds: Array.from(selectedRoleIds),
         yardIds: Array.from(selectedYardIds),
       };
@@ -272,6 +322,10 @@ export default function AdminUsers() {
       return;
     }
 
+    if (!employeeId.trim()) {
+      toast({ title: "Employee required", description: "Each login must be linked to an active employee.", variant: "destructive" });
+      return;
+    }
     if (password.length < 8) {
       toast({ title: "Password too short", description: "Use at least 8 characters.", variant: "destructive" });
       return;
@@ -286,6 +340,7 @@ export default function AdminUsers() {
       username: username.trim() || undefined,
       phone: phone.trim() || undefined,
       password,
+      employeeId: employeeId.trim(),
       roleIds: Array.from(selectedRoleIds),
       yardIds: Array.from(selectedYardIds),
     });
@@ -325,7 +380,7 @@ export default function AdminUsers() {
               Users
             </CardTitle>
             <p className="text-sm text-muted-foreground mt-1">
-              IOMS M-10: Roles and yards per user. Add or edit to change assignments.
+              IOMS M-10: Employee link, roles, and yards per user. Add or edit to change assignments.
             </p>
           </div>
           {canCreate && (
@@ -377,6 +432,25 @@ export default function AdminUsers() {
                 <div className="space-y-2">
                   <Label htmlFor="user-phone">Phone (optional)</Label>
                   <Input id="user-phone" value={phone} onChange={(ev) => setPhone(ev.target.value)} />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Linked employee *</Label>
+                  <Select value={employeeId || undefined} onValueChange={setEmployeeId}>
+                    <SelectTrigger id="user-employee">
+                      <SelectValue placeholder="Select active employee" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectableEmployees(isEditMode ? editingUserId : null, employeeId).map((e) => (
+                        <SelectItem key={e.id} value={e.id}>
+                          {employeeLabel(e)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    SRS §1.4: every user maps to one active employee. HR status changes deactivate the login automatically.
+                  </p>
                 </div>
 
                 {isEditMode && (
@@ -513,6 +587,7 @@ export default function AdminUsers() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Email</TableHead>
+                  <TableHead>Employee</TableHead>
                   <TableHead>Username</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead className="min-w-[200px]">Roles</TableHead>
@@ -526,6 +601,14 @@ export default function AdminUsers() {
                   <TableRow key={u.id}>
                     <TableCell>{u.name}</TableCell>
                     <TableCell className="font-mono text-sm">{u.email}</TableCell>
+                    <TableCell className="text-sm">
+                      {u.employeeId
+                        ? (() => {
+                            const e = employees.find((x) => x.id === u.employeeId);
+                            return e ? employeeLabel(e) : u.employeeId;
+                          })()
+                        : "—"}
+                    </TableCell>
                     <TableCell className="font-mono text-sm">{u.username ?? "—"}</TableCell>
                     <TableCell>{u.phone ?? "—"}</TableCell>
                     <TableCell>

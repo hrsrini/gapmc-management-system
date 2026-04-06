@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { Truck, AlertCircle, PlusCircle } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 interface Vehicle {
   id: string;
@@ -17,6 +18,15 @@ interface Vehicle {
   status: string;
   insuranceExpiry?: string | null;
   fitnessExpiry?: string | null;
+}
+
+interface FleetRenewalAlert {
+  vehicleId: string;
+  registrationNo: string;
+  kind: "insurance" | "fitness";
+  expiryDate: string;
+  daysRemaining: number;
+  urgency: "overdue" | "30d" | "60d";
 }
 
 export default function FleetVehicles() {
@@ -29,6 +39,12 @@ export default function FleetVehicles() {
     queryKey: ["/api/yards"],
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+
+  const { data: renewalPayload } = useQuery<{ alerts: FleetRenewalAlert[] }>({
+    queryKey: ["/api/ioms/fleet/renewal-alerts"],
+  });
+  const fleetAlerts = renewalPayload?.alerts ?? [];
+  const overdueFleet = fleetAlerts.filter((a) => a.urgency === "overdue").length;
 
   if (isError) {
     return (
@@ -52,6 +68,15 @@ export default function FleetVehicles() {
             Vehicles (IOMS M-07)
           </CardTitle>
           <p className="text-sm text-muted-foreground">Vehicle master, trip log, fuel, maintenance.</p>
+          {fleetAlerts.length > 0 && (
+            <Alert variant={overdueFleet > 0 ? "destructive" : "default"} className="mt-3">
+              <AlertTitle>Renewal reminders</AlertTitle>
+              <AlertDescription>
+                {fleetAlerts.length} insurance/fitness item(s) due within 60 days or overdue
+                {overdueFleet > 0 ? ` (${overdueFleet} overdue).` : "."} Review registration and expiry columns below.
+              </AlertDescription>
+            </Alert>
+          )}
           {canCreate && (
             <div className="pt-2">
               <Button asChild size="sm">

@@ -190,7 +190,7 @@ export const yards = gapmc.table("yards", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   code: text("code").notNull().unique(),
-  type: text("type").notNull(), // Yard | CheckPost
+  type: text("type").notNull(), // Yard | CheckPost | HO
   phone: text("phone"),
   mobile: text("mobile"),
   address: text("address"),
@@ -275,6 +275,33 @@ export const auditLog = gapmc.table("audit_log", {
   afterValue: jsonb("after_value"),
   ip: text("ip"),
   createdAt: text("created_at").notNull(),
+});
+
+/** Govt. office/godown holders exempt from GST (GAPLMB list). */
+export const govtGstExemptCategories = gapmc.table("govt_gst_exempt_categories", {
+  id: text("id").primaryKey(),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+
+/**
+ * Tally chart of accounts (from tally_ledgers.pdf).
+ * statementClass: PL_Income | PL_Expense | BS_Liability | BS_Asset
+ */
+export const tallyLedgers = gapmc.table("tally_ledgers", {
+  id: text("id").primaryKey(),
+  ledgerName: text("ledger_name").notNull(),
+  primaryGroup: text("primary_group").notNull(),
+  statementClass: text("statement_class").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  isActive: boolean("is_active").default(true),
+});
+
+/** Maps IOMS revenue_head string → Tally ledger for export (M-05). */
+export const iomsRevenueHeadLedgerMap = gapmc.table("ioms_revenue_head_ledger_map", {
+  revenueHead: text("revenue_head").primaryKey(),
+  tallyLedgerId: text("tally_ledger_id").notNull(),
 });
 
 // ----- M-05: Receipts Online (central engine) -----
@@ -407,8 +434,14 @@ export const leaveRequests = gapmc.table("leave_requests", {
   leaveType: text("leave_type").notNull(),
   fromDate: text("from_date").notNull(),
   toDate: text("to_date").notNull(),
-  status: text("status").notNull(),
+  status: text("status").notNull(), // Pending | Verified | Approved | Rejected
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
   approvedBy: text("approved_by"),
+  rejectionReasonCode: text("rejection_reason_code"),
+  rejectionRemarks: text("rejection_remarks"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
+  dvReturnRemarks: text("dv_return_remarks"),
 });
 
 export const ltcClaims = gapmc.table("ltc_claims", {
@@ -454,6 +487,8 @@ export const traderLicences = gapmc.table("trader_licences", {
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   daUser: text("da_user"),
+  /** When set, tenant is a listed govt. office/godown holder — GST not charged (M-03/M-05). */
+  govtGstExemptCategoryId: text("govt_gst_exempt_category_id"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
@@ -534,6 +569,8 @@ export const rentInvoices = gapmc.table("rent_invoices", {
   daUser: text("da_user"),
   generatedAt: text("generated_at"),
   approvedAt: text("approved_at"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
+  dvReturnRemarks: text("dv_return_remarks"),
 });
 
 export const rentDepositLedger = gapmc.table("rent_deposit_ledger", {
@@ -611,6 +648,11 @@ export const purchaseTransactions = gapmc.table("purchase_transactions", {
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   daUser: text("da_user"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
+  dvReturnRemarks: text("dv_return_remarks"),
+  /** M-04 adjusted return: links to an Approved original purchase row. */
+  parentTransactionId: text("parent_transaction_id"),
+  entryKind: text("entry_kind").notNull().default("Original"), // Original | Adjustment
 });
 
 export const checkPostInward = gapmc.table("check_post_inward", {
@@ -680,6 +722,7 @@ export const expenditureHeads = gapmc.table("expenditure_heads", {
   code: text("code").notNull().unique(),
   description: text("description").notNull(),
   category: text("category"),
+  tallyLedgerId: text("tally_ledger_id"),
   isActive: boolean("is_active").default(true),
 });
 
@@ -704,6 +747,10 @@ export const paymentVouchers = gapmc.table("payment_vouchers", {
   paidAt: text("paid_at"),
   paymentRef: text("payment_ref"),
   createdAt: text("created_at"),
+  rejectionReasonCode: text("rejection_reason_code"),
+  rejectionRemarks: text("rejection_remarks"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
+  dvReturnRemarks: text("dv_return_remarks"),
 });
 
 export const advanceRequests = gapmc.table("advance_requests", {

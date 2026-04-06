@@ -57,9 +57,9 @@
 | **Login** | Session-based; store user + roles + permissions (e.g. from /api/auth/me). |
 | **Route guards** | Protected routes require auth; admin section requires ADMIN or M-10 permission. |
 | **Permission-aware UI** | Helper `can(module, action)`. Hide/disable Create/Edit/Delete where user lacks permission; show “Access denied” on forbidden pages or 403. |
-| **Admin screens** | Users (assign role + locations), Roles, Permission matrix (module × role → checkboxes), Locations (yards), Config, Audit log (list + filters), SLA config. |
+| **Admin screens** | Users (assign role + locations), Roles, Permission matrix (module × role → checkboxes), Locations (yards), Config, Audit log (list + filters: module, user id, limit), SLA config. |
 
-**Status in current app:** Login, ProtectedRoute, AdminRoute, can(), RequirePermission, sidebar filtering, list/detail permission checks exist. Optional: “Pending my action” filter for DV/DA.
+**Status in current app:** Login, ProtectedRoute, AdminRoute, can(), RequirePermission, sidebar filtering, list/detail permission checks exist. **Pending my action:** payment vouchers and **leave requests** (`pendingMyAction=1`).
 
 ### 0.4 One DO→DV→DA flow (validation)
 
@@ -71,9 +71,45 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 - Every relevant mutation is audited.  
 - At least one entity has full DO→DV→DA and is permission-gated.
 
+### Phase 0 — completion (this repo)
+
+| Area | Done |
+|------|------|
+| **0.1 DB** | `yards.type` supports **Yard \| CheckPost \| HO** (comment in schema); locations remain single master. |
+| **0.2 Audit** | M-10: yards, roles, users (no password in audit payload), role_permissions assign/remove, SLA config create/update; existing config + tally mapping unchanged. M-06: expenditure head create/update, advance create; vouchers create/update already audited. |
+| **0.3 UI** | **Payment Vouchers** and **leave requests**: **“Pending my action”** → `GET /api/ioms/vouchers?pendingMyAction=1` and `GET /api/hr/leaves?pendingMyAction=1` (DV/DA queue + ADMIN where applicable). |
+| **0.4 Reference workflow** | **Payment vouchers** (`server/workflow.ts` + `routes-vouchers.ts`): Draft/Submitted → Verified (DV) → Approved/Rejected/Paid (DA); DO create; segregation + permission checks. |
+
 ---
 
 ## Phase 1 — Receipt engine (M-05) & Trader/Asset (M-02)
+
+### Phase 1 — progress (this repo)
+
+| Item | Status |
+|------|--------|
+| **M-05 Public verify** | `GET /api/ioms/receipts/verify/:receiptNo` and `/verify/:receiptNo` work **without login** (`isPublicReceiptVerificationPath` in `server/auth.ts`). |
+| **M-05 QR image** | `GET /api/ioms/receipts/public/qr?receiptNo=` returns PNG; new receipts store `qrCodeUrl` pointing at this endpoint; verify page shows QR. Optional `PUBLIC_APP_URL` for correct scan target in QR payload. |
+| **M-02 Licence expiry cron** | `autoBlockExpiredTraderLicences()` in `server/cron-licence-expiry.ts`: Active + `validTo` &lt; today → `Expired`, blocked, `trader_blocking_log`, system audit. In-process schedule: `CRON_LICENCE_EXPIRY=true` (daily 01:05). HTTP: `POST /api/cron/licence-expiry-auto-block` with `x-cron-secret` when `CRON_SECRET` is set. |
+
+### Phase 2 — progress (this repo)
+
+| Item | Status |
+|------|--------|
+| **M-03 Auto-invoice cron** | `generateRentInvoicesForCurrentMonth()` (`server/cron-rent-invoices.ts`); in-process `CRON_RENT_INVOICE=true` (1st 00:01); HTTP `POST /api/cron/rent-invoice-generation` with `x-cron-secret` if `CRON_SECRET` set. |
+| **M-03 Track B / Pre-Receipt** | Create/update Draft rent invoice: `tenantLicenceIsGstExempt` forces CGST/SGST 0, `isGovtEntity` true; manual **Govt entity** on form. GSTR-1 excludes `isGovtEntity`. |
+| **M-03 GSTR-1** | `GET /api/ioms/rent/gstr1?fromMonth=&toMonth=`; UI on rent invoices register. Optional `GSTIN` in `.env`. |
+| **M-03 Credit notes** | Create + update enforce **Approved** invoice, **not Paid**, yard scope on linked invoice. |
+
+### Phase 3 — progress (this repo)
+
+| Item | Status |
+|------|--------|
+| **M-06 Monthly statement** | `GET /api/ioms/vouchers/monthly-statement` (JSON/CSV/XLSX/PDF); UI `/vouchers/monthly-statement`. |
+| **M-07 Fleet alerts** | `GET /api/ioms/fleet/renewal-alerts` + banner on vehicles list (`operational-alerts.ts`, 60/30/overdue). |
+| **M-08 AMC alerts** | `GET /api/ioms/amc/renewal-alerts`; Construction AMC UI can consume same pattern. |
+| **M-09 Dak SLA** | `GET /api/ioms/dak/inward/sla-overdue`; hourly `sla-reminder.ts` when `sla_config` rows match M-09/DAK; inward register banner. |
+| **M-08 Land register** | Append-only at API: **no** PUT/DELETE for `land_records` (create + list only). Optional DB enforcement: **`npm run db:apply-land-immutable`** (then **`npm run db:verify-schema`**). |
 
 ### 1.1 M-05 Receipts Online
 
@@ -84,7 +120,7 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 | **Logic** | Sequential receipt_no; revenue heads: Rent, GSTInvoice, MarketFee, LicenceFee, SecurityDeposit, Miscellaneous. |
 | **UI** | Receipt list (filters); receipt detail (QR download); reconciliation screen; public verify page. |
 
-**Gaps to implement (if any):** Online gateway (SBI ePay/NSDL/RazorpayGov) + callback; PDF with QR; ensure numbering and heads match SRS.
+**Gaps to implement (if any):** Production payment gateway (SBI ePay/NSDL/RazorpayGov); ensure numbering and heads match SRS. **Public verify page:** browser **Print / save as PDF** (no server PDF; avoids open SRS layout questions).
 
 ### 1.2 M-02 Trader & Asset
 
@@ -95,7 +131,7 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 | **Logic** | Licence lifecycle: apply → DV → DA → issue; allotment linked to asset + licence; blocking log on block/unblock. |
 | **UI** | Yard/check post master; trader licence list/detail + application/renewal; asset register; allotment screen (with vacancy); blocking log; MSP settings. |
 
-**Gaps to implement (if any):** Licence application form + document upload + eKYC step; auto-block cron on licence expiry; locations type (Yard/CheckPost/HO).
+**Gaps to implement (if any):** Licence application form + document upload + eKYC step. **Locations (M-10):** admin **create + edit** yards (code, name, type Yard/CheckPost/HO, contact, active). **Auto-block on licence expiry:** implemented (cron + HTTP trigger above).
 
 ---
 
@@ -110,7 +146,7 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 | **Logic** | Cron 1st of month: create Draft invoice per active allotment (idempotent); Govt/Track B → Pre-Receipt (no GST); credit note only for approved invoices, restrict if paid. |
 | **UI** | Invoice register (search, filter); Verify/Approve actions; ledger view; credit note form; GSTR-1 export button. |
 
-**Gaps to implement:** Auto-invoice cron; Govt Track B / Pre-Receipt; GSTR-1 export; enforce credit note rules.
+**Remaining gaps (optional / production):** Payment gateway live integration; server-side PDF; further SRS alignment on receipt numbering.
 
 ### 2.2 M-04 Market Fee & Commodities
 
@@ -135,7 +171,7 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 | **API** | Voucher CRUD; DO/DV/DA transitions; monthly statement (by head, location). |
 | **UI** | Create voucher (type, payee, head, amount, links to work/vehicle/advance); list with “pending my action”; approve flow; monthly statement report (PDF/Excel). |
 
-**Gaps to implement:** Monthly statement report (auto or on-demand, PDF/Excel).
+**Remaining gaps:** Optional scheduled email for statement; JSON/CSV/**XLSX/PDF** exports are implemented on the monthly statement API and UI.
 
 ### 3.2 M-07 Fleet
 
@@ -146,7 +182,7 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 | **Logic** | Location scope; alerts for insurance/fitness expiry (cron or scheduled query). |
 | **UI** | Vehicle master; trip entry; fuel register; maintenance + link to voucher; dashboard alerts (insurance/fitness). |
 
-**Gaps to implement:** Insurance/fitness renewal alerts (e.g. 60/30 days).
+**Remaining gaps:** Optional scheduled email/push from renewal-alerts API (UI banner exists).
 
 ### 3.3 M-08 Construction & Maintenance
 
@@ -157,7 +193,7 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 | **Logic** | AMC renewal alert (cron 60/30 days before contract_end). |
 | **UI** | Works register; work detail + bills; AMC list + renewal alerts; land register; fixed asset register + disposal approval. |
 
-**Gaps to implement:** AMC renewal cron/alert; land immutability (DB constraint); disposal workflow.
+**Remaining gaps:** In-process daily cron for AMC (optional; alerts API exists); full DA-only disposal workflow in UI if not complete. **Land:** DB-level append-only triggers via **`npm run db:apply-land-immutable`** (see `scripts/migrations/002-land-records-immutable.sql`).
 
 ### 3.4 M-09 Correspondence (Dak)
 
@@ -168,7 +204,7 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 | **Logic** | SLA = deadline − received_date; cron: deadline &lt; today and status ≠ Closed → create escalation + notify. |
 | **UI** | Inward register (assign, deadline); outward register; “My pending dak”; action tracking; subject file view; SLA breach report. |
 
-**Gaps to implement:** SLA cron + escalation (create record, notify); SLA breach report; subject file grouping.
+**Remaining gaps:** Optional physical file-room barcode linkage (out of scope here). **Done:** `dak_escalations` persistence + SLA report page + inward **subject** filter + **URL `?subject=`** sync + **Inward by subject** index (`GET /api/ioms/dak/inward/subject-summary`, `/correspondence/inward/subjects`) + **My pending dak** / **Escalations** UI routes.
 
 ---
 
@@ -179,9 +215,11 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 | **DB** | employees (link to users); employment_contracts; attendance_events; timesheets; service_book_entries; leave_requests; leave_allocations; lta_ltc; cgegis_records; ta_da_claims; recruitment (job, application, interview_stages). |
 | **API** | CRUD per entity; attendance check-in/out; timesheet validation; leave request workflow (DO→DV→DA); service book append (immutable after DA); LTC/TA-DA claims. |
 | **Logic** | EMP-ID on DA approval; service book immutable after DA; retirement alerts (cron 180/90/60/30 days); on Retired/Resigned, disable linked user. |
-| **UI** | Employee master (3-tab: Public / Personal / HR Settings); contracts; attendance; timesheet validation; leave requests/approvals; service book view; LTC/TA-DA; retirement alerts widget. |
+| **UI** | Employee master (3-tab: Public / Personal / HR Settings); contracts; attendance; timesheet validation; leave requests/approvals; service book view; LTC/TA-DA; retirement alerts widget (dashboard summary + daily cron). |
 
-**Gaps to implement:** Aadhaar eKYC flow (or simulated); 3-tab employee form; retirement cron + user disable; CGEGIS if required.
+**Gaps to implement:** Aadhaar eKYC flow (or simulated); CGEGIS if required. **3-tab employee form** and **dashboard retirement window** are in the repo (`HrEmployeeForm`, `GET /api/hr/retirement-upcoming`).
+
+**Done in repo:** Retirement reminder cron; **user login disabled** when employee status is Inactive / Retired / Suspended / Resigned — on **PUT** `/api/hr/employees/:id` (by `employees.userId` and/or `users.employee_id`) and again **daily** inside `runHrRetirementReminders()` (`disableUsersForSeparatedEmployees`, system audit).
 
 ---
 
@@ -216,3 +254,24 @@ Use node-cron or a small scheduler process; document in .env.example.
 6. **Cron and docs:** All scheduled jobs above; keep DB and .env docs updated.
 
 This order keeps RBAC and cross-cutting concerns first, then builds modules that depend on receipts and trader/asset, then the rest, with HRMS last.
+
+---
+
+## Repo completion note (2026-04)
+
+After pulling these changes, run **`npm run db:push`** so new columns exist: `leave_requests` (`do_user`, `dv_user`, `workflow_revision_count`, `dv_return_remarks`), `purchase_transactions` (`parent_transaction_id`, `entry_kind`). Optional: **`npm run db:apply-land-immutable`** for `land_records` triggers; **`npm run db:verify-schema`** to confirm columns and triggers (read-only).
+
+| Area | Delivered in code |
+|------|-------------------|
+| **M-01 Leave** | Full **Pending → Verified (DV) → Approved/Rejected (DA)**; DV return to Pending with remarks; **pending my action** filter; sample seed uses do/dv users. |
+| **M-01 Retirement** | Daily cron + HTTP cron; **user disable** on terminal HR status (PUT + cron); notifications via `notify` (webhook/SMTP optional). |
+| **M-04 Adjusted returns** | **Adjustment** purchase rows linked to **Approved** parent; negative `marketFeeAmount`; same DO→DV→DA workflow as originals. |
+| **M-08 Land** | Append-only API; optional DB triggers via **`npm run db:apply-land-immutable`** + **`npm run db:verify-schema`**. |
+| **M-08 Disposal** | **PUT `/api/ioms/fixed-assets/:id`** — disposal fields **DA/Admin only**; UI **Dispose** on fixed assets. |
+| **M-09 Dak** | Hourly SLA tick **inserts `dak_escalations`** (one per inward per UTC day); **SLA breach report** page; inward list **`?subject=`** filter (case-insensitive contains). |
+| **M-07/M-08 digest** | Daily cron + HTTP; fleet + AMC alert counts + audit stub. |
+| **Service book** | **PUT** allowed until entry is immutable / Approved. |
+
+**Still external / optional:** live payment gateway (adapter `PAYMENT_GATEWAY_MODE`), Aadhaar eKYC, CGEGIS, weighbridge. **Land DB triggers** are optional but scripted: **`npm run db:apply-land-immutable`** (API remains append-only without them).
+
+**Also delivered:** notify channels (webhook/SMTP), voucher monthly **PDF/XLSX**, Dak **my-pending** / **escalations** / **subject index** + **query-string subject filter**, admin **location create + edit** (yard type HO/CheckPost/Yard), **HR user disable** on separation (PUT + daily cron), **dashboard retirement-upcoming** card (`GET /api/hr/retirement-upcoming?days=90`), **public receipt print/PDF** from browser, **audit log** module list aligned with IOMS writers + **user id** filter.

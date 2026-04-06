@@ -42,6 +42,8 @@ import {
   Truck,
   HardHat,
   Mail,
+  Inbox,
+  BellRing,
   Calendar,
   CalendarDays,
   Send,
@@ -51,6 +53,7 @@ import {
   KeyRound,
   ShieldAlert,
   Bug,
+  BookMarked,
 } from 'lucide-react';
 
 type MenuItem = {
@@ -153,6 +156,7 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
     group: 'Vouchers (IOMS M-06)',
     items: [
       { title: 'Payment Vouchers', icon: Banknote, href: '/vouchers' },
+      { title: 'Monthly statement', icon: CalendarDays, href: '/vouchers/monthly-statement' },
       { title: 'Create voucher', icon: PlusCircle, href: '/vouchers/create', requirePermission: { module: 'M-06', action: 'Create' } },
       { title: 'Advance requests', icon: Wallet, href: '/vouchers/advances' },
     ]
@@ -175,8 +179,12 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
   {
     group: 'Correspondence (IOMS M-09)',
     items: [
-      { title: 'Dak Inward', icon: Mail, href: '/correspondence/inward' },
-      { title: 'Dak Outward', icon: Send, href: '/correspondence/outward' },
+      { title: 'Dak Inward', icon: Mail, href: '/correspondence/inward', requirePermission: { module: 'M-09', action: 'Read' } },
+      { title: 'My pending dak', icon: Inbox, href: '/correspondence/inward/my-pending', requirePermission: { module: 'M-09', action: 'Read' } },
+      { title: 'Dak escalations', icon: BellRing, href: '/correspondence/inward/escalations', requirePermission: { module: 'M-09', action: 'Read' } },
+      { title: 'Inward by subject', icon: Grid3X3, href: '/correspondence/inward/subjects', requirePermission: { module: 'M-09', action: 'Read' } },
+      { title: 'SLA breach report', icon: ClipboardList, href: '/correspondence/sla-report', requirePermission: { module: 'M-09', action: 'Read' } },
+      { title: 'Dak Outward', icon: Send, href: '/correspondence/outward', requirePermission: { module: 'M-09', action: 'Read' } },
     ]
   },
   {
@@ -201,6 +209,7 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
       { title: 'Audit Log', icon: ScrollText, href: '/admin/audit' },
       { title: 'Permission matrix', icon: Grid3X3, href: '/admin/permissions' },
       { title: 'SLA config', icon: Clock, href: '/admin/sla-config' },
+      { title: 'Finance mappings', icon: BookMarked, href: '/admin/finance-mappings' },
     ]
   },
 ];

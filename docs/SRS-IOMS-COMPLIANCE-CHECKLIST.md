@@ -1,7 +1,9 @@
 # GAPLMB IOMS SRS — Compliance checklist
 
-**Reference:** `GAPLMB_IOMS_SRS_v1_0.pdf` (map each row to SRS **FR / UC / SCR** and **Appendix C RTM** where applicable).  
-**App:** `gapmc-management-system` (Express + React + Drizzle + PostgreSQL).
+**Reference:** `GAPLMB-GOA-IOMS-SRS-v2-final.pdf` (GAPLMB-GOA-IOMS-SRS-v2.0, Mar 2026) — map each row to SRS **FR / UC / SCR** and **Appendix C RTM** where applicable.  
+**Supporting inputs:** `tally_ledgers.pdf` (chart of accounts), `List of Exemption from GST.pdf` (govt. office/godown GST exemption list).  
+**App:** `gapmc-management-system` (Express + React + Drizzle + PostgreSQL).  
+**Traceability sheet:** [SRS-TRACEABILITY-SHEET.md](./SRS-TRACEABILITY-SHEET.md). **Client open items:** [SRS-OPEN-ITEMS-CLIENT.md](./SRS-OPEN-ITEMS-CLIENT.md).
 
 ## How to use
 
@@ -16,18 +18,20 @@
 | # | Requirement | Status | Evidence / notes |
 |---|-------------|--------|------------------|
 | CC-01 | DO → DV → DA workflow on transactional records (draft visibility rules) | | `server/workflow.ts`, per-route |
-| CC-02 | **BR-WF-01:** same **user** cannot be DO + DV + DA on the **same** record | | Enforce `userId` per transition |
-| CC-03 | DA rejection: **reason code** + minimum **remarks** length; **revision count** where SRS specifies | | UI + API validation |
+| CC-02 | **BR-WF-01:** same **user** cannot be DO + DV + DA on the **same** record | Partial | Transitions: rent, vouchers, market tx. Stored roles: `assertRecordDoDvDaSeparation` on works, fleet vehicles, trader licences, allotments; leave self-approve blocked in `routes-hr.ts` |
+| CC-03 | DA rejection: **reason code** + minimum **remarks** length; **revision count** where SRS specifies | Partial | `shared/workflow-rejection.ts`; vouchers `routes-vouchers.ts` + `VoucherDetail` / `VouchersList`; leave `routes-hr.ts` + `LeaveRequests`; rent `routes-rent-ioms.ts` + `IomsRentInvoiceDetail`; M-04 purchase `routes-market-ioms.ts` + `MarketTransactions` (**Verified→Draft** DV return, `dvReturnRemarks`, revision count) |
 | CC-04 | **Audit log** on material mutations (who, when, before/after, IP) | | `audit_log` + helpers |
-| CC-05 | **Location / yard scoping** on APIs (non-admin) | | Middleware + queries |
-| CC-06 | **Notifications** (email/SMS) on submit / verify / approve / return / reject / SLA breach | | Notif service + templates |
-| CC-07 | **SLA escalation job** (reads `sla_config`, notifies `alert_role`) | | Cron/worker |
-| CC-08 | **PWA:** manifest, service worker, installability (if SRS mandates) | | `client` build |
+| CC-05 | **Location / yard scoping** on APIs (non-admin) | Partial | `routes-traders-assets.ts` (licences, assistants, assets, vacant, allotments, blocking log); other IOMS routes as before |
+| CC-06 | **Notifications** (email/SMS) on submit / verify / approve / return / reject / SLA breach | Partial | `server/notify-stub.ts` — replace with provider; SLA tick calls stub |
+| CC-07 | **SLA escalation job** (reads `sla_config`, notifies `alert_role`) | Partial | `sla-reminder.ts`: M-03 Draft rent + M-06 Draft/Submitted voucher overdue counts → `sendNotificationStub` |
+| CC-08 | **PWA:** manifest, service worker, installability (if SRS mandates) | Partial | `manifest.webmanifest`, `sw.js`, prod registration in `main.tsx` |
 | CC-09 | **Offline + sync** at check posts (if SRS mandates) | | |
 | CC-10 | **WCAG 2.1 AA** + GIGW-oriented UX | | Audit |
 | CC-11 | **Data retention / archival** per SRS §16 | | |
-| CC-12 | **Error code registry** + consistent API errors | | |
-| CC-13 | **User ↔ active employee** coupling; disable user when employee inactive (**SRS §1.4**) | | DB + provisioning |
+| CC-12 | **Error code registry** + consistent API errors | Done | `server/api-errors.ts` `sendApiError`: all route modules + `auth.ts` use `{ error, code, details? }` for **4xx/5xx** (`INTERNAL_ERROR` on catch paths); client `readApiErrorMessage` + 401 branch in `fetchApiGet`; dev **port scan** `PORT`…`PORT+19`; **`npm run smoke`** → `GET /api/health` |
+| CC-13 | **User ↔ active employee** coupling; disable user when employee inactive (**SRS §1.4**) | Partial | `POST/PUT /api/admin/users` + `employees.user_id`; HR update deactivates user |
+| CC-14 | **Tally COA mapping** — ledger catalogue + revenue/expenditure head → Tally ledger for export | Partial | Schema + seed; `PUT /api/admin/expenditure-heads/:id/tally-ledger`; `AdminFinanceMappings.tsx`; `GET /api/ioms/reports/tally-export` |
+| CC-15 | **Govt. office/godown GST exempt categories** (7 named entities) — licence link + M-03/M-05 zero tax | Partial | Seed + API + `TraderLicenceDetail` category editor; rent + receipt server logic |
 
 ---
 
@@ -38,10 +42,10 @@
 | # | Requirement | Status | Evidence / notes |
 |---|-------------|--------|------------------|
 | M10-01 | Users table: login identity, `employee_id` link, active flag, password/session policy | | `users`, `auth` |
-| M10-02 | **No IOMS user** without **active** employee (if SRS is binding) | | Block standalone create or flag bootstrap-only |
-| M10-03 | **Transactional disable** of user when employee becomes inactive (same transaction as HR update) | | Trigger or app transaction |
-| M10-04 | User CRUD API (create, read, update, deactivate) with permission checks | | `routes-admin.ts` |
-| M10-05 | Admin UI: list users, assign **roles** and **yards/locations** | | `AdminUsers.tsx` |
+| M10-02 | **No IOMS user** without **active** employee (if SRS is binding) | Partial | `POST /api/admin/users` requires `employeeId` |
+| M10-03 | **Transactional disable** of user when employee becomes inactive (same transaction as HR update) | Partial | `routes-hr.ts` employee `PUT` |
+| M10-04 | User CRUD API (create, read, update, deactivate) with permission checks | Partial | `routes-admin.ts` |
+| M10-05 | Admin UI: list users, assign **roles** and **yards/locations** | Partial | `AdminUsers.tsx` + employee picker |
 | M10-06 | Optional: password reset / admin-set password policy per SRS | | |
 | M10-07 | SSO / government IdP / OTP login (if in scope) | | Currently password session |
 

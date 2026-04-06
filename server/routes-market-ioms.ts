@@ -21,8 +21,16 @@ import {
   iomsReceipts,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
-import { canCreatePurchaseTransaction, canEditDraftPurchaseTransaction, canTransitionPurchaseTransaction, canVerifyCheckPostInward } from "./workflow";
+import {
+  canCreatePurchaseTransaction,
+  canEditDraftPurchaseTransaction,
+  canTransitionPurchaseTransaction,
+  canVerifyCheckPostInward,
+  assertSegregationDoDvDa,
+} from "./workflow";
 import { writeAuditLog } from "./audit";
+import { sendApiError } from "./api-errors";
+import { validateDvReturnToDraft } from "@shared/workflow-rejection";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 
@@ -43,7 +51,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch commodities" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch commodities");
     }
   });
 
@@ -60,16 +68,19 @@ export function registerMarketIomsRoutes(app: Express) {
         isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
       });
       const [row] = await db.select().from(commodities).where(eq(commodities.id, id));
+      if (row) writeAuditLog(req, { module: "Market", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create commodity" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create commodity");
     }
   });
 
   app.put("/api/ioms/commodities/:id", async (req, res) => {
     try {
       const id = req.params.id;
+      const [existingCommodity] = await db.select().from(commodities).where(eq(commodities.id, id)).limit(1);
+      if (!existingCommodity) return sendApiError(res, 404, "IOMS_COMMODITY_NOT_FOUND", "Not found");
       const body = req.body;
       const updates: Record<string, unknown> = {};
       ["name", "variety", "unit", "gradeType", "isActive"].forEach((k) => {
@@ -79,11 +90,12 @@ export function registerMarketIomsRoutes(app: Express) {
       });
       await db.update(commodities).set(updates as Record<string, string | boolean | null>).where(eq(commodities.id, id));
       const [row] = await db.select().from(commodities).where(eq(commodities.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "IOMS_COMMODITY_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "Market", action: "Update", recordId: id, beforeValue: existingCommodity, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update commodity" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update commodity");
     }
   });
 
@@ -102,7 +114,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch fee rates" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch fee rates");
     }
   });
 
@@ -112,7 +124,7 @@ export function registerMarketIomsRoutes(app: Express) {
       const yardId = body.yardId ? String(body.yardId) : null;
       const scopedIds = req.scopedLocationIds;
       if (yardId && scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
-        return res.status(403).json({ error: "You do not have access to this yard" });
+        return sendApiError(res, 403, "IOMS_MARKET_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
       const sys = await getMergedSystemConfig();
       const defaultPct = parseSystemConfigNumber(sys, "market_fee_percent");
@@ -126,10 +138,11 @@ export function registerMarketIomsRoutes(app: Express) {
         yardId,
       });
       const [row] = await db.select().from(marketFeeRates).where(eq(marketFeeRates.id, id));
+      if (row) writeAuditLog(req, { module: "Market", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create fee rate" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create fee rate");
     }
   });
 
@@ -146,7 +159,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch farmers" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch farmers");
     }
   });
 
@@ -156,7 +169,7 @@ export function registerMarketIomsRoutes(app: Express) {
       const yardId = String(body.yardId ?? "");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
-        return res.status(403).json({ error: "You do not have access to this yard" });
+        return sendApiError(res, 403, "IOMS_MARKET_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
       const id = nanoid();
       await db.insert(farmers).values({
@@ -170,10 +183,11 @@ export function registerMarketIomsRoutes(app: Express) {
         aadhaarToken: body.aadhaarToken ? String(body.aadhaarToken) : null,
       });
       const [row] = await db.select().from(farmers).where(eq(farmers.id, id));
+      if (row) writeAuditLog(req, { module: "Market", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create farmer" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create farmer");
     }
   });
 
@@ -181,10 +195,10 @@ export function registerMarketIomsRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(farmers).where(eq(farmers.id, id)).limit(1);
-      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (!existing) return sendApiError(res, 404, "IOMS_FARMER_NOT_FOUND", "Not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(existing.yardId)) {
-        return res.status(404).json({ error: "Not found" });
+        return sendApiError(res, 404, "IOMS_FARMER_NOT_FOUND", "Not found");
       }
       const body = req.body;
       const updates: Record<string, unknown> = {};
@@ -192,15 +206,16 @@ export function registerMarketIomsRoutes(app: Express) {
         if (body[k] !== undefined) updates[k] = body[k] == null ? null : String(body[k]);
       });
       if (updates.yardId && scopedIds && scopedIds.length > 0 && !scopedIds.includes(updates.yardId as string)) {
-        return res.status(403).json({ error: "You do not have access to this yard" });
+        return sendApiError(res, 403, "IOMS_MARKET_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
       await db.update(farmers).set(updates as Record<string, string | null>).where(eq(farmers.id, id));
       const [row] = await db.select().from(farmers).where(eq(farmers.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "IOMS_FARMER_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "Market", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update farmer" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update farmer");
     }
   });
 
@@ -214,21 +229,105 @@ export function registerMarketIomsRoutes(app: Express) {
       if (scopedIds && scopedIds.length > 0) conditions.push(inArray(purchaseTransactions.yardId, scopedIds));
       if (yardId) conditions.push(eq(purchaseTransactions.yardId, yardId));
       if (status) conditions.push(eq(purchaseTransactions.status, status));
+      const parentTransactionId = req.query.parentTransactionId as string | undefined;
+      if (parentTransactionId) conditions.push(eq(purchaseTransactions.parentTransactionId, parentTransactionId));
       const base = db.select().from(purchaseTransactions).orderBy(desc(purchaseTransactions.transactionDate));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch transactions" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch transactions");
     }
   });
 
   app.post("/api/ioms/market/transactions", async (req, res) => {
     try {
       if (!canCreatePurchaseTransaction(req.user)) {
-        return res.status(403).json({ error: "Only Data Originator or Admin can create purchase transactions" });
+        return sendApiError(
+          res,
+          403,
+          "PURCHASE_TX_CREATE_DENIED",
+          "Only Data Originator or Admin can create purchase transactions",
+        );
       }
       const body = req.body;
+      const parentTransactionId = body.parentTransactionId ? String(body.parentTransactionId) : null;
+      if (parentTransactionId) {
+        const [parent] = await db
+          .select()
+          .from(purchaseTransactions)
+          .where(eq(purchaseTransactions.id, parentTransactionId))
+          .limit(1);
+        if (!parent) {
+          return sendApiError(res, 404, "PURCHASE_TX_PARENT_NOT_FOUND", "Original transaction not found");
+        }
+        if (parent.status !== "Approved") {
+          return sendApiError(
+            res,
+            400,
+            "PURCHASE_TX_ADJUSTMENT_PARENT_NOT_APPROVED",
+            "Adjusted return must reference an Approved purchase",
+          );
+        }
+        const scopedIds = req.scopedLocationIds;
+        if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(parent.yardId)) {
+          return sendApiError(res, 403, "PURCHASE_TX_YARD_ACCESS_DENIED", "You do not have access to this yard");
+        }
+        const marketFeeAmount = Number(body.marketFeeAmount ?? 0);
+        if (Number.isNaN(marketFeeAmount) || marketFeeAmount >= 0) {
+          return sendApiError(
+            res,
+            400,
+            "PURCHASE_TX_ADJUSTMENT_FEE_NEGATIVE",
+            "Adjustment requires negative marketFeeAmount (market fee credit)",
+          );
+        }
+        const declaredValue = Number(body.declaredValue ?? 0);
+        if (Number.isNaN(declaredValue) || declaredValue < 0) {
+          return sendApiError(
+            res,
+            400,
+            "PURCHASE_TX_DECLARED_VALUE_INVALID",
+            "declaredValue must be a non-negative number",
+          );
+        }
+        const quantity = Number(body.quantity ?? parent.quantity);
+        if (Number.isNaN(quantity) || quantity <= 0) {
+          return sendApiError(res, 400, "PURCHASE_TX_QUANTITY_INVALID", "quantity must be greater than 0");
+        }
+        const id = nanoid();
+        await db.insert(purchaseTransactions).values({
+          id,
+          yardId: parent.yardId,
+          commodityId: parent.commodityId,
+          traderLicenceId: parent.traderLicenceId,
+          quantity,
+          unit: String(body.unit ?? parent.unit),
+          weight: body.weight != null ? Number(body.weight) : parent.weight,
+          declaredValue,
+          marketFeePercent: Number(body.marketFeePercent ?? parent.marketFeePercent),
+          marketFeeAmount,
+          purchaseType: String(body.purchaseType ?? parent.purchaseType),
+          grade: body.grade != null ? String(body.grade) : parent.grade,
+          transactionDate: String(body.transactionDate ?? new Date().toISOString().slice(0, 10)),
+          status: "Draft",
+          farmerId: body.farmerId != null ? String(body.farmerId) : parent.farmerId,
+          receiptId: null,
+          doUser: req.user?.id ?? null,
+          dvUser: null,
+          daUser: null,
+          parentTransactionId,
+          entryKind: "Adjustment",
+        });
+        const [row] = await db.select().from(purchaseTransactions).where(eq(purchaseTransactions.id, id));
+        if (row) {
+          writeAuditLog(req, { module: "Market", action: "CreateAdjustment", recordId: id, afterValue: row }).catch((e) =>
+            console.error("Audit log failed:", e),
+          );
+        }
+        return res.status(201).json(row);
+      }
+
       const yardId = String(body.yardId ?? "");
       const commodityId = String(body.commodityId ?? "");
       const traderLicenceId = String(body.traderLicenceId ?? "");
@@ -243,38 +342,63 @@ export function registerMarketIomsRoutes(app: Express) {
       const weight = body.weight != null ? Number(body.weight) : null;
 
       if (!yardId || !commodityId || !traderLicenceId || !transactionDate || !unit || !purchaseType) {
-        return res.status(400).json({ error: "yardId, commodityId, traderLicenceId, transactionDate, unit and purchaseType are required" });
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_FIELDS_REQUIRED",
+          "yardId, commodityId, traderLicenceId, transactionDate, unit and purchaseType are required",
+        );
       }
       if (Number.isNaN(quantity) || quantity <= 0) {
-        return res.status(400).json({ error: "quantity must be greater than 0" });
+        return sendApiError(res, 400, "PURCHASE_TX_QUANTITY_INVALID", "quantity must be greater than 0");
       }
       if (Number.isNaN(declaredValue) || declaredValue < 0) {
-        return res.status(400).json({ error: "declaredValue must be a non-negative number" });
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_DECLARED_VALUE_INVALID",
+          "declaredValue must be a non-negative number",
+        );
       }
       if (Number.isNaN(marketFeePercent) || marketFeePercent < 0 || marketFeePercent > 100) {
-        return res.status(400).json({ error: "marketFeePercent must be between 0 and 100" });
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_MARKET_FEE_PERCENT_INVALID",
+          "marketFeePercent must be between 0 and 100",
+        );
       }
       if (Number.isNaN(marketFeeAmount) || marketFeeAmount < 0) {
-        return res.status(400).json({ error: "marketFeeAmount must be a non-negative number" });
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_MARKET_FEE_AMOUNT_INVALID",
+          "marketFeeAmount must be a non-negative number",
+        );
       }
       if (weight != null && (Number.isNaN(weight) || weight < 0)) {
-        return res.status(400).json({ error: "weight must be a non-negative number" });
+        return sendApiError(res, 400, "PURCHASE_TX_WEIGHT_INVALID", "weight must be a non-negative number");
       }
 
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
-        return res.status(403).json({ error: "You do not have access to this yard" });
+        return sendApiError(res, 403, "PURCHASE_TX_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
       const [commodity] = await db.select({ id: commodities.id }).from(commodities).where(eq(commodities.id, commodityId)).limit(1);
-      if (!commodity) return res.status(404).json({ error: "Commodity not found" });
+      if (!commodity) return sendApiError(res, 404, "PURCHASE_TX_COMMODITY_NOT_FOUND", "Commodity not found");
       const [licence] = await db
         .select({ id: traderLicences.id, yardId: traderLicences.yardId, status: traderLicences.status })
         .from(traderLicences)
         .where(eq(traderLicences.id, traderLicenceId))
         .limit(1);
-      if (!licence) return res.status(404).json({ error: "Trader licence not found" });
+      if (!licence) return sendApiError(res, 404, "PURCHASE_TX_LICENCE_NOT_FOUND", "Trader licence not found");
       if (licence.yardId && licence.yardId !== yardId) {
-        return res.status(400).json({ error: "Trader licence belongs to a different yard" });
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_LICENCE_YARD_MISMATCH",
+          "Trader licence belongs to a different yard",
+        );
       }
 
       const id = nanoid();
@@ -298,6 +422,8 @@ export function registerMarketIomsRoutes(app: Express) {
         doUser: req.user?.id ?? null,
         dvUser: null,
         daUser: null,
+        parentTransactionId: null,
+        entryKind: "Original",
       });
       const [row] = await db.select().from(purchaseTransactions).where(eq(purchaseTransactions.id, id));
       if (row) {
@@ -306,7 +432,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create transaction" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create transaction");
     }
   });
 
@@ -314,24 +440,47 @@ export function registerMarketIomsRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(purchaseTransactions).where(eq(purchaseTransactions.id, id));
-      if (!existing) return res.status(404).json({ error: "Purchase transaction not found" });
+      if (!existing) {
+        return sendApiError(res, 404, "PURCHASE_TX_NOT_FOUND", "Purchase transaction not found");
+      }
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(existing.yardId)) {
-        return res.status(404).json({ error: "Purchase transaction not found" });
+        return sendApiError(res, 404, "PURCHASE_TX_NOT_FOUND", "Purchase transaction not found");
       }
       const body = req.body;
       const newStatus = body.status !== undefined ? String(body.status) : existing.status;
       const statusChange = newStatus !== existing.status;
       const transition = statusChange ? canTransitionPurchaseTransaction(req.user, existing.status, newStatus) : null;
 
+      let dvReturnRemarks: string | null = null;
       if (statusChange) {
         if (!transition?.allowed) {
-          return res.status(403).json({
-            error: `You cannot change status from ${existing.status} to ${newStatus}. Only DV can verify; only DA can approve.`,
-          });
+          return sendApiError(
+            res,
+            403,
+            "PURCHASE_TX_STATUS_TRANSITION_DENIED",
+            `You cannot change status from ${existing.status} to ${newStatus}. Only DV can verify; only DA can approve.`,
+          );
+        }
+        const seg = assertSegregationDoDvDa(req.user, existing, {
+          setDvUser: transition?.setDvUser,
+          setDaUser: transition?.setDaUser,
+        });
+        if (!seg.ok) {
+          return sendApiError(res, 403, "PURCHASE_TX_DO_DV_DA_SEGREGATION", seg.error);
+        }
+        if (existing.status === "Verified" && newStatus === "Draft") {
+          const ret = validateDvReturnToDraft(body as Record<string, unknown>);
+          if (!ret.ok) return sendApiError(res, 400, "PURCHASE_TX_DV_RETURN_INVALID", ret.error);
+          dvReturnRemarks = ret.remarks;
         }
       } else if (existing.status === "Draft" && !canEditDraftPurchaseTransaction(req.user)) {
-        return res.status(403).json({ error: "Only Data Originator or Admin can edit draft transactions" });
+        return sendApiError(
+          res,
+          403,
+          "PURCHASE_TX_DRAFT_EDIT_DENIED",
+          "Only Data Originator or Admin can edit draft transactions",
+        );
       }
 
       const updates: Record<string, unknown> = {};
@@ -341,29 +490,53 @@ export function registerMarketIomsRoutes(app: Express) {
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
       if (updates.yardId && scopedIds && scopedIds.length > 0 && !scopedIds.includes(String(updates.yardId))) {
-        return res.status(403).json({ error: "You do not have access to this yard" });
+        return sendApiError(res, 403, "PURCHASE_TX_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
       if (updates.quantity != null && (Number.isNaN(Number(updates.quantity)) || Number(updates.quantity) <= 0)) {
-        return res.status(400).json({ error: "quantity must be greater than 0" });
+        return sendApiError(res, 400, "PURCHASE_TX_QUANTITY_INVALID", "quantity must be greater than 0");
       }
       if (updates.declaredValue != null && (Number.isNaN(Number(updates.declaredValue)) || Number(updates.declaredValue) < 0)) {
-        return res.status(400).json({ error: "declaredValue must be a non-negative number" });
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_DECLARED_VALUE_INVALID",
+          "declaredValue must be a non-negative number",
+        );
       }
-      if (updates.marketFeePercent != null && (Number.isNaN(Number(updates.marketFeePercent)) || Number(updates.marketFeePercent) < 0 || Number(updates.marketFeePercent) > 100)) {
-        return res.status(400).json({ error: "marketFeePercent must be between 0 and 100" });
+      if (
+        updates.marketFeePercent != null &&
+        (Number.isNaN(Number(updates.marketFeePercent)) ||
+          Number(updates.marketFeePercent) < 0 ||
+          Number(updates.marketFeePercent) > 100)
+      ) {
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_MARKET_FEE_PERCENT_INVALID",
+          "marketFeePercent must be between 0 and 100",
+        );
       }
       if (updates.marketFeeAmount != null && (Number.isNaN(Number(updates.marketFeeAmount)) || Number(updates.marketFeeAmount) < 0)) {
-        return res.status(400).json({ error: "marketFeeAmount must be a non-negative number" });
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_MARKET_FEE_AMOUNT_INVALID",
+          "marketFeeAmount must be a non-negative number",
+        );
       }
       if (updates.weight != null && (Number.isNaN(Number(updates.weight)) || Number(updates.weight) < 0)) {
-        return res.status(400).json({ error: "weight must be a non-negative number" });
+        return sendApiError(res, 400, "PURCHASE_TX_WEIGHT_INVALID", "weight must be a non-negative number");
       }
       if (transition?.setDvUser) updates.dvUser = req.user?.id ?? null;
       if (transition?.setDaUser) updates.daUser = req.user?.id ?? null;
+      if (dvReturnRemarks !== null) {
+        updates.dvReturnRemarks = dvReturnRemarks;
+        updates.workflowRevisionCount = Number(existing.workflowRevisionCount ?? 0) + 1;
+      }
 
       await db.update(purchaseTransactions).set(updates as Record<string, string | number | null>).where(eq(purchaseTransactions.id, id));
       const [row] = await db.select().from(purchaseTransactions).where(eq(purchaseTransactions.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "PURCHASE_TX_NOT_FOUND", "Not found");
       let responseRow = row;
 
       // Phase-1 linkage: when a market purchase transaction is Approved,
@@ -440,7 +613,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.json(responseRow);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update purchase transaction" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update purchase transaction");
     }
   });
 
@@ -458,7 +631,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch inward entries" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch inward entries");
     }
   });
 
@@ -473,19 +646,29 @@ export function registerMarketIomsRoutes(app: Express) {
       const isDvOrAdmin = Boolean(req.user?.roles?.some((r) => r.tier === "DV" || r.tier === "ADMIN"));
 
       if (!checkPostId || !entryDate) {
-        return res.status(400).json({ error: "checkPostId and entryDate are required" });
+        return sendApiError(res, 400, "CHECKPOST_INWARD_FIELDS_REQUIRED", "checkPostId and entryDate are required");
       }
       if (!isScopedCheckPost(req, checkPostId)) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       if (!isValidStatus(status, ["Draft", "Verified"])) {
-        return res.status(400).json({ error: "Invalid status. Allowed: Draft, Verified" });
+        return sendApiError(res, 400, "CHECKPOST_INWARD_STATUS_INVALID", "Invalid status. Allowed: Draft, Verified");
       }
       if (status === "Verified" && !isDvOrAdmin) {
-        return res.status(403).json({ error: "Only DV or Admin can create inward entries as Verified" });
+        return sendApiError(
+          res,
+          403,
+          "CHECKPOST_INWARD_CREATE_VERIFY_DENIED",
+          "Only DV or Admin can create inward entries as Verified",
+        );
       }
       if (totalCharges != null && (Number.isNaN(totalCharges) || totalCharges < 0)) {
-        return res.status(400).json({ error: "totalCharges must be a non-negative number" });
+        return sendApiError(
+          res,
+          400,
+          "CHECKPOST_INWARD_TOTAL_CHARGES_INVALID",
+          "totalCharges must be a non-negative number",
+        );
       }
 
       const id = nanoid();
@@ -513,7 +696,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create inward entry" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create inward entry");
     }
   });
 
@@ -521,22 +704,32 @@ export function registerMarketIomsRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(checkPostInward).where(eq(checkPostInward.id, id));
-      if (!existing) return res.status(404).json({ error: "Check post inward entry not found" });
+      if (!existing) return sendApiError(res, 404, "CHECKPOST_INWARD_NOT_FOUND", "Check post inward entry not found");
       if (!isScopedCheckPost(req, existing.checkPostId)) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       const body = req.body;
       const newStatus = body.status !== undefined ? String(body.status) : existing.status;
       if (!isValidStatus(newStatus, ["Draft", "Verified"])) {
-        return res.status(400).json({ error: "Invalid status. Allowed: Draft, Verified" });
+        return sendApiError(res, 400, "CHECKPOST_INWARD_STATUS_INVALID", "Invalid status. Allowed: Draft, Verified");
       }
       if (existing.status === "Draft" && newStatus === "Verified") {
         if (!canVerifyCheckPostInward(req.user)) {
-          return res.status(403).json({ error: "Only DV or Admin can verify check post inward entries." });
+          return sendApiError(
+            res,
+            403,
+            "CHECKPOST_INWARD_VERIFY_DENIED",
+            "Only DV or Admin can verify check post inward entries.",
+          );
         }
       }
       if (existing.status === "Verified" && newStatus !== "Verified") {
-        return res.status(400).json({ error: "Verified inward entries cannot be moved back to Draft" });
+        return sendApiError(
+          res,
+          400,
+          "CHECKPOST_INWARD_NO_REVERT_FROM_VERIFIED",
+          "Verified inward entries cannot be moved back to Draft",
+        );
       }
 
       // Once verified, core fields are immutable.
@@ -558,7 +751,12 @@ export function registerMarketIomsRoutes(app: Express) {
         ];
         const tried = forbiddenAfterVerify.some((k) => body[k] !== undefined);
         if (tried) {
-          return res.status(400).json({ error: "Verified inward entries are immutable; only status metadata can be updated." });
+          return sendApiError(
+            res,
+            400,
+            "CHECKPOST_INWARD_VERIFIED_IMMUTABLE",
+            "Verified inward entries are immutable; only status metadata can be updated.",
+          );
         }
       }
 
@@ -569,16 +767,16 @@ export function registerMarketIomsRoutes(app: Express) {
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
       if (updates.checkPostId && !isScopedCheckPost(req, String(updates.checkPostId))) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       await db.update(checkPostInward).set(updates as Record<string, string | number | null>).where(eq(checkPostInward.id, id));
       const [row] = await db.select().from(checkPostInward).where(eq(checkPostInward.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "CHECKPOST_INWARD_NOT_FOUND", "Not found");
       writeAuditLog(req, { module: "CheckPost", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update check post inward" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update check post inward");
     }
   });
 
@@ -586,15 +784,15 @@ export function registerMarketIomsRoutes(app: Express) {
   app.get("/api/ioms/checkpost/inward/:inwardId/commodities", async (req, res) => {
     try {
       const [inward] = await db.select().from(checkPostInward).where(eq(checkPostInward.id, req.params.inwardId)).limit(1);
-      if (!inward) return res.status(404).json({ error: "Inward entry not found" });
+      if (!inward) return sendApiError(res, 404, "CHECKPOST_INWARD_NOT_FOUND", "Inward entry not found");
       if (!isScopedCheckPost(req, inward.checkPostId)) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       const list = await db.select().from(checkPostInwardCommodities).where(eq(checkPostInwardCommodities.inwardId, req.params.inwardId));
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch inward commodities" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch inward commodities");
     }
   });
 
@@ -603,9 +801,9 @@ export function registerMarketIomsRoutes(app: Express) {
       const inwardId = req.params.inwardId;
       const body = req.body;
       const [inward] = await db.select().from(checkPostInward).where(eq(checkPostInward.id, inwardId)).limit(1);
-      if (!inward) return res.status(404).json({ error: "Inward entry not found" });
+      if (!inward) return sendApiError(res, 404, "CHECKPOST_INWARD_NOT_FOUND", "Inward entry not found");
       if (!isScopedCheckPost(req, inward.checkPostId)) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
 
       const commodityId = String(body.commodityId ?? "");
@@ -616,19 +814,29 @@ export function registerMarketIomsRoutes(app: Express) {
       const marketFeeAmount = body.marketFeeAmount != null ? Number(body.marketFeeAmount) : null;
 
       if (!commodityId || !unit) {
-        return res.status(400).json({ error: "commodityId and unit are required" });
+        return sendApiError(res, 400, "CHECKPOST_LINE_COMMODITY_REQUIRED", "commodityId and unit are required");
       }
       if (Number.isNaN(quantity) || quantity <= 0) {
-        return res.status(400).json({ error: "quantity must be greater than 0" });
+        return sendApiError(res, 400, "CHECKPOST_LINE_QUANTITY_INVALID", "quantity must be greater than 0");
       }
       if (Number.isNaN(value) || value < 0) {
-        return res.status(400).json({ error: "value must be a non-negative number" });
+        return sendApiError(res, 400, "CHECKPOST_LINE_VALUE_INVALID", "value must be a non-negative number");
       }
       if (marketFeePercent != null && (Number.isNaN(marketFeePercent) || marketFeePercent < 0 || marketFeePercent > 100)) {
-        return res.status(400).json({ error: "marketFeePercent must be between 0 and 100" });
+        return sendApiError(
+          res,
+          400,
+          "CHECKPOST_LINE_MARKET_FEE_PERCENT_INVALID",
+          "marketFeePercent must be between 0 and 100",
+        );
       }
       if (marketFeeAmount != null && (Number.isNaN(marketFeeAmount) || marketFeeAmount < 0)) {
-        return res.status(400).json({ error: "marketFeeAmount must be a non-negative number" });
+        return sendApiError(
+          res,
+          400,
+          "CHECKPOST_LINE_MARKET_FEE_AMOUNT_INVALID",
+          "marketFeeAmount must be a non-negative number",
+        );
       }
 
       const id = nanoid();
@@ -649,7 +857,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create inward commodity" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create inward commodity");
     }
   });
 
@@ -666,7 +874,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch outward entries" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch outward entries");
     }
   });
 
@@ -677,10 +885,15 @@ export function registerMarketIomsRoutes(app: Express) {
       const inwardRefId = String(body.inwardRefId ?? "");
       const entryDate = String(body.entryDate ?? "");
       if (!checkPostId || !inwardRefId || !entryDate) {
-        return res.status(400).json({ error: "checkPostId, inwardRefId and entryDate are required" });
+        return sendApiError(
+          res,
+          400,
+          "CHECKPOST_OUTWARD_FIELDS_REQUIRED",
+          "checkPostId, inwardRefId and entryDate are required",
+        );
       }
       if (!isScopedCheckPost(req, checkPostId)) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       const id = nanoid();
       await db.insert(checkPostOutward).values({
@@ -698,7 +911,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create outward entry" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create outward entry");
     }
   });
 
@@ -706,9 +919,9 @@ export function registerMarketIomsRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(checkPostOutward).where(eq(checkPostOutward.id, id)).limit(1);
-      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (!existing) return sendApiError(res, 404, "CHECKPOST_OUTWARD_NOT_FOUND", "Not found");
       if (!isScopedCheckPost(req, existing.checkPostId)) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       const body = req.body;
       const updates: Record<string, unknown> = {};
@@ -717,16 +930,16 @@ export function registerMarketIomsRoutes(app: Express) {
         updates[k] = body[k] == null ? null : String(body[k]);
       });
       if (updates.checkPostId && !isScopedCheckPost(req, String(updates.checkPostId))) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       await db.update(checkPostOutward).set(updates as Record<string, string | null>).where(eq(checkPostOutward.id, id));
       const [row] = await db.select().from(checkPostOutward).where(eq(checkPostOutward.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "CHECKPOST_OUTWARD_NOT_FOUND", "Not found");
       writeAuditLog(req, { module: "CheckPost", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update outward entry" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update outward entry");
     }
   });
 
@@ -751,7 +964,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.json(scoped);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch exit permits" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch exit permits");
     }
   });
 
@@ -763,12 +976,17 @@ export function registerMarketIomsRoutes(app: Express) {
       const issuedDate = String(body.issuedDate ?? "");
       const officerId = String(body.officerId ?? "");
       if (!permitNo || !inwardId || !issuedDate || !officerId) {
-        return res.status(400).json({ error: "permitNo, inwardId, issuedDate and officerId are required" });
+        return sendApiError(
+          res,
+          400,
+          "CHECKPOST_EXIT_PERMIT_FIELDS_REQUIRED",
+          "permitNo, inwardId, issuedDate and officerId are required",
+        );
       }
       const [inward] = await db.select().from(checkPostInward).where(eq(checkPostInward.id, inwardId)).limit(1);
-      if (!inward) return res.status(404).json({ error: "Inward entry not found" });
+      if (!inward) return sendApiError(res, 404, "CHECKPOST_INWARD_NOT_FOUND", "Inward entry not found");
       if (!isScopedCheckPost(req, inward.checkPostId)) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       const id = nanoid();
       await db.insert(exitPermits).values({
@@ -785,7 +1003,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create exit permit" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create exit permit");
     }
   });
 
@@ -793,10 +1011,10 @@ export function registerMarketIomsRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(exitPermits).where(eq(exitPermits.id, id)).limit(1);
-      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (!existing) return sendApiError(res, 404, "CHECKPOST_EXIT_PERMIT_NOT_FOUND", "Not found");
       const [existingInward] = await db.select().from(checkPostInward).where(eq(checkPostInward.id, existing.inwardId)).limit(1);
       if (existingInward && !isScopedCheckPost(req, existingInward.checkPostId)) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       const body = req.body;
       const updates: Record<string, unknown> = {};
@@ -806,19 +1024,19 @@ export function registerMarketIomsRoutes(app: Express) {
       });
       if (updates.inwardId) {
         const [newInward] = await db.select().from(checkPostInward).where(eq(checkPostInward.id, String(updates.inwardId))).limit(1);
-        if (!newInward) return res.status(404).json({ error: "Inward entry not found" });
+        if (!newInward) return sendApiError(res, 404, "CHECKPOST_INWARD_NOT_FOUND", "Inward entry not found");
         if (!isScopedCheckPost(req, newInward.checkPostId)) {
-          return res.status(403).json({ error: "You do not have access to this check post" });
+          return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
         }
       }
       await db.update(exitPermits).set(updates as Record<string, string | null>).where(eq(exitPermits.id, id));
       const [row] = await db.select().from(exitPermits).where(eq(exitPermits.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "CHECKPOST_EXIT_PERMIT_NOT_FOUND", "Not found");
       writeAuditLog(req, { module: "CheckPost", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update exit permit" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update exit permit");
     }
   });
 
@@ -835,7 +1053,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch bank deposits" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch bank deposits");
     }
   });
 
@@ -849,19 +1067,29 @@ export function registerMarketIomsRoutes(app: Express) {
       const status = String(body.status ?? "Recorded");
       const isDvOrAdmin = Boolean(req.user?.roles?.some((r) => r.tier === "DV" || r.tier === "ADMIN"));
       if (!checkPostId || !depositDate || !bankName) {
-        return res.status(400).json({ error: "checkPostId, depositDate and bankName are required" });
+        return sendApiError(
+          res,
+          400,
+          "CHECKPOST_DEPOSIT_FIELDS_REQUIRED",
+          "checkPostId, depositDate and bankName are required",
+        );
       }
       if (!isScopedCheckPost(req, checkPostId)) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       if (Number.isNaN(amount) || amount <= 0) {
-        return res.status(400).json({ error: "amount must be greater than 0" });
+        return sendApiError(res, 400, "CHECKPOST_DEPOSIT_AMOUNT_POSITIVE", "amount must be greater than 0");
       }
       if (!isValidStatus(status, ["Recorded", "Verified"])) {
-        return res.status(400).json({ error: "Invalid status. Allowed: Recorded, Verified" });
+        return sendApiError(res, 400, "CHECKPOST_DEPOSIT_STATUS_INVALID", "Invalid status. Allowed: Recorded, Verified");
       }
       if (status === "Verified" && !isDvOrAdmin) {
-        return res.status(403).json({ error: "Only DV or Admin can mark bank deposits as Verified" });
+        return sendApiError(
+          res,
+          403,
+          "CHECKPOST_DEPOSIT_VERIFY_DENIED",
+          "Only DV or Admin can mark bank deposits as Verified",
+        );
       }
       const id = nanoid();
       await db.insert(checkPostBankDeposits).values({
@@ -883,7 +1111,7 @@ export function registerMarketIomsRoutes(app: Express) {
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create bank deposit" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create bank deposit");
     }
   });
 
@@ -891,9 +1119,9 @@ export function registerMarketIomsRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(checkPostBankDeposits).where(eq(checkPostBankDeposits.id, id)).limit(1);
-      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (!existing) return sendApiError(res, 404, "CHECKPOST_DEPOSIT_NOT_FOUND", "Not found");
       if (!isScopedCheckPost(req, existing.checkPostId)) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       const body = req.body;
       const updates: Record<string, unknown> = {};
@@ -909,38 +1137,53 @@ export function registerMarketIomsRoutes(app: Express) {
         const forbiddenAfterVerify = ["checkPostId", "depositDate", "bankName", "amount", "accountNumber", "voucherDetails", "narration"];
         const tried = forbiddenAfterVerify.some((k) => body[k] !== undefined);
         if (tried) {
-          return res.status(400).json({ error: "Verified deposits are immutable; only status metadata can be updated." });
+          return sendApiError(
+            res,
+            400,
+            "CHECKPOST_DEPOSIT_VERIFIED_IMMUTABLE",
+            "Verified deposits are immutable; only status metadata can be updated.",
+          );
         }
       }
 
       // Only DV/Admin can move Recorded -> Verified; do not allow downgrade.
       if (newStatus === "Verified" && existing.status !== "Verified" && !isDvOrAdmin) {
-        return res.status(403).json({ error: "Only DV or Admin can mark bank deposits as Verified" });
+        return sendApiError(
+          res,
+          403,
+          "CHECKPOST_DEPOSIT_VERIFY_DENIED",
+          "Only DV or Admin can mark bank deposits as Verified",
+        );
       }
       if (existing.status === "Verified" && newStatus !== "Verified") {
-        return res.status(400).json({ error: "Verified deposits cannot be moved back to Recorded" });
+        return sendApiError(
+          res,
+          400,
+          "CHECKPOST_DEPOSIT_NO_REVERT_FROM_VERIFIED",
+          "Verified deposits cannot be moved back to Recorded",
+        );
       }
 
       if (updates.checkPostId && !isScopedCheckPost(req, String(updates.checkPostId))) {
-        return res.status(403).json({ error: "You do not have access to this check post" });
+        return sendApiError(res, 403, "CHECKPOST_ACCESS_DENIED", "You do not have access to this check post");
       }
       if (updates.amount != null && (Number.isNaN(Number(updates.amount)) || Number(updates.amount) < 0)) {
-        return res.status(400).json({ error: "amount must be a non-negative number" });
+        return sendApiError(res, 400, "CHECKPOST_DEPOSIT_AMOUNT_INVALID", "amount must be a non-negative number");
       }
       if (updates.status != null && !isValidStatus(String(updates.status), ["Recorded", "Verified"])) {
-        return res.status(400).json({ error: "Invalid status. Allowed: Recorded, Verified" });
+        return sendApiError(res, 400, "CHECKPOST_DEPOSIT_STATUS_INVALID", "Invalid status. Allowed: Recorded, Verified");
       }
       if (newStatus === "Verified") {
         updates.verifiedBy = req.user?.id ?? existing.verifiedBy ?? null;
       }
       await db.update(checkPostBankDeposits).set(updates as Record<string, string | number | null>).where(eq(checkPostBankDeposits.id, id));
       const [row] = await db.select().from(checkPostBankDeposits).where(eq(checkPostBankDeposits.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "CHECKPOST_DEPOSIT_NOT_FOUND", "Not found");
       writeAuditLog(req, { module: "CheckPost", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update bank deposit" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update bank deposit");
     }
   });
 }

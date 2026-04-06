@@ -17,11 +17,21 @@ import {
   auditLog,
   permissions,
   rolePermissions,
+  employees,
+  expenditureHeads,
+  tallyLedgers,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import { SYSTEM_CONFIG_KEYS } from "@shared/system-config-defaults";
 import { getMergedSystemConfig } from "./system-config";
 import { writeAuditLog } from "./audit";
+import { sendApiError } from "./api-errors";
+
+function userSnapshotForAudit(u: Record<string, unknown> | undefined) {
+  if (!u) return undefined;
+  const { passwordHash: _omit, ...rest } = u;
+  return rest;
+}
 
 export function registerAdminRoutes(app: Express) {
   const now = () => new Date().toISOString();
@@ -33,7 +43,7 @@ export function registerAdminRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch yards" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch yards");
     }
   });
 
@@ -41,7 +51,7 @@ export function registerAdminRoutes(app: Express) {
     try {
       const { name, code, type, phone, mobile, address } = req.body;
       if (!name || !code || !type) {
-        return res.status(400).json({ error: "name, code, type required" });
+        return sendApiError(res, 400, "ADMIN_YARD_FIELDS_REQUIRED", "name, code, type required");
       }
       const id = nanoid();
       await db.insert(yards).values({
@@ -55,16 +65,20 @@ export function registerAdminRoutes(app: Express) {
         isActive: true,
       });
       const [row] = await db.select().from(yards).where(eq(yards.id, id));
+      writeAuditLog(req, { module: "M-10", action: "CreateLocation", recordId: id, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create yard" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create yard");
     }
   });
 
   app.put("/api/admin/yards/:id", async (req, res) => {
     try {
       const id = req.params.id;
+      const [before] = await db.select().from(yards).where(eq(yards.id, id)).limit(1);
       const { name, code, type, phone, mobile, address, isActive } = req.body;
       await db.update(yards).set({
         ...(name != null && { name: String(name) }),
@@ -76,11 +90,14 @@ export function registerAdminRoutes(app: Express) {
         ...(isActive !== undefined && { isActive: Boolean(isActive) }),
       }).where(eq(yards.id, id));
       const [row] = await db.select().from(yards).where(eq(yards.id, id));
-      if (!row) return res.status(404).json({ error: "Yard not found" });
+      if (!row) return sendApiError(res, 404, "ADMIN_YARD_NOT_FOUND", "Yard not found");
+      writeAuditLog(req, { module: "M-10", action: "UpdateLocation", recordId: id, beforeValue: before, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update yard" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update yard");
     }
   });
 
@@ -91,7 +108,7 @@ export function registerAdminRoutes(app: Express) {
       res.json(merged);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch config" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch config");
     }
   });
 
@@ -127,7 +144,7 @@ export function registerAdminRoutes(app: Express) {
       res.json(after);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update config" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update config");
     }
   });
 
@@ -138,7 +155,7 @@ export function registerAdminRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch roles" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch roles");
     }
   });
 
@@ -146,7 +163,7 @@ export function registerAdminRoutes(app: Express) {
     try {
       const { name, tier, description } = req.body;
       if (!name || !tier || typeof name !== "string" || typeof tier !== "string") {
-        return res.status(400).json({ error: "name and tier required" });
+        return sendApiError(res, 400, "ADMIN_ROLE_FIELDS_REQUIRED", "name and tier required");
       }
       const id = nanoid();
       await db.insert(roles).values({
@@ -156,12 +173,15 @@ export function registerAdminRoutes(app: Express) {
         description: description != null && description !== "" ? String(description).trim() : null,
       });
       const [row] = await db.select().from(roles).where(eq(roles.id, id));
+      writeAuditLog(req, { module: "M-10", action: "CreateRole", recordId: id, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
       const err = e as { code?: string };
-      if (err.code === "23505") return res.status(400).json({ error: "Role name or tier already exists" });
-      res.status(500).json({ error: "Failed to create role" });
+      if (err.code === "23505") return sendApiError(res, 400, "ADMIN_ROLE_DUPLICATE", "Role name or tier already exists");
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create role");
     }
   });
 
@@ -170,16 +190,16 @@ export function registerAdminRoutes(app: Express) {
       const id = req.params.id;
       const { name, tier, description } = req.body;
       const [existing] = await db.select().from(roles).where(eq(roles.id, id)).limit(1);
-      if (!existing) return res.status(404).json({ error: "Role not found" });
+      if (!existing) return sendApiError(res, 404, "ADMIN_ROLE_NOT_FOUND", "Role not found");
       const updates: Record<string, string | null> = {};
       if (name !== undefined) {
         const v = String(name).trim();
-        if (!v) return res.status(400).json({ error: "name cannot be empty" });
+        if (!v) return sendApiError(res, 400, "ADMIN_ROLE_NAME_EMPTY", "name cannot be empty");
         updates.name = v;
       }
       if (tier !== undefined) {
         const v = String(tier).trim();
-        if (!v) return res.status(400).json({ error: "tier cannot be empty" });
+        if (!v) return sendApiError(res, 400, "ADMIN_ROLE_TIER_EMPTY", "tier cannot be empty");
         updates.tier = v;
       }
       if (description !== undefined) updates.description = description === "" || description == null ? null : String(description).trim();
@@ -189,13 +209,16 @@ export function registerAdminRoutes(app: Express) {
       }
       await db.update(roles).set(updates).where(eq(roles.id, id));
       const [row] = await db.select().from(roles).where(eq(roles.id, id));
-      if (!row) return res.status(404).json({ error: "Role not found" });
+      if (!row) return sendApiError(res, 404, "ADMIN_ROLE_NOT_FOUND", "Role not found");
+      writeAuditLog(req, { module: "M-10", action: "UpdateRole", recordId: id, beforeValue: existing, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
       res.json(row);
     } catch (e) {
       console.error(e);
       const err = e as { code?: string };
-      if (err.code === "23505") return res.status(400).json({ error: "Role name or tier already exists" });
-      res.status(500).json({ error: "Failed to update role" });
+      if (err.code === "23505") return sendApiError(res, 400, "ADMIN_ROLE_DUPLICATE", "Role name or tier already exists");
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update role");
     }
   });
 
@@ -203,16 +226,19 @@ export function registerAdminRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(roles).where(eq(roles.id, id)).limit(1);
-      if (!existing) return res.status(404).json({ error: "Role not found" });
+      if (!existing) return sendApiError(res, 404, "ADMIN_ROLE_NOT_FOUND", "Role not found");
       const inUse = await db.select({ userId: userRoles.userId }).from(userRoles).where(eq(userRoles.roleId, id)).limit(1);
       if (inUse.length > 0) {
-        return res.status(400).json({ error: "Cannot delete role: it is assigned to one or more users" });
+        return sendApiError(res, 400, "ADMIN_ROLE_IN_USE", "Cannot delete role: it is assigned to one or more users");
       }
+      writeAuditLog(req, { module: "M-10", action: "DeleteRole", recordId: id, beforeValue: existing }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
       await db.delete(roles).where(eq(roles.id, id));
       res.status(204).send();
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to delete role" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete role");
     }
   });
 
@@ -259,19 +285,35 @@ export function registerAdminRoutes(app: Express) {
       res.json(enriched);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch users" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch users");
     }
   });
 
   app.post("/api/admin/users", async (req, res) => {
     try {
-      const { email, username, name, phone, roleIds, yardIds, password } = req.body;
+      const { email, username, name, phone, roleIds, yardIds, password, employeeId: employeeIdBody } = req.body;
       if (!email || !name) {
-        return res.status(400).json({ error: "email, name required" });
+        return sendApiError(res, 400, "ADMIN_USER_FIELDS_REQUIRED", "email, name required");
+      }
+      const employeeIdRaw = employeeIdBody != null ? String(employeeIdBody).trim() : "";
+      if (!employeeIdRaw) {
+        return sendApiError(
+          res,
+          400,
+          "ADMIN_USER_EMPLOYEE_ID_REQUIRED",
+          "employeeId required: each user must be linked to an active employee (SRS §1.4).",
+        );
+      }
+      const [emp] = await db.select().from(employees).where(eq(employees.id, employeeIdRaw)).limit(1);
+      if (!emp || emp.status !== "Active") {
+        return sendApiError(res, 400, "ADMIN_USER_EMPLOYEE_INVALID", "Employee not found or not Active");
+      }
+      if (emp.userId) {
+        return sendApiError(res, 400, "ADMIN_USER_EMPLOYEE_ALREADY_LINKED", "Employee is already linked to another user");
       }
       const passwordStr = password != null ? String(password) : "";
       if (passwordStr.length < 8) {
-        return res.status(400).json({ error: "password required (min 8 characters)" });
+        return sendApiError(res, 400, "ADMIN_USER_PASSWORD_REQUIRED", "password required (min 8 characters)");
       }
       const emailNorm = String(email).trim().toLowerCase();
       const rawU = username != null ? String(username).trim().toLowerCase() : "";
@@ -284,11 +326,16 @@ export function registerAdminRoutes(app: Express) {
         username: usernameVal,
         name: String(name),
         phone: phone ? String(phone) : null,
+        employeeId: employeeIdRaw,
         passwordHash,
         isActive: true,
         createdAt: now(),
         updatedAt: now(),
       });
+      await db
+        .update(employees)
+        .set({ userId: id, updatedAt: now() })
+        .where(eq(employees.id, employeeIdRaw));
       if (Array.isArray(roleIds) && roleIds.length) {
         for (const roleId of roleIds) {
           await db.insert(userRoles).values({ userId: id, roleId: String(roleId) }).onConflictDoNothing();
@@ -300,21 +347,29 @@ export function registerAdminRoutes(app: Express) {
         }
       }
       const [row] = await db.select().from(users).where(eq(users.id, id));
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "CreateUser",
+        recordId: id,
+        afterValue: userSnapshotForAudit(row as unknown as Record<string, unknown>),
+      }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e: unknown) {
       console.error(e);
       const code = e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code) : "";
       if (code === "23505") {
-        return res.status(409).json({ error: "Email or username already exists" });
+        return sendApiError(res, 409, "ADMIN_USER_DUPLICATE", "Email or username already exists");
       }
-      res.status(500).json({ error: "Failed to create user" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create user");
     }
   });
 
   app.put("/api/admin/users/:id", async (req, res) => {
     try {
       const id = req.params.id;
-      const { email, username, name, phone, isActive, roleIds, yardIds, password } = req.body;
+      const [beforeUser] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+      if (!beforeUser) return sendApiError(res, 404, "ADMIN_USER_NOT_FOUND", "User not found");
+      const { email, username, name, phone, isActive, roleIds, yardIds, password, employeeId: employeeIdBody } = req.body;
       const usernameUpdate =
         username === undefined
           ? {}
@@ -328,10 +383,25 @@ export function registerAdminRoutes(app: Express) {
       if (password !== undefined && password !== null && String(password) !== "") {
         const passwordStr = String(password);
         if (passwordStr.length < 8) {
-          return res.status(400).json({ error: "password must be at least 8 characters" });
+          return sendApiError(res, 400, "ADMIN_USER_PASSWORD_TOO_SHORT", "password must be at least 8 characters");
         }
         passwordUpdate = { passwordHash: await hash(passwordStr, 10) };
       }
+      let employeeIdUpdate: { employeeId: string | null } | Record<string, never> = {};
+      if (employeeIdBody !== undefined) {
+        const eid = employeeIdBody === null || String(employeeIdBody).trim() === "" ? null : String(employeeIdBody).trim();
+        if (eid) {
+          const [emp] = await db.select().from(employees).where(eq(employees.id, eid)).limit(1);
+          if (!emp || emp.status !== "Active") {
+            return sendApiError(res, 400, "ADMIN_USER_EMPLOYEE_INVALID", "Employee not found or not Active");
+          }
+          if (emp.userId && emp.userId !== id) {
+            return sendApiError(res, 400, "ADMIN_USER_EMPLOYEE_ALREADY_LINKED", "Employee is already linked to another user");
+          }
+        }
+        employeeIdUpdate = { employeeId: eid };
+      }
+
       await db.update(users).set({
         ...(email != null && { email: String(email).trim().toLowerCase() }),
         ...usernameUpdate,
@@ -339,8 +409,17 @@ export function registerAdminRoutes(app: Express) {
         ...(phone !== undefined && { phone: phone ? String(phone) : null }),
         ...(isActive !== undefined && { isActive: Boolean(isActive) }),
         ...passwordUpdate,
+        ...employeeIdUpdate,
         updatedAt: now(),
       }).where(eq(users.id, id));
+
+      if (employeeIdBody !== undefined) {
+        const [u] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+        await db.update(employees).set({ userId: null, updatedAt: now() }).where(eq(employees.userId, id));
+        if (u?.employeeId) {
+          await db.update(employees).set({ userId: id, updatedAt: now() }).where(eq(employees.id, u.employeeId));
+        }
+      }
       if (Array.isArray(roleIds)) {
         await db.delete(userRoles).where(eq(userRoles.userId, id));
         for (const roleId of roleIds) {
@@ -354,15 +433,53 @@ export function registerAdminRoutes(app: Express) {
         }
       }
       const [row] = await db.select().from(users).where(eq(users.id, id));
-      if (!row) return res.status(404).json({ error: "User not found" });
+      if (!row) return sendApiError(res, 404, "ADMIN_USER_NOT_FOUND", "User not found");
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "UpdateUser",
+        recordId: id,
+        beforeValue: userSnapshotForAudit(beforeUser as unknown as Record<string, unknown>),
+        afterValue: userSnapshotForAudit(row as unknown as Record<string, unknown>),
+      }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e: unknown) {
       console.error(e);
       const code = e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code) : "";
       if (code === "23505") {
-        return res.status(409).json({ error: "Email or username already exists" });
+        return sendApiError(res, 409, "ADMIN_USER_DUPLICATE", "Email or username already exists");
       }
-      res.status(500).json({ error: "Failed to update user" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update user");
+    }
+  });
+
+  // ----- Expenditure head → Tally ledger (M-10 / finance mapping) -----
+  app.put("/api/admin/expenditure-heads/:id/tally-ledger", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const tallyLedgerId = req.body?.tallyLedgerId;
+      const tl =
+        tallyLedgerId === null || tallyLedgerId === undefined || String(tallyLedgerId).trim() === ""
+          ? null
+          : String(tallyLedgerId).trim();
+      const [before] = await db.select().from(expenditureHeads).where(eq(expenditureHeads.id, id)).limit(1);
+      if (!before) return sendApiError(res, 404, "ADMIN_EXPENDITURE_HEAD_NOT_FOUND", "Expenditure head not found");
+      if (tl) {
+        const [exists] = await db.select().from(tallyLedgers).where(eq(tallyLedgers.id, tl)).limit(1);
+        if (!exists) return sendApiError(res, 400, "ADMIN_TALLY_LEDGER_UNKNOWN", "Unknown tally ledger id");
+      }
+      await db.update(expenditureHeads).set({ tallyLedgerId: tl }).where(eq(expenditureHeads.id, id));
+      const [row] = await db.select().from(expenditureHeads).where(eq(expenditureHeads.id, id)).limit(1);
+      await writeAuditLog(req, {
+        module: "Admin",
+        action: "Update",
+        recordId: id,
+        beforeValue: before,
+        afterValue: row,
+      }).catch((e) => console.error("Audit log failed:", e));
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update tally mapping");
     }
   });
 
@@ -415,7 +532,7 @@ export function registerAdminRoutes(app: Express) {
       res.json(rows);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch audit log" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch audit log");
     }
   });
 
@@ -426,7 +543,7 @@ export function registerAdminRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch permissions" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch permissions");
     }
   });
 
@@ -436,7 +553,7 @@ export function registerAdminRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch role permissions" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch role permissions");
     }
   });
 
@@ -444,16 +561,22 @@ export function registerAdminRoutes(app: Express) {
     try {
       const { roleId, permissionId } = req.body;
       if (!roleId || !permissionId) {
-        return res.status(400).json({ error: "roleId and permissionId required" });
+        return sendApiError(res, 400, "ADMIN_PERMISSION_MATRIX_FIELDS", "roleId and permissionId required");
       }
       await db.insert(rolePermissions).values({
         roleId: String(roleId),
         permissionId: String(permissionId),
       }).onConflictDoNothing();
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "AssignRolePermission",
+        recordId: `${roleId}:${permissionId}`,
+        afterValue: { roleId: String(roleId), permissionId: String(permissionId) },
+      }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json({ roleId: String(roleId), permissionId: String(permissionId) });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to assign permission to role" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to assign permission to role");
     }
   });
 
@@ -461,15 +584,21 @@ export function registerAdminRoutes(app: Express) {
     try {
       const { roleId, permissionId } = req.query;
       if (!roleId || !permissionId || typeof roleId !== "string" || typeof permissionId !== "string") {
-        return res.status(400).json({ error: "roleId and permissionId required (query params)" });
+        return sendApiError(res, 400, "ADMIN_PERMISSION_MATRIX_QUERY", "roleId and permissionId required (query params)");
       }
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "RemoveRolePermission",
+        recordId: `${roleId}:${permissionId}`,
+        beforeValue: { roleId, permissionId },
+      }).catch((e) => console.error("Audit log failed:", e));
       await db.delete(rolePermissions).where(
         and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.permissionId, permissionId))
       );
       res.status(204).send();
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to remove permission from role" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to remove permission from role");
     }
   });
 
@@ -480,7 +609,7 @@ export function registerAdminRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch SLA config" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch SLA config");
     }
   });
 
@@ -495,10 +624,13 @@ export function registerAdminRoutes(app: Express) {
         alertRole: body.alertRole ? String(body.alertRole) : null,
       });
       const [row] = await db.select().from(slaConfig).where(eq(slaConfig.id, id));
+      writeAuditLog(req, { module: "M-10", action: "CreateSlaConfig", recordId: id, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create SLA config" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create SLA config");
     }
   });
 
@@ -506,7 +638,7 @@ export function registerAdminRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(slaConfig).where(eq(slaConfig.id, id)).limit(1);
-      if (!existing) return res.status(404).json({ error: "Not found" });
+      if (!existing) return sendApiError(res, 404, "ADMIN_SLA_CONFIG_NOT_FOUND", "Not found");
       const body = req.body;
       const updates: Record<string, unknown> = {};
       ["workflow", "hours", "alertRole"].forEach((k) => {
@@ -516,11 +648,14 @@ export function registerAdminRoutes(app: Express) {
       });
       await db.update(slaConfig).set(updates as Record<string, string | number | null>).where(eq(slaConfig.id, id));
       const [row] = await db.select().from(slaConfig).where(eq(slaConfig.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "ADMIN_SLA_CONFIG_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "M-10", action: "UpdateSlaConfig", recordId: id, beforeValue: existing, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update SLA config" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update SLA config");
     }
   });
 }

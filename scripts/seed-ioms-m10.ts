@@ -14,6 +14,7 @@ import {
   rolePermissions,
   users,
   userYards,
+  employees,
 } from "../shared/db-schema";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -136,7 +137,39 @@ async function seed() {
     if (readPerms.length > 0) console.log("Assigned Read-only permissions to READ_ONLY role");
   }
 
-  // 5. Optional: one admin user (email admin@gapmc.local) with hashed password
+  // 5. Bootstrap employee for admin (SRS §1.4 — user must link to active employee)
+  let bootstrapEmpId: string | null = null;
+  const firstYardId = yardIds[0];
+  if (firstYardId) {
+    const [existingBoot] = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.workEmail, "admin.bootstrap@gapmc.local"))
+      .limit(1);
+    if (existingBoot) {
+      bootstrapEmpId = existingBoot.id;
+    } else {
+      const eid = nanoid();
+      await db.insert(employees).values({
+        id: eid,
+        empId: "EMP-BOOT-ADMIN",
+        firstName: "System",
+        surname: "Admin",
+        designation: "Administrator",
+        yardId: firstYardId,
+        employeeType: "Regular",
+        joiningDate: now.slice(0, 10),
+        status: "Active",
+        workEmail: "admin.bootstrap@gapmc.local",
+        createdAt: now,
+        updatedAt: now,
+      });
+      bootstrapEmpId = eid;
+      console.log("Seeded bootstrap employee for admin user (SRS §1.4)");
+    }
+  }
+
+  // 6. Optional: one admin user (email admin@gapmc.local) with hashed password
   const adminRoleId = roleIdMap["ADMIN"];
   const existingAdmin = await db.select().from(users).where(eq(users.email, "admin@gapmc.local"));
   const passwordHash = await hash(DEFAULT_ADMIN_PASSWORD, 10);
@@ -147,11 +180,18 @@ async function seed() {
       email: "admin@gapmc.local",
       username: "admin",
       name: "System Admin",
+      employeeId: bootstrapEmpId,
       passwordHash,
       isActive: true,
       createdAt: now,
       updatedAt: now,
     });
+    if (bootstrapEmpId) {
+      await db
+        .update(employees)
+        .set({ userId: adminUserId, updatedAt: now })
+        .where(eq(employees.id, bootstrapEmpId));
+    }
 
     await db.insert(userRoles).values({
       userId: adminUserId,
@@ -167,13 +207,26 @@ async function seed() {
     console.log("Seeded admin user (admin@gapmc.local) with ADMIN role and all yards. Password: " + DEFAULT_ADMIN_PASSWORD);
   } else if (existingAdmin.length > 0) {
     const a = existingAdmin[0];
-    const patch: { passwordHash?: string; username?: string; updatedAt: string } = { updatedAt: now };
+    const patch: {
+      passwordHash?: string;
+      username?: string;
+      employeeId?: string | null;
+      updatedAt: string;
+    } = { updatedAt: now };
     if (!a.passwordHash) patch.passwordHash = passwordHash;
     if (!a.username) patch.username = "admin";
+    if (!a.employeeId && bootstrapEmpId) {
+      patch.employeeId = bootstrapEmpId;
+      await db
+        .update(employees)
+        .set({ userId: a.id, updatedAt: now })
+        .where(eq(employees.id, bootstrapEmpId));
+    }
     if (Object.keys(patch).length > 1) {
       await db.update(users).set(patch).where(eq(users.id, a.id));
       if (!a.passwordHash) console.log("Updated admin user with password hash. Password: " + DEFAULT_ADMIN_PASSWORD);
       if (!a.username) console.log("Set admin username to 'admin' for email-or-username login");
+      if (!a.employeeId && bootstrapEmpId) console.log("Linked admin user to bootstrap employee (SRS §1.4)");
     } else {
       console.log("Admin user already exists, skipping");
     }

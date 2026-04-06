@@ -4,10 +4,11 @@
  * service_book_entries, leave_requests, ltc_claims, ta_da_claims.
  */
 import type { Express } from "express";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, or, and, gte, lte, isNotNull } from "drizzle-orm";
 import { db } from "./db";
 import {
   employees,
+  users,
   employeeContracts,
   recruitment,
   attendances,
@@ -18,13 +19,46 @@ import {
   taDaClaims,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
-import { canCreateLeaveRequest, canTransitionLeaveRequest } from "./workflow";
+import {
+  canCreateLeaveRequest,
+  canTransitionLeaveRequest,
+  leaveRequestAwaitingMyAction,
+  assertSegregationDoDvDa,
+} from "./workflow";
+import { validateDaRejection, validateDvReturnToDraft } from "@shared/workflow-rejection";
+import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
 
 export function registerHrRoutes(app: Express) {
   const now = () => new Date().toISOString();
 
   // ----- Employees -----
+  /** Active employees with retirement_date in the next `days` (default 90), for dashboard / HR widgets. */
+  app.get("/api/hr/retirement-upcoming", async (req, res) => {
+    try {
+      const days = Math.min(366, Math.max(1, parseInt(String(req.query.days ?? "90"), 10) || 90));
+      const today = new Date().toISOString().slice(0, 10);
+      const end = new Date(`${today}T12:00:00.000Z`);
+      end.setUTCDate(end.getUTCDate() + days);
+      const until = end.toISOString().slice(0, 10);
+      const rows = await db
+        .select({ id: employees.id })
+        .from(employees)
+        .where(
+          and(
+            eq(employees.status, "Active"),
+            isNotNull(employees.retirementDate),
+            gte(employees.retirementDate, today),
+            lte(employees.retirementDate, until),
+          ),
+        );
+      res.json({ asOf: today, until, days, count: rows.length });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch retirement upcoming count");
+    }
+  });
+
   app.get("/api/hr/employees", async (req, res) => {
     try {
       const yardId = req.query.yardId as string | undefined;
@@ -34,18 +68,18 @@ export function registerHrRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch employees" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch employees");
     }
   });
 
   app.get("/api/hr/employees/:id", async (req, res) => {
     try {
       const [row] = await db.select().from(employees).where(eq(employees.id, req.params.id)).limit(1);
-      if (!row) return res.status(404).json({ error: "Employee not found" });
+      if (!row) return sendApiError(res, 404, "HR_EMPLOYEE_NOT_FOUND", "Employee not found");
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch employee" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch employee");
     }
   });
 
@@ -75,20 +109,23 @@ export function registerHrRoutes(app: Express) {
         updatedAt: now(),
       };
       if (!payload.yardId || !payload.joiningDate) {
-        return res.status(400).json({ error: "yardId and joiningDate required" });
+        return sendApiError(res, 400, "HR_EMPLOYEE_FIELDS_REQUIRED", "yardId and joiningDate required");
       }
       await db.insert(employees).values(payload);
       const [row] = await db.select().from(employees).where(eq(employees.id, id));
+      if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create employee" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create employee");
     }
   });
 
   app.put("/api/hr/employees/:id", async (req, res) => {
     try {
       const id = req.params.id;
+      const [beforeEmp] = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
+      if (!beforeEmp) return sendApiError(res, 404, "HR_EMPLOYEE_NOT_FOUND", "Employee not found");
       const body = req.body;
       const updates: Record<string, unknown> = { updatedAt: now() };
       const allowed = ["firstName", "middleName", "surname", "photoUrl", "designation", "yardId", "employeeType", "aadhaarToken", "pan", "dob", "joiningDate", "retirementDate", "mobile", "workEmail", "status", "userId", "empId"];
@@ -96,13 +133,34 @@ export function registerHrRoutes(app: Express) {
         if (body[key] !== undefined) updates[key === "empId" ? "empId" : key] = body[key] === null ? null : String(body[key]);
       }
       if (body.retirementDate !== undefined) updates.retirementDate = body.retirementDate;
-      await db.update(employees).set(updates as Record<string, string | null>).where(eq(employees.id, id));
+
+      const terminalStatuses = ["Inactive", "Retired", "Suspended", "Resigned"];
+      await db.transaction(async (tx) => {
+        await tx.update(employees).set(updates as Record<string, string | null>).where(eq(employees.id, id));
+        const [after] = await tx
+          .select({ status: employees.status, userId: employees.userId })
+          .from(employees)
+          .where(eq(employees.id, id))
+          .limit(1);
+        if (after?.status && terminalStatuses.includes(after.status)) {
+          if (after.userId) {
+            await tx
+              .update(users)
+              .set({ isActive: false, updatedAt: now() })
+              .where(or(eq(users.employeeId, id), eq(users.id, after.userId)));
+          } else {
+            await tx.update(users).set({ isActive: false, updatedAt: now() }).where(eq(users.employeeId, id));
+          }
+        }
+      });
+
       const [row] = await db.select().from(employees).where(eq(employees.id, id));
-      if (!row) return res.status(404).json({ error: "Employee not found" });
+      if (!row) return sendApiError(res, 404, "HR_EMPLOYEE_NOT_FOUND", "Employee not found");
+      writeAuditLog(req, { module: "HR", action: "Update", recordId: id, beforeValue: beforeEmp, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update employee" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update employee");
     }
   });
 
@@ -113,7 +171,7 @@ export function registerHrRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch contracts" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch contracts");
     }
   });
 
@@ -131,10 +189,11 @@ export function registerHrRoutes(app: Express) {
         endDate: body.endDate ? String(body.endDate) : null,
       });
       const [row] = await db.select().from(employeeContracts).where(eq(employeeContracts.id, id));
+      if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create contract" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create contract");
     }
   });
 
@@ -145,7 +204,7 @@ export function registerHrRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch recruitment" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch recruitment");
     }
   });
 
@@ -164,16 +223,19 @@ export function registerHrRoutes(app: Express) {
         decision: body.decision ? String(body.decision) : null,
       });
       const [row] = await db.select().from(recruitment).where(eq(recruitment.id, id));
+      if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create recruitment entry" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create recruitment entry");
     }
   });
 
   app.put("/api/hr/recruitment/:id", async (req, res) => {
     try {
       const id = req.params.id;
+      const [existing] = await db.select().from(recruitment).where(eq(recruitment.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "HR_RECRUITMENT_NOT_FOUND", "Not found");
       const body = req.body;
       const updates: Record<string, unknown> = {};
       ["position", "applicantName", "qualification", "appliedDate", "status", "interviewOutcomes", "decision"].forEach((k) => {
@@ -181,11 +243,12 @@ export function registerHrRoutes(app: Express) {
       });
       await db.update(recruitment).set(updates as Record<string, string | null>).where(eq(recruitment.id, id));
       const [row] = await db.select().from(recruitment).where(eq(recruitment.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "HR_RECRUITMENT_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "HR", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update recruitment" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update recruitment");
     }
   });
 
@@ -201,7 +264,7 @@ export function registerHrRoutes(app: Express) {
       res.json(filtered);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch attendances" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch attendances");
     }
   });
 
@@ -217,10 +280,11 @@ export function registerHrRoutes(app: Express) {
         reason: body.reason ? String(body.reason) : null,
       });
       const [row] = await db.select().from(attendances).where(eq(attendances.id, id));
+      if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create attendance" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create attendance");
     }
   });
 
@@ -234,7 +298,7 @@ export function registerHrRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch timesheets" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch timesheets");
     }
   });
 
@@ -253,10 +317,11 @@ export function registerHrRoutes(app: Express) {
         validatedBy: body.validatedBy ? String(body.validatedBy) : null,
       });
       const [row] = await db.select().from(timesheets).where(eq(timesheets.id, id));
+      if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create timesheet" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create timesheet");
     }
   });
 
@@ -265,7 +330,7 @@ export function registerHrRoutes(app: Express) {
       const timesheetId = req.params.id;
       const body = req.body;
       const [existing] = await db.select().from(timesheets).where(eq(timesheets.id, timesheetId)).limit(1);
-      if (!existing) return res.status(404).json({ error: "Timesheet not found" });
+      if (!existing) return sendApiError(res, 404, "HR_TIMESHEET_NOT_FOUND", "Timesheet not found");
       const updates: Record<string, unknown> = { };
       if (body.status !== undefined) {
         const newStatus = String(body.status);
@@ -286,10 +351,11 @@ export function registerHrRoutes(app: Express) {
       }
       await db.update(timesheets).set(updates as Record<string, string | number | null>).where(eq(timesheets.id, timesheetId));
       const [row] = await db.select().from(timesheets).where(eq(timesheets.id, timesheetId)).limit(1);
+      if (row) writeAuditLog(req, { module: "HR", action: "Update", recordId: timesheetId, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row!);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update timesheet" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update timesheet");
     }
   });
 
@@ -297,20 +363,30 @@ export function registerHrRoutes(app: Express) {
   app.get("/api/hr/leaves", async (req, res) => {
     try {
       const employeeId = req.query.employeeId as string | undefined;
-      const list = employeeId
+      const pendingMyAction =
+        req.query.pendingMyAction === "1" || String(req.query.pendingMyAction ?? "").toLowerCase() === "true";
+      let list = employeeId
         ? await db.select().from(leaveRequests).where(eq(leaveRequests.employeeId, employeeId)).orderBy(desc(leaveRequests.fromDate))
         : await db.select().from(leaveRequests).orderBy(desc(leaveRequests.fromDate));
+      if (pendingMyAction) {
+        list = list.filter((row) => leaveRequestAwaitingMyAction(req.user, row));
+      }
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch leave requests" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch leave requests");
     }
   });
 
   app.post("/api/hr/leaves", async (req, res) => {
     try {
       if (!canCreateLeaveRequest(req.user)) {
-        return res.status(403).json({ error: "Only Data Originator or Admin can create leave requests" });
+        return sendApiError(
+          res,
+          403,
+          "LEAVE_CREATE_DENIED",
+          "Only Data Originator or Admin can create leave requests",
+        );
       }
       const body = req.body;
       const id = nanoid();
@@ -321,14 +397,18 @@ export function registerHrRoutes(app: Express) {
         fromDate: String(body.fromDate ?? ""),
         toDate: String(body.toDate ?? ""),
         status: "Pending",
+        doUser: req.user?.id ?? null,
+        dvUser: null,
         approvedBy: null,
+        workflowRevisionCount: 0,
+        dvReturnRemarks: null,
       });
       const [row] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id));
       if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create leave request" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create leave request");
     }
   });
 
@@ -336,34 +416,100 @@ export function registerHrRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id));
-      if (!existing) return res.status(404).json({ error: "Leave request not found" });
+      if (!existing) {
+        return sendApiError(res, 404, "LEAVE_REQUEST_NOT_FOUND", "Leave request not found");
+      }
       const body = req.body;
       const newStatus = body.status !== undefined ? String(body.status) : existing.status;
       const statusChange = newStatus !== existing.status;
       const transition = statusChange ? canTransitionLeaveRequest(req.user, existing.status, newStatus) : null;
 
+      let leaveRejection: { code: string; remarks: string } | null = null;
+      let dvReturnRemarks: string | null = null;
       if (statusChange) {
         if (!transition?.allowed) {
-          return res.status(403).json({
-            error: `You cannot change status from ${existing.status} to ${newStatus}. Only DA can approve or reject.`,
-          });
+          return sendApiError(
+            res,
+            403,
+            "LEAVE_STATUS_TRANSITION_DENIED",
+            `You cannot change status from ${existing.status} to ${newStatus}. DV verifies; DA approves or rejects.`,
+          );
+        }
+        const segRec = {
+          doUser: existing.doUser,
+          dvUser: existing.dvUser,
+          daUser: null as string | null,
+        };
+        if (transition.setDvUser) {
+          const seg = assertSegregationDoDvDa(req.user, segRec, { setDvUser: true });
+          if (!seg.ok) return sendApiError(res, 403, "LEAVE_DO_DV_DA_SEGREGATION", seg.error);
+        }
+        if (transition.setApprovedBy) {
+          const seg = assertSegregationDoDvDa(req.user, segRec, { setDaUser: true });
+          if (!seg.ok) return sendApiError(res, 403, "LEAVE_DO_DV_DA_SEGREGATION", seg.error);
+        }
+        if (transition.setApprovedBy && req.user?.id) {
+          const [emp] = await db.select().from(employees).where(eq(employees.id, existing.employeeId)).limit(1);
+          if (emp?.userId === req.user.id) {
+            return sendApiError(
+              res,
+              403,
+              "LEAVE_SELF_APPROVE_REJECT_DENIED",
+              "You cannot approve or reject your own leave request.",
+            );
+          }
+        }
+        if (newStatus === "Rejected") {
+          const rej = validateDaRejection(body as Record<string, unknown>);
+          if (!rej.ok) return sendApiError(res, 400, "LEAVE_DA_REJECTION_INVALID", rej.error);
+          leaveRejection = { code: rej.code, remarks: rej.remarks };
+        }
+        if (existing.status === "Verified" && newStatus === "Pending") {
+          const ret = validateDvReturnToDraft(body as Record<string, unknown>);
+          if (!ret.ok) return sendApiError(res, 400, "LEAVE_DV_RETURN_INVALID", ret.error);
+          dvReturnRemarks = ret.remarks;
+        }
+      } else {
+        if (["Approved", "Rejected"].includes(existing.status)) {
+          return sendApiError(res, 403, "LEAVE_TERMINAL_NO_EDIT", "Approved or rejected leave cannot be edited");
+        }
+        if (existing.status !== "Pending") {
+          return sendApiError(res, 403, "LEAVE_EDIT_DENIED", "Only pending leave requests can be edited");
+        }
+        if (!canCreateLeaveRequest(req.user)) {
+          return sendApiError(res, 403, "LEAVE_EDIT_DENIED", "Only Data Originator or Admin can edit a pending leave request");
         }
       }
 
       const updates: Record<string, unknown> = {};
       if (body.status !== undefined) updates.status = body.status;
+      if (transition?.setDvUser) updates.dvUser = req.user?.id ?? null;
       if (transition?.setApprovedBy) updates.approvedBy = req.user?.id ?? null;
+      if (dvReturnRemarks !== null) {
+        updates.dvReturnRemarks = dvReturnRemarks;
+        updates.workflowRevisionCount = Number(existing.workflowRevisionCount ?? 0) + 1;
+        updates.dvUser = null;
+        updates.approvedBy = null;
+      }
+      if (leaveRejection) {
+        updates.rejectionReasonCode = leaveRejection.code;
+        updates.rejectionRemarks = leaveRejection.remarks;
+      }
+      if (statusChange && newStatus === "Approved") {
+        updates.rejectionReasonCode = null;
+        updates.rejectionRemarks = null;
+      }
       ["leaveType", "fromDate", "toDate"].forEach((k) => {
         if (body[k] !== undefined) updates[k] = body[k];
       });
-      await db.update(leaveRequests).set(updates as Record<string, string | null>).where(eq(leaveRequests.id, id));
+      await db.update(leaveRequests).set(updates as Record<string, string | number | null>).where(eq(leaveRequests.id, id));
       const [row] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id));
-      if (!row) return res.status(404).json({ error: "Not found" });
+      if (!row) return sendApiError(res, 404, "LEAVE_REQUEST_NOT_FOUND", "Not found");
       writeAuditLog(req, { module: "HR", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update leave request" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update leave request");
     }
   });
 
@@ -377,7 +523,7 @@ export function registerHrRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch LTC claims" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch LTC claims");
     }
   });
 
@@ -394,10 +540,11 @@ export function registerHrRoutes(app: Express) {
         status: String(body.status ?? "Pending"),
       });
       const [row] = await db.select().from(ltcClaims).where(eq(ltcClaims.id, id));
+      if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create LTC claim" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create LTC claim");
     }
   });
 
@@ -411,7 +558,7 @@ export function registerHrRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch TA/DA claims" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch TA/DA claims");
     }
   });
 
@@ -428,10 +575,11 @@ export function registerHrRoutes(app: Express) {
         status: String(body.status ?? "Pending"),
       });
       const [row] = await db.select().from(taDaClaims).where(eq(taDaClaims.id, id));
+      if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create TA/DA claim" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create TA/DA claim");
     }
   });
 
@@ -442,7 +590,7 @@ export function registerHrRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch service book" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch service book");
     }
   });
 
@@ -462,10 +610,51 @@ export function registerHrRoutes(app: Express) {
         approvedAt: body.approvedAt ? String(body.approvedAt) : null,
       });
       const [row] = await db.select().from(serviceBookEntries).where(eq(serviceBookEntries.id, id));
+      if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create service book entry" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create service book entry");
+    }
+  });
+
+  app.put("/api/hr/employees/:employeeId/service-book/:entryId", async (req, res) => {
+    try {
+      const { employeeId, entryId } = req.params;
+      const [existing] = await db.select().from(serviceBookEntries).where(eq(serviceBookEntries.id, entryId)).limit(1);
+      if (!existing || existing.employeeId !== employeeId) {
+        return sendApiError(res, 404, "HR_SERVICE_BOOK_NOT_FOUND", "Service book entry not found");
+      }
+      if (existing.isImmutable || existing.status === "Approved") {
+        return sendApiError(
+          res,
+          403,
+          "HR_SERVICE_BOOK_IMMUTABLE",
+          "Approved or locked service book entries cannot be updated",
+        );
+      }
+      const body = req.body;
+      const updates: Record<string, unknown> = {};
+      if (body.section !== undefined) updates.section = String(body.section);
+      if (body.content !== undefined) updates.content = typeof body.content === "object" ? body.content : {};
+      if (body.status !== undefined) updates.status = String(body.status);
+      if (body.isImmutable !== undefined) updates.isImmutable = Boolean(body.isImmutable);
+      if (body.approvedBy !== undefined) updates.approvedBy = body.approvedBy == null ? null : String(body.approvedBy);
+      if (body.approvedAt !== undefined) updates.approvedAt = body.approvedAt == null ? null : String(body.approvedAt);
+      if (Object.keys(updates).length === 0) {
+        const [row] = await db.select().from(serviceBookEntries).where(eq(serviceBookEntries.id, entryId)).limit(1);
+        return res.json(row!);
+      }
+      await db.update(serviceBookEntries).set(updates as Record<string, unknown>).where(eq(serviceBookEntries.id, entryId));
+      const [row] = await db.select().from(serviceBookEntries).where(eq(serviceBookEntries.id, entryId)).limit(1);
+      if (!row) return sendApiError(res, 404, "HR_SERVICE_BOOK_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "HR", action: "Update", recordId: entryId, beforeValue: existing, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update service book entry");
     }
   });
 }

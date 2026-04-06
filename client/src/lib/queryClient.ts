@@ -15,10 +15,24 @@ function notify403(): void {
   }
 }
 
+/** Parse `{ error?: string }` from JSON API errors (e.g. `sendApiError`); fall back to body text. */
+export async function readApiErrorMessage(res: Response): Promise<string> {
+  const text = (await res.text()) || res.statusText;
+  const trimmed = text.trim();
+  if (!trimmed) return res.statusText;
+  try {
+    const j = JSON.parse(trimmed) as { error?: unknown };
+    if (typeof j.error === "string" && j.error.length > 0) return j.error;
+  } catch {
+    /* not JSON */
+  }
+  return trimmed;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    const msg = await readApiErrorMessage(res);
+    throw new Error(`${res.status}: ${msg}`);
   }
 }
 
@@ -36,8 +50,8 @@ export async function fetchApiGet<T>(url: string): Promise<T> {
 
   if (res.status === 401) {
     notify401();
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    const msg = await readApiErrorMessage(res);
+    throw new Error(`${res.status}: ${msg}`);
   }
   if (res.status === 403) {
     notify403();

@@ -3,6 +3,7 @@
  * Loads user roles and permissions (from role_permissions); ADMIN role gets all permissions.
  */
 import type { Request, Response, NextFunction } from "express";
+import { sendApiError } from "./api-errors";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { users, userRoles, roles, userYards, rolePermissions, permissions } from "@shared/db-schema";
@@ -32,9 +33,18 @@ declare module "express-session" {
   }
 }
 
+/** M-05: public receipt verification page + QR image (no login). */
+export function isPublicReceiptVerificationPath(path: string, method: string): boolean {
+  if (method !== "GET") return false;
+  if (path.startsWith("/api/ioms/receipts/verify/")) return true;
+  if (path === "/api/ioms/receipts/public/qr") return true;
+  return false;
+}
+
 function isPublicApi(path: string, method: string): boolean {
   if (path === "/api/health" && method === "GET") return true;
   if (path === "/api/auth/login" && method === "POST") return true;
+  if (isPublicReceiptVerificationPath(path, method)) return true;
   return false;
 }
 
@@ -91,14 +101,14 @@ export async function requireAuthApi(req: Request, res: Response, next: NextFunc
   }
   const userId = req.session?.userId;
   if (!userId) {
-    res.status(401).json({ error: "Not authenticated" });
+    sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
     return;
   }
   try {
     const user = await loadAuthUser(userId);
     if (!user) {
       (req.session as any) = null;
-      res.status(401).json({ error: "Session invalid" });
+      sendApiError(res, 401, "AUTH_SESSION_INVALID", "Session invalid");
       return;
     }
     req.user = user;
@@ -106,7 +116,7 @@ export async function requireAuthApi(req: Request, res: Response, next: NextFunc
     next();
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Auth failed" });
+    sendApiError(res, 500, "INTERNAL_ERROR", "Auth failed");
   }
 }
 
@@ -115,12 +125,12 @@ export function requireRole(...allowedTiers: string[]) {
   const set = new Set(allowedTiers);
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
-      res.status(401).json({ error: "Not authenticated" });
+      sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
       return;
     }
     const hasRole = req.user.roles.some((r) => set.has(r.tier));
     if (!hasRole) {
-      res.status(403).json({ error: "Insufficient permissions" });
+      sendApiError(res, 403, "AUTH_ROLE_DENIED", "Insufficient permissions");
       return;
     }
     next();
@@ -137,11 +147,11 @@ export function hasPermission(user: AuthUser | undefined, module: string, action
 export function requirePermission(module: string, action: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
-      res.status(401).json({ error: "Not authenticated" });
+      sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
       return;
     }
     if (!hasPermission(req.user, module, action)) {
-      res.status(403).json({ error: "Insufficient permissions", required: `${module}:${action}` });
+      sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: `${module}:${action}` });
       return;
     }
     next();
@@ -160,11 +170,13 @@ const METHOD_TO_ACTION: Record<string, string> = {
 export function getModuleForPath(path: string): string | null {
   /** Bug tracking: all authenticated users; not tied to IOMS module permissions. */
   if (path.startsWith("/api/bugs")) return null;
+  /** Reference data: Tally catalogue, GST exempt categories (read-only for any logged-in user). */
+  if (path.startsWith("/api/ioms/reference")) return null;
   /** Read-only merged system defaults for any logged-in user (Admin edits via /api/admin/config). */
   if (path.startsWith("/api/system")) return null;
   if (path.startsWith("/api/hr")) return "M-01";
   if (path.startsWith("/api/ioms/rent")) return "M-03";
-  if (path.startsWith("/api/ioms/receipts")) return "M-05";
+  if (path.startsWith("/api/ioms/receipts") || path.startsWith("/api/ioms/reports/tally-export")) return "M-05";
   if (
     path.startsWith("/api/ioms/traders") ||
     path.startsWith("/api/ioms/assets") ||
@@ -208,16 +220,17 @@ export function requireModulePermissionByPath(req: Request, res: Response, next:
   if (!req.path.startsWith("/api")) return next();
   if (req.path.startsWith("/api/auth") || req.path.startsWith("/api/health")) return next();
   if (req.path.startsWith("/api/admin")) return next();
+  if (isPublicReceiptVerificationPath(req.path, req.method)) return next();
   const module = getModuleForPath(req.path);
   if (!module) return next();
   if (!req.user) {
-    res.status(401).json({ error: "Not authenticated" });
+    sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
     return;
   }
   if (req.user.roles.some((r) => r.tier === "ADMIN")) return next();
   const action = METHOD_TO_ACTION[req.method] ?? "Read";
   if (!hasPermission(req.user, module, action)) {
-    res.status(403).json({ error: "Insufficient permissions", required: `${module}:${action}` });
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: `${module}:${action}` });
     return;
   }
   next();
@@ -226,7 +239,7 @@ export function requireModulePermissionByPath(req: Request, res: Response, next:
 /** Use after requireAuthApi. For /api/admin/*, requires M-10 permission for the request method. ADMIN tier always allowed. */
 export function requireAdminPermissionByMethod(req: Request, res: Response, next: NextFunction): void {
   if (!req.user) {
-    res.status(401).json({ error: "Not authenticated" });
+    sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
     return;
   }
   // ADMIN tier: full access regardless of permission matrix
@@ -235,7 +248,7 @@ export function requireAdminPermissionByMethod(req: Request, res: Response, next
   }
   const action = METHOD_TO_ACTION[req.method] ?? "Read";
   if (!hasPermission(req.user, "M-10", action)) {
-    res.status(403).json({ error: "Insufficient permissions", required: `M-10:${action}` });
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: `M-10:${action}` });
     return;
   }
   next();

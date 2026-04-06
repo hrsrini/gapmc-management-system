@@ -108,6 +108,11 @@ app.use((req, res, next) => {
 (async () => {
   await registerRoutes(httpServer, app);
 
+  if (process.env.SLA_REMINDER !== "false") {
+    const { startSlaReminderLoop } = await import("./sla-reminder");
+    startSlaReminderLoop();
+  }
+
   // M-03: Rent invoice auto-generation on 1st of each month at 00:01 (optional)
   if (process.env.CRON_RENT_INVOICE === "true") {
     const cron = await import("node-cron");
@@ -121,6 +126,62 @@ app.use((req, res, next) => {
       }
     });
     log("Cron M-03 rent invoice generation scheduled (1st of month 00:01)");
+  }
+
+  if (process.env.CRON_LICENCE_EXPIRY === "true") {
+    const cron = await import("node-cron");
+    const { autoBlockExpiredTraderLicences } = await import("./cron-licence-expiry");
+    cron.default.schedule("5 1 * * *", async () => {
+      try {
+        const { blocked } = await autoBlockExpiredTraderLicences();
+        log(`Cron M-02: expired licences auto-blocked=${blocked}`);
+      } catch (e) {
+        console.error("Cron M-02 licence expiry failed:", e);
+      }
+    });
+    log("Cron M-02 licence expiry auto-block scheduled (daily 01:05)");
+  }
+
+  if (process.env.CRON_HR_RETIREMENT === "true") {
+    const cron = await import("node-cron");
+    const { runHrRetirementReminders } = await import("./cron-hr-retirement");
+    cron.default.schedule("15 7 * * *", async () => {
+      try {
+        const r = await runHrRetirementReminders();
+        log(`Cron M-01: HR retirement reminders checked=${r.checked} notified=${r.notified}`);
+      } catch (e) {
+        console.error("Cron M-01 HR retirement failed:", e);
+      }
+    });
+    log("Cron M-01 HR retirement reminders scheduled (daily 07:15)");
+  }
+
+  if (process.env.CRON_OPERATIONAL_DIGEST === "true") {
+    const cron = await import("node-cron");
+    const { runOperationalRemindersDigest } = await import("./cron-operational-reminders");
+    cron.default.schedule("25 7 * * *", async () => {
+      try {
+        const r = await runOperationalRemindersDigest();
+        log(`Cron M-07/M-08: operational digest fleet=${r.fleetAlerts} amc=${r.amcAlerts}`);
+      } catch (e) {
+        console.error("Cron operational digest failed:", e);
+      }
+    });
+    log("Cron M-07/M-08 operational digest scheduled (daily 07:25)");
+  }
+
+  if (process.env.CRON_AMC_DIGEST === "true") {
+    const cron = await import("node-cron");
+    const { runAmcRenewalDigest } = await import("./cron-amc-renewal-digest");
+    cron.default.schedule("35 7 * * *", async () => {
+      try {
+        const r = await runAmcRenewalDigest();
+        log(`Cron M-08: AMC renewal digest amcAlerts=${r.amcAlerts}`);
+      } catch (e) {
+        console.error("Cron AMC digest failed:", e);
+      }
+    });
+    log("Cron M-08 AMC renewal digest scheduled (daily 07:35)");
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -150,21 +211,41 @@ app.use((req, res, next) => {
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
+  const requestedPort = parseInt(process.env.PORT || "5000", 10);
   const host = process.env.HOST || "0.0.0.0";
+  const isDev = process.env.NODE_ENV !== "production";
+  /** In development, try the next ports if the requested one is busy (production keeps a single bind). */
+  const maxPort = isDev ? requestedPort + 19 : requestedPort;
 
-  function onListen() {
-    log(`serving on http://${host === "0.0.0.0" ? "localhost" : host}:${port}`);
+  function onListenLog(effectivePort: number, bindHost: string) {
+    const displayHost = bindHost === "0.0.0.0" ? "localhost" : bindHost;
+    log(`serving on http://${displayHost}:${effectivePort}`);
   }
 
-  httpServer.once("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOTSUP" && host === "0.0.0.0") {
-      log("Binding to 0.0.0.0 not supported, trying 127.0.0.1...");
-      httpServer.listen(port, "127.0.0.1", onListen);
-    } else {
+  function listenOn(port: number, bindHost: string): void {
+    httpServer.removeAllListeners("error");
+    httpServer.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOTSUP" && bindHost === "0.0.0.0") {
+        log("Binding to 0.0.0.0 not supported, trying 127.0.0.1...");
+        listenOn(port, "127.0.0.1");
+        return;
+      }
+      if (err.code === "EADDRINUSE" && port < maxPort) {
+        log(`Port ${port} in use, trying ${port + 1}...`);
+        listenOn(port + 1, bindHost);
+        return;
+      }
+      if (err.code === "EADDRINUSE") {
+        log(
+          `Port ${port} is already in use. Stop the other process or set PORT to a free port.`,
+        );
+        process.exit(1);
+        return;
+      }
       throw err;
-    }
-  });
+    });
+    httpServer.listen(port, bindHost, () => onListenLog(port, bindHost));
+  }
 
-  httpServer.listen(port, host, onListen);
+  listenOn(requestedPort, host);
 })();

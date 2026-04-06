@@ -4,10 +4,13 @@
  */
 import type { Express } from "express";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
+import QRCode from "qrcode";
 import { db } from "./db";
 import { yards, receiptSequence, iomsReceipts, paymentGatewayLog } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import { writeAuditLog } from "./audit";
+import { sendApiError } from "./api-errors";
+import { tenantLicenceIsGstExempt } from "./gst-exempt";
 
 const REVENUE_HEAD_CODES: Record<string, string> = {
   Rent: "RENT",
@@ -97,8 +100,7 @@ export async function createIomsReceipt(params: {
     paymentMode: params.paymentMode,
     sourceModule: params.sourceModule ?? null,
     sourceRecordId: params.sourceRecordId ?? null,
-    // Legacy compatibility: UI can use QR image URLs if present, while current QR is generated client-side.
-    qrCodeUrl: `/verify/${encodeURIComponent(receiptNo)}`,
+    qrCodeUrl: `/api/ioms/receipts/public/qr?receiptNo=${encodeURIComponent(receiptNo)}`,
     pdfUrl: null,
     status: "Pending",
     createdBy: params.createdBy,
@@ -109,6 +111,36 @@ export async function createIomsReceipt(params: {
 }
 
 export function registerReceiptsIomsRoutes(app: Express) {
+  // Public PNG QR (embed in UI / print); must stay before /:id and match auth public list
+  app.get("/api/ioms/receipts/public/qr", async (req, res) => {
+    try {
+      const raw = req.query.receiptNo;
+      const receiptNo = typeof raw === "string" ? decodeURIComponent(raw.trim()) : "";
+      if (!receiptNo) {
+        return sendApiError(res, 400, "RECEIPT_QR_NO_REQUIRED", "Query receiptNo is required");
+      }
+      const [row] = await db
+        .select({ receiptNo: iomsReceipts.receiptNo })
+        .from(iomsReceipts)
+        .where(eq(iomsReceipts.receiptNo, receiptNo))
+        .limit(1);
+      if (!row) return sendApiError(res, 404, "RECEIPT_VERIFY_NOT_FOUND", "Receipt not found", { receiptNo });
+
+      const base =
+        (process.env.PUBLIC_APP_URL && process.env.PUBLIC_APP_URL.replace(/\/$/, "")) ||
+        `${req.protocol}://${req.get("host") || "localhost"}`;
+      const verifyUrl = `${base}/verify/${encodeURIComponent(receiptNo)}`;
+
+      const png = await QRCode.toBuffer(verifyUrl, { type: "png", margin: 1, width: 240 });
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "public, max-age=300");
+      res.send(png);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate QR");
+    }
+  });
+
   // List IOMS receipts (filter by yard, revenue_head, date range; scoped to user's yards)
   app.get("/api/ioms/receipts", async (req, res) => {
     try {
@@ -134,7 +166,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
       res.json(list);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch receipts" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipts");
     }
   });
 
@@ -146,8 +178,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
         .select()
         .from(iomsReceipts)
         .where(eq(iomsReceipts.receiptNo, receiptNo));
-      if (!row)
-        return res.status(404).json({ error: "Receipt not found", receiptNo });
+      if (!row) return sendApiError(res, 404, "RECEIPT_VERIFY_NOT_FOUND", "Receipt not found", { receiptNo });
       res.json({
         receiptNo: row.receiptNo,
         amount: row.amount,
@@ -159,7 +190,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
       });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to verify receipt" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to verify receipt");
     }
   });
 
@@ -170,15 +201,15 @@ export function registerReceiptsIomsRoutes(app: Express) {
         .select()
         .from(iomsReceipts)
         .where(eq(iomsReceipts.id, req.params.id));
-      if (!row) return res.status(404).json({ error: "Receipt not found" });
+      if (!row) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(row.yardId)) {
-        return res.status(404).json({ error: "Receipt not found" });
+        return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       }
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch receipt" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipt");
     }
   });
 
@@ -190,24 +221,30 @@ export function registerReceiptsIomsRoutes(app: Express) {
       const revenueHead = body.revenueHead as string;
       const amount = Number(body.amount);
       if (!yardId || !revenueHead || !Number.isFinite(amount) || amount < 0) {
-        return res.status(400).json({
-          error: "yardId, revenueHead, amount (number) required",
-        });
+        return sendApiError(res, 400, "RECEIPT_CREATE_FIELDS_REQUIRED", "yardId, revenueHead, amount (number) required");
       }
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
-        return res.status(403).json({ error: "You do not have access to this yard" });
+        return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
       const createdBy = (req.user?.id as string) ?? (body.createdBy as string) ?? "system";
+      const payerType = body.payerType as string | undefined;
+      const payerRefId = body.payerRefId as string | undefined;
+      let cgst = body.cgst != null ? Number(body.cgst) : undefined;
+      let sgst = body.sgst != null ? Number(body.sgst) : undefined;
+      if (payerType === "TenantLicence" && payerRefId && (await tenantLicenceIsGstExempt(payerRefId))) {
+        cgst = 0;
+        sgst = 0;
+      }
       const result = await createIomsReceipt({
         yardId,
         revenueHead,
         payerName: body.payerName as string | undefined,
-        payerType: body.payerType as string | undefined,
-        payerRefId: body.payerRefId as string | undefined,
+        payerType,
+        payerRefId,
         amount,
-        cgst: body.cgst != null ? Number(body.cgst) : undefined,
-        sgst: body.sgst != null ? Number(body.sgst) : undefined,
+        cgst,
+        sgst,
         paymentMode: (body.paymentMode as string) ?? "Cash",
         sourceModule: body.sourceModule as string | undefined,
         sourceRecordId: body.sourceRecordId as string | undefined,
@@ -218,7 +255,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
       res.status(201).json(result);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to create receipt" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create receipt");
     }
   });
 
@@ -227,16 +264,16 @@ export function registerReceiptsIomsRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [existing] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, id));
-      if (!existing) return res.status(404).json({ error: "Receipt not found" });
+      if (!existing) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(existing.yardId)) {
-        return res.status(404).json({ error: "Receipt not found" });
+        return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       }
       const body = req.body as Record<string, unknown>;
       const status = body.status as string;
       const gatewayRef = body.gatewayRef as string | undefined;
       if (status !== "Paid" && status !== "Failed" && status !== "Reconciled") {
-        return res.status(400).json({ error: "status must be Paid, Failed, or Reconciled" });
+        return sendApiError(res, 400, "RECEIPT_STATUS_INVALID", "status must be Paid, Failed, or Reconciled");
       }
       await db
         .update(iomsReceipts)
@@ -246,12 +283,12 @@ export function registerReceiptsIomsRoutes(app: Express) {
         })
         .where(eq(iomsReceipts.id, id));
       const [row] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, id));
-      if (!row) return res.status(404).json({ error: "Receipt not found" });
+      if (!row) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       writeAuditLog(req, { module: "Receipts", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to update receipt" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update receipt");
     }
   });
 
@@ -263,10 +300,10 @@ export function registerReceiptsIomsRoutes(app: Express) {
       const { gateway } = (req.body ?? {}) as Record<string, unknown>;
 
       const [receipt] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, receiptId)).limit(1);
-      if (!receipt) return res.status(404).json({ error: "Receipt not found" });
+      if (!receipt) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(receipt.yardId)) {
-        return res.status(404).json({ error: "Receipt not found" });
+        return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       }
 
       const gatewayTxnId = nanoid();
@@ -292,7 +329,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
       res.status(201).json({ gatewayTxnId });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to initiate payment" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to initiate payment");
     }
   });
 
@@ -304,20 +341,20 @@ export function registerReceiptsIomsRoutes(app: Express) {
       const gatewayRef = body.gatewayRef ? String(body.gatewayRef) : undefined;
 
       if (!gatewayTxnId || !status) {
-        return res.status(400).json({ error: "gatewayTxnId and status are required" });
+        return sendApiError(res, 400, "RECEIPT_CALLBACK_FIELDS_REQUIRED", "gatewayTxnId and status are required");
       }
       if (!["Paid", "Failed", "Reconciled"].includes(status)) {
-        return res.status(400).json({ error: "status must be Paid, Failed, or Reconciled" });
+        return sendApiError(res, 400, "RECEIPT_STATUS_INVALID", "status must be Paid, Failed, or Reconciled");
       }
 
       const [log] = await db.select().from(paymentGatewayLog).where(eq(paymentGatewayLog.gatewayTxnId, gatewayTxnId)).limit(1);
-      if (!log) return res.status(404).json({ error: "Payment log not found" });
+      if (!log) return sendApiError(res, 404, "PAYMENT_LOG_NOT_FOUND", "Payment log not found");
 
       const [receipt] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, log.receiptId)).limit(1);
-      if (!receipt) return res.status(404).json({ error: "Receipt not found" });
+      if (!receipt) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(receipt.yardId)) {
-        return res.status(404).json({ error: "Receipt not found" });
+        return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       }
 
       await db
@@ -336,21 +373,22 @@ export function registerReceiptsIomsRoutes(app: Express) {
         })
         .where(eq(iomsReceipts.id, receipt.id));
 
+      const [updatedLog] = await db.select().from(paymentGatewayLog).where(eq(paymentGatewayLog.id, log.id)).limit(1);
       const [updatedReceipt] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, receipt.id)).limit(1);
-      if (!updatedReceipt) return res.status(404).json({ error: "Receipt not found" });
+      if (!updatedReceipt) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
 
       writeAuditLog(req, {
         module: "Receipts",
         action: "PaymentCallback",
         recordId: receipt.id,
-        beforeValue: receipt,
-        afterValue: updatedReceipt,
+        beforeValue: { receipt, paymentGatewayLog: log },
+        afterValue: { receipt: updatedReceipt, paymentGatewayLog: updatedLog ?? null },
       }).catch((e) => console.error("Audit log failed:", e));
 
       res.json(updatedReceipt);
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to process callback" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to process callback");
     }
   });
 
@@ -381,7 +419,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
       });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Failed to fetch reconciliation data" });
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch reconciliation data");
     }
   });
 }

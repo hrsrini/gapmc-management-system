@@ -1,0 +1,85 @@
+# GAPLMB IOMS — merged clarification questions (draft)
+
+**Purpose:** One list to send GAPLMB / finance / IT for written answers before design freeze.  
+**Sources:** `execution plan.md` (open questions 1–47), `docs/SRS-OPEN-ITEMS-CLIENT.md` (SRS §18-style items), plus a few **integration/ops** notes.  
+**Status:** **Draft** — reconcile with **SRS v2 Section 18** verbatim from `GAPLMB-GOA-IOMS-SRS-v2-final.pdf` when available; this file may be missing or rewording SRS rows.
+
+**Dedup notes:**
+
+- **Q4** and **SRS-OPEN #5** (maker–checker on admin config) → **one row** below.
+- **Q15** and **SRS-OPEN #4** (TDS and rent) → **one row** below.
+- **Q18** and **SRS-OPEN #1** (govt / GST-exempt list) → **one row** below; **SRS-OPEN #2** (Track B / pre-receipt **wording**) kept **adjacent** as a separate row.
+- **Q9** and **SRS-OPEN #6** (notification channels for operational/SLA alerts) → **one row** below (retirement + SLA breach + NIC gateway).
+- **Q28** (public verify): app already exposes public verify + QR; row asks for **policy confirmation** for production.
+
+---
+
+## Clarification table
+
+| # | Area | Question |
+|---|------|------------|
+| 1 | M-10 | Can one user **hold both DV and DA roles** (in the permission matrix), or must those roles always be assigned to **different** users? *(Note: BR-WF-01 already bars the **same user** acting as DO+DV+DA on the **same record**.)* |
+| 2 | M-10 | Can **location-scoped** users see **HO-raised** records (e.g. read-only), or **no access**? |
+| 3 | M-10 | Is **SSO** / government IdP required in **Phase 1** or **later**? |
+| 4 | M-10 / Cross-cutting | Which **`system_config`** (and fee-related) keys require **DA approval** or **maker–checker** vs **admin immediate** update? *(Aligns SRS open item: maker–checker on admin config.)* |
+| 5 | M-01 | **Aadhaar eKYC:** live **UIDAI** in Phase 1 or **simulated** only? |
+| 6 | M-01 | **Recruitment:** **external** job postings or **internal-only**? |
+| 7 | M-01 | **CGEGIS:** simple **deduction record** in-system vs **LIC / govt integration**? |
+| 8 | M-01 | **TA/DA** claims: **DV-only** verification or full **DA** (or other workflow)? |
+| 9 | M-01 / Cross-cutting | **Outbound notifications:** pre-retirement alerts — **email only** or **SMS** too? **SLA breach / workflow alerts** — same channels, **escalation roster**, **NIC SMS gateway** when available? *(Merges execution-plan Q9 + SRS open item 6.)* |
+| 10 | M-02 | **Functionaries / Hamali / Assistant traders:** **one table with type** vs **separate tables**? |
+| 11 | M-02 | **Assistant** sub-licence: validity **tied to primary licence expiry** or **independent**? |
+| 12 | M-02 | **GSTIN:** mandatory for **all** traders or only **above threshold**? |
+| 13 | M-02 | **Stock opening balance** (legacy): migrate in **M-02** or **M-04**? |
+| 14 | M-02 | **Trader portal:** **online licence application** in Phase 1 or **counter-only**? |
+| 15 | M-03 / SRS | **TDS on rent:** who **deducts**; effect on **rent deposit ledger**; **rates**, **thresholds**, and **ledger names** as on SRS/receipt lines. *(Merges execution-plan Q15 + SRS open item 4.)* |
+| 16 | M-03 | **Interest on arrears:** **auto-calculate**? If yes, **rate** and **rules**? |
+| 17 | M-03 | **GSTR-1** export: **per-yard** filing or **consolidated** for whole GAPLMB? |
+| 18 | M-03 / SRS | **Government / GST-exempt / Track B:** confirm the **seven** named office/godown holders is the **complete** list; **sub-units** (e.g. regional offices) mapping to **category codes**; authoritative **full allottee list** where needed. *(Merges execution-plan Q18 + SRS open item 1.)* |
+| 19 | M-03 / SRS | **Track B / pre-receipt:** align **invoice vs receipt document titles** for exempt entities with finance and **SRS §6**. *(SRS open item 2.)* |
+| 20 | M-03 | **Migrate legacy rent deposit opening balances**? If yes, **source** and **cut-off date**? |
+| 21 | M-04 | **Weighbridge:** **device API** or **manual weight** only? |
+| 22 | M-04 | **Passway / Transit:** **exempt from market fee** or not? |
+| 23 | M-04 | **Farmer registry:** **eKYC/Aadhaar** required or **name + village** enough? |
+| 24 | M-04 | **Grading:** **officer-assessed** or **self-declared**? |
+| 25 | M-04 | **Check post bank deposits:** is a **dedicated Cashier** role required? |
+| 26 | M-04 | **Commodity returns:** **what triggers** them and **effect on stock register**? |
+| 27 | M-05 | Which **payment gateway** is confirmed — **SBI ePay**, **NSDL**, **RazorpayGov**, or **other**? |
+| 28 | M-05 | **Receipt head short codes** (e.g. RENT, MFEE, LCFEE): **final sign-off** vs SRS appendix / current implementation? |
+| 29 | M-05 | **Public verification** (receipt no + QR **without login**): **confirm policy** for production (acceptable as implemented?). *(Execution-plan Q28.)* |
+| 30 | M-05 | **Legacy ~54 receipt types** → map to **six revenue heads**: who **signs off** before go-live? |
+| 31 | M-05 | **Cheque/DD dishonour:** how should **receipts be reversed** or **adjusted**? |
+| 32 | M-06 | **Salary:** computed in **M-01** with M-06 only **recording payment**, or **computed in M-06**? |
+| 33 | M-06 | **Supporting documents:** **which storage** (app disk, **S3**, **DMS**)? |
+| 34 | M-06 | **Advance recovery:** **automated** deduction from payslips or **manual**? |
+| 35 | M-06 | **Expenditure heads:** **government account code list** to seed — **source file / authority**? |
+| 36 | M-06 | **Budget / limits** per head per yard per year — **required**? If yes, **who sets** and **enforcement**? |
+| 37 | M-07 | Approximate **number of GAPLMB vehicles** (planning / seed)? |
+| 38 | M-07 | **Dedicated driver** role or **any officer** may log trips? |
+| 39 | M-07 | **Fuel:** **per trip** (pump) vs **central bulk store**? |
+| 40 | M-07 | **Maintenance:** **km-based**, **calendar-based**, or **both**? |
+| 41 | M-08 | **Fixed asset depreciation:** **system-computed** (SLM/WDV) vs **manual entry** only? |
+| 42 | M-08 | **AMC bills:** **auto-generated** (cron) or **manual** each period? |
+| 43 | M-08 | **Land register:** can **errors be corrected** or **strictly immutable**? |
+| 44 | M-08 | **Works:** **public tendering** (e.g. GovTender) or **internal estimates** only? |
+| 45 | M-09 | **Dak numbering:** **per-yard** sequences or **central HO** sequence? |
+| 46 | M-09 | **Scanned attachments:** **project storage** vs **DMS** standard? |
+| 47 | M-09 | **Escalation recipient:** always **Secretary** vs **assignee’s supervisor** — **fixed rule**? |
+| 48 | M-09 | **Outward letters:** **official print template** / GAPLMB letterhead — **who provides** the template? |
+| 49 | Cross-cutting / SRS | **Tally export:** confirm **CSV column order** (and path: XML bridge, manual journal, or third-party tool). *(SRS open item 3.)* |
+| 50 | Cross-cutting / SRS | **Data retention / archival:** per **SRS §16**, confirm **years per record class** before building purge/archival jobs. *(SRS open item 7.)* |
+| 51 | Integration | **Payment gateway webhooks/callbacks:** **public URL + signature/HMAC** vs **authenticated** callback — required **security policy**? |
+| 52 | M-05 / UX | **Receipt PDF:** mandatory **server-generated branded PDF**, or is **browser print-to-PDF** from the verify page sufficient? |
+| 53 | Ops / audit | **`audit_log` for cron/system:** must **`AUDIT_SYSTEM_USER_ID`** match a **real `users` row**, or is literal **`system`** acceptable for compliance? |
+
+---
+
+## Row count
+
+- **Execution plan** numbered questions **1–47** are covered (some **merged** into a single row so the table is **not** 47 rows).
+- **SRS-OPEN-ITEMS-CLIENT** items **1–7** are covered (**rows 4, 9, 15, 18, 19, 49, 50** and overlap as noted).
+- **Rows 51–53** are extra **integration/ops** items useful for implementation; drop if the client wants SRS scope only.
+
+---
+
+*Last updated: merged from `execution plan.md` + `docs/SRS-OPEN-ITEMS-CLIENT.md`.*

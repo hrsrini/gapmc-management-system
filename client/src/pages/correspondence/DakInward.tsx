@@ -1,4 +1,6 @@
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -6,8 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
-import { Mail, AlertCircle, PlusCircle } from "lucide-react";
+import { Mail, AlertCircle, PlusCircle, Search } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface Inward {
   id: string;
@@ -24,8 +29,27 @@ interface Inward {
 export default function DakInward() {
   const { can } = useAuth();
   const canCreate = can("M-09", "Create");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [subjectDraft, setSubjectDraft] = useState("");
+  const [subjectApplied, setSubjectApplied] = useState("");
+
+  useEffect(() => {
+    const s = searchParams.get("subject")?.trim() ?? "";
+    setSubjectDraft(s);
+    setSubjectApplied(s);
+  }, [searchParams]);
+
+  const inwardListUrl = useMemo(() => {
+    const p = new URLSearchParams();
+    if (subjectApplied.trim()) p.set("subject", subjectApplied.trim());
+    const qs = p.toString();
+    return qs ? `/api/ioms/dak/inward?${qs}` : `/api/ioms/dak/inward`;
+  }, [subjectApplied]);
   const { data: list, isLoading, isError } = useQuery<Inward[]>({
-    queryKey: ["/api/ioms/dak/inward"],
+    queryKey: [inwardListUrl],
+  });
+  const { data: slaPayload } = useQuery<{ count: number; asOf: string }>({
+    queryKey: ["/api/ioms/dak/inward/sla-overdue"],
   });
 
   if (isError) {
@@ -49,14 +73,81 @@ export default function DakInward() {
             <Mail className="h-5 w-5" />
             Dak Inward (IOMS M-09)
           </CardTitle>
-          <p className="text-sm text-muted-foreground">Inward correspondence — diary no, routing, action log, escalation.</p>
-          {canCreate && (
-            <div className="pt-2">
-              <Button asChild size="sm">
+          <p className="text-sm text-muted-foreground">
+            Inward correspondence — diary no, routing, action log, escalation.{" "}
+            <Link href="/correspondence/inward/subjects" className="text-primary hover:underline">
+              Browse by subject
+            </Link>
+          </p>
+          {slaPayload != null && slaPayload.count > 0 && (
+            <Alert variant="destructive" className="mt-3">
+              <AlertTitle>Deadline overdue</AlertTitle>
+              <AlertDescription>
+                {slaPayload.count} inward item(s) have a deadline on or before {slaPayload.asOf} and are not Closed.
+              </AlertDescription>
+            </Alert>
+          )}
+          <div className="flex flex-wrap items-end gap-3 pt-2">
+            <div className="space-y-1 min-w-[200px] flex-1 max-w-md">
+              <Label htmlFor="dak-subject">Subject contains</Label>
+              <Input
+                id="dak-subject"
+                placeholder="Filter by subject text…"
+                value={subjectDraft}
+                onChange={(e) => setSubjectDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") setSubjectApplied(subjectDraft);
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                const t = subjectDraft.trim();
+                setSubjectApplied(t);
+                setSearchParams(
+                  (prev) => {
+                    const p = new URLSearchParams(prev);
+                    if (t) p.set("subject", t);
+                    else p.delete("subject");
+                    return p;
+                  },
+                  { replace: true },
+                );
+              }}
+            >
+              <Search className="h-4 w-4 mr-2" />
+              Search
+            </Button>
+            {subjectApplied && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setSubjectDraft("");
+                  setSubjectApplied("");
+                  setSearchParams(
+                    (prev) => {
+                      const p = new URLSearchParams(prev);
+                      p.delete("subject");
+                      return p;
+                    },
+                    { replace: true },
+                  );
+                }}
+              >
+                Clear
+              </Button>
+            )}
+            {canCreate && (
+              <Button asChild size="sm" className="ml-auto">
                 <Link href="/correspondence/inward/new"><PlusCircle className="h-4 w-4 mr-2" />Add inward</Link>
               </Button>
-            </div>
-          )}
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
