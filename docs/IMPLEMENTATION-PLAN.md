@@ -4,6 +4,8 @@
 **Stack:** Express + React/Vite + Drizzle + PostgreSQL (`gapmc` schema).  
 **Reference:** Current app vs IOMS (quick map).md, GAPLMB IOMS Module-Wise Dev Prompts.
 
+**Test traceability:** `docs/test_plan.csv` includes an `srs_reference` column for mapping cases to **GAPLMB-GOA-IOMS-SRS-v2-final.pdf** (sections, FR-*, UC-*, BR-WF-*, NFR). Fill that column on legacy rows as RTM work proceeds.
+
 ---
 
 ## Overview: Phase order

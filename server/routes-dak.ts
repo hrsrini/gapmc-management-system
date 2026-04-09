@@ -10,6 +10,8 @@ import { dakInward, dakOutward, dakActionLog, dakEscalations } from "@shared/db-
 import { nanoid } from "nanoid";
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
+import { getMergedSystemConfig } from "./system-config";
+import { generateNextDakDiaryNo } from "./dak-diary-sequence";
 
 function dakYardInScope(req: Express.Request, yardId: string | null): boolean {
   if (yardId == null) return true;
@@ -138,11 +140,24 @@ export function registerDakRoutes(app: Express) {
       const body = req.body;
       const yardId = body.yardId != null ? String(body.yardId) : null;
       if (yardId != null && !dakYardInScope(req, yardId)) return sendApiError(res, 403, "DAK_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      const receivedDateRaw = String(body.receivedDate ?? "").trim().slice(0, 10) || new Date().toISOString().slice(0, 10);
+      const manualDiary = body.diaryNo != null ? String(body.diaryNo).trim() : "";
+      let diaryNo: string | null = manualDiary || null;
+      if (!diaryNo) {
+        const cfg = await getMergedSystemConfig();
+        const scopeRaw = (cfg.dak_diary_sequence_scope ?? "per_yard").trim().toLowerCase();
+        const scope = scopeRaw === "central" ? "central" : "per_yard";
+        diaryNo = await generateNextDakDiaryNo({
+          yardId,
+          receivedDate: receivedDateRaw,
+          scope,
+        });
+      }
       const id = nanoid();
       await db.insert(dakInward).values({
         id,
         yardId: yardId || null,
-        receivedDate: String(body.receivedDate ?? ""),
+        receivedDate: receivedDateRaw,
         fromParty: String(body.fromParty ?? ""),
         subject: String(body.subject ?? ""),
         modeOfReceipt: String(body.modeOfReceipt ?? "Hand"),
@@ -152,14 +167,18 @@ export function registerDakRoutes(app: Express) {
         assignedTo: body.assignedTo ? String(body.assignedTo) : null,
         deadline: body.deadline ? String(body.deadline) : null,
         fileRef: body.fileRef ? String(body.fileRef) : null,
-        diaryNo: body.diaryNo ? String(body.diaryNo) : null,
+        diaryNo,
         createdAt: now(),
       });
       const [row] = await db.select().from(dakInward).where(eq(dakInward.id, id));
       if (row) writeAuditLog(req, { module: "Dak", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
-    } catch (e) {
+    } catch (e: unknown) {
       console.error(e);
+      const code = e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code) : "";
+      if (code === "23505") {
+        return sendApiError(res, 409, "DAK_DIARY_NO_DUPLICATE", "Diary number already exists; leave blank for auto or choose another.");
+      }
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create inward");
     }
   });

@@ -64,7 +64,7 @@ export default function AdminFinanceMappings() {
   return (
     <AppShell
       breadcrumbs={[
-        { label: "Admin", href: "/admin/users" },
+        { label: "Admin", href: "/admin/locations" },
         { label: "Finance mappings" },
       ]}
     >

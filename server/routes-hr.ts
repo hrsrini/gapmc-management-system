@@ -3,7 +3,7 @@
  * Tables: employees, employee_contracts, recruitment, attendances, timesheets,
  * service_book_entries, leave_requests, ltc_claims, ta_da_claims.
  */
-import type { Express } from "express";
+import type { Express, Response } from "express";
 import { eq, desc, or, and, gte, lte, isNotNull } from "drizzle-orm";
 import { db } from "./db";
 import {
@@ -24,10 +24,45 @@ import {
   canTransitionLeaveRequest,
   leaveRequestAwaitingMyAction,
   assertSegregationDoDvDa,
+  canCreateTaDaClaim,
+  canTransitionTaDaClaim,
+  taDaClaimAwaitingMyAction,
 } from "./workflow";
 import { validateDaRejection, validateDvReturnToDraft } from "@shared/workflow-rejection";
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
+import { hasPermission } from "./auth";
+import {
+  enrichEmployeesWithAppLogin,
+  buildLoginProfileForEmployee,
+  handleCreateEmployeeLogin,
+  handleUpdateEmployeeLogin,
+} from "./hr-employee-login";
+import {
+  HrEmployeeRuleError,
+  assertJoiningAndDob,
+  normalizePan,
+  normalizeAadhaarMasked,
+  assertPersonalEmailFormat,
+  assertEmployeeUniqueness,
+  allocateNextEmpId,
+  isDraftOrSubmitted,
+} from "./hr-employee-rules";
+
+function sendHrEmployeeRuleError(res: Response, e: unknown): boolean {
+  if (e instanceof HrEmployeeRuleError) {
+    sendApiError(res, 400, e.code, e.message);
+    return true;
+  }
+  return false;
+}
+
+const OFFICIAL_EMP_ID_RE = /^EMP-\d{3}$/i;
+
+function hasOfficialEmpId(empId: string | null | undefined): boolean {
+  if (empId == null || String(empId).trim() === "") return false;
+  return OFFICIAL_EMP_ID_RE.test(String(empId).trim());
+}
 
 export function registerHrRoutes(app: Express) {
   const now = () => new Date().toISOString();
@@ -61,15 +96,67 @@ export function registerHrRoutes(app: Express) {
 
   app.get("/api/hr/employees", async (req, res) => {
     try {
+      if (!req.user) {
+        return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      }
+      const includeApp = req.query.includeApp === "1";
+      if (includeApp && !hasPermission(req.user, "M-10", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-10 Read required for includeApp=1", {
+          required: "M-10:Read",
+        });
+      }
       const yardId = req.query.yardId as string | undefined;
       const list = yardId
         ? await db.select().from(employees).where(eq(employees.yardId, yardId)).orderBy(desc(employees.createdAt))
         : await db.select().from(employees).orderBy(desc(employees.createdAt));
-      res.json(list);
+      if (!includeApp) {
+        res.json(list);
+        return;
+      }
+      const enriched = await enrichEmployeesWithAppLogin(list);
+      res.json(enriched);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch employees");
     }
+  });
+
+  app.get("/api/hr/employees/:id/login-profile", async (req, res) => {
+    try {
+      if (!req.user) {
+        return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      }
+      if (!hasPermission(req.user, "M-10", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-10:Read" });
+      }
+      const [emp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, req.params.id)).limit(1);
+      if (!emp) return sendApiError(res, 404, "HR_EMPLOYEE_NOT_FOUND", "Employee not found");
+      const profile = await buildLoginProfileForEmployee(req.params.id);
+      res.json(profile);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch login profile");
+    }
+  });
+
+  app.post("/api/hr/employees/:id/login", async (req, res) => {
+    if (!req.user) {
+      return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+    }
+    if (!hasPermission(req.user, "M-10", "Create")) {
+      return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-10:Create" });
+    }
+    await handleCreateEmployeeLogin(req, res, req.params.id);
+  });
+
+  app.put("/api/hr/employees/:id/login", async (req, res) => {
+    if (!req.user) {
+      return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+    }
+    if (!hasPermission(req.user, "M-10", "Update")) {
+      return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-10:Update" });
+    }
+    await handleUpdateEmployeeLogin(req, res, req.params.id);
   });
 
   app.get("/api/hr/employees/:id", async (req, res) => {
@@ -87,24 +174,62 @@ export function registerHrRoutes(app: Express) {
     try {
       const body = req.body;
       const id = nanoid();
+      const statusRaw = String(body.status ?? "Draft");
+      if (statusRaw !== "Draft" && statusRaw !== "Submitted") {
+        return sendApiError(
+          res,
+          400,
+          "HR_EMP_CREATE_STATUS",
+          "New employees must be created as Draft or Submitted. Active status and EMP-ID are set only after DA approval.",
+        );
+      }
+      if (body.empId !== undefined && body.empId !== null && String(body.empId).trim() !== "") {
+        return sendApiError(res, 400, "HR_EMP_EMPID_CREATE", "Employee ID cannot be set at registration; it is assigned at DA approval.");
+      }
+
+      let panNorm: string | null;
+      let aadhaarMasked: string | null;
+      let personalEmailNorm: string | null;
+      try {
+        personalEmailNorm =
+          body.personalEmail != null && String(body.personalEmail).trim() !== ""
+            ? String(body.personalEmail).trim().toLowerCase()
+            : null;
+        assertPersonalEmailFormat(personalEmailNorm);
+        panNorm = normalizePan(body.pan);
+        aadhaarMasked = normalizeAadhaarMasked(body.aadhaarToken ?? body.aadhaar ?? null);
+        assertJoiningAndDob(String(body.joiningDate ?? ""), body.dob != null ? String(body.dob) : null);
+        await assertEmployeeUniqueness({
+          pan: panNorm,
+          aadhaarMasked,
+          personalEmail: personalEmailNorm,
+          excludeEmployeeId: null,
+        });
+      } catch (e) {
+        if (sendHrEmployeeRuleError(res, e)) return;
+        throw e;
+      }
+
       const payload = {
         id,
+        empId: null as string | null,
         firstName: String(body.firstName ?? ""),
         surname: String(body.surname ?? ""),
         designation: String(body.designation ?? ""),
         yardId: String(body.yardId ?? ""),
         employeeType: String(body.employeeType ?? "Regular"),
         joiningDate: String(body.joiningDate ?? ""),
-        status: String(body.status ?? "Active"),
+        status: statusRaw,
         middleName: body.middleName ? String(body.middleName) : null,
         photoUrl: body.photoUrl ? String(body.photoUrl) : null,
-        aadhaarToken: body.aadhaarToken ? String(body.aadhaarToken) : null,
-        pan: body.pan ? String(body.pan) : null,
+        aadhaarToken: aadhaarMasked,
+        pan: panNorm,
         dob: body.dob ? String(body.dob) : null,
         retirementDate: body.retirementDate ? String(body.retirementDate) : null,
         mobile: body.mobile ? String(body.mobile) : null,
         workEmail: body.workEmail ? String(body.workEmail) : null,
-        userId: body.userId ? String(body.userId) : null,
+        personalEmail: personalEmailNorm,
+        userId: null,
         createdAt: now(),
         updatedAt: now(),
       };
@@ -121,22 +246,155 @@ export function registerHrRoutes(app: Express) {
     }
   });
 
+  /** BR-EMP-06: assign EMP-NNN and set Active (DA or M-01:Approve). */
+  app.post("/api/hr/employees/:id/approve-registration", async (req, res) => {
+    try {
+      if (!req.user) {
+        return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      }
+      const id = req.params.id;
+      const [emp] = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
+      if (!emp) return sendApiError(res, 404, "HR_EMPLOYEE_NOT_FOUND", "Employee not found");
+      if (hasOfficialEmpId(emp.empId)) {
+        return sendApiError(res, 400, "HR_EMP_ALREADY_APPROVED", "This employee already has an official EMP-ID.");
+      }
+      const approvable =
+        isDraftOrSubmitted(emp.status) || (emp.status === "Active" && !hasOfficialEmpId(emp.empId));
+      if (!approvable) {
+        return sendApiError(
+          res,
+          400,
+          "HR_EMP_APPROVE_STATE",
+          "Only Draft, Submitted, or Active records without an official EMP-ID can be approved.",
+        );
+      }
+      try {
+        assertJoiningAndDob(emp.joiningDate, emp.dob);
+        const panNorm = normalizePan(emp.pan);
+        const aadhaarMasked = normalizeAadhaarMasked(emp.aadhaarToken);
+        const pe = emp.personalEmail != null && String(emp.personalEmail).trim() !== "" ? String(emp.personalEmail).trim().toLowerCase() : null;
+        assertPersonalEmailFormat(pe);
+        await assertEmployeeUniqueness({
+          pan: panNorm,
+          aadhaarMasked,
+          personalEmail: pe,
+          excludeEmployeeId: id,
+        });
+      } catch (e) {
+        if (sendHrEmployeeRuleError(res, e)) return;
+        throw e;
+      }
+      let newEmpId: string;
+      try {
+        newEmpId = await allocateNextEmpId();
+      } catch (e) {
+        if (sendHrEmployeeRuleError(res, e)) return;
+        throw e;
+      }
+      await db
+        .update(employees)
+        .set({ empId: newEmpId, status: "Active", updatedAt: now() })
+        .where(eq(employees.id, id));
+      const [row] = await db.select().from(employees).where(eq(employees.id, id));
+      if (row) {
+        writeAuditLog(req, { module: "HR", action: "Approve", recordId: id, beforeValue: emp, afterValue: row }).catch((e) =>
+          console.error("Audit log failed:", e),
+        );
+      }
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to approve employee registration");
+    }
+  });
+
   app.put("/api/hr/employees/:id", async (req, res) => {
     try {
       const id = req.params.id;
       const [beforeEmp] = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
       if (!beforeEmp) return sendApiError(res, 404, "HR_EMPLOYEE_NOT_FOUND", "Employee not found");
       const body = req.body;
-      const updates: Record<string, unknown> = { updatedAt: now() };
-      const allowed = ["firstName", "middleName", "surname", "photoUrl", "designation", "yardId", "employeeType", "aadhaarToken", "pan", "dob", "joiningDate", "retirementDate", "mobile", "workEmail", "status", "userId", "empId"];
-      for (const key of allowed) {
-        if (body[key] !== undefined) updates[key === "empId" ? "empId" : key] = body[key] === null ? null : String(body[key]);
+      if (body.empId !== undefined) {
+        return sendApiError(res, 400, "HR_EMP_EMPID_READONLY", "Employee ID is assigned only through DA approval (Approve registration).");
       }
-      if (body.retirementDate !== undefined) updates.retirementDate = body.retirementDate;
+
+      const updates: Record<string, unknown> = { updatedAt: now() };
+      const allowed = [
+        "firstName",
+        "middleName",
+        "surname",
+        "photoUrl",
+        "designation",
+        "yardId",
+        "employeeType",
+        "aadhaarToken",
+        "pan",
+        "dob",
+        "joiningDate",
+        "retirementDate",
+        "mobile",
+        "workEmail",
+        "personalEmail",
+        "status",
+      ];
+      for (const key of allowed) {
+        if (body[key] === undefined) continue;
+        if (key === "personalEmail") {
+          updates.personalEmail =
+            body.personalEmail === null || String(body.personalEmail).trim() === ""
+              ? null
+              : String(body.personalEmail).trim().toLowerCase();
+          continue;
+        }
+        updates[key] = body[key] === null ? null : String(body[key]);
+      }
+
+      const merged: typeof beforeEmp = { ...beforeEmp };
+      for (const k of Object.keys(updates)) {
+        if (k === "updatedAt") continue;
+        (merged as Record<string, unknown>)[k] = updates[k];
+      }
+      const newStatus = (updates.status !== undefined ? String(updates.status) : beforeEmp.status) as string;
+      if (isDraftOrSubmitted(beforeEmp.status) && newStatus === "Active") {
+        return sendApiError(
+          res,
+          400,
+          "HR_EMP_ACTIVE_VIA_APPROVE",
+          "Cannot set status to Active from Draft/Submitted here. Use Approve registration (DA) to assign EMP-ID and activate.",
+        );
+      }
+
+      let panNorm: string | null;
+      let aadhaarMasked: string | null;
+      let personalEmailNorm: string | null;
+      try {
+        personalEmailNorm =
+          merged.personalEmail != null && String(merged.personalEmail).trim() !== ""
+            ? String(merged.personalEmail).trim().toLowerCase()
+            : null;
+        assertPersonalEmailFormat(personalEmailNorm);
+        panNorm = normalizePan(merged.pan);
+        aadhaarMasked = normalizeAadhaarMasked(merged.aadhaarToken);
+        assertJoiningAndDob(merged.joiningDate, merged.dob);
+        await assertEmployeeUniqueness({
+          pan: panNorm,
+          aadhaarMasked,
+          personalEmail: personalEmailNorm,
+          excludeEmployeeId: id,
+        });
+      } catch (e) {
+        if (sendHrEmployeeRuleError(res, e)) return;
+        throw e;
+      }
+
+      const setPayload = { ...updates, pan: panNorm, aadhaarToken: aadhaarMasked, personalEmail: personalEmailNorm } as Record<
+        string,
+        string | null
+      >;
 
       const terminalStatuses = ["Inactive", "Retired", "Suspended", "Resigned"];
       await db.transaction(async (tx) => {
-        await tx.update(employees).set(updates as Record<string, string | null>).where(eq(employees.id, id));
+        await tx.update(employees).set(setPayload).where(eq(employees.id, id));
         const [after] = await tx
           .select({ status: employees.status, userId: employees.userId })
           .from(employees)
@@ -552,9 +810,14 @@ export function registerHrRoutes(app: Express) {
   app.get("/api/hr/claims/tada", async (req, res) => {
     try {
       const employeeId = req.query.employeeId as string | undefined;
-      const list = employeeId
+      const pendingMyAction =
+        req.query.pendingMyAction === "1" || String(req.query.pendingMyAction ?? "").toLowerCase() === "true";
+      let list = employeeId
         ? await db.select().from(taDaClaims).where(eq(taDaClaims.employeeId, employeeId)).orderBy(desc(taDaClaims.travelDate))
         : await db.select().from(taDaClaims).orderBy(desc(taDaClaims.travelDate));
+      if (pendingMyAction) {
+        list = list.filter((row) => taDaClaimAwaitingMyAction(req.user, row));
+      }
       res.json(list);
     } catch (e) {
       console.error(e);
@@ -564,6 +827,14 @@ export function registerHrRoutes(app: Express) {
 
   app.post("/api/hr/claims/tada", async (req, res) => {
     try {
+      if (!canCreateTaDaClaim(req.user)) {
+        return sendApiError(
+          res,
+          403,
+          "TADA_CREATE_DENIED",
+          "Only Data Originator or Admin can create TA/DA claims",
+        );
+      }
       const body = req.body;
       const id = nanoid();
       await db.insert(taDaClaims).values({
@@ -572,7 +843,14 @@ export function registerHrRoutes(app: Express) {
         travelDate: String(body.travelDate ?? ""),
         purpose: String(body.purpose ?? ""),
         amount: Number(body.amount ?? 0),
-        status: String(body.status ?? "Pending"),
+        status: "Pending",
+        doUser: req.user?.id ?? null,
+        dvUser: null,
+        approvedBy: null,
+        rejectionReasonCode: null,
+        rejectionRemarks: null,
+        workflowRevisionCount: 0,
+        dvReturnRemarks: null,
       });
       const [row] = await db.select().from(taDaClaims).where(eq(taDaClaims.id, id));
       if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -580,6 +858,111 @@ export function registerHrRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create TA/DA claim");
+    }
+  });
+
+  app.put("/api/hr/claims/tada/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const [existing] = await db.select().from(taDaClaims).where(eq(taDaClaims.id, id));
+      if (!existing) {
+        return sendApiError(res, 404, "TADA_CLAIM_NOT_FOUND", "TA/DA claim not found");
+      }
+      const body = req.body;
+      const newStatus = body.status !== undefined ? String(body.status) : existing.status;
+      const statusChange = newStatus !== existing.status;
+      const transition = statusChange ? canTransitionTaDaClaim(req.user, existing.status, newStatus) : null;
+
+      let claimRejection: { code: string; remarks: string } | null = null;
+      let dvReturnRemarks: string | null = null;
+      if (statusChange) {
+        if (!transition?.allowed) {
+          return sendApiError(
+            res,
+            403,
+            "TADA_STATUS_TRANSITION_DENIED",
+            `You cannot change status from ${existing.status} to ${newStatus}. DV verifies; DA approves or rejects.`,
+          );
+        }
+        const segRec = {
+          doUser: existing.doUser,
+          dvUser: existing.dvUser,
+          daUser: null as string | null,
+        };
+        if (transition.setDvUser) {
+          const seg = assertSegregationDoDvDa(req.user, segRec, { setDvUser: true });
+          if (!seg.ok) return sendApiError(res, 403, "TADA_DO_DV_DA_SEGREGATION", seg.error);
+        }
+        if (transition.setApprovedBy) {
+          const seg = assertSegregationDoDvDa(req.user, segRec, { setDaUser: true });
+          if (!seg.ok) return sendApiError(res, 403, "TADA_DO_DV_DA_SEGREGATION", seg.error);
+        }
+        if (transition.setApprovedBy && req.user?.id) {
+          const [emp] = await db.select().from(employees).where(eq(employees.id, existing.employeeId)).limit(1);
+          if (emp?.userId === req.user.id) {
+            return sendApiError(
+              res,
+              403,
+              "TADA_SELF_APPROVE_REJECT_DENIED",
+              "You cannot approve or reject your own TA/DA claim.",
+            );
+          }
+        }
+        if (newStatus === "Rejected") {
+          const rej = validateDaRejection(body as Record<string, unknown>);
+          if (!rej.ok) return sendApiError(res, 400, "TADA_DA_REJECTION_INVALID", rej.error);
+          claimRejection = { code: rej.code, remarks: rej.remarks };
+        }
+        if (existing.status === "Verified" && newStatus === "Pending") {
+          const ret = validateDvReturnToDraft(body as Record<string, unknown>);
+          if (!ret.ok) return sendApiError(res, 400, "TADA_DV_RETURN_INVALID", ret.error);
+          dvReturnRemarks = ret.remarks;
+        }
+      } else {
+        if (["Approved", "Rejected"].includes(existing.status)) {
+          return sendApiError(res, 403, "TADA_TERMINAL_NO_EDIT", "Approved or rejected TA/DA claims cannot be edited");
+        }
+        if (existing.status !== "Pending") {
+          return sendApiError(res, 403, "TADA_EDIT_DENIED", "Only pending TA/DA claims can be edited");
+        }
+        if (!canCreateTaDaClaim(req.user)) {
+          return sendApiError(res, 403, "TADA_EDIT_DENIED", "Only Data Originator or Admin can edit a pending TA/DA claim");
+        }
+      }
+
+      const updates: Record<string, unknown> = {};
+      if (body.status !== undefined) updates.status = body.status;
+      if (transition?.setDvUser) updates.dvUser = req.user?.id ?? null;
+      if (transition?.setApprovedBy) updates.approvedBy = req.user?.id ?? null;
+      if (dvReturnRemarks !== null) {
+        updates.dvReturnRemarks = dvReturnRemarks;
+        updates.workflowRevisionCount = Number(existing.workflowRevisionCount ?? 0) + 1;
+        updates.dvUser = null;
+        updates.approvedBy = null;
+      }
+      if (claimRejection) {
+        updates.rejectionReasonCode = claimRejection.code;
+        updates.rejectionRemarks = claimRejection.remarks;
+      }
+      if (statusChange && newStatus === "Approved") {
+        updates.rejectionReasonCode = null;
+        updates.rejectionRemarks = null;
+      }
+      ["travelDate", "purpose", "amount"].forEach((k) => {
+        if (body[k] !== undefined) {
+          updates[k] = k === "amount" ? Number(body[k]) : String(body[k]);
+        }
+      });
+      await db.update(taDaClaims).set(updates as Record<string, string | number | null>).where(eq(taDaClaims.id, id));
+      const [row] = await db.select().from(taDaClaims).where(eq(taDaClaims.id, id));
+      if (!row) return sendApiError(res, 404, "TADA_CLAIM_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "HR", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update TA/DA claim");
     }
   });
 

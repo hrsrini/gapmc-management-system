@@ -68,11 +68,15 @@ interface DetailResponse {
   canComment: boolean;
 }
 
-interface AdminUser {
+interface EmployeeAssignee {
   id: string;
-  name: string;
-  email: string;
-  isActive?: boolean | null;
+  userId: string | null;
+  firstName: string;
+  middleName?: string | null;
+  surname: string;
+  empId?: string | null;
+  workEmail?: string | null;
+  status: string;
 }
 
 export default function BugDetail() {
@@ -87,8 +91,8 @@ export default function BugDetail() {
     enabled: Boolean(id),
   });
 
-  const { data: adminUsers } = useQuery<AdminUser[]>({
-    queryKey: ["/api/admin/users"],
+  const { data: employees = [] } = useQuery<EmployeeAssignee[]>({
+    queryKey: ["/api/hr/employees"],
     enabled: isAdmin,
   });
 
@@ -138,9 +142,15 @@ export default function BugDetail() {
   });
 
   const assigneeOptions = useMemo(() => {
-    const list = (adminUsers ?? []).filter((u) => u.isActive !== false);
-    return list.map((u) => ({ id: u.id, label: `${u.name} (${u.email})` }));
-  }, [adminUsers]);
+    return employees
+      .filter((e) => e.userId && e.status === "Active")
+      .map((e) => {
+        const name = [e.firstName, e.middleName, e.surname].filter(Boolean).join(" ");
+        const tag = e.empId ?? e.id;
+        const email = e.workEmail ? ` · ${e.workEmail}` : "";
+        return { id: e.userId!, label: `${name} (${tag})${email}` };
+      });
+  }, [employees]);
 
   if (isError || !id) {
     return (
@@ -244,7 +254,7 @@ export default function BugDetail() {
             <CardHeader>
               <CardTitle className="text-base">Admin — manage ticket</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Update status, assignee, and resolution notes. Users are notified via the ticket view.
+                Update status, assignee, and resolution notes. Assignees are employees with an active app login (HR → Login &amp; roles).
               </p>
             </CardHeader>
             <CardContent className="space-y-4">

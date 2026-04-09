@@ -1,5 +1,6 @@
 /**
  * Payment gateway pluggable adapter (stub default). Set PAYMENT_GATEWAY_MODE=stub|none.
+ * Client Phase 1: cash and cheque only; electronic gateways stay pending until confirmed.
  * Wire a real provider (SBI ePay / NSDL / etc.) by extending createGatewayAdapter when keys are set.
  */
 export type GatewayMode = "stub" | "none";
@@ -19,7 +20,7 @@ function envMode(): GatewayMode {
 const stubAdapter: PaymentGatewayAdapter = {
   mode: "stub",
   describe() {
-    return "stub (no live capture; receipts created internally)";
+    return "stub — Phase 1: cash/cheque in-app; no live gateway capture yet";
   },
 };
 

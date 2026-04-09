@@ -28,7 +28,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
-import { UserCircle, ArrowLeft, BookOpen, AlertCircle, Plus, Loader2, FileSignature } from "lucide-react";
+import { fetchApiGet } from "@/lib/queryClient";
+import { UserCircle, ArrowLeft, BookOpen, AlertCircle, Plus, Loader2, FileSignature, KeyRound } from "lucide-react";
+import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
 
 const SERVICE_BOOK_SECTIONS = ["History", "Appendix", "AuditComments", "Verification", "CertMutable", "CertImmutable"];
 
@@ -45,6 +47,8 @@ interface Employee {
   status: string;
   mobile?: string | null;
   workEmail?: string | null;
+  personalEmail?: string | null;
+  aadhaarToken?: string | null;
   dob?: string | null;
   pan?: string | null;
   retirementDate?: string | null;
@@ -77,9 +81,12 @@ export default function HrEmployeeDetail() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const canUpdate = can("M-01", "Update");
   const canCreate = can("M-01", "Create");
+  const canM10Read = can("M-10", "Read");
+  const canApproveRegistration =
+    can("M-01", "Approve") || Boolean(user?.roles?.some((r) => r.tier === "DA" || r.tier === "ADMIN"));
   const [sbOpen, setSbOpen] = useState(false);
   const [section, setSection] = useState("History");
   const [contentText, setContentText] = useState("");
@@ -106,6 +113,34 @@ export default function HrEmployeeDetail() {
     queryKey: ["/api/yards"],
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+
+  const loginProfileUrl = id ? `/api/hr/employees/${id}/login-profile` : "";
+  const { data: loginProfile } = useQuery<{ login: { id: string; email: string; isActive: boolean; roles?: { id: string; name: string; tier: string }[] } | null }>({
+    queryKey: [loginProfileUrl],
+    queryFn: () => fetchApiGet(loginProfileUrl),
+    enabled: Boolean(id) && canM10Read,
+  });
+  const linkedLogin = loginProfile?.login ?? undefined;
+
+  const approveRegistrationMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/hr/employees/${id}/approve-registration`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return (await res.json()) as Employee;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/employees", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
+      toast({ title: "Registration approved", description: "Official EMP-ID assigned and status set to Active." });
+    },
+    onError: (e: Error) => toast({ title: "Approval failed", description: e.message, variant: "destructive" }),
+  });
 
   const addSbMutation = useMutation({
     mutationFn: async (body: { section: string; content: Record<string, unknown>; status: string }) => {
@@ -208,16 +243,42 @@ export default function HrEmployeeDetail() {
   }
 
   const fullName = [employee.firstName, employee.middleName, employee.surname].filter(Boolean).join(" ");
+  const displayEmpId =
+    employee.empId ??
+    (employee.status === "Draft" || employee.status === "Submitted" ? null : employee.id);
+  const hasOfficialEmpId = /^EMP-\d{3}$/i.test((employee.empId ?? "").trim());
+  const showApproveRegistration =
+    Boolean(id) &&
+    canApproveRegistration &&
+    (employee.status === "Draft" ||
+      employee.status === "Submitted" ||
+      (employee.status === "Active" && !hasOfficialEmpId));
 
   return (
-    <AppShell breadcrumbs={[{ label: "HR", href: "/hr/employees" }, { label: employee.empId ?? fullName }]}>
+    <AppShell
+      breadcrumbs={[
+        { label: "HR", href: "/hr/employees" },
+        { label: displayEmpId ? `${displayEmpId} — ${fullName}` : fullName },
+      ]}
+    >
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="flex items-center gap-2">
             <UserCircle className="h-5 w-5" />
-            {employee.empId ?? employee.id} — {fullName}
+            {displayEmpId ? `${displayEmpId} — ${fullName}` : fullName}
           </CardTitle>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 justify-end">
+            {showApproveRegistration && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={approveRegistrationMutation.isPending}
+                onClick={() => approveRegistrationMutation.mutate()}
+              >
+                {approveRegistrationMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Approve registration (EMP-ID)
+              </Button>
+            )}
             {canUpdate && (
               <Button variant="outline" size="sm" asChild>
                 <Link href={`/hr/employees/${id}/edit`}>Edit</Link>
@@ -229,6 +290,11 @@ export default function HrEmployeeDetail() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {(employee.status === "Draft" || employee.status === "Submitted") && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100">
+              Registration is <span className="font-medium">{employee.status}</span>. Official EMP-ID is assigned when a Data Approver approves (BR-EMP-06).
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Designation</span><br />{employee.designation}</div>
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[employee.yardId] ?? employee.yardId}</div>
@@ -237,14 +303,56 @@ export default function HrEmployeeDetail() {
             <div><span className="text-muted-foreground">Joining date</span><br />{employee.joiningDate}</div>
             <div><span className="text-muted-foreground">DOB</span><br />{employee.dob ?? "—"}</div>
             <div><span className="text-muted-foreground">Mobile</span><br />{employee.mobile ?? "—"}</div>
-            <div><span className="text-muted-foreground">Email</span><br />{employee.workEmail ?? "—"}</div>
+            <div><span className="text-muted-foreground">Work email</span><br />{employee.workEmail ?? "—"}</div>
+            <div><span className="text-muted-foreground">Personal email</span><br />{employee.personalEmail ?? "—"}</div>
+            <div><span className="text-muted-foreground">PAN</span><br />{employee.pan ?? "—"}</div>
+            <div><span className="text-muted-foreground">Aadhaar (masked)</span><br />{employee.aadhaarToken ?? "—"}</div>
             {employee.retirementDate && <div><span className="text-muted-foreground">Retirement</span><br />{employee.retirementDate}</div>}
           </div>
 
+          {canM10Read && (
+            <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
+              <div className="font-medium text-foreground mb-1 flex items-center gap-2">
+                <KeyRound className="h-4 w-4" />
+                App login &amp; roles (IOMS M-10)
+              </div>
+              {linkedLogin ? (
+                <div className="space-y-2 text-muted-foreground">
+                  <div>
+                    <span className="text-muted-foreground">Sign-in</span>
+                    <span className="text-foreground ml-2 font-mono text-xs">{linkedLogin.email}</span>
+                    <Badge variant={linkedLogin.isActive ? "default" : "secondary"} className="ml-2">
+                      {linkedLogin.isActive ? "Active" : "Inactive"}
+                    </Badge>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-muted-foreground shrink-0">Roles</span>
+                    {(linkedLogin.roles?.length ?? 0) > 0 ? (
+                      linkedLogin.roles!.map((r) => (
+                        <Badge key={r.id} variant="outline" className="font-normal text-xs">
+                          {r.name}
+                          <span className="text-muted-foreground ml-1">({r.tier})</span>
+                        </Badge>
+                      ))
+                    ) : (
+                      <span className="text-amber-700 dark:text-amber-400">No roles — user cannot use modules until you assign at least one.</span>
+                    )}
+                  </div>
+                  <p className="text-xs">To change password, yards, or role checkboxes, open the <span className="font-medium text-foreground">Login &amp; roles</span> tab below.</p>
+                </div>
+              ) : (
+                <p className="text-muted-foreground">
+                  No application login linked to this employee yet. Open the <span className="font-medium text-foreground">Login &amp; roles</span> tab to enable sign-in and map roles and locations.
+                </p>
+              )}
+            </div>
+          )}
+
           <Tabs defaultValue="servicebook">
-            <TabsList>
+            <TabsList className="flex-wrap h-auto gap-1">
               <TabsTrigger value="servicebook"><BookOpen className="h-4 w-4 mr-2" /> Service book ({serviceBook.length})</TabsTrigger>
               <TabsTrigger value="contracts"><FileSignature className="h-4 w-4 mr-2" /> Contracts ({contracts.length})</TabsTrigger>
+              <TabsTrigger value="access"><KeyRound className="h-4 w-4 mr-2" /> Login &amp; roles</TabsTrigger>
             </TabsList>
             <TabsContent value="servicebook" className="pt-2">
               {canCreate && (
@@ -365,6 +473,14 @@ export default function HrEmployeeDetail() {
                   </TableBody>
                 </Table>
               )}
+            </TabsContent>
+            <TabsContent value="access" className="pt-2">
+              <EmployeeLoginAccessSection
+                employeeId={employee.id}
+                employeeStatus={employee.status}
+                displayName={fullName}
+                workEmail={employee.workEmail}
+              />
             </TabsContent>
           </Tabs>
         </CardContent>

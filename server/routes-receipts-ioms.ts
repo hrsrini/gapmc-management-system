@@ -2,7 +2,7 @@
  * IOMS M-05: Receipts Online — central receipt engine.
  * Receipt numbers: GAPLMB/[LOC]/[FY]/[HEAD]/[NNN]
  */
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import QRCode from "qrcode";
 import { db } from "./db";
@@ -11,6 +11,25 @@ import { nanoid } from "nanoid";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import { tenantLicenceIsGstExempt } from "./gst-exempt";
+import { verifyPaymentWebhookHmac } from "./payment-webhook-hmac";
+
+/** Phase 1 (client): in-app cash / cheque (+ DD); electronic gateway later. */
+const PHASE1_PAYMENT_MODES = new Set(["Cash", "Cheque", "DD"]);
+
+class ReceiptPaymentModeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReceiptPaymentModeError";
+  }
+}
+
+function assertPhase1PaymentMode(mode: string): void {
+  if (process.env.RECEIPT_ALLOW_ANY_PAYMENT_MODE === "true") return;
+  const m = String(mode ?? "").trim();
+  if (!PHASE1_PAYMENT_MODES.has(m)) {
+    throw new ReceiptPaymentModeError(`Phase 1: paymentMode must be Cash, Cheque, or DD (got "${m || "empty"}").`);
+  }
+}
 
 const REVENUE_HEAD_CODES: Record<string, string> = {
   Rent: "RENT",
@@ -80,6 +99,7 @@ export async function createIomsReceipt(params: {
   sourceRecordId?: string;
   createdBy: string;
 }): Promise<{ id: string; receiptNo: string }> {
+  assertPhase1PaymentMode(params.paymentMode);
   const totalAmount = params.amount + (params.cgst ?? 0) + (params.sgst ?? 0);
   const receiptNo = await generateNextReceiptNo(params.yardId, params.revenueHead);
   const id = nanoid();
@@ -223,6 +243,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
       if (!yardId || !revenueHead || !Number.isFinite(amount) || amount < 0) {
         return sendApiError(res, 400, "RECEIPT_CREATE_FIELDS_REQUIRED", "yardId, revenueHead, amount (number) required");
       }
+      assertPhase1PaymentMode(String(body.paymentMode ?? "Cash"));
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
         return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "You do not have access to this yard");
@@ -253,7 +274,10 @@ export function registerReceiptsIomsRoutes(app: Express) {
       const [row] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, result.id));
       if (row) writeAuditLog(req, { module: "Receipts", action: "Create", recordId: result.id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(result);
-    } catch (e) {
+    } catch (e: unknown) {
+      if (e instanceof ReceiptPaymentModeError) {
+        return sendApiError(res, 400, "RECEIPT_PAYMENT_MODE_INVALID", e.message);
+      }
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create receipt");
     }
@@ -272,8 +296,36 @@ export function registerReceiptsIomsRoutes(app: Express) {
       const body = req.body as Record<string, unknown>;
       const status = body.status as string;
       const gatewayRef = body.gatewayRef as string | undefined;
-      if (status !== "Paid" && status !== "Failed" && status !== "Reconciled") {
-        return sendApiError(res, 400, "RECEIPT_STATUS_INVALID", "status must be Paid, Failed, or Reconciled");
+      const dishonourReason =
+        typeof body.dishonourReason === "string" && body.dishonourReason.trim()
+          ? body.dishonourReason.trim()
+          : undefined;
+      if (status !== "Paid" && status !== "Failed" && status !== "Reconciled" && status !== "Reversed") {
+        return sendApiError(
+          res,
+          400,
+          "RECEIPT_STATUS_INVALID",
+          "status must be Paid, Failed, Reconciled, or Reversed",
+        );
+      }
+      if (status === "Reversed") {
+        const mode = String(existing.paymentMode ?? "");
+        if (mode !== "Cheque" && mode !== "DD") {
+          return sendApiError(
+            res,
+            400,
+            "RECEIPT_CHEQUE_DISHONOUR_INVALID",
+            "Only Cheque or DD receipts can be marked Reversed (dishonour).",
+          );
+        }
+        if (existing.status !== "Paid" && existing.status !== "Reconciled") {
+          return sendApiError(
+            res,
+            400,
+            "RECEIPT_CHEQUE_DISHONOUR_INVALID",
+            "Receipt must be Paid or Reconciled before dishonour reversal.",
+          );
+        }
       }
       await db
         .update(iomsReceipts)
@@ -284,7 +336,21 @@ export function registerReceiptsIomsRoutes(app: Express) {
         .where(eq(iomsReceipts.id, id));
       const [row] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, id));
       if (!row) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
-      writeAuditLog(req, { module: "Receipts", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      const afterForAudit =
+        status === "Reversed"
+          ? {
+              ...row,
+              ...(dishonourReason ? { dishonourReason } : {}),
+              rentRecomputationNote: "Pending GAPMB interest formula and rent re-run.",
+            }
+          : row;
+      writeAuditLog(req, {
+        module: "Receipts",
+        action: status === "Reversed" ? "ChequeDishonour" : "Update",
+        recordId: id,
+        beforeValue: existing,
+        afterValue: afterForAudit,
+      }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
@@ -296,6 +362,14 @@ export function registerReceiptsIomsRoutes(app: Express) {
   // Real provider webhooks can be wired later; for now this creates a gateway log and allows marking success/failure.
   app.post("/api/ioms/receipts/:id/payments/initiate", async (req, res) => {
     try {
+      if (process.env.PAYMENT_GATEWAY_INIT_ENABLED !== "true") {
+        return sendApiError(
+          res,
+          403,
+          "RECEIPT_GATEWAY_DISABLED",
+          "Phase 1: record payments as Cash, Cheque, or DD. Electronic payment initiation is disabled until the gateway is enabled (set PAYMENT_GATEWAY_INIT_ENABLED=true).",
+        );
+      }
       const receiptId = req.params.id;
       const { gateway } = (req.body ?? {}) as Record<string, unknown>;
 
@@ -335,6 +409,10 @@ export function registerReceiptsIomsRoutes(app: Express) {
 
   app.post("/api/ioms/receipts/payments/callback", async (req, res) => {
     try {
+      const hmac = verifyPaymentWebhookHmac(req as Request & { rawBody?: Buffer });
+      if (!hmac.ok) {
+        return sendApiError(res, 401, "PAYMENT_WEBHOOK_HMAC_INVALID", hmac.reason);
+      }
       const body = req.body as Record<string, unknown>;
       const gatewayTxnId = body.gatewayTxnId ? String(body.gatewayTxnId) : null;
       const status = body.status ? String(body.status) : null; // Paid | Failed | Reconciled

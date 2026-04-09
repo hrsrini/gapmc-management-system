@@ -53,7 +53,7 @@ export default function AdminConfig() {
 
   if (isError) {
     return (
-      <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/users" }, { label: "Config" }]}>
+      <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "Config" }]}>
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
@@ -65,7 +65,7 @@ export default function AdminConfig() {
   }
 
   return (
-    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/users" }, { label: "Default Values" }]}>
+    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "Default Values" }]}>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

@@ -59,7 +59,7 @@ export default function AdminAudit() {
 
   if (isError) {
     return (
-      <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/users" }, { label: "Audit Log" }]}>
+      <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "Audit Log" }]}>
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
@@ -71,7 +71,7 @@ export default function AdminAudit() {
   }
 
   return (
-    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/users" }, { label: "Audit Log" }]}>
+    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "Audit Log" }]}>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

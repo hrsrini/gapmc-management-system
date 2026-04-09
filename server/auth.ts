@@ -6,12 +6,17 @@ import type { Request, Response, NextFunction } from "express";
 import { sendApiError } from "./api-errors";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { users, userRoles, roles, userYards, rolePermissions, permissions } from "@shared/db-schema";
+import { users, employees, userRoles, roles, userYards, rolePermissions, permissions } from "@shared/db-schema";
+import { ensureEmployeeRecordForUser } from "./ensure-user-employee";
 
 export interface AuthUser {
   id: string;
   email: string;
   name: string;
+  /** Employee master row (SRS §1.4); required for every app user. */
+  employeeId: string;
+  /** Human-readable employee code from master, when set. */
+  employeeEmpId: string | null;
   roles: { id: string; tier: string; name: string }[];
   yardIds: string[];
   /** Resolved from role_permissions + permissions; used for permission checks. */
@@ -35,6 +40,7 @@ declare module "express-session" {
 
 /** M-05: public receipt verification page + QR image (no login). */
 export function isPublicReceiptVerificationPath(path: string, method: string): boolean {
+  if (process.env.PUBLIC_RECEIPT_VERIFY_ENABLED === "false") return false;
   if (method !== "GET") return false;
   if (path.startsWith("/api/ioms/receipts/verify/")) return true;
   if (path === "/api/ioms/receipts/public/qr") return true;
@@ -49,8 +55,24 @@ function isPublicApi(path: string, method: string): boolean {
 }
 
 export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
+  await ensureEmployeeRecordForUser(userId);
   const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!user || !user.isActive) return null;
+  if (!user.employeeId) {
+    console.warn(
+      `[auth] User ${userId} has no employee_id after ensure (e.g. no locations in DB); session denied.`,
+    );
+    return null;
+  }
+  const [emp] = await db
+    .select({ id: employees.id, empId: employees.empId })
+    .from(employees)
+    .where(eq(employees.id, user.employeeId))
+    .limit(1);
+  if (!emp) {
+    console.warn(`[auth] User ${userId} points to missing employee ${user.employeeId}; session denied.`);
+    return null;
+  }
   const roleRows = await db
     .select({ roleId: userRoles.roleId, tier: roles.tier, name: roles.name })
     .from(userRoles)
@@ -84,6 +106,8 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
     id: user.id,
     email: user.email,
     name: user.name,
+    employeeId: user.employeeId,
+    employeeEmpId: emp.empId ?? null,
     roles: roleRows.map((r) => ({ id: r.roleId, tier: r.tier, name: r.name })),
     yardIds: yardRows.map((y) => y.yardId),
     permissions: permList,
@@ -228,6 +252,17 @@ export function requireModulePermissionByPath(req: Request, res: Response, next:
     return;
   }
   if (req.user.roles.some((r) => r.tier === "ADMIN")) return next();
+  // M-01 BR-EMP-06: DA assigns EMP-NNN via dedicated route (POST would otherwise require M-01:Create).
+  if (
+    req.method === "POST" &&
+    /^\/api\/hr\/employees\/[^/]+\/approve-registration$/.test(req.path)
+  ) {
+    if (req.user.roles.some((r) => r.tier === "DA") || hasPermission(req.user, "M-01", "Approve")) {
+      return next();
+    }
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-01:Approve or DA role" });
+    return;
+  }
   const action = METHOD_TO_ACTION[req.method] ?? "Read";
   if (!hasPermission(req.user, module, action)) {
     sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: `${module}:${action}` });

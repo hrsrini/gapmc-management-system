@@ -1,11 +1,11 @@
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { FileCheck, AlertCircle } from "lucide-react";
+import { ReportDataTable, type ReportPagedParams } from "@/components/reports/ReportDataTable";
 
 interface Licence {
   id: string;
@@ -20,14 +20,88 @@ interface Licence {
   isBlocked?: boolean;
 }
 
+interface PagedResponse {
+  total: number;
+  page: number;
+  pageSize: number | "all";
+  rows: Licence[];
+}
+
 export default function TraderLicences() {
-  const { data: licences, isLoading, isError } = useQuery<Licence[]>({
-    queryKey: ["/api/ioms/traders/licences"],
+  const [tableParams, setTableParams] = useState<ReportPagedParams>({
+    page: 1,
+    pageSize: 25,
+    q: "",
   });
+
+  const mergeParams = useCallback((next: Partial<ReportPagedParams>) => {
+    setTableParams((s) => ({ ...s, ...next }));
+  }, []);
+
+  const listUrl = useMemo(() => {
+    const sp = new URLSearchParams({
+      paged: "1",
+      page: String(tableParams.page),
+      pageSize: String(tableParams.pageSize),
+      q: tableParams.q,
+    });
+    return `/api/ioms/traders/licences?${sp}`;
+  }, [tableParams]);
+
   const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ["/api/yards"],
   });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const yardById = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, y.name])), [yards]);
+
+  const { data, isLoading, isError } = useQuery<PagedResponse>({
+    queryKey: [listUrl],
+    queryFn: async () => {
+      const res = await fetch(listUrl, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load");
+      return res.json() as Promise<PagedResponse>;
+    },
+  });
+
+  const columns = useMemo(
+    () => [
+      { key: "_licenceLink", header: "Licence no." },
+      { key: "_firmLink", header: "Firm" },
+      { key: "licenceType", header: "Type" },
+      { key: "yardDisplay", header: "Yard" },
+      { key: "mobile", header: "Mobile" },
+      { key: "validTo", header: "Valid To" },
+      { key: "_status", header: "Status" },
+    ],
+    [],
+  );
+
+  const rowsForTable = useMemo(() => {
+    return (data?.rows ?? []).map((l) => {
+      const id = l.id;
+      return {
+        id,
+        _licenceLink: (
+          <Link href={`/traders/licences/${id}`} className="text-primary hover:underline font-mono text-sm">
+            {l.licenceNo ?? id}
+          </Link>
+        ),
+        _firmLink: (
+          <Link href={`/traders/licences/${id}`} className="text-primary hover:underline">
+            {l.firmName}
+          </Link>
+        ),
+        licenceType: l.licenceType,
+        yardDisplay: yardById[l.yardId] ?? l.yardId,
+        mobile: l.mobile,
+        validTo: l.validTo ?? "—",
+        _status: (
+          <Badge variant={l.isBlocked ? "destructive" : l.status === "Active" ? "default" : "secondary"}>
+            {l.isBlocked ? "Blocked" : l.status}
+          </Badge>
+        ),
+      } as Record<string, unknown>;
+    });
+  }, [data?.rows, yardById]);
 
   if (isError) {
     return (
@@ -50,48 +124,21 @@ export default function TraderLicences() {
             <FileCheck className="h-5 w-5" />
             Trader Licences (M-02)
           </CardTitle>
-          <p className="text-sm text-muted-foreground">IOMS licence lifecycle — Associated, Functionary, Hamali, Weighman, Assistant.</p>
+          <p className="text-sm text-muted-foreground">
+            IOMS licence lifecycle — Associated, Functionary, Hamali, Weighman, Assistant. Search by trader name,
+            licence number, or mobile; use pagination for large lists.
+          </p>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
-            <Skeleton className="h-64 w-full" />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Licence No</TableHead>
-                  <TableHead>Firm</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Valid To</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(licences ?? []).map((l) => (
-                  <TableRow key={l.id}>
-                    <TableCell className="font-mono text-sm">
-                      <Link href={`/traders/licences/${l.id}`} className="text-primary hover:underline">{l.licenceNo ?? l.id}</Link>
-                    </TableCell>
-                    <TableCell>
-                      <Link href={`/traders/licences/${l.id}`} className="text-primary hover:underline">{l.firmName}</Link>
-                    </TableCell>
-                    <TableCell>{l.licenceType}</TableCell>
-                    <TableCell>{yardById[l.yardId] ?? l.yardId}</TableCell>
-                    <TableCell>{l.validTo ?? "—"}</TableCell>
-                    <TableCell>
-                      <Badge variant={l.isBlocked ? "destructive" : l.status === "Active" ? "default" : "secondary"}>
-                        {l.isBlocked ? "Blocked" : l.status}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!licences || licences.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No IOMS licences. Existing traders are in Trader Directory.</p>
-          )}
+          <ReportDataTable
+            columns={columns}
+            rows={rowsForTable}
+            total={data?.total ?? 0}
+            params={tableParams}
+            onParamsChange={mergeParams}
+            isLoading={isLoading}
+            searchPlaceholder="Search by Name of Trader, License Number, Trader Mobile No."
+          />
         </CardContent>
       </Card>
     </AppShell>

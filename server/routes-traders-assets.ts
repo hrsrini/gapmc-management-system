@@ -4,7 +4,7 @@
  * CC-05: list/get/mutate filtered by req.scopedLocationIds when non-empty.
  */
 import type { Express, Request } from "express";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { eq, desc, and, inArray, sql, or, ilike } from "drizzle-orm";
 import { db } from "./db";
 import {
   traderLicences,
@@ -12,6 +12,8 @@ import {
   assets,
   assetAllotments,
   traderBlockingLog,
+  traderStockOpenings,
+  commodities,
   mspSettings,
   rentInvoices,
   iomsReceipts,
@@ -23,6 +25,7 @@ import { createIomsReceipt } from "./routes-receipts-ioms";
 import { tenantLicenceIsGstExempt } from "./gst-exempt";
 import { assertRecordDoDvDaSeparation } from "./workflow";
 import { sendApiError } from "./api-errors";
+import { parseReportPaging, reportSearchPattern } from "./report-paging";
 
 function yardInScope(req: Request, yardId: string): boolean {
   const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
@@ -37,13 +40,46 @@ export function registerTradersAssetsRoutes(app: Express) {
     try {
       const yardId = req.query.yardId as string | undefined;
       const status = req.query.status as string | undefined;
+      const paged = req.query.paged === "1";
       const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
       const conditions = [];
       if (scopedIds && scopedIds.length > 0) conditions.push(inArray(traderLicences.yardId, scopedIds));
       if (yardId) conditions.push(eq(traderLicences.yardId, yardId));
+      if (status) conditions.push(eq(traderLicences.status, status));
+
+      if (paged) {
+        const { page, pageSize, q } = parseReportPaging(req);
+        const pattern = reportSearchPattern(q);
+        const all = [...conditions];
+        if (pattern) {
+          all.push(
+            or(
+              ilike(traderLicences.licenceNo, pattern),
+              ilike(traderLicences.firmName, pattern),
+              ilike(traderLicences.mobile, pattern),
+              ilike(traderLicences.id, pattern),
+              ilike(traderLicences.email, pattern),
+              ilike(traderLicences.licenceType, pattern),
+              ilike(traderLicences.contactName, pattern),
+              sql`cast(${traderLicences.feeAmount} as text) ilike ${pattern}`,
+            )!,
+          );
+        }
+        const wc = all.length ? and(...all) : undefined;
+        const countQ = db.select({ c: sql<number>`count(*)::int` }).from(traderLicences);
+        const [{ c: total }] = wc ? await countQ.where(wc) : await countQ;
+        const licenceBase = db.select().from(traderLicences);
+        const licenceFiltered = wc ? licenceBase.where(wc) : licenceBase;
+        const dataQ = licenceFiltered.orderBy(desc(traderLicences.createdAt));
+        const rows =
+          pageSize === "all"
+            ? await dataQ
+            : await dataQ.limit(pageSize).offset((page - 1) * pageSize);
+        return res.json({ total, page, pageSize, rows });
+      }
+
       const base = db.select().from(traderLicences).orderBy(desc(traderLicences.createdAt));
-      let list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
-      if (status) list = list.filter((r) => r.status === status);
+      const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
       res.json(list);
     } catch (e) {
       console.error(e);
@@ -60,6 +96,111 @@ export function registerTradersAssetsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch licence");
+    }
+  });
+
+  // ----- Trader stock openings (M-02 legacy opening balance) -----
+  app.get("/api/ioms/traders/licences/:licenceId/stock-openings", async (req, res) => {
+    try {
+      const licenceId = req.params.licenceId;
+      const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, licenceId)).limit(1);
+      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      const list = await db
+        .select()
+        .from(traderStockOpenings)
+        .where(eq(traderStockOpenings.traderLicenceId, licenceId))
+        .orderBy(desc(traderStockOpenings.effectiveDate));
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch stock openings");
+    }
+  });
+
+  app.post("/api/ioms/traders/licences/:licenceId/stock-openings", async (req, res) => {
+    try {
+      const licenceId = req.params.licenceId;
+      const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, licenceId)).limit(1);
+      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      const body = req.body as Record<string, unknown>;
+      const commodityId = String(body.commodityId ?? "");
+      const unit = String(body.unit ?? "");
+      const effectiveDate = String(body.effectiveDate ?? "");
+      const quantity = Number(body.quantity);
+      if (!commodityId || !unit || !effectiveDate || !Number.isFinite(quantity)) {
+        return sendApiError(res, 400, "STOCK_OPENING_FIELDS", "commodityId, unit, effectiveDate, quantity (number) required");
+      }
+      const [com] = await db.select().from(commodities).where(eq(commodities.id, commodityId)).limit(1);
+      if (!com) return sendApiError(res, 400, "STOCK_OPENING_COMMODITY_INVALID", "Commodity not found");
+      const id = nanoid();
+      const ts = now();
+      await db.insert(traderStockOpenings).values({
+        id,
+        traderLicenceId: licenceId,
+        yardId: lic.yardId,
+        commodityId,
+        quantity,
+        unit,
+        effectiveDate,
+        remarks: body.remarks ? String(body.remarks) : null,
+        createdAt: ts,
+        createdBy: req.user?.id ?? null,
+      });
+      const [row] = await db.select().from(traderStockOpenings).where(eq(traderStockOpenings.id, id));
+      if (row) writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      res.status(201).json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create stock opening");
+    }
+  });
+
+  app.put("/api/ioms/traders/stock-openings/:openingId", async (req, res) => {
+    try {
+      const openingId = req.params.openingId;
+      const [existing] = await db.select().from(traderStockOpenings).where(eq(traderStockOpenings.id, openingId)).limit(1);
+      if (!existing) return sendApiError(res, 404, "STOCK_OPENING_NOT_FOUND", "Not found");
+      const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, existing.traderLicenceId)).limit(1);
+      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "STOCK_OPENING_NOT_FOUND", "Not found");
+      const body = req.body as Record<string, unknown>;
+      const updates: Record<string, unknown> = {};
+      if (body.commodityId !== undefined) {
+        const cid = String(body.commodityId);
+        const [com] = await db.select().from(commodities).where(eq(commodities.id, cid)).limit(1);
+        if (!com) return sendApiError(res, 400, "STOCK_OPENING_COMMODITY_INVALID", "Commodity not found");
+        updates.commodityId = cid;
+      }
+      if (body.quantity !== undefined) updates.quantity = Number(body.quantity);
+      if (body.unit !== undefined) updates.unit = String(body.unit);
+      if (body.effectiveDate !== undefined) updates.effectiveDate = String(body.effectiveDate);
+      if (body.remarks !== undefined) updates.remarks = body.remarks == null ? null : String(body.remarks);
+      if (Object.keys(updates).length === 0) {
+        const [row] = await db.select().from(traderStockOpenings).where(eq(traderStockOpenings.id, openingId));
+        return res.json(row!);
+      }
+      await db.update(traderStockOpenings).set(updates as Record<string, string | number | null>).where(eq(traderStockOpenings.id, openingId));
+      const [row] = await db.select().from(traderStockOpenings).where(eq(traderStockOpenings.id, openingId));
+      if (row) writeAuditLog(req, { module: "Traders", action: "Update", recordId: openingId, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      res.json(row!);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update stock opening");
+    }
+  });
+
+  app.delete("/api/ioms/traders/stock-openings/:openingId", async (req, res) => {
+    try {
+      const openingId = req.params.openingId;
+      const [existing] = await db.select().from(traderStockOpenings).where(eq(traderStockOpenings.id, openingId)).limit(1);
+      if (!existing) return sendApiError(res, 404, "STOCK_OPENING_NOT_FOUND", "Not found");
+      const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, existing.traderLicenceId)).limit(1);
+      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "STOCK_OPENING_NOT_FOUND", "Not found");
+      await db.delete(traderStockOpenings).where(eq(traderStockOpenings.id, openingId));
+      writeAuditLog(req, { module: "Traders", action: "Delete", recordId: openingId, beforeValue: existing }).catch((e) => console.error("Audit log failed:", e));
+      res.status(204).send();
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete stock opening");
     }
   });
 
@@ -94,6 +235,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         isBlocked: Boolean(body.isBlocked ?? false),
         blockReason: body.blockReason ? String(body.blockReason) : null,
         govtGstExemptCategoryId: body.govtGstExemptCategoryId ? String(body.govtGstExemptCategoryId) : null,
+        isNonGstEntity: Boolean(body.isNonGstEntity ?? false),
         doUser: body.doUser ? String(body.doUser) : null,
         dvUser: body.dvUser ? String(body.dvUser) : null,
         daUser: body.daUser ? String(body.daUser) : null,
@@ -130,6 +272,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         else updates[k] = body[k] == null ? null : String(body[k]);
       }
       if (body.isBlocked !== undefined) updates.isBlocked = Boolean(body.isBlocked);
+      if (body.isNonGstEntity !== undefined) updates.isNonGstEntity = Boolean(body.isNonGstEntity);
       const mergedRoles = {
         doUser: updates.doUser !== undefined ? (updates.doUser as string | null) : existing.doUser,
         dvUser: updates.dvUser !== undefined ? (updates.dvUser as string | null) : existing.dvUser,
@@ -237,10 +380,34 @@ export function registerTradersAssetsRoutes(app: Express) {
       const body = req.body;
       const ay = String(body.yardId ?? "");
       if (!yardInScope(req, ay)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      const primaryLicenceId = String(body.primaryLicenceId ?? "");
+      const [primary] = await db.select().from(traderLicences).where(eq(traderLicences.id, primaryLicenceId)).limit(1);
+      if (!primary) {
+        return sendApiError(res, 400, "ASSISTANT_PRIMARY_NOT_FOUND", "Primary trader licence not found");
+      }
+      if (!yardInScope(req, primary.yardId)) {
+        return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to the primary licence yard");
+      }
+      if (primary.status !== "Active") {
+        return sendApiError(
+          res,
+          400,
+          "ASSISTANT_PRIMARY_NOT_ACTIVE",
+          "Assistant can only be linked to an Active primary trader licence.",
+        );
+      }
+      if (ay !== primary.yardId) {
+        return sendApiError(
+          res,
+          400,
+          "ASSISTANT_YARD_MISMATCH",
+          "Assistant yard must match the primary trader licence yard.",
+        );
+      }
       const id = nanoid();
       await db.insert(assistantTraders).values({
         id,
-        primaryLicenceId: String(body.primaryLicenceId ?? ""),
+        primaryLicenceId,
         personName: String(body.personName ?? ""),
         yardId: String(body.yardId ?? ""),
         status: String(body.status ?? "Active"),

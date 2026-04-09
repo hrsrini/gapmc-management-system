@@ -1,10 +1,9 @@
 /**
  * IOMS M-10: RBAC & System Administration API routes.
- * All tables in gapmc schema (yards, users, roles, system_config, audit_log).
+ * M-10 admin: yards, roles, permission matrix, config, audit. App logins are managed via HR only (/api/hr/employees/:id/login).
  */
 import type { Express } from "express";
 import { eq, desc, and, sql } from "drizzle-orm";
-import { hash } from "bcryptjs";
 import { db } from "./db";
 import {
   yards,
@@ -17,7 +16,6 @@ import {
   auditLog,
   permissions,
   rolePermissions,
-  employees,
   expenditureHeads,
   tallyLedgers,
 } from "@shared/db-schema";
@@ -26,12 +24,6 @@ import { SYSTEM_CONFIG_KEYS } from "@shared/system-config-defaults";
 import { getMergedSystemConfig } from "./system-config";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
-
-function userSnapshotForAudit(u: Record<string, unknown> | undefined) {
-  if (!u) return undefined;
-  const { passwordHash: _omit, ...rest } = u;
-  return rest;
-}
 
 export function registerAdminRoutes(app: Express) {
   const now = () => new Date().toISOString();
@@ -242,215 +234,7 @@ export function registerAdminRoutes(app: Express) {
     }
   });
 
-  // ----- Users -----
-  app.get("/api/admin/users", async (_req, res) => {
-    try {
-      const list = await db.select().from(users).orderBy(users.name);
-      const roleAssignments = await db
-        .select({
-          userId: userRoles.userId,
-          id: roles.id,
-          name: roles.name,
-          tier: roles.tier,
-        })
-        .from(userRoles)
-        .innerJoin(roles, eq(roles.id, userRoles.roleId));
-      const yardAssignments = await db
-        .select({
-          userId: userYards.userId,
-          id: yards.id,
-          name: yards.name,
-        })
-        .from(userYards)
-        .innerJoin(yards, eq(yards.id, userYards.yardId));
-
-      const rolesByUser = new Map<string, { id: string; name: string; tier: string }[]>();
-      for (const r of roleAssignments) {
-        const arr = rolesByUser.get(r.userId) ?? [];
-        arr.push({ id: r.id, name: r.name, tier: r.tier });
-        rolesByUser.set(r.userId, arr);
-      }
-      const yardsByUser = new Map<string, { id: string; name: string }[]>();
-      for (const y of yardAssignments) {
-        const arr = yardsByUser.get(y.userId) ?? [];
-        arr.push({ id: y.id, name: y.name });
-        yardsByUser.set(y.userId, arr);
-      }
-
-      const enriched = list.map((u) => ({
-        ...u,
-        roles: rolesByUser.get(u.id) ?? [],
-        yards: yardsByUser.get(u.id) ?? [],
-      }));
-      res.json(enriched);
-    } catch (e) {
-      console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch users");
-    }
-  });
-
-  app.post("/api/admin/users", async (req, res) => {
-    try {
-      const { email, username, name, phone, roleIds, yardIds, password, employeeId: employeeIdBody } = req.body;
-      if (!email || !name) {
-        return sendApiError(res, 400, "ADMIN_USER_FIELDS_REQUIRED", "email, name required");
-      }
-      const employeeIdRaw = employeeIdBody != null ? String(employeeIdBody).trim() : "";
-      if (!employeeIdRaw) {
-        return sendApiError(
-          res,
-          400,
-          "ADMIN_USER_EMPLOYEE_ID_REQUIRED",
-          "employeeId required: each user must be linked to an active employee (SRS §1.4).",
-        );
-      }
-      const [emp] = await db.select().from(employees).where(eq(employees.id, employeeIdRaw)).limit(1);
-      if (!emp || emp.status !== "Active") {
-        return sendApiError(res, 400, "ADMIN_USER_EMPLOYEE_INVALID", "Employee not found or not Active");
-      }
-      if (emp.userId) {
-        return sendApiError(res, 400, "ADMIN_USER_EMPLOYEE_ALREADY_LINKED", "Employee is already linked to another user");
-      }
-      const passwordStr = password != null ? String(password) : "";
-      if (passwordStr.length < 8) {
-        return sendApiError(res, 400, "ADMIN_USER_PASSWORD_REQUIRED", "password required (min 8 characters)");
-      }
-      const emailNorm = String(email).trim().toLowerCase();
-      const rawU = username != null ? String(username).trim().toLowerCase() : "";
-      const usernameVal = rawU === "" ? null : rawU;
-      const passwordHash = await hash(passwordStr, 10);
-      const id = nanoid();
-      await db.insert(users).values({
-        id,
-        email: emailNorm,
-        username: usernameVal,
-        name: String(name),
-        phone: phone ? String(phone) : null,
-        employeeId: employeeIdRaw,
-        passwordHash,
-        isActive: true,
-        createdAt: now(),
-        updatedAt: now(),
-      });
-      await db
-        .update(employees)
-        .set({ userId: id, updatedAt: now() })
-        .where(eq(employees.id, employeeIdRaw));
-      if (Array.isArray(roleIds) && roleIds.length) {
-        for (const roleId of roleIds) {
-          await db.insert(userRoles).values({ userId: id, roleId: String(roleId) }).onConflictDoNothing();
-        }
-      }
-      if (Array.isArray(yardIds) && yardIds.length) {
-        for (const yardId of yardIds) {
-          await db.insert(userYards).values({ userId: id, yardId: String(yardId) }).onConflictDoNothing();
-        }
-      }
-      const [row] = await db.select().from(users).where(eq(users.id, id));
-      writeAuditLog(req, {
-        module: "M-10",
-        action: "CreateUser",
-        recordId: id,
-        afterValue: userSnapshotForAudit(row as unknown as Record<string, unknown>),
-      }).catch((e) => console.error("Audit log failed:", e));
-      res.status(201).json(row);
-    } catch (e: unknown) {
-      console.error(e);
-      const code = e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code) : "";
-      if (code === "23505") {
-        return sendApiError(res, 409, "ADMIN_USER_DUPLICATE", "Email or username already exists");
-      }
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create user");
-    }
-  });
-
-  app.put("/api/admin/users/:id", async (req, res) => {
-    try {
-      const id = req.params.id;
-      const [beforeUser] = await db.select().from(users).where(eq(users.id, id)).limit(1);
-      if (!beforeUser) return sendApiError(res, 404, "ADMIN_USER_NOT_FOUND", "User not found");
-      const { email, username, name, phone, isActive, roleIds, yardIds, password, employeeId: employeeIdBody } = req.body;
-      const usernameUpdate =
-        username === undefined
-          ? {}
-          : {
-              username:
-                username === null || String(username).trim() === ""
-                  ? null
-                  : String(username).trim().toLowerCase(),
-            };
-      let passwordUpdate: { passwordHash: string } | Record<string, never> = {};
-      if (password !== undefined && password !== null && String(password) !== "") {
-        const passwordStr = String(password);
-        if (passwordStr.length < 8) {
-          return sendApiError(res, 400, "ADMIN_USER_PASSWORD_TOO_SHORT", "password must be at least 8 characters");
-        }
-        passwordUpdate = { passwordHash: await hash(passwordStr, 10) };
-      }
-      let employeeIdUpdate: { employeeId: string | null } | Record<string, never> = {};
-      if (employeeIdBody !== undefined) {
-        const eid = employeeIdBody === null || String(employeeIdBody).trim() === "" ? null : String(employeeIdBody).trim();
-        if (eid) {
-          const [emp] = await db.select().from(employees).where(eq(employees.id, eid)).limit(1);
-          if (!emp || emp.status !== "Active") {
-            return sendApiError(res, 400, "ADMIN_USER_EMPLOYEE_INVALID", "Employee not found or not Active");
-          }
-          if (emp.userId && emp.userId !== id) {
-            return sendApiError(res, 400, "ADMIN_USER_EMPLOYEE_ALREADY_LINKED", "Employee is already linked to another user");
-          }
-        }
-        employeeIdUpdate = { employeeId: eid };
-      }
-
-      await db.update(users).set({
-        ...(email != null && { email: String(email).trim().toLowerCase() }),
-        ...usernameUpdate,
-        ...(name != null && { name: String(name) }),
-        ...(phone !== undefined && { phone: phone ? String(phone) : null }),
-        ...(isActive !== undefined && { isActive: Boolean(isActive) }),
-        ...passwordUpdate,
-        ...employeeIdUpdate,
-        updatedAt: now(),
-      }).where(eq(users.id, id));
-
-      if (employeeIdBody !== undefined) {
-        const [u] = await db.select().from(users).where(eq(users.id, id)).limit(1);
-        await db.update(employees).set({ userId: null, updatedAt: now() }).where(eq(employees.userId, id));
-        if (u?.employeeId) {
-          await db.update(employees).set({ userId: id, updatedAt: now() }).where(eq(employees.id, u.employeeId));
-        }
-      }
-      if (Array.isArray(roleIds)) {
-        await db.delete(userRoles).where(eq(userRoles.userId, id));
-        for (const roleId of roleIds) {
-          await db.insert(userRoles).values({ userId: id, roleId: String(roleId) }).onConflictDoNothing();
-        }
-      }
-      if (Array.isArray(yardIds)) {
-        await db.delete(userYards).where(eq(userYards.userId, id));
-        for (const yardId of yardIds) {
-          await db.insert(userYards).values({ userId: id, yardId: String(yardId) }).onConflictDoNothing();
-        }
-      }
-      const [row] = await db.select().from(users).where(eq(users.id, id));
-      if (!row) return sendApiError(res, 404, "ADMIN_USER_NOT_FOUND", "User not found");
-      writeAuditLog(req, {
-        module: "M-10",
-        action: "UpdateUser",
-        recordId: id,
-        beforeValue: userSnapshotForAudit(beforeUser as unknown as Record<string, unknown>),
-        afterValue: userSnapshotForAudit(row as unknown as Record<string, unknown>),
-      }).catch((e) => console.error("Audit log failed:", e));
-      res.json(row);
-    } catch (e: unknown) {
-      console.error(e);
-      const code = e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code) : "";
-      if (code === "23505") {
-        return sendApiError(res, 409, "ADMIN_USER_DUPLICATE", "Email or username already exists");
-      }
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update user");
-    }
-  });
+  // App logins are created/updated only via HR: POST/PUT /api/hr/employees/:id/login (no standalone user admin API).
 
   // ----- Expenditure head → Tally ledger (M-10 / finance mapping) -----
   app.put("/api/admin/expenditure-heads/:id/tally-ledger", async (req, res) => {

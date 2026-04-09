@@ -247,6 +247,68 @@ export function canEditLeaveRequest(user: AuthUser | undefined): boolean {
   return hasAnyRole(user, [DO, ADMIN]);
 }
 
+// ----- M-01: TA/DA claims (Pending → Verified → Approved | Rejected; DV may return Verified → Pending) -----
+const TA_DA_CLAIM_FLOW: Record<string, string[]> = {
+  Pending: ["Verified"],
+  Verified: ["Approved", "Rejected", "Pending"],
+  Approved: [],
+  Rejected: [],
+};
+
+export function canTransitionTaDaClaim(
+  user: AuthUser | undefined,
+  currentStatus: string,
+  newStatus: string
+): { allowed: boolean; setDvUser?: boolean; setApprovedBy?: boolean } {
+  if (!user) return { allowed: false };
+  if (hasRole(user, ADMIN)) {
+    return {
+      allowed: true,
+      setDvUser: newStatus === "Verified",
+      setApprovedBy: newStatus === "Approved" || newStatus === "Rejected",
+    };
+  }
+  const allowed = TA_DA_CLAIM_FLOW[currentStatus];
+  if (!allowed || !allowed.includes(newStatus)) return { allowed: false };
+  if (currentStatus === "Pending" && newStatus === "Verified") {
+    return hasRole(user, DV) ? { allowed: true, setDvUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && (newStatus === "Approved" || newStatus === "Rejected")) {
+    return hasRole(user, DA) ? { allowed: true, setApprovedBy: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Pending") {
+    return hasRole(user, DV) ? { allowed: true } : { allowed: false };
+  }
+  return { allowed: false };
+}
+
+/** DV queue: Pending; DA queue: Verified. Same segregation rules as leave. */
+export function taDaClaimAwaitingMyAction(
+  user: AuthUser | undefined,
+  row: { status: string; doUser?: string | null; dvUser?: string | null },
+): boolean {
+  if (!user?.id) return false;
+  const uid = user.id;
+  const st = row.status;
+  if (hasRole(user, ADMIN)) {
+    return st === "Pending" || st === "Verified";
+  }
+  if (hasRole(user, DV) && st === "Pending") {
+    if (row.doUser && row.doUser === uid) return false;
+    return true;
+  }
+  if (hasRole(user, DA) && st === "Verified") {
+    if (row.doUser && row.doUser === uid) return false;
+    if (row.dvUser && row.dvUser === uid) return false;
+    return true;
+  }
+  return false;
+}
+
+export function canCreateTaDaClaim(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, ADMIN]);
+}
+
 // ----- M-04: Purchase transactions (Draft → Verified → Approved; do/dv/da) -----
 const PURCHASE_TX_FLOW: Record<string, string[]> = {
   Draft: ["Verified"],

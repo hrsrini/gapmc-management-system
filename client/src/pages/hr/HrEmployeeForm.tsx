@@ -14,9 +14,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { UserCircle, ArrowLeft, User, Lock, Settings, Loader2, AlertCircle } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
+import { UserCircle, ArrowLeft, User, Lock, Settings, Loader2, AlertCircle, KeyRound } from "lucide-react";
+import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
 
 interface Yard {
   id: string;
@@ -40,18 +44,30 @@ interface Employee {
   retirementDate?: string | null;
   mobile?: string | null;
   workEmail?: string | null;
+  personalEmail?: string | null;
   status: string;
   userId?: string | null;
 }
 
+interface Role {
+  id: string;
+  name: string;
+  tier: string;
+}
+
 const EMPLOYEE_TYPES = ["Regular", "Contract", "Daily Wage", "Temporary"];
-const STATUS_OPTIONS = ["Active", "Inactive", "Suspended", "Retired", "Resigned"];
+const STATUS_OPTIONS = ["Draft", "Submitted", "Active", "Inactive", "Suspended", "Retired", "Resigned"];
 
 export default function HrEmployeeForm() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { can, user } = useAuth();
+  const canM10Create = can("M-10", "Create");
+  const canM10Read = can("M-10", "Read");
+  const canApproveRegistration =
+    can("M-01", "Approve") || Boolean(user?.roles?.some((r) => r.tier === "DA" || r.tier === "ADMIN"));
   const isEdit = !!id && id !== "new";
 
   const [firstName, setFirstName] = useState("");
@@ -68,16 +84,33 @@ export default function HrEmployeeForm() {
   const [dob, setDob] = useState("");
   const [mobile, setMobile] = useState("");
   const [workEmail, setWorkEmail] = useState("");
+  const [personalEmail, setPersonalEmail] = useState("");
 
   const [joiningDate, setJoiningDate] = useState("");
   const [retirementDate, setRetirementDate] = useState("");
-  const [status, setStatus] = useState("Active");
-  const [userId, setUserId] = useState("");
+  const [status, setStatus] = useState("Draft");
+
+  const [enableLoginOnCreate, setEnableLoginOnCreate] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginConfirm, setLoginConfirm] = useState("");
+  const [createRoleIds, setCreateRoleIds] = useState<Set<string>>(new Set());
+  const [createYardIds, setCreateYardIds] = useState<Set<string>>(new Set());
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
   const { data: employee, isLoading, isError } = useQuery<Employee>({
     queryKey: ["/api/hr/employees", id],
     enabled: isEdit,
+  });
+
+  const { data: roles = [] } = useQuery<Role[]>({
+    queryKey: ["/api/admin/roles"],
+    enabled: !isEdit && canM10Create,
+  });
+  const { data: adminYards = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ["/api/admin/yards"],
+    enabled: !isEdit && canM10Create && enableLoginOnCreate,
   });
 
   useEffect(() => {
@@ -95,10 +128,10 @@ export default function HrEmployeeForm() {
       setDob(employee.dob ?? "");
       setMobile(employee.mobile ?? "");
       setWorkEmail(employee.workEmail ?? "");
+      setPersonalEmail(employee.personalEmail ?? "");
       setJoiningDate(employee.joiningDate ?? "");
       setRetirementDate(employee.retirementDate ?? "");
       setStatus(employee.status ?? "Active");
-      setUserId(employee.userId ?? "");
     }
   }, [employee]);
 
@@ -114,14 +147,29 @@ export default function HrEmployeeForm() {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as { error?: string }).error ?? res.statusText);
       }
+      return (await res.json()) as Employee;
+    },
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/hr/employees/${id}/approve-registration`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
       return res.json();
     },
-    onSuccess: (row) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
-      toast({ title: "Employee created" });
-      setLocation(`/hr/employees/${row.id}`);
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/employees", id] });
+      toast({ title: "Registration approved", description: "EMP-ID assigned and status set to Active." });
+      setLocation(`/hr/employees/${id}`);
     },
-    onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Approval failed", description: e.message, variant: "destructive" }),
   });
 
   const updateMutation = useMutation({
@@ -147,9 +195,29 @@ export default function HrEmployeeForm() {
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  function toggleCreateRole(roleId: string) {
+    setCreateRoleIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(roleId)) n.delete(roleId);
+      else n.add(roleId);
+      return n;
+    });
+  }
+
+  function toggleCreateYard(yid: string) {
+    setCreateYardIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(yid)) n.delete(yid);
+      else n.add(yid);
+      return n;
+    });
+  }
+
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = {
+    const payload: Record<string, unknown> = {
       firstName,
       middleName: middleName || null,
       surname,
@@ -157,22 +225,100 @@ export default function HrEmployeeForm() {
       designation,
       yardId,
       employeeType,
-      empId: empId || null,
       aadhaarToken: aadhaarToken || null,
       pan: pan || null,
       dob: dob || null,
       mobile: mobile || null,
       workEmail: workEmail || null,
+      personalEmail: personalEmail.trim() ? personalEmail.trim().toLowerCase() : null,
       joiningDate,
       retirementDate: retirementDate || null,
       status,
-      userId: userId || null,
     };
-    if (isEdit) updateMutation.mutate(payload);
-    else createMutation.mutate(payload);
+
+    if (isEdit) {
+      updateMutation.mutate(payload);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const emp = await createMutation.mutateAsync(payload);
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
+
+      if (enableLoginOnCreate && canM10Create) {
+        if (status !== "Active") {
+          toast({
+            title: "Employee created",
+            description: "Login was not created because status is not Active. Use Login & roles on the employee page when active.",
+          });
+          setLocation(`/hr/employees/${emp.id}`);
+          return;
+        }
+        const email = loginEmail.trim() || workEmail.trim();
+        if (!email) {
+          toast({
+            title: "Employee created",
+            description: "Set work email or sign-in email and create login from the employee page.",
+          });
+          setLocation(`/hr/employees/${emp.id}`);
+          return;
+        }
+        if (loginPassword.length < 8 || loginPassword !== loginConfirm) {
+          toast({
+            title: "Employee created",
+            description: "Password must be at least 8 characters and match confirmation. Finish login on the employee page.",
+          });
+          setLocation(`/hr/employees/${emp.id}`);
+          return;
+        }
+        const displayName = [firstName, middleName, surname].filter(Boolean).join(" ").trim() || email;
+        const res = await fetch(`/api/hr/employees/${emp.id}/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email,
+            name: displayName,
+            username: loginUsername.trim() || undefined,
+            password: loginPassword,
+            roleIds: Array.from(createRoleIds),
+            yardIds: Array.from(createYardIds),
+          }),
+          credentials: "include",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          toast({
+            title: "Employee created; login failed",
+            description: (data as { error?: string }).error ?? res.statusText,
+            variant: "destructive",
+          });
+          setLocation(`/hr/employees/${emp.id}`);
+          return;
+        }
+        queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
+        queryClient.invalidateQueries({ queryKey: [`/api/hr/employees/${emp.id}/login-profile`] });
+        toast({ title: "Employee and app login created" });
+        setLocation(`/hr/employees/${emp.id}`);
+        return;
+      }
+
+      toast({ title: "Employee created" });
+      setLocation(`/hr/employees/${emp.id}`);
+    } catch (err) {
+      toast({
+        title: "Create failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const pending = createMutation.isPending || updateMutation.isPending;
+  const pending = submitting || updateMutation.isPending;
+  const showAccessTab = (!isEdit && canM10Create) || (isEdit && canM10Read);
+  const displayNameForAccess = [firstName, middleName, surname].filter(Boolean).join(" ").trim();
 
   if (isEdit && (isLoading || (employee === undefined && !isError))) {
     return (
@@ -215,10 +361,13 @@ export default function HrEmployeeForm() {
         <CardContent>
           <form onSubmit={handleSubmit}>
             <Tabs defaultValue="public">
-              <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="public"><User className="h-4 w-4 mr-2" /> Public info</TabsTrigger>
-                <TabsTrigger value="personal"><Lock className="h-4 w-4 mr-2" /> Personal info</TabsTrigger>
-                <TabsTrigger value="hr"><Settings className="h-4 w-4 mr-2" /> HR settings</TabsTrigger>
+              <TabsList className={`grid w-full gap-1 ${showAccessTab ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-3"}`}>
+                <TabsTrigger value="public"><User className="h-4 w-4 mr-2 shrink-0" /> Public info</TabsTrigger>
+                <TabsTrigger value="personal"><Lock className="h-4 w-4 mr-2 shrink-0" /> Personal info</TabsTrigger>
+                <TabsTrigger value="hr"><Settings className="h-4 w-4 mr-2 shrink-0" /> HR settings</TabsTrigger>
+                {showAccessTab && (
+                  <TabsTrigger value="access"><KeyRound className="h-4 w-4 mr-2 shrink-0" /> App access</TabsTrigger>
+                )}
               </TabsList>
               <TabsContent value="public" className="space-y-4 pt-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -248,17 +397,27 @@ export default function HrEmployeeForm() {
                     </Select>
                   </div>
                   {isEdit && (
-                    <div><Label>Emp ID</Label><Input value={empId} onChange={(e) => setEmpId(e.target.value)} placeholder="EMP-LOC-YEAR-NNN" /></div>
+                    <div className="md:col-span-2">
+                      <Label>Employee ID (EMP-NNN)</Label>
+                      <Input value={empId || "— (assigned at DA approval)"} readOnly disabled className="bg-muted/50" />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Official ID is assigned only when a Data Approver approves registration (BR-EMP-06).
+                      </p>
+                    </div>
                   )}
                 </div>
               </TabsContent>
               <TabsContent value="personal" className="space-y-4 pt-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div><Label>Aadhaar (token / last 4)</Label><Input value={aadhaarToken} onChange={(e) => setAadhaarToken(e.target.value)} placeholder="Optional" /></div>
+                  <div>
+                    <Label>Aadhaar (last 4 digits)</Label>
+                    <Input value={aadhaarToken} onChange={(e) => setAadhaarToken(e.target.value)} placeholder="Stored masked as XXXX-XXXX-####" />
+                  </div>
                   <div><Label>PAN</Label><Input value={pan} onChange={(e) => setPan(e.target.value)} /></div>
                   <div><Label>Date of birth</Label><Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} /></div>
                   <div><Label>Mobile</Label><Input value={mobile} onChange={(e) => setMobile(e.target.value)} /></div>
-                  <div className="md:col-span-2"><Label>Work email</Label><Input type="email" value={workEmail} onChange={(e) => setWorkEmail(e.target.value)} /></div>
+                  <div><Label>Personal email</Label><Input type="email" value={personalEmail} onChange={(e) => setPersonalEmail(e.target.value)} placeholder="Must be unique among active / pending employees" /></div>
+                  <div><Label>Work email</Label><Input type="email" value={workEmail} onChange={(e) => setWorkEmail(e.target.value)} /></div>
                 </div>
               </TabsContent>
               <TabsContent value="hr" className="space-y-4 pt-4">
@@ -275,11 +434,103 @@ export default function HrEmployeeForm() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div><Label>User ID (link to app user)</Label><Input value={userId} onChange={(e) => setUserId(e.target.value)} placeholder="Optional" /></div>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  New employees start as Draft or Submitted; a Data Approver assigns <span className="font-medium">EMP-NNN</span> and activates the record. App login is linked from the <span className="font-medium">App access</span> tab when status is Active.
+                </p>
               </TabsContent>
+              {showAccessTab && (
+                <TabsContent value="access" className="space-y-4 pt-4">
+                  {!isEdit && canM10Create && (
+                    <div className="space-y-4 rounded-lg border p-4">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <Label className="text-base">Create app login with this employee</Label>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Optional. Saves the employee first, then creates the IOMS user linked to this record (same as employee detail → Login &amp; roles).
+                          </p>
+                        </div>
+                        <Switch checked={enableLoginOnCreate} onCheckedChange={setEnableLoginOnCreate} />
+                      </div>
+                      {enableLoginOnCreate && (
+                        <div className="space-y-4 border-t pt-4">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <Label>Sign-in email *</Label>
+                              <Input
+                                type="email"
+                                value={loginEmail}
+                                onChange={(e) => setLoginEmail(e.target.value)}
+                                placeholder={workEmail ? "Defaults to work email if empty" : "required if no work email"}
+                              />
+                            </div>
+                            <div>
+                              <Label>Username (optional)</Label>
+                              <Input value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} placeholder="Alias for login" />
+                            </div>
+                            <div>
+                              <Label>Password *</Label>
+                              <Input type="password" autoComplete="new-password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} minLength={8} />
+                            </div>
+                            <div>
+                              <Label>Confirm password *</Label>
+                              <Input type="password" autoComplete="new-password" value={loginConfirm} onChange={(e) => setLoginConfirm(e.target.value)} minLength={8} />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="rounded-md border">
+                              <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Roles</div>
+                              <div className="p-3 space-y-2 max-h-40 overflow-y-auto">
+                                {roles.map((r) => (
+                                  <label key={r.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                                    <Checkbox checked={createRoleIds.has(r.id)} onCheckedChange={() => toggleCreateRole(r.id)} />
+                                    <span>{r.name} <span className="text-muted-foreground">({r.tier})</span></span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="rounded-md border">
+                              <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Locations (yards)</div>
+                              <div className="p-3 space-y-2 max-h-40 overflow-y-auto">
+                                {adminYards.map((y) => (
+                                  <label key={y.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                                    <Checkbox checked={createYardIds.has(y.id)} onCheckedChange={() => toggleCreateYard(y.id)} />
+                                    <span>{y.name}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {isEdit && id && (
+                    <EmployeeLoginAccessSection
+                      employeeId={id}
+                      employeeStatus={status}
+                      displayName={displayNameForAccess || employee?.empId || id}
+                      workEmail={workEmail}
+                    />
+                  )}
+                </TabsContent>
+              )}
             </Tabs>
-            <div className="flex justify-end gap-2 mt-6">
+            <div className="flex flex-wrap justify-end gap-2 mt-6">
+              {isEdit &&
+                id &&
+                canApproveRegistration &&
+                (status === "Draft" || status === "Submitted" || (status === "Active" && !/^EMP-\d{3}$/i.test((empId || "").trim()))) && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={approveMutation.isPending || pending}
+                    onClick={() => approveMutation.mutate()}
+                  >
+                    {approveMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    Approve registration (assign EMP-ID)
+                  </Button>
+                )}
               <Button type="button" variant="outline" onClick={() => setLocation(isEdit ? `/hr/employees/${id}` : "/hr/employees")}>Cancel</Button>
               <Button type="submit" disabled={pending}>
                 {pending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { FileText, Receipt, Banknote, Download, UserCircle, BarChart3 } from "lucide-react";
+import { FileText, Receipt, Banknote, Download, UserCircle, BarChart3, Table2, Truck } from "lucide-react";
+import {
+  ReportDataTable,
+  type ReportPagedParams,
+  type ReportTableColumn,
+} from "@/components/reports/ReportDataTable";
 
 interface Yard {
   id: string;
@@ -21,17 +26,147 @@ interface Yard {
   name?: string | null;
 }
 
+type ReportKind = "rent" | "voucher" | "receipt" | "staff" | "licences";
+
+function buildPreviewUrl(
+  kind: ReportKind,
+  yardId: string,
+  from: string,
+  to: string,
+  p: ReportPagedParams,
+): string {
+  const sp = new URLSearchParams({
+    paged: "1",
+    page: String(p.page),
+    pageSize: String(p.pageSize),
+    q: p.q,
+  });
+  if (yardId && yardId !== "all") sp.set("yardId", yardId);
+  if (from) sp.set("from", from);
+  if (to) sp.set("to", to);
+  switch (kind) {
+    case "rent":
+      return `/api/ioms/reports/rent-summary?${sp}`;
+    case "voucher":
+      return `/api/ioms/reports/voucher-summary?${sp}`;
+    case "receipt":
+      return `/api/ioms/reports/receipt-register?${sp}`;
+    case "staff":
+      return `/api/hr/reports/staff-list?${sp}`;
+    case "licences":
+      return `/api/ioms/traders/licences?${sp}`;
+    default:
+      return `/api/ioms/reports/rent-summary?${sp}`;
+  }
+}
+
+function columnsForKind(kind: ReportKind): ReportTableColumn[] {
+  switch (kind) {
+    case "rent":
+      return [
+        { key: "invoiceNo", header: "Invoice no." },
+        { key: "yardId", header: "Yard" },
+        { key: "periodMonth", header: "Period" },
+        { key: "assetId", header: "Asset" },
+        { key: "rentAmount", header: "Rent" },
+        { key: "totalAmount", header: "Total" },
+        { key: "status", header: "Status" },
+      ];
+    case "voucher":
+      return [
+        { key: "voucherNo", header: "Voucher no." },
+        { key: "yardId", header: "Yard" },
+        { key: "voucherType", header: "Type" },
+        { key: "payeeName", header: "Payee" },
+        { key: "amount", header: "Amount" },
+        { key: "status", header: "Status" },
+        { key: "createdAt", header: "Created" },
+      ];
+    case "receipt":
+      return [
+        { key: "receiptNo", header: "Receipt no." },
+        { key: "yardId", header: "Yard" },
+        { key: "revenueHead", header: "Head" },
+        { key: "payerName", header: "Payer" },
+        { key: "totalAmount", header: "Total" },
+        { key: "paymentMode", header: "Mode" },
+        { key: "status", header: "Status" },
+        { key: "createdAt", header: "Created" },
+      ];
+    case "staff":
+      return [
+        { key: "empId", header: "Emp. ID" },
+        { key: "firstName", header: "First name" },
+        { key: "surname", header: "Surname" },
+        { key: "designation", header: "Designation" },
+        { key: "yardId", header: "Yard" },
+        { key: "mobile", header: "Mobile" },
+        { key: "status", header: "Status" },
+      ];
+    case "licences":
+      return [
+        { key: "licenceNo", header: "Licence no." },
+        { key: "firmName", header: "Firm / trader name" },
+        { key: "licenceType", header: "Type" },
+        { key: "mobile", header: "Mobile" },
+        { key: "yardId", header: "Yard" },
+        { key: "validTo", header: "Valid to" },
+        { key: "status", header: "Status" },
+      ];
+    default:
+      return [];
+  }
+}
+
+function searchPlaceholderForKind(kind: ReportKind): string {
+  if (kind === "licences") {
+    return "Search by name of trader, licence number, trader mobile no.";
+  }
+  if (kind === "staff") {
+    return "Search by name, emp. ID, mobile, email…";
+  }
+  return "Search across columns (partial text or numbers)…";
+}
+
+interface PagedRowsResponse {
+  total: number;
+  page: number;
+  pageSize: number | "all";
+  rows: Record<string, unknown>[];
+}
+
 export default function IomsReports() {
   const { toast } = useToast();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [yardId, setYardId] = useState<string>("all");
+  const [previewKind, setPreviewKind] = useState<ReportKind>("licences");
+  const [tableParams, setTableParams] = useState<ReportPagedParams>({
+    page: 1,
+    pageSize: 25,
+    q: "",
+  });
+
+  const mergeTableParams = useCallback((next: Partial<ReportPagedParams>) => {
+    setTableParams((s) => ({ ...s, ...next }));
+  }, []);
+
+  const previewUrl = useMemo(
+    () => buildPreviewUrl(previewKind, yardId, from, to, tableParams),
+    [previewKind, yardId, from, to, tableParams],
+  );
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
-  const consolidatedUrl = yardId && yardId !== "all"
-    ? `/api/hr/reports/consolidated?yardId=${encodeURIComponent(yardId)}`
-    : "/api/hr/reports/consolidated";
-  const { data: consolidated } = useQuery<{ total: number; byYard: Record<string, number>; byStatus: Record<string, number>; byEmployeeType: Record<string, number> }>({
+  const consolidatedUrl =
+    yardId && yardId !== "all"
+      ? `/api/hr/reports/consolidated?yardId=${encodeURIComponent(yardId)}`
+      : "/api/hr/reports/consolidated";
+  const { data: consolidated } = useQuery<{
+    total: number;
+    byYard: Record<string, number>;
+    byStatus: Record<string, number>;
+    byEmployeeType: Record<string, number>;
+  }>({
     queryKey: [consolidatedUrl],
     queryFn: async () => {
       const res = await fetch(consolidatedUrl, { credentials: "include" });
@@ -39,6 +174,21 @@ export default function IomsReports() {
       return res.json();
     },
   });
+
+  const {
+    data: pagedData,
+    isLoading: previewLoading,
+    isError: previewError,
+  } = useQuery<PagedRowsResponse>({
+    queryKey: [previewUrl],
+    queryFn: async () => {
+      const res = await fetch(previewUrl, { credentials: "include" });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json() as Promise<PagedRowsResponse>;
+    },
+  });
+
+  const previewColumns = useMemo(() => columnsForKind(previewKind), [previewKind]);
 
   const downloadTallyExportCsv = async () => {
     try {
@@ -54,9 +204,16 @@ export default function IomsReports() {
       a.download = "tally-export.csv";
       a.click();
       URL.revokeObjectURL(url);
-      toast({ title: "Download started", description: "tally-export.csv (receipts + vouchers with ledger names)." });
+      toast({
+        title: "Download started",
+        description: "tally-export.csv (receipts + vouchers with ledger names).",
+      });
     } catch (e) {
-      toast({ title: "Download failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+      toast({
+        title: "Download failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
     }
   };
 
@@ -77,7 +234,35 @@ export default function IomsReports() {
       URL.revokeObjectURL(url);
       toast({ title: "Download started", description: `${filename} is being saved.` });
     } catch (e) {
-      toast({ title: "Download failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+      toast({
+        title: "Download failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const downloadCheckPostCsv = async (endpoint: "check-post-arrivals" | "check-post-passway-transit", filename: string) => {
+    try {
+      const params = new URLSearchParams({ format: "csv" });
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      const res = await fetch(`/api/ioms/reports/${endpoint}?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Download started", description: `${filename} is being saved.` });
+    } catch (e) {
+      toast({
+        title: "Download failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
     }
   };
 
@@ -96,7 +281,11 @@ export default function IomsReports() {
       URL.revokeObjectURL(url);
       toast({ title: "Download started", description: "staff-list.csv is being saved." });
     } catch (e) {
-      toast({ title: "Download failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+      toast({
+        title: "Download failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
     }
   };
 
@@ -107,7 +296,8 @@ export default function IomsReports() {
           <CardHeader>
             <CardTitle>IOMS Reports & Export</CardTitle>
             <CardDescription>
-              Yard-scoped reports. Optionally filter by yard and date range, then view summary or download CSV (opens in Excel).
+              Yard-scoped reports. Optionally filter by yard and date range, then preview data in the table below or
+              download CSV (opens in Excel).
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -140,6 +330,57 @@ export default function IomsReports() {
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Table2 className="h-5 w-5" />
+              Report preview (filter & search)
+            </CardTitle>
+            <CardDescription>
+              Server-side pagination and search. Horizontal scrollbars are at the top and bottom of the grid; the
+              header stays visible while scrolling vertically.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+              <div className="space-y-2 min-w-[200px]">
+                <Label>Report</Label>
+                <Select
+                  value={previewKind}
+                  onValueChange={(v) => {
+                    setPreviewKind(v as ReportKind);
+                    setTableParams({ page: 1, pageSize: 25, q: "" });
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="licences">Trader licences (M-02)</SelectItem>
+                    <SelectItem value="rent">Rent summary</SelectItem>
+                    <SelectItem value="voucher">Voucher summary</SelectItem>
+                    <SelectItem value="receipt">Receipt register</SelectItem>
+                    <SelectItem value="staff">Staff list (HR)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {previewError ? (
+              <p className="text-sm text-destructive">Could not load this report. Check permissions and try again.</p>
+            ) : (
+              <ReportDataTable
+                columns={previewColumns}
+                rows={(pagedData?.rows ?? []) as Record<string, unknown>[]}
+                total={pagedData?.total ?? 0}
+                params={tableParams}
+                onParamsChange={mergeTableParams}
+                isLoading={previewLoading}
+                searchPlaceholder={searchPlaceholderForKind(previewKind)}
+              />
+            )}
+          </CardContent>
+        </Card>
+
         <div className="grid gap-4 md:grid-cols-3">
           <Card>
             <CardHeader>
@@ -165,7 +406,54 @@ export default function IomsReports() {
               <CardDescription>Payment vouchers by yard; totals and counts by status.</CardDescription>
             </CardHeader>
             <CardContent>
-              <Button onClick={() => downloadCsv("voucher-summary", "voucher-summary.csv")} variant="outline" className="w-full">
+              <Button
+                onClick={() => downloadCsv("voucher-summary", "voucher-summary.csv")}
+                variant="outline"
+                className="w-full"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download CSV
+              </Button>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Truck className="h-5 w-5" />
+                Check-post arrivals (excl. passway)
+              </CardTitle>
+              <CardDescription>
+                Aggregated commodity quantities from verified inward entries. Passway/Transit is excluded (separate
+                report). Uses From/To as entry dates (e.g. 2025-01-01).
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button
+                onClick={() => downloadCheckPostCsv("check-post-arrivals", "check-post-arrivals.csv")}
+                variant="outline"
+                className="w-full"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download CSV
+              </Button>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Truck className="h-5 w-5" />
+                Passway / transit volumes
+              </CardTitle>
+              <CardDescription>
+                Same layout as arrivals, but only Passway/Transit lines (administrative tracking). Date filter as above.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button
+                onClick={() => downloadCheckPostCsv("check-post-passway-transit", "check-post-passway-transit.csv")}
+                variant="outline"
+                className="w-full"
+              >
                 <Download className="h-4 w-4 mr-2" />
                 Download CSV
               </Button>
@@ -180,7 +468,11 @@ export default function IomsReports() {
               <CardDescription>IOMS receipts by yard and date; revenue head and amount.</CardDescription>
             </CardHeader>
             <CardContent>
-              <Button onClick={() => downloadCsv("receipt-register", "receipt-register.csv")} variant="outline" className="w-full">
+              <Button
+                onClick={() => downloadCsv("receipt-register", "receipt-register.csv")}
+                variant="outline"
+                className="w-full"
+              >
                 <Download className="h-4 w-4 mr-2" />
                 Download CSV
               </Button>
@@ -209,7 +501,9 @@ export default function IomsReports() {
                 <UserCircle className="h-5 w-5" />
                 Staff list (HR)
               </CardTitle>
-              <CardDescription>Employee list by yard; empId, name, designation, joining, status. Optional yard filter above.</CardDescription>
+              <CardDescription>
+                Employee list by yard; empId, name, designation, joining, status. Optional yard filter above.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <Button onClick={downloadStaffListCsv} variant="outline" className="w-full">
@@ -240,7 +534,7 @@ export default function IomsReports() {
                       By type: {Object.entries(consolidated.byEmployeeType).map(([k, v]) => `${k}: ${v}`).join(", ")}
                     </div>
                   )}
-                  {!yardId && Object.keys(consolidated.byYard).length > 0 && (
+                  {yardId === "all" && Object.keys(consolidated.byYard).length > 0 && (
                     <div className="text-sm text-muted-foreground">
                       By yard: {Object.entries(consolidated.byYard).map(([k, v]) => `${k}: ${v}`).join(", ")}
                     </div>

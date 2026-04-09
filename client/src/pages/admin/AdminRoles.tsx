@@ -157,7 +157,7 @@ export default function AdminRoles() {
 
   if (isError) {
     return (
-      <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/users" }, { label: "Roles" }]}>
+      <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "Roles" }]}>
         <Card className={isAccessDenied ? "bg-amber-500/10 border-amber-500/30" : "bg-destructive/10 border-destructive/20"}>
           <CardContent className="p-6 flex flex-col gap-3">
             <div className="flex items-center gap-3">
@@ -176,7 +176,7 @@ export default function AdminRoles() {
   }
 
   return (
-    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/users" }, { label: "Roles" }]}>
+    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "Roles" }]}>
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>

@@ -268,8 +268,24 @@ async function seed() {
   const farmerCount = await db.select().from(farmers).limit(3);
   if (farmerCount.length === 0) {
     await db.insert(farmers).values([
-      { id: nanoid(), name: "Sample Farmer 1", village: "Village A", district: "North Goa", yardId },
-      { id: nanoid(), name: "Sample Farmer 2", village: "Village B", district: "South Goa", yardId: yardIds[1] ?? yardId },
+      {
+        id: nanoid(),
+        name: "Sample Farmer 1",
+        krishiCardNo: "KRISHI-DEMO-0001",
+        village: "Village A",
+        taluk: "Taluka A",
+        district: "North Goa",
+        yardId,
+      },
+      {
+        id: nanoid(),
+        name: "Sample Farmer 2",
+        krishiCardNo: "KRISHI-DEMO-0002",
+        village: "Village B",
+        taluk: "Taluka B",
+        district: "South Goa",
+        yardId: yardIds[1] ?? yardId,
+      },
     ]);
     console.log("Seeded sample farmers");
   }
@@ -494,9 +510,11 @@ async function seed() {
   if (vehicleCount.length === 0) {
     const v1 = nanoid();
     const v2 = nanoid();
+    const v3 = nanoid();
     await db.insert(vehicles).values([
       { id: v1, registrationNo: "GA-01-AB-1234", vehicleType: "Light", yardId, status: "Active", purchaseDate: "2023-01-15", purchaseValue: 450000 },
       { id: v2, registrationNo: "GA-02-CD-5678", vehicleType: "Truck", yardId: yardIds[1] ?? yardId, status: "Active", capacity: "3T" },
+      { id: v3, registrationNo: "GA-03-EF-9012", vehicleType: "Van", yardId, status: "Active", capacity: "1T" },
     ]);
     vehicleId1 = v1;
     await db.insert(vehicleTripLog).values([
@@ -671,6 +689,13 @@ async function seed() {
         purpose: "Official meeting at HQ",
         amount: 1500,
         status: "Pending",
+        doUser: null,
+        dvUser: null,
+        approvedBy: null,
+        rejectionReasonCode: null,
+        rejectionRemarks: null,
+        workflowRevisionCount: 0,
+        dvReturnRemarks: null,
       });
       console.log("Seeded TA/DA claims");
     }

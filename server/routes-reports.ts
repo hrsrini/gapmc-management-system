@@ -3,9 +3,10 @@
  * All reports filter by req.scopedLocationIds when present.
  */
 import type { Express } from "express";
-import { eq, desc, and, inArray, gte, lte, sql } from "drizzle-orm";
+import { eq, desc, and, inArray, gte, lte, sql, or, ilike, ne } from "drizzle-orm";
 import { db } from "./db";
 import { sendApiError } from "./api-errors";
+import { parseReportPaging, reportSearchPattern } from "./report-paging";
 import {
   rentInvoices,
   paymentVouchers,
@@ -14,6 +15,9 @@ import {
   tallyLedgers,
   iomsRevenueHeadLedgerMap,
   expenditureHeads,
+  checkPostInward,
+  checkPostInwardCommodities,
+  commodities,
 } from "@shared/db-schema";
 
 function escapeCsvCell(val: unknown): string {
@@ -28,6 +32,122 @@ function toCsvRow(arr: unknown[]): string {
 }
 
 export function registerReportsRoutes(app: Express) {
+  /**
+   * Check-post commodity arrivals for "Arrival of Commodities" reporting — excludes Passway/Transit
+   * (market fee exempt; tracked separately). Only Verified inward rows.
+   */
+  app.get("/api/ioms/reports/check-post-arrivals", async (req, res) => {
+    try {
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const checkPostId = req.query.checkPostId as string | undefined;
+      const format = (req.query.format as string)?.toLowerCase();
+
+      const conditions = [
+        ne(checkPostInward.transactionType, "Passway/Transit"),
+        eq(checkPostInward.status, "Verified"),
+      ];
+      if (from) conditions.push(gte(checkPostInward.entryDate, from));
+      if (to) conditions.push(lte(checkPostInward.entryDate, to));
+      if (checkPostId) conditions.push(eq(checkPostInward.checkPostId, checkPostId));
+
+      const rows = await db
+        .select({
+          commodityId: checkPostInwardCommodities.commodityId,
+          commodityName: commodities.name,
+          unit: checkPostInwardCommodities.unit,
+          totalQuantity: sql<number>`coalesce(sum(${checkPostInwardCommodities.quantity}), 0)::double precision`,
+          totalValue: sql<number>`coalesce(sum(${checkPostInwardCommodities.value}), 0)::double precision`,
+          lineCount: sql<number>`count(*)::int`,
+        })
+        .from(checkPostInwardCommodities)
+        .innerJoin(checkPostInward, eq(checkPostInwardCommodities.inwardId, checkPostInward.id))
+        .innerJoin(commodities, eq(checkPostInwardCommodities.commodityId, commodities.id))
+        .where(and(...conditions))
+        .groupBy(checkPostInwardCommodities.commodityId, commodities.name, checkPostInwardCommodities.unit);
+
+      if (format === "csv") {
+        const headers = ["commodityId", "commodityName", "unit", "totalQuantity", "totalValue", "lineCount"];
+        const csv = [
+          headers.join(","),
+          ...rows.map((r) =>
+            toCsvRow([r.commodityId, r.commodityName, r.unit, r.totalQuantity, r.totalValue, r.lineCount]),
+          ),
+        ].join("\r\n");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", "attachment; filename=check-post-arrivals.csv");
+        return res.send("\uFEFF" + csv);
+      }
+
+      res.json({
+        description: "Aggregated check-post commodity lines; Passway/Transit excluded per client business rule.",
+        from: from ?? null,
+        to: to ?? null,
+        checkPostId: checkPostId ?? null,
+        count: rows.length,
+        rows,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate check-post arrivals report");
+    }
+  });
+
+  /** Passway / transit volumes only (administrative charges; separate from main arrival totals). */
+  app.get("/api/ioms/reports/check-post-passway-transit", async (req, res) => {
+    try {
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const checkPostId = req.query.checkPostId as string | undefined;
+      const format = (req.query.format as string)?.toLowerCase();
+
+      const conditions = [eq(checkPostInward.transactionType, "Passway/Transit"), eq(checkPostInward.status, "Verified")];
+      if (from) conditions.push(gte(checkPostInward.entryDate, from));
+      if (to) conditions.push(lte(checkPostInward.entryDate, to));
+      if (checkPostId) conditions.push(eq(checkPostInward.checkPostId, checkPostId));
+
+      const rows = await db
+        .select({
+          commodityId: checkPostInwardCommodities.commodityId,
+          commodityName: commodities.name,
+          unit: checkPostInwardCommodities.unit,
+          totalQuantity: sql<number>`coalesce(sum(${checkPostInwardCommodities.quantity}), 0)::double precision`,
+          totalValue: sql<number>`coalesce(sum(${checkPostInwardCommodities.value}), 0)::double precision`,
+          lineCount: sql<number>`count(*)::int`,
+        })
+        .from(checkPostInwardCommodities)
+        .innerJoin(checkPostInward, eq(checkPostInwardCommodities.inwardId, checkPostInward.id))
+        .innerJoin(commodities, eq(checkPostInwardCommodities.commodityId, commodities.id))
+        .where(and(...conditions))
+        .groupBy(checkPostInwardCommodities.commodityId, commodities.name, checkPostInwardCommodities.unit);
+
+      if (format === "csv") {
+        const headers = ["commodityId", "commodityName", "unit", "totalQuantity", "totalValue", "lineCount"];
+        const csv = [
+          headers.join(","),
+          ...rows.map((r) =>
+            toCsvRow([r.commodityId, r.commodityName, r.unit, r.totalQuantity, r.totalValue, r.lineCount]),
+          ),
+        ].join("\r\n");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", "attachment; filename=check-post-passway-transit.csv");
+        return res.send("\uFEFF" + csv);
+      }
+
+      res.json({
+        description: "Passway/Transit commodity lines only (tracked separately from main arrivals).",
+        from: from ?? null,
+        to: to ?? null,
+        checkPostId: checkPostId ?? null,
+        count: rows.length,
+        rows,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate passway/transit report");
+    }
+  });
+
   // Rent invoice summary (yard-scoped; optional yardId, from, to on periodMonth)
   app.get("/api/ioms/reports/rent-summary", async (req, res) => {
     try {
@@ -53,6 +173,36 @@ export function registerReportsRoutes(app: Express) {
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", "attachment; filename=rent-summary.csv");
         return res.send("\uFEFF" + csv);
+      }
+
+      if (req.query.paged === "1") {
+        const { page, pageSize, q } = parseReportPaging(req);
+        const pattern = reportSearchPattern(q);
+        const all = [...conditions];
+        if (pattern) {
+          all.push(
+            or(
+              ilike(rentInvoices.invoiceNo, pattern),
+              ilike(rentInvoices.assetId, pattern),
+              ilike(rentInvoices.periodMonth, pattern),
+              ilike(rentInvoices.status, pattern),
+              ilike(rentInvoices.id, pattern),
+              sql`cast(${rentInvoices.rentAmount} as text) ilike ${pattern}`,
+              sql`cast(${rentInvoices.totalAmount} as text) ilike ${pattern}`,
+            )!,
+          );
+        }
+        const wc = all.length ? and(...all) : undefined;
+        const countQ = db.select({ c: sql<number>`count(*)::int` }).from(rentInvoices);
+        const [{ c: total }] = wc ? await countQ.where(wc) : await countQ;
+        const rentBase = db.select().from(rentInvoices);
+        const rentFiltered = wc ? rentBase.where(wc) : rentBase;
+        const dataQ = rentFiltered.orderBy(desc(rentInvoices.periodMonth));
+        const rows =
+          pageSize === "all"
+            ? await dataQ
+            : await dataQ.limit(pageSize).offset((page - 1) * pageSize);
+        return res.json({ total, page, pageSize, rows });
       }
 
       const summary = {
@@ -99,6 +249,36 @@ export function registerReportsRoutes(app: Express) {
         return res.send("\uFEFF" + csv);
       }
 
+      if (req.query.paged === "1") {
+        const { page, pageSize, q } = parseReportPaging(req);
+        const pattern = reportSearchPattern(q);
+        const all = [...conditions];
+        if (pattern) {
+          all.push(
+            or(
+              ilike(paymentVouchers.voucherNo, pattern),
+              ilike(paymentVouchers.payeeName, pattern),
+              ilike(paymentVouchers.voucherType, pattern),
+              ilike(paymentVouchers.status, pattern),
+              ilike(paymentVouchers.id, pattern),
+              ilike(paymentVouchers.yardId, pattern),
+              sql`cast(${paymentVouchers.amount} as text) ilike ${pattern}`,
+            )!,
+          );
+        }
+        const wc = all.length ? and(...all) : undefined;
+        const countQ = db.select({ c: sql<number>`count(*)::int` }).from(paymentVouchers);
+        const [{ c: total }] = wc ? await countQ.where(wc) : await countQ;
+        const voucherBase = db.select().from(paymentVouchers);
+        const voucherFiltered = wc ? voucherBase.where(wc) : voucherBase;
+        const dataQ = voucherFiltered.orderBy(desc(paymentVouchers.createdAt));
+        const rows =
+          pageSize === "all"
+            ? await dataQ
+            : await dataQ.limit(pageSize).offset((page - 1) * pageSize);
+        return res.json({ total, page, pageSize, rows });
+      }
+
       const summary = {
         count: list.length,
         totalAmount: list.reduce((s, r) => s + Number(r.amount ?? 0), 0),
@@ -142,6 +322,37 @@ export function registerReportsRoutes(app: Express) {
         return res.send("\uFEFF" + csv);
       }
 
+      if (req.query.paged === "1") {
+        const { page, pageSize, q } = parseReportPaging(req);
+        const pattern = reportSearchPattern(q);
+        const all = [...conditions];
+        if (pattern) {
+          all.push(
+            or(
+              ilike(iomsReceipts.receiptNo, pattern),
+              ilike(iomsReceipts.payerName, pattern),
+              ilike(iomsReceipts.revenueHead, pattern),
+              ilike(iomsReceipts.paymentMode, pattern),
+              ilike(iomsReceipts.status, pattern),
+              ilike(iomsReceipts.id, pattern),
+              sql`cast(${iomsReceipts.amount} as text) ilike ${pattern}`,
+              sql`cast(${iomsReceipts.totalAmount} as text) ilike ${pattern}`,
+            )!,
+          );
+        }
+        const wc = all.length ? and(...all) : undefined;
+        const countQ = db.select({ c: sql<number>`count(*)::int` }).from(iomsReceipts);
+        const [{ c: total }] = wc ? await countQ.where(wc) : await countQ;
+        const receiptBase = db.select().from(iomsReceipts);
+        const receiptFiltered = wc ? receiptBase.where(wc) : receiptBase;
+        const dataQ = receiptFiltered.orderBy(desc(iomsReceipts.createdAt));
+        const rows =
+          pageSize === "all"
+            ? await dataQ
+            : await dataQ.limit(pageSize).offset((page - 1) * pageSize);
+        return res.json({ total, page, pageSize, rows });
+      }
+
       const summary = {
         count: list.length,
         totalAmount: list.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0),
@@ -163,17 +374,83 @@ export function registerReportsRoutes(app: Express) {
     try {
       const yardId = req.query.yardId as string | undefined;
       const format = (req.query.format as string)?.toLowerCase();
-      const list = yardId
-        ? await db.select().from(employees).where(eq(employees.yardId, yardId)).orderBy(desc(employees.joiningDate))
-        : await db.select().from(employees).orderBy(desc(employees.joiningDate));
+      const baseConditions = [];
+      if (yardId) baseConditions.push(eq(employees.yardId, yardId));
+      const baseOrder = desc(employees.joiningDate);
+      const listQuery = db.select().from(employees).orderBy(baseOrder);
+      const list =
+        baseConditions.length > 0 ? await listQuery.where(and(...baseConditions)) : await listQuery;
 
       if (format === "csv") {
-        const headers = ["empId", "firstName", "middleName", "surname", "designation", "yardId", "employeeType", "joiningDate", "status", "mobile", "workEmail", "dob", "retirementDate"];
-        const rows = list.map((r) => [r.empId, r.firstName, r.middleName, r.surname, r.designation, r.yardId, r.employeeType, r.joiningDate, r.status, r.mobile, r.workEmail, r.dob, r.retirementDate]);
+        const headers = [
+          "empId",
+          "firstName",
+          "middleName",
+          "surname",
+          "designation",
+          "yardId",
+          "employeeType",
+          "joiningDate",
+          "status",
+          "mobile",
+          "workEmail",
+          "personalEmail",
+          "dob",
+          "retirementDate",
+        ];
+        const rows = list.map((r) => [
+          r.empId,
+          r.firstName,
+          r.middleName,
+          r.surname,
+          r.designation,
+          r.yardId,
+          r.employeeType,
+          r.joiningDate,
+          r.status,
+          r.mobile,
+          r.workEmail,
+          r.personalEmail,
+          r.dob,
+          r.retirementDate,
+        ]);
         const csv = [headers.join(","), ...rows.map(toCsvRow)].join("\r\n");
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", "attachment; filename=staff-list.csv");
         return res.send("\uFEFF" + csv);
+      }
+
+      if (req.query.paged === "1") {
+        const { page, pageSize, q } = parseReportPaging(req);
+        const pattern = reportSearchPattern(q);
+        const all = [...baseConditions];
+        if (pattern) {
+          all.push(
+            or(
+              ilike(employees.empId, pattern),
+              ilike(employees.firstName, pattern),
+              ilike(employees.middleName, pattern),
+              ilike(employees.surname, pattern),
+              ilike(employees.designation, pattern),
+              ilike(employees.mobile, pattern),
+              ilike(employees.workEmail, pattern),
+              ilike(employees.personalEmail, pattern),
+              ilike(employees.id, pattern),
+              ilike(employees.status, pattern),
+            )!,
+          );
+        }
+        const wc = all.length ? and(...all) : undefined;
+        const countQ = db.select({ c: sql<number>`count(*)::int` }).from(employees);
+        const [{ c: total }] = wc ? await countQ.where(wc) : await countQ;
+        const staffBase = db.select().from(employees);
+        const staffFiltered = wc ? staffBase.where(wc) : staffBase;
+        const dataQ = staffFiltered.orderBy(baseOrder);
+        const rows =
+          pageSize === "all"
+            ? await dataQ
+            : await dataQ.limit(pageSize).offset((page - 1) * pageSize);
+        return res.json({ total, page, pageSize, rows });
       }
 
       res.json({ count: list.length, rows: list });

@@ -126,7 +126,7 @@ export default function AdminSlaConfig() {
 
   if (isError) {
     return (
-      <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/users" }, { label: "SLA config" }]}>
+      <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "SLA config" }]}>
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
@@ -138,7 +138,7 @@ export default function AdminSlaConfig() {
   }
 
   return (
-    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/users" }, { label: "SLA config" }]}>
+    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "SLA config" }]}>
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>

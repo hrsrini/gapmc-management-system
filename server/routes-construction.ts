@@ -269,6 +269,56 @@ export function registerConstructionRoutes(app: Express) {
     }
   });
 
+  /** Land register corrections after go-live: only DA or Admin (client clarification M-08). */
+  app.put("/api/ioms/land-records/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const user = (req as Express.Request & { user?: AuthUser }).user;
+      if (!hasRole(user, "DA") && !hasRole(user, "ADMIN")) {
+        return sendApiError(
+          res,
+          403,
+          "LAND_RECORD_UPDATE_DA_ONLY",
+          "Updating land records requires Data Approver or Admin",
+        );
+      }
+      const [existing] = await db.select().from(landRecords).where(eq(landRecords.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "LAND_RECORD_NOT_FOUND", "Not found");
+      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "LAND_RECORD_NOT_FOUND", "Not found");
+      const body = req.body;
+      const updates: Record<string, unknown> = {};
+      if (body.yardId !== undefined) {
+        const y = String(body.yardId ?? "");
+        if (!yardInScope(req, y)) return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
+        updates.yardId = y;
+      }
+      [
+        "surveyNo",
+        "village",
+        "taluk",
+        "district",
+        "saleDeedNo",
+        "saleDeedDate",
+        "encumbrance",
+        "remarks",
+      ].forEach((k) => {
+        if (body[k] !== undefined) updates[k] = body[k] == null ? null : String(body[k]);
+      });
+      if (body.areaSqm !== undefined) updates.areaSqm = body.areaSqm == null ? null : Number(body.areaSqm);
+      if (Object.keys(updates).length === 0) {
+        const [row] = await db.select().from(landRecords).where(eq(landRecords.id, id));
+        return res.json(row!);
+      }
+      await db.update(landRecords).set(updates as Record<string, string | number | null>).where(eq(landRecords.id, id));
+      const [row] = await db.select().from(landRecords).where(eq(landRecords.id, id));
+      if (row) writeAuditLog(req, { module: "Construction", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      res.json(row!);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update land record");
+    }
+  });
+
   app.get("/api/ioms/fixed-assets", async (req, res) => {
     try {
       const yardId = req.query.yardId as string | undefined;

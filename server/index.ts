@@ -184,6 +184,20 @@ app.use((req, res, next) => {
     log("Cron M-08 AMC renewal digest scheduled (daily 07:35)");
   }
 
+  if (process.env.CRON_AMC_MONTHLY_BILLS === "true") {
+    const cron = await import("node-cron");
+    const { generateMonthlyAmcBillsIfMissing } = await import("./cron-amc-bills");
+    cron.default.schedule("20 2 * * *", async () => {
+      try {
+        const r = await generateMonthlyAmcBillsIfMissing();
+        log(`Cron M-08: AMC monthly bills created=${r.created} skipped=${r.skipped}`);
+      } catch (e) {
+        console.error("Cron AMC monthly bills failed:", e);
+      }
+    });
+    log("Cron M-08 AMC monthly bill generation scheduled (daily 02:20 UTC; Monthly contracts only)");
+  }
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
@@ -214,8 +228,12 @@ app.use((req, res, next) => {
   const requestedPort = parseInt(process.env.PORT || "5000", 10);
   const host = process.env.HOST || "0.0.0.0";
   const isDev = process.env.NODE_ENV !== "production";
-  /** In development, try the next ports if the requested one is busy (production keeps a single bind). */
-  const maxPort = isDev ? requestedPort + 19 : requestedPort;
+  /**
+   * Default: fail fast if PORT is in use (avoids a stale server on :5000 while you open :5001 and get broken auth).
+   * Set DEV_PORT_FALLBACK=true to try the next ports (legacy behaviour).
+   */
+  const allowDevPortFallback = process.env.DEV_PORT_FALLBACK === "true";
+  const maxPort = isDev && allowDevPortFallback ? requestedPort + 19 : requestedPort;
 
   function onListenLog(effectivePort: number, bindHost: string) {
     const displayHost = bindHost === "0.0.0.0" ? "localhost" : bindHost;
@@ -237,7 +255,9 @@ app.use((req, res, next) => {
       }
       if (err.code === "EADDRINUSE") {
         log(
-          `Port ${port} is already in use. Stop the other process or set PORT to a free port.`,
+          isDev && !allowDevPortFallback
+            ? `Port ${port} is already in use (another node/express may be running old code). Stop it, then restart. Or set DEV_PORT_FALLBACK=true to try another port, or set PORT to a free port.`
+            : `Port ${port} is already in use. Stop the other process or set PORT to a free port.`,
         );
         process.exit(1);
         return;

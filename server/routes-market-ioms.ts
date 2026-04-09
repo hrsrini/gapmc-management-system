@@ -176,6 +176,7 @@ export function registerMarketIomsRoutes(app: Express) {
         id,
         name: String(body.name ?? ""),
         yardId,
+        krishiCardNo: body.krishiCardNo ? String(body.krishiCardNo) : null,
         village: body.village ? String(body.village) : null,
         taluk: body.taluk ? String(body.taluk) : null,
         district: body.district ? String(body.district) : null,
@@ -202,7 +203,7 @@ export function registerMarketIomsRoutes(app: Express) {
       }
       const body = req.body;
       const updates: Record<string, unknown> = {};
-      ["name", "yardId", "village", "taluk", "district", "mobile", "aadhaarToken"].forEach((k) => {
+      ["name", "yardId", "krishiCardNo", "village", "taluk", "district", "mobile", "aadhaarToken"].forEach((k) => {
         if (body[k] !== undefined) updates[k] = body[k] == null ? null : String(body[k]);
       });
       if (updates.yardId && scopedIds && scopedIds.length > 0 && !scopedIds.includes(updates.yardId as string)) {

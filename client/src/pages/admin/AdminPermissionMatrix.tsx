@@ -154,7 +154,7 @@ export default function AdminPermissionMatrix() {
 
   if (anyError) {
     return (
-      <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/users" }, { label: "Permission matrix" }]}>
+      <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "Permission matrix" }]}>
         <Card className={isAccessDenied ? "bg-amber-500/10 border-amber-500/30" : "bg-destructive/10 border-destructive/20"}>
           <CardContent className="p-6 flex flex-col gap-3">
             <div className="flex items-center gap-3">
@@ -173,7 +173,7 @@ export default function AdminPermissionMatrix() {
   }
 
   return (
-    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/users" }, { label: "Permission matrix" }]}>
+    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "Permission matrix" }]}>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

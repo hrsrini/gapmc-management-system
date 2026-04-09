@@ -16,7 +16,7 @@ import {
   userYards,
   employees,
 } from "../shared/db-schema";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { SYSTEM_CONFIG_DEFAULTS } from "../shared/system-config-defaults";
 
@@ -137,6 +137,45 @@ async function seed() {
     if (readPerms.length > 0) console.log("Assigned Read-only permissions to READ_ONLY role");
   }
 
+  // 4d. DA role: M-01 Read / Update / Approve (employee registration approval, leave workflow updates on /api/hr)
+  const daRoleIdForHr = roleIdMap["DA"];
+  if (daRoleIdForHr) {
+    const daHrPerms = await db
+      .select({ id: permissions.id })
+      .from(permissions)
+      .where(and(eq(permissions.module, "M-01"), inArray(permissions.action, ["Read", "Update", "Approve"])));
+    for (const p of daHrPerms) {
+      await db.insert(rolePermissions).values({ roleId: daRoleIdForHr, permissionId: p.id }).onConflictDoNothing();
+    }
+    if (daHrPerms.length > 0) console.log("Assigned M-01 Read/Update/Approve to DA role");
+  }
+
+  // 4e. DO role: M-01 Create / Read / Update (employee registration Draft/Submit)
+  const doRoleIdForHr = roleIdMap["DO"];
+  if (doRoleIdForHr) {
+    const doHrPerms = await db
+      .select({ id: permissions.id })
+      .from(permissions)
+      .where(and(eq(permissions.module, "M-01"), inArray(permissions.action, ["Create", "Read", "Update"])));
+    for (const p of doHrPerms) {
+      await db.insert(rolePermissions).values({ roleId: doRoleIdForHr, permissionId: p.id }).onConflictDoNothing();
+    }
+    if (doHrPerms.length > 0) console.log("Assigned M-01 Create/Read/Update to DO role");
+  }
+
+  // 4f. DV role: M-01 Read / Update (leave verification and other HR updates on /api/hr)
+  const dvRoleIdForHr = roleIdMap["DV"];
+  if (dvRoleIdForHr) {
+    const dvHrPerms = await db
+      .select({ id: permissions.id })
+      .from(permissions)
+      .where(and(eq(permissions.module, "M-01"), inArray(permissions.action, ["Read", "Update"])));
+    for (const p of dvHrPerms) {
+      await db.insert(rolePermissions).values({ roleId: dvRoleIdForHr, permissionId: p.id }).onConflictDoNothing();
+    }
+    if (dvHrPerms.length > 0) console.log("Assigned M-01 Read/Update to DV role");
+  }
+
   // 5. Bootstrap employee for admin (SRS §1.4 — user must link to active employee)
   let bootstrapEmpId: string | null = null;
   const firstYardId = yardIds[0];
@@ -230,6 +269,31 @@ async function seed() {
     } else {
       console.log("Admin user already exists, skipping");
     }
+  }
+
+  // 7. Legacy DBs: admin exists but still has no employee_id (bootstrap row missing or never linked)
+  const [admFix] = await db.select().from(users).where(eq(users.email, "admin@gapmc.local")).limit(1);
+  if (admFix && !admFix.employeeId && yardIds.length > 0) {
+    const eid = nanoid();
+    const y0 = yardIds[0]!;
+    await db.insert(employees).values({
+      id: eid,
+      empId: `EMP-ADMIN-${nanoid(8)}`,
+      firstName: "System",
+      surname: "Admin",
+      designation: "Administrator",
+      yardId: y0,
+      employeeType: "Regular",
+      joiningDate: now.slice(0, 10),
+      status: "Active",
+      workEmail: admFix.email,
+      userId: admFix.id,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.update(users).set({ employeeId: eid, updatedAt: now }).where(eq(users.id, admFix.id));
+    await db.insert(userYards).values({ userId: admFix.id, yardId: y0 }).onConflictDoNothing();
+    console.log("Linked admin@gapmc.local to new employee row (had no employee_id). Password (if unset): " + DEFAULT_ADMIN_PASSWORD);
   }
 
   console.log("IOMS M-10 seed complete.");

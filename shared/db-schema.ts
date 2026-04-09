@@ -204,7 +204,8 @@ export const users = gapmc.table("users", {
   username: text("username").unique(),
   name: text("name").notNull(),
   phone: text("phone"),
-  employeeId: text("employee_id"), // FK → employees (M-01)
+  /** Required for all sessions: must reference employees.id (enforced in loadAuthUser + HR login APIs). */
+  employeeId: text("employee_id"),
   passwordHash: text("password_hash"),
   isActive: boolean("is_active").default(true),
   createdAt: text("created_at"),
@@ -349,7 +350,7 @@ export const iomsReceipts = gapmc.table("ioms_receipts", {
   sourceRecordId: text("source_record_id"),
   qrCodeUrl: text("qr_code_url"),
   pdfUrl: text("pdf_url"),
-  status: text("status").notNull(), // Pending | Paid | Failed | Reconciled
+  status: text("status").notNull(), // Pending | Paid | Failed | Reconciled | Reversed (cheque/DD dishonour)
   createdBy: text("created_by").notNull(),
   createdAt: text("created_at").notNull(),
 });
@@ -357,7 +358,7 @@ export const iomsReceipts = gapmc.table("ioms_receipts", {
 // ----- M-01: HRMS & Service Record -----
 export const employees = gapmc.table("employees", {
   id: text("id").primaryKey(),
-  empId: text("emp_id").unique(), // EMP-[LOC]-[YEAR]-[NNN] after DA approval
+  empId: text("emp_id").unique(), // BR-EMP-01 / BR-EMP-06: EMP-NNN assigned only at DA approval
   firstName: text("first_name").notNull(),
   middleName: text("middle_name"),
   surname: text("surname").notNull(),
@@ -372,7 +373,9 @@ export const employees = gapmc.table("employees", {
   retirementDate: text("retirement_date"),
   mobile: text("mobile"),
   workEmail: text("work_email"),
-  status: text("status").notNull(), // Active | Inactive | Suspended | Retired | Resigned
+  /** BR-EMP-03: personal email; unique among Active | Draft | Submitted (see server rules). */
+  personalEmail: text("personal_email"),
+  status: text("status").notNull(), // Draft | Submitted | Active | Inactive | Suspended | Retired | Resigned
   userId: text("user_id"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
@@ -459,7 +462,14 @@ export const taDaClaims = gapmc.table("ta_da_claims", {
   travelDate: text("travel_date").notNull(),
   purpose: text("purpose").notNull(),
   amount: doublePrecision("amount").notNull(),
-  status: text("status").notNull(),
+  status: text("status").notNull(), // Pending | Verified | Approved | Rejected
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  approvedBy: text("approved_by"),
+  rejectionReasonCode: text("rejection_reason_code"),
+  rejectionRemarks: text("rejection_remarks"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
+  dvReturnRemarks: text("dv_return_remarks"),
 });
 
 // ----- M-02: Trader & Asset ID Management -----
@@ -489,8 +499,24 @@ export const traderLicences = gapmc.table("trader_licences", {
   daUser: text("da_user"),
   /** When set, tenant is a listed govt. office/godown holder — GST not charged (M-03/M-05). */
   govtGstExemptCategoryId: text("govt_gst_exempt_category_id"),
+  /** Declared non-GST trader (commercial / unregistered); treat like zero GST on linked receipts where applicable (client M-03). */
+  isNonGstEntity: boolean("is_non_gst_entity").default(false),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
+});
+
+/** M-02 legacy opening stock per trader + commodity, effective-dated (client clarification). */
+export const traderStockOpenings = gapmc.table("trader_stock_openings", {
+  id: text("id").primaryKey(),
+  traderLicenceId: text("trader_licence_id").notNull(),
+  yardId: text("yard_id").notNull(),
+  commodityId: text("commodity_id").notNull(),
+  quantity: doublePrecision("quantity").notNull(),
+  unit: text("unit").notNull(),
+  effectiveDate: text("effective_date").notNull(),
+  remarks: text("remarks"),
+  createdAt: text("created_at"),
+  createdBy: text("created_by"),
 });
 
 export const assistantTraders = gapmc.table("assistant_traders", {
@@ -619,6 +645,8 @@ export const marketFeeRates = gapmc.table("market_fee_rates", {
 export const farmers = gapmc.table("farmers", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
+  /** Farmer Krishi Card number (M-04 registry; client clarification). */
+  krishiCardNo: text("krishi_card_no"),
   village: text("village"),
   taluk: text("taluk"),
   district: text("district"),
@@ -907,6 +935,17 @@ export const fixedAssets = gapmc.table("fixed_assets", {
 });
 
 // ----- M-09: Correspondence Management -----
+/** Atomic sequence for auto-generated dak inward diary numbers (per yard or central — see system_config dak_diary_sequence_scope). */
+export const dakDiarySequence = gapmc.table(
+  "dak_diary_sequence",
+  {
+    scopeKey: text("scope_key").notNull(),
+    financialYear: text("financial_year").notNull(),
+    lastSeq: integer("last_seq").default(0).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.scopeKey, t.financialYear] })]
+);
+
 export const dakInward = gapmc.table("dak_inward", {
   id: text("id").primaryKey(),
   yardId: text("yard_id"), // optional; when set, scoped by user's yards

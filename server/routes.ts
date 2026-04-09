@@ -16,7 +16,7 @@ import { registerDakRoutes } from "./routes-dak";
 import { registerBugRoutes } from "./routes-bugs";
 import { registerReportsRoutes } from "./routes-reports";
 import { registerFinanceReferenceRoutes } from "./routes-finance-reference";
-import { registerAuthRoutes } from "./routes-auth";
+import { registerPublicAuthRoutes, registerAuthMeRoute } from "./routes-auth";
 import { getMergedSystemConfig } from "./system-config";
 import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermissionByPath } from "./auth";
 import { writeAuditLog } from "./audit";
@@ -172,11 +172,28 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/cron/amc-monthly-bills", async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers["x-cron-secret"] !== secret) {
+      return sendApiError(res, 401, "CRON_UNAUTHORIZED", "Unauthorized");
+    }
+    try {
+      const { generateMonthlyAmcBillsIfMissing } = await import("./cron-amc-bills");
+      const result = await generateMonthlyAmcBillsIfMissing();
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("Cron AMC monthly bills failed:", e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
+    }
+  });
+
+  // Login/logout before requireAuthApi (Express 5 + session.save must be awaited in the handler).
+  registerPublicAuthRoutes(app);
+
   // Require session for all other /api routes; attach req.user and req.scopedLocationIds
   app.use(requireAuthApi);
 
-  // Auth: login (public via isPublicApi), me, logout — must run after requireAuthApi so /me sees req.user
-  registerAuthRoutes(app);
+  registerAuthMeRoute(app);
 
   // IOMS M-10: Admin — require M-10 permission by method (Read/Create/Update/Delete) from role_permissions
   app.use("/api/admin", requireAdminPermissionByMethod);

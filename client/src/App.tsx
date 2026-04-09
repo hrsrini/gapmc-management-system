@@ -30,7 +30,6 @@ import IomsReceiptDetail from "@/pages/receipts/IomsReceiptDetail";
 import IomsReceiptReconciliation from "@/pages/receipts/IomsReceiptReconciliation";
 import VerifyReceipt from "@/pages/VerifyReceipt";
 import Health from "@/pages/Health";
-import AdminUsers from "@/pages/admin/AdminUsers";
 import AdminRoles from "@/pages/admin/AdminRoles";
 import AdminLocations from "@/pages/admin/AdminLocations";
 import AdminConfig from "@/pages/admin/AdminConfig";
@@ -312,9 +311,6 @@ function Router() {
       </Route>
       <Route path="/verify/:receiptNo" component={VerifyReceipt} />
       <Route path="/health" component={Health} />
-      <Route path="/admin/users">
-        <AdminRoute><AdminUsers /></AdminRoute>
-      </Route>
       <Route path="/admin/roles">
         <AdminRoute><AdminRoles /></AdminRoute>
       </Route>

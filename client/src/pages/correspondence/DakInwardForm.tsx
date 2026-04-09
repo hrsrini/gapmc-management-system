@@ -192,7 +192,11 @@ export default function DakInwardForm() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label>Diary No</Label>
-                <Input value={diaryNo} onChange={(e) => setDiaryNo(e.target.value)} placeholder="Optional" />
+                <Input
+                  value={diaryNo}
+                  onChange={(e) => setDiaryNo(e.target.value)}
+                  placeholder="Leave blank for auto (per Admin Config: per yard or central)"
+                />
               </div>
               <div>
                 <Label>Received date *</Label>

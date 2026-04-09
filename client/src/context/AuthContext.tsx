@@ -6,9 +6,12 @@ export interface AuthUser {
   id: string;
   email: string;
   name: string;
+  /** Employee master (M-01); every app user must have this (server-enforced). */
+  employeeId: string;
+  employeeEmpId?: string | null;
   roles?: { id: string; tier: string; name: string }[];
   yardIds?: string[];
-  /** Resolved from role_permissions; used for permission-based access. */
+  /** Resolved from role_permissions via assigned roles; used for permission-based access. */
   permissions?: { module: string; action: string }[];
 }
 
@@ -24,7 +27,38 @@ function normalizeLoginErrorMessage(raw: string): string {
     .replace(/\bInvalid credentials\b/gi, 'Invalid email/username or password');
 }
 
-export type PermissionAction = 'Read' | 'Create' | 'Update' | 'Delete';
+/** Accept camelCase or snake_case from JSON (defensive). */
+function employeeIdFromApiUser(u: Record<string, unknown>): string | undefined {
+  const a = u.employeeId;
+  if (typeof a === 'string' && a.length > 0) return a;
+  const b = u.employee_id;
+  if (typeof b === 'string' && b.length > 0) return b;
+  return undefined;
+}
+
+function authUserFromApiPayload(raw: unknown): AuthUser | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const u = raw as Record<string, unknown>;
+  const eid = employeeIdFromApiUser(u);
+  if (typeof u.id !== 'string' || typeof u.email !== 'string' || !eid) return null;
+  return {
+    id: u.id,
+    email: u.email,
+    name: (typeof u.name === 'string' ? u.name : u.email) as string,
+    employeeId: eid,
+    employeeEmpId:
+      typeof u.employeeEmpId === 'string'
+        ? u.employeeEmpId
+        : typeof u.employee_emp_id === 'string'
+          ? u.employee_emp_id
+          : null,
+    roles: u.roles as AuthUser['roles'],
+    yardIds: u.yardIds as AuthUser['yardIds'],
+    permissions: u.permissions as AuthUser['permissions'],
+  };
+}
+
+export type PermissionAction = 'Read' | 'Create' | 'Update' | 'Delete' | 'Approve';
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -55,16 +89,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         if (res.ok) {
           const data = await res.json();
-          const u = data?.user;
-          if (u?.id && u?.email) {
-            const authUser: AuthUser = {
-              id: u.id,
-              email: u.email,
-              name: u.name ?? u.email,
-              roles: u.roles,
-              yardIds: u.yardIds,
-              permissions: u.permissions,
-            };
+          const authUser = authUserFromApiPayload(data?.user);
+          if (authUser) {
             setUser(authUser);
             setIsAuthenticated(true);
             localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authUser));
@@ -75,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const stored = localStorage.getItem(AUTH_STORAGE_KEY);
         if (stored) {
           const parsed = JSON.parse(stored) as AuthUser;
-          if (parsed?.id && parsed?.email) {
+          if (parsed?.id && parsed?.email && typeof parsed.employeeId === 'string') {
             setUser(parsed);
             setIsAuthenticated(true);
           }
@@ -85,7 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled && stored) {
           try {
             const parsed = JSON.parse(stored) as AuthUser;
-            if (parsed?.id && parsed?.email) {
+            if (parsed?.id && parsed?.email && typeof parsed.employeeId === 'string') {
               setUser(parsed);
               setIsAuthenticated(true);
             }
@@ -124,23 +150,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const raw = typeof data?.error === 'string' ? data.error : 'Invalid email/username or password';
         return { ok: false, error: normalizeLoginErrorMessage(raw) };
       }
-      const u = data?.user;
-      if (!u || typeof u.id !== 'string' || typeof u.email !== 'string') {
+      let authUser = authUserFromApiPayload(data?.user);
+      if (!authUser) {
+        const meRes = await fetch('/api/auth/me', { credentials: 'include' });
+        const meCt = meRes.headers.get('content-type') ?? '';
+        if (meRes.ok && meCt.includes('application/json')) {
+          const meData = await meRes.json().catch(() => ({}));
+          authUser = authUserFromApiPayload(meData?.user);
+        }
+      }
+      if (!authUser) {
         return {
           ok: false,
           error: isJson
-            ? 'Invalid response from server'
+            ? 'Profile after login is incomplete. Usually another old app is still bound to port 5000: stop all Node processes, run only one `npm run dev`, open the URL it prints (often http://localhost:5000), hard-refresh (Ctrl+Shift+R). Verify with `npm run login-smoke`.'
             : 'Login API did not respond with JSON. Start the app with "npm run dev" (not Vite alone) so /api is available.',
         };
       }
-      const authUser: AuthUser = {
-        id: u.id,
-        email: u.email,
-        name: u.name ?? u.email,
-        roles: u.roles,
-        yardIds: u.yardIds,
-        permissions: u.permissions,
-      };
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authUser));
       setUser(authUser);
       setIsAuthenticated(true);

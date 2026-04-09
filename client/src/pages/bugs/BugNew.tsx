@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Link } from "wouter";
 import { ArrowLeft, Bug, Loader2 } from "lucide-react";
+import { FormFileAttachments } from "@/components/forms/FormFileAttachments";
 import { useToast } from "@/hooks/use-toast";
 import {
   BUG_TYPES,
@@ -33,7 +34,7 @@ export default function BugNew() {
   const [bugType, setBugType] = useState<BugType>("UI");
   const [bugSubtype, setBugSubtype] = useState<string>(BUG_SUBTYPES.UI[0]!);
   const [severity, setSeverity] = useState<string>("medium");
-  const [files, setFiles] = useState<FileList | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
 
   const subtypes = BUG_SUBTYPES[bugType] ?? BUG_SUBTYPES.Other;
 
@@ -45,10 +46,8 @@ export default function BugNew() {
       fd.append("bugType", bugType);
       fd.append("bugSubtype", bugSubtype);
       fd.append("severity", severity);
-      if (files) {
-        for (let i = 0; i < files.length; i++) {
-          fd.append("files", files[i]!);
-        }
+      for (const f of files) {
+        fd.append("files", f);
       }
       const res = await fetch("/api/bugs", {
         method: "POST",
@@ -183,16 +182,13 @@ export default function BugNew() {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="files">Attachments (optional)</Label>
-            <Input
-              id="files"
-              type="file"
-              multiple
-              accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,.pdf,.txt"
-              onChange={(e) => setFiles(e.target.files)}
-            />
-          </div>
+          <FormFileAttachments
+            files={files}
+            onChange={setFiles}
+            maxFiles={5}
+            maxBytesPerFile={10 * 1024 * 1024}
+            description="View each file before submit, remove or add replacements. Up to 5 files, 10 MB each."
+          />
           <Button
             disabled={mutation.isPending || !title.trim() || !description.trim()}
             onClick={() => mutation.mutate()}

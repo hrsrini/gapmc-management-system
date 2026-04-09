@@ -4,11 +4,15 @@
  */
 import { and, desc, eq, isNotNull, lte, ne, or } from "drizzle-orm";
 import { db } from "./db";
-import { slaConfig, rentInvoices, paymentVouchers, dakInward, dakEscalations } from "@shared/db-schema";
+import { slaConfig, rentInvoices, paymentVouchers, dakInward, dakEscalations, employees } from "@shared/db-schema";
 import { sendNotificationStub } from "./notify";
+import { isEmployeeDraftStale } from "./hr-employee-rules";
 import { nanoid } from "nanoid";
 
 const INTERVAL_MS = 60 * 60 * 1000; // hourly
+
+/** BR-EMP-05: avoid repeating the same stale-draft alert every hour (once per UTC day is enough). */
+let lastHrEmployeeDraftNotifyUtcDay: string | null = null;
 
 function cutoffIso(hours: number): string {
   return new Date(Date.now() - hours * 3600 * 1000).toISOString();
@@ -62,6 +66,7 @@ async function runSlaTick(): Promise<void> {
             deadline: dakInward.deadline,
             status: dakInward.status,
             subject: dakInward.subject,
+            assignedTo: dakInward.assignedTo,
           })
           .from(dakInward)
           .where(
@@ -78,10 +83,11 @@ async function runSlaTick(): Promise<void> {
             .limit(1);
           if (lastEsc?.escalatedAt?.startsWith(today)) continue;
           const eid = nanoid();
+          const assignee = r.assignedTo?.trim();
           await db.insert(dakEscalations).values({
             id: eid,
             inwardId: r.id,
-            escalatedTo: rule.alertRole?.trim() || "DA",
+            escalatedTo: assignee || rule.alertRole?.trim() || "DA",
             escalatedAt: new Date().toISOString(),
             escalationReason: `SLA overdue (deadline ${r.deadline}, status ${r.status}): ${(r.subject ?? "").slice(0, 200)}`,
             resolvedAt: null,
@@ -105,6 +111,35 @@ async function runSlaTick(): Promise<void> {
     } catch (e) {
       console.error("[SLA] rule check failed:", rule.workflow, e);
     }
+  }
+
+  // BR-EMP-05: Draft/Submitted employee registrations stale > 15 working days (admin/DA alert stub)
+  try {
+    const empRows = await db
+      .select({
+        id: employees.id,
+        createdAt: employees.createdAt,
+        status: employees.status,
+      })
+      .from(employees)
+      .where(or(eq(employees.status, "Draft"), eq(employees.status, "Submitted")));
+    const stale = empRows.filter((r) => isEmployeeDraftStale(r.createdAt, r.status));
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    if (stale.length > 0 && lastHrEmployeeDraftNotifyUtcDay !== todayUtc) {
+      lastHrEmployeeDraftNotifyUtcDay = todayUtc;
+      const ids = stale.map((s) => s.id).slice(0, 25);
+      const suffix = stale.length > 25 ? " …" : "";
+      sendNotificationStub({
+        kind: "sla_reminder",
+        workflow: "M-01-EMPLOYEE-DRAFT",
+        hours: 0,
+        alertRole: "DA",
+        message: `M-01: ${stale.length} employee registration(s) in Draft or Submitted for more than 15 working days (IDs: ${ids.join(", ")}${suffix}).`,
+        overdueCount: stale.length,
+      });
+    }
+  } catch (e) {
+    console.error("[SLA] HR employee draft check failed:", e);
   }
 }
 

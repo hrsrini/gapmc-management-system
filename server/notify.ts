@@ -1,5 +1,6 @@
 /**
- * Notifications: console + optional NOTIFY_WEBHOOK_URL + optional SMTP (NOTIFY_EMAIL_TO, SMTP_*).
+ * Notifications: console + optional NOTIFY_WEBHOOK_URL + optional SMTP (NOTIFY_EMAIL_TO, SMTP_*)
+ * + optional NOTIFY_SMS_WEBHOOK_URL (client/NIC SMS gateway — POST JSON same shape as generic webhook).
  * Failures are logged; never throw to callers of sendNotificationStub.
  */
 export type SlaReminderPayload = {
@@ -87,6 +88,25 @@ export async function dispatchNotification(payload: NotificationPayload): Promis
       await transporter.sendMail({ from, to, subject, text });
     } catch (e) {
       console.error("[NOTIFY] SMTP failed:", e);
+    }
+  }
+
+  const smsUrl = process.env.NOTIFY_SMS_WEBHOOK_URL?.trim();
+  if (smsUrl) {
+    try {
+      await fetch(smsUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: "sms",
+          ...payload,
+          subject,
+          text,
+          sentAt: new Date().toISOString(),
+        }),
+      });
+    } catch (e) {
+      console.error("[NOTIFY] SMS webhook failed:", e);
     }
   }
 }

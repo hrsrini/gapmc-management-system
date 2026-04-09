@@ -47,9 +47,17 @@ export async function writeAuditLog(req: Request, entry: AuditEntry): Promise<vo
   });
 }
 
-/** For cron/batch jobs with no authenticated user. userId from AUDIT_SYSTEM_USER_ID or `"system"`. */
+/**
+ * Cron / batch audit actor id. Default literal `"system"` (no `users` row required).
+ * Set `AUDIT_SYSTEM_USER_ID` to a real `users.id` if compliance requires a FK-capable actor.
+ */
+export function getAuditSystemUserId(): string {
+  return process.env.AUDIT_SYSTEM_USER_ID?.trim() || "system";
+}
+
+/** For cron/batch jobs with no authenticated user. */
 export async function writeAuditLogSystem(entry: AuditEntry): Promise<void> {
-  const userId = process.env.AUDIT_SYSTEM_USER_ID ?? "system";
+  const userId = getAuditSystemUserId();
   const now = new Date().toISOString();
   await db.insert(auditLog).values({
     id: nanoid(),

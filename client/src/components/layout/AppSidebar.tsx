@@ -202,7 +202,6 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
     group: 'Admin (IOMS)',
     adminOnly: true,
     items: [
-      { title: 'Users', icon: Users, href: '/admin/users' },
       { title: 'Roles', icon: Shield, href: '/admin/roles' },
       { title: 'Locations', icon: MapPin, href: '/admin/locations' },
       { title: 'Config', icon: Settings, href: '/admin/config' },

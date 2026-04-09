@@ -9,6 +9,7 @@
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "smoke": "node scripts/api-smoke.mjs",
+    "login-smoke": "node scripts/login-smoke.mjs",
     "db:push": "dotenv -e .env -- drizzle-kit push",
     "db:push-safe": "npm run db:backup-data && npm run db:push",
     "db:create-gapmc": "tsx scripts/run-create-gapmc.ts",
@@ -18,7 +19,8 @@
     "db:backup-data": "dotenv -e .env -- tsx scripts/dump-db-data.ts",
     "db:backup-full": "dotenv -e .env -- tsx scripts/build-backup-sql.ts",
     "db:verify-schema": "dotenv -e .env -- tsx scripts/verify-gapmc-schema.ts",
-    "db:apply-land-immutable": "dotenv -e .env -- tsx scripts/apply-land-immutable.ts"
+    "db:apply-land-immutable": "dotenv -e .env -- tsx scripts/apply-land-immutable.ts",
+    "test-plan:expand": "node scripts/expand-test-plan.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
