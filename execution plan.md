@@ -59,8 +59,8 @@ All schema and workflow logic from the doc applies; only the runtime (Next.js vs
 | Item | Description |
 |------|-------------|
 | **Schema** | `users`, `roles`, `user_roles`, `permissions`, `role_permissions`, `yards` (locations), `user_yards`, `system_config`, `sla_config`, `audit_log` |
-| **API** | User CRUD, role/permission matrix, location CRUD, config get/set, audit log query (filter by user/module/date) |
-| **Client routes** | `/admin/users`, `/admin/roles`, `/admin/locations`, `/admin/config`, `/admin/audit` |
+| **API** | **App login:** `POST|PUT /api/hr/employees/:id/login` (not admin user CRUD). Role/permission matrix, location CRUD, config get/set, audit log query (filter by user/module/date) |
+| **Client routes** | **User provisioning:** `/hr/employees/:id` (Login & roles) — not `/admin/users`. **Admin:** `/admin/roles`, `/admin/locations`, `/admin/config`, `/admin/audit`, `/admin/permissions`, `/admin/sla-config`, `/admin/finance-mappings` |
 | **Middleware** | Resolve user from session; attach `user` and `scopedYardIds` to request; enforce role + yard on protected routes |
 | **Seed** | 14 locations (Canacona, Curchorem, Dhargal, GSAMB, Keri, Mapusa, Mapusa Sub Yard, Margao, Mollem, Pernem, Pollem, Ponda, Sanquelim, Valpoi); default config (Market Fee % = 1, MSP Rate = 10, Admin Charges = 0, Licence Fee = 300) |
 

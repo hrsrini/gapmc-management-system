@@ -9,7 +9,7 @@ Stack differs; feature parity is the goal. Items below are **screens, APIs, or b
 
 | Doc item | Status | Notes |
 |----------|--------|------|
-| User List + Form | ✅ Done | `/admin/users` |
+| User List + Form | ✅ Done (via HR) | **No** `/admin/users`. App logins: **`/hr/employees/{id}` → Login & roles** tab; APIs `POST|PUT /api/hr/employees/:id/login` |
 | Role List | ✅ Done | `/admin/roles` (list only) |
 | **Permission Matrix** | ❌ Pending | Doc: Module × Action (Create/Read/Update/Delete/Approve) grid. We have `/api/admin/permissions` and role-permissions API but **no UI grid** to view/edit role–permission matrix. |
 | Location Config | ✅ Done | `/admin/locations` (yards CRUD) |

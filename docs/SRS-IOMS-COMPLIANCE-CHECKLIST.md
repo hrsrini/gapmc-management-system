@@ -29,7 +29,7 @@
 | CC-10 | **WCAG 2.1 AA** + GIGW-oriented UX | | Audit |
 | CC-11 | **Data retention / archival** per SRS §16 | | |
 | CC-12 | **Error code registry** + consistent API errors | Done | `server/api-errors.ts` `sendApiError`: all route modules + `auth.ts` use `{ error, code, details? }` for **4xx/5xx** (`INTERNAL_ERROR` on catch paths); client `readApiErrorMessage` + 401 branch in `fetchApiGet`; dev **port scan** `PORT`…`PORT+19`; **`npm run smoke`** → `GET /api/health` |
-| CC-13 | **User ↔ active employee** coupling; disable user when employee inactive (**SRS §1.4**) | Partial | `POST/PUT /api/admin/users` + `employees.user_id`; HR update deactivates user |
+| CC-13 | **User ↔ active employee** coupling; disable user when employee inactive (**SRS §1.4**) | Partial | `POST/PUT /api/hr/employees/:id/login`, `GET /api/hr/employees/:id/login-profile`; `employees.user_id` / `users.employee_id`; HR employee `PUT` deactivates linked login |
 | CC-14 | **Tally COA mapping** — ledger catalogue + revenue/expenditure head → Tally ledger for export | Partial | Schema + seed; `PUT /api/admin/expenditure-heads/:id/tally-ledger`; `AdminFinanceMappings.tsx`; `GET /api/ioms/reports/tally-export` |
 | CC-15 | **Govt. office/godown GST exempt categories** (7 named entities) — licence link + M-03/M-05 zero tax | Partial | Seed + API + `TraderLicenceDetail` category editor; rent + receipt server logic |
 
@@ -42,10 +42,10 @@
 | # | Requirement | Status | Evidence / notes |
 |---|-------------|--------|------------------|
 | M10-01 | Users table: login identity, `employee_id` link, active flag, password/session policy | | `users`, `auth` |
-| M10-02 | **No IOMS user** without **active** employee (if SRS is binding) | Partial | `POST /api/admin/users` requires `employeeId` |
+| M10-02 | **No IOMS user** without **active** employee (if SRS is binding) | Partial | App login is always created in context of an employee: `POST /api/hr/employees/:id/login` (no standalone user without `employee_id`) |
 | M10-03 | **Transactional disable** of user when employee becomes inactive (same transaction as HR update) | Partial | `routes-hr.ts` employee `PUT` |
-| M10-04 | User CRUD API (create, read, update, deactivate) with permission checks | Partial | `routes-admin.ts` |
-| M10-05 | Admin UI: list users, assign **roles** and **yards/locations** | Partial | `AdminUsers.tsx` + employee picker |
+| M10-04 | User CRUD API (create, read, update, deactivate) with permission checks | Partial | **Create/update/deactivate login:** `routes-hr.ts` `POST|PUT /api/hr/employees/:id/login`. **No** `/api/admin/users` — `routes-admin.ts` is roles, locations, config, audit, matrix, SLA, finance mappings |
+| M10-05 | Admin UI: list users, assign **roles** and **yards/locations** | Partial | **No** standalone `/admin/users`. **HR** `HrEmployeeDetail` → **Login & roles** (`EmployeeLoginAccessSection.tsx`) for login, roles, yards; **M-10** `/admin/permissions` for module×action matrix |
 | M10-06 | Optional: password reset / admin-set password policy per SRS | | |
 | M10-07 | SSO / government IdP / OTP login (if in scope) | | Currently password session |
 
