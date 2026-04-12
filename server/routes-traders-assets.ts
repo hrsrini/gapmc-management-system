@@ -3,7 +3,7 @@
  * Tables: trader_licences, assistant_traders, assets, asset_allotments, trader_blocking_log, msp_settings.
  * CC-05: list/get/mutate filtered by req.scopedLocationIds when non-empty.
  */
-import type { Express, Request } from "express";
+import type { Express, Request, Response } from "express";
 import { eq, desc, and, inArray, sql, or, ilike } from "drizzle-orm";
 import { db } from "./db";
 import {
@@ -25,7 +25,22 @@ import { createIomsReceipt } from "./routes-receipts-ioms";
 import { tenantLicenceIsGstExempt } from "./gst-exempt";
 import { assertRecordDoDvDaSeparation } from "./workflow";
 import { sendApiError } from "./api-errors";
-import { parseReportPaging, reportSearchPattern } from "./report-paging";
+import { parseReportPaging, parseReportSort, reportSearchPattern } from "./report-paging";
+import { orderLicenceReport, LICENCE_REPORT_SORT_ALLOW } from "./report-order";
+import {
+  HrEmployeeRuleError,
+  normalizeMobile10,
+  assertPersonalEmailFormat,
+  normalizeAadhaarMasked,
+} from "./hr-employee-rules";
+
+function sendHrRule(res: Response, e: unknown): boolean {
+  if (e instanceof HrEmployeeRuleError) {
+    sendApiError(res, 400, e.code, e.message);
+    return true;
+  }
+  return false;
+}
 
 function yardInScope(req: Request, yardId: string): boolean {
   const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
@@ -49,6 +64,7 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       if (paged) {
         const { page, pageSize, q } = parseReportPaging(req);
+        const { sortKey, sortDir } = parseReportSort(req, LICENCE_REPORT_SORT_ALLOW, "createdAt");
         const pattern = reportSearchPattern(q);
         const all = [...conditions];
         if (pattern) {
@@ -70,7 +86,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         const [{ c: total }] = wc ? await countQ.where(wc) : await countQ;
         const licenceBase = db.select().from(traderLicences);
         const licenceFiltered = wc ? licenceBase.where(wc) : licenceBase;
-        const dataQ = licenceFiltered.orderBy(desc(traderLicences.createdAt));
+        const dataQ = licenceFiltered.orderBy(...orderLicenceReport(sortKey, sortDir));
         const rows =
           pageSize === "all"
             ? await dataQ
@@ -209,6 +225,26 @@ export function registerTradersAssetsRoutes(app: Express) {
       const body = req.body;
       const yid = String(body.yardId ?? "");
       if (!yardInScope(req, yid)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      if (!body.mobile || String(body.mobile).trim() === "") {
+        return sendApiError(res, 400, "LICENCE_MOBILE_REQUIRED", "Mobile is required");
+      }
+      let mobileNorm: string;
+      let emailNorm: string | null;
+      let aadhaarNorm: string | null;
+      try {
+        const m = normalizeMobile10(String(body.mobile));
+        if (m == null) {
+          return sendApiError(res, 400, "LICENCE_MOBILE_REQUIRED", "Mobile is required");
+        }
+        mobileNorm = m;
+        emailNorm =
+          body.email != null && String(body.email).trim() !== "" ? String(body.email).trim().toLowerCase() : null;
+        assertPersonalEmailFormat(emailNorm);
+        aadhaarNorm = normalizeAadhaarMasked(body.aadhaarToken ?? null);
+      } catch (e) {
+        if (sendHrRule(res, e)) return;
+        throw e;
+      }
       const id = nanoid();
       const sys = await getMergedSystemConfig();
       const feeFromBody =
@@ -218,14 +254,14 @@ export function registerTradersAssetsRoutes(app: Express) {
         id,
         firmName: String(body.firmName ?? ""),
         yardId: String(body.yardId ?? ""),
-        mobile: String(body.mobile ?? ""),
+        mobile: mobileNorm,
         licenceType: String(body.licenceType ?? "Associated"),
         status: String(body.status ?? "Draft"),
         firmType: body.firmType ? String(body.firmType) : null,
         contactName: body.contactName ? String(body.contactName) : null,
-        email: body.email ? String(body.email) : null,
+        email: emailNorm,
         address: body.address ? String(body.address) : null,
-        aadhaarToken: body.aadhaarToken ? String(body.aadhaarToken) : null,
+        aadhaarToken: aadhaarNorm,
         pan: body.pan ? String(body.pan) : null,
         gstin: body.gstin ? String(body.gstin) : null,
         feeAmount,
@@ -234,6 +270,8 @@ export function registerTradersAssetsRoutes(app: Express) {
         validTo: body.validTo ? String(body.validTo) : null,
         isBlocked: Boolean(body.isBlocked ?? false),
         blockReason: body.blockReason ? String(body.blockReason) : null,
+        dvReturnRemarks: null,
+        workflowRevisionCount: 0,
         govtGstExemptCategoryId: body.govtGstExemptCategoryId ? String(body.govtGstExemptCategoryId) : null,
         isNonGstEntity: Boolean(body.isNonGstEntity ?? false),
         doUser: body.doUser ? String(body.doUser) : null,
@@ -259,12 +297,62 @@ export function registerTradersAssetsRoutes(app: Express) {
       const [existing] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
       if (!existing) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+
+      const issuedNo = existing.licenceNo != null && String(existing.licenceNo).trim() !== "";
+      /** After licence number is issued, application data is frozen; these keys remain patchable (tax / operational). */
+      const ISSUED_ALLOWED_BODY_KEYS = new Set([
+        "govtGstExemptCategoryId",
+        "isNonGstEntity",
+        "isBlocked",
+        "blockReason",
+      ]);
+      if (issuedNo) {
+        for (const key of Object.keys(body)) {
+          if (body[key] === undefined) continue;
+          if (!ISSUED_ALLOWED_BODY_KEYS.has(key)) {
+            return sendApiError(
+              res,
+              403,
+              "LICENCE_FINAL_LOCKED",
+              "This licence number has been issued. Only GST exemption category, non-GST flag, and block fields can be updated.",
+            );
+          }
+        }
+      }
+
       const newYardId = body.yardId !== undefined ? String(body.yardId) : existing.yardId;
       if (body.yardId !== undefined && !yardInScope(req, newYardId)) {
         return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
 
-      const allowed = ["firmName", "firmType", "yardId", "contactName", "mobile", "email", "address", "aadhaarToken", "pan", "gstin", "licenceType", "feeAmount", "receiptId", "validFrom", "validTo", "status", "isBlocked", "blockReason", "licenceNo", "doUser", "dvUser", "daUser", "govtGstExemptCategoryId"];
+      const allowedAll = [
+        "firmName",
+        "firmType",
+        "yardId",
+        "contactName",
+        "mobile",
+        "email",
+        "address",
+        "aadhaarToken",
+        "pan",
+        "gstin",
+        "licenceType",
+        "feeAmount",
+        "receiptId",
+        "validFrom",
+        "validTo",
+        "status",
+        "isBlocked",
+        "blockReason",
+        "licenceNo",
+        "doUser",
+        "dvUser",
+        "daUser",
+        "govtGstExemptCategoryId",
+      ];
+      const allowed = issuedNo
+        ? allowedAll.filter((k) => ISSUED_ALLOWED_BODY_KEYS.has(k))
+        : allowedAll;
       const updates: Record<string, unknown> = { updatedAt: now() };
       for (const k of allowed) {
         if (body[k] === undefined) continue;
@@ -273,6 +361,54 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
       if (body.isBlocked !== undefined) updates.isBlocked = Boolean(body.isBlocked);
       if (body.isNonGstEntity !== undefined) updates.isNonGstEntity = Boolean(body.isNonGstEntity);
+
+      if (body.dvReturnRemarks !== undefined) {
+        const raw = body.dvReturnRemarks;
+        updates.dvReturnRemarks =
+          raw == null || String(raw).trim() === "" ? null : String(raw).trim().slice(0, 4000);
+      }
+
+      const mergedStatus =
+        updates.status !== undefined ? String(updates.status) : String(existing.status);
+      if (mergedStatus === "Query" && existing.status !== "Query") {
+        const remark =
+          updates.dvReturnRemarks !== undefined ? (updates.dvReturnRemarks as string | null) : null;
+        if (remark == null || String(remark).trim() === "") {
+          return sendApiError(
+            res,
+            400,
+            "QUERY_REMARKS_REQUIRED",
+            "Reviewer remarks are required when returning an application for correction.",
+          );
+        }
+      }
+      if (existing.status === "Query" && mergedStatus === "Pending") {
+        updates.workflowRevisionCount = (existing.workflowRevisionCount ?? 0) + 1;
+        updates.dvReturnRemarks = null;
+      }
+
+      const mergedMobile = updates.mobile !== undefined ? updates.mobile : existing.mobile;
+      const mergedEmail = updates.email !== undefined ? updates.email : existing.email;
+      const mergedAadhaar = updates.aadhaarToken !== undefined ? updates.aadhaarToken : existing.aadhaarToken;
+      try {
+        if (mergedMobile == null || String(mergedMobile).trim() === "") {
+          return sendApiError(res, 400, "LICENCE_MOBILE_REQUIRED", "Mobile is required");
+        }
+        const mn = normalizeMobile10(String(mergedMobile));
+        if (!mn) {
+          return sendApiError(res, 400, "LICENCE_MOBILE_REQUIRED", "Mobile is required");
+        }
+        updates.mobile = mn;
+        const en =
+          mergedEmail == null || String(mergedEmail).trim() === "" ? null : String(mergedEmail).trim().toLowerCase();
+        assertPersonalEmailFormat(en);
+        updates.email = en;
+        updates.aadhaarToken = normalizeAadhaarMasked(mergedAadhaar as string | null);
+      } catch (e) {
+        if (sendHrRule(res, e)) return;
+        throw e;
+      }
+
       const mergedRoles = {
         doUser: updates.doUser !== undefined ? (updates.doUser as string | null) : existing.doUser,
         dvUser: updates.dvUser !== undefined ? (updates.dvUser as string | null) : existing.dvUser,

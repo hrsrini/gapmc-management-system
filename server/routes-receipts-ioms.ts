@@ -214,6 +214,37 @@ export function registerReceiptsIomsRoutes(app: Express) {
     }
   });
 
+  // Reconciliation: gateway log vs receipts (scoped to user's yards) — MUST be before /:id so "reconciliation" is not captured as an id
+  app.get("/api/ioms/receipts/reconciliation", async (req, res) => {
+    try {
+      const scopedIds = req.scopedLocationIds;
+      const receiptWhere = scopedIds && scopedIds.length > 0 ? inArray(iomsReceipts.yardId, scopedIds) : undefined;
+      const [gatewayLogs, receipts] = await Promise.all([
+        db.select().from(paymentGatewayLog).orderBy(desc(paymentGatewayLog.createdAt)).limit(200),
+        receiptWhere
+          ? db.select().from(iomsReceipts).where(receiptWhere).orderBy(desc(iomsReceipts.createdAt)).limit(200)
+          : db.select().from(iomsReceipts).orderBy(desc(iomsReceipts.createdAt)).limit(200),
+      ]);
+      const receiptMap = new Map(receipts.map((r) => [r.id, r]));
+      const matched: { logId: string; receiptId: string }[] = [];
+      const unmatchedLogs: typeof gatewayLogs = [];
+      for (const log of gatewayLogs) {
+        const rec = receiptMap.get(log.receiptId);
+        if (rec && rec.status === "Paid") matched.push({ logId: log.id, receiptId: log.receiptId });
+        else unmatchedLogs.push(log);
+      }
+      res.json({
+        gatewayLogCount: gatewayLogs.length,
+        receiptCount: receipts.length,
+        matched,
+        unmatchedLogs: unmatchedLogs.slice(0, 50),
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch reconciliation data");
+    }
+  });
+
   // Get one receipt by id (scoped to user's yards)
   app.get("/api/ioms/receipts/:id", async (req, res) => {
     try {
@@ -467,37 +498,6 @@ export function registerReceiptsIomsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to process callback");
-    }
-  });
-
-  // Reconciliation: gateway log vs receipts (scoped to user's yards)
-  app.get("/api/ioms/receipts/reconciliation", async (req, res) => {
-    try {
-      const scopedIds = req.scopedLocationIds;
-      const receiptWhere = scopedIds && scopedIds.length > 0 ? inArray(iomsReceipts.yardId, scopedIds) : undefined;
-      const [gatewayLogs, receipts] = await Promise.all([
-        db.select().from(paymentGatewayLog).orderBy(desc(paymentGatewayLog.createdAt)).limit(200),
-        receiptWhere
-          ? db.select().from(iomsReceipts).where(receiptWhere).orderBy(desc(iomsReceipts.createdAt)).limit(200)
-          : db.select().from(iomsReceipts).orderBy(desc(iomsReceipts.createdAt)).limit(200),
-      ]);
-      const receiptMap = new Map(receipts.map((r) => [r.id, r]));
-      const matched: { logId: string; receiptId: string }[] = [];
-      const unmatchedLogs: typeof gatewayLogs = [];
-      for (const log of gatewayLogs) {
-        const rec = receiptMap.get(log.receiptId);
-        if (rec && rec.status === "Paid") matched.push({ logId: log.id, receiptId: log.receiptId });
-        else unmatchedLogs.push(log);
-      }
-      res.json({
-        gatewayLogCount: gatewayLogs.length,
-        receiptCount: receipts.length,
-        matched: matched.length,
-        unmatchedLogs: unmatchedLogs.slice(0, 50),
-      });
-    } catch (e) {
-      console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch reconciliation data");
     }
   });
 }

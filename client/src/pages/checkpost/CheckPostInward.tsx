@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +14,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { LogIn, AlertCircle, ShieldCheck, Plus } from "lucide-react";
-
 interface InwardEntry {
   id: string;
   entryNo?: string | null;
@@ -204,15 +204,87 @@ export default function CheckPostInward() {
     onError: (e: Error) => toast({ title: "Add commodity failed", description: e.message, variant: "destructive" }),
   });
 
-  const openCommodities = (inwardId: string) => {
+  const openCommodities = useCallback((inwardId: string) => {
     setSelectedInwardId(inwardId);
     setCommodityDialogOpen(true);
-  };
-  const filteredList = (list ?? []).filter((e) => {
-    if (filterCheckPostId && e.checkPostId !== filterCheckPostId) return false;
-    if (filterStatus && e.status !== filterStatus) return false;
-    return true;
-  });
+  }, []);
+  const filteredList = useMemo(() => {
+    return (list ?? []).filter((e) => {
+      if (filterCheckPostId && e.checkPostId !== filterCheckPostId) return false;
+      if (filterStatus && e.status !== filterStatus) return false;
+      return true;
+    });
+  }, [list, filterCheckPostId, filterStatus]);
+
+  const inwardColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "entryNo", header: "Entry No" },
+      { key: "checkPostName", header: "Check Post" },
+      { key: "transactionType", header: "Type" },
+      { key: "entryDate", header: "Date" },
+      { key: "vehicleNumber", header: "Vehicle" },
+      { key: "totalCharges", header: "Charges" },
+      { key: "_status", header: "Status", sortField: "status" },
+      { key: "_actions", header: "Actions" },
+    ],
+    [],
+  );
+
+  const inwardSourceRows = useMemo((): Record<string, unknown>[] => {
+    return filteredList.map((e) => ({
+      id: e.id,
+      entryNo: e.entryNo ?? "—",
+      checkPostName: checkPostById.get(e.checkPostId)?.name ?? e.checkPostId,
+      transactionType: e.transactionType,
+      entryDate: e.entryDate.slice(0, 10),
+      vehicleNumber: e.vehicleNumber ?? "—",
+      totalCharges: e.totalCharges != null ? e.totalCharges : "—",
+      status: e.status,
+      _status: <Badge variant="secondary">{e.status}</Badge>,
+      _actions: (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => openCommodities(e.id)}>
+            Commodities
+          </Button>
+          {canVerify && e.status === "Draft" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => statusMutation.mutate({ id: e.id, status: "Verified" })}
+              disabled={statusMutation.isPending}
+            >
+              <ShieldCheck className="h-3.5 w-3.5 mr-1" />
+              {statusMutation.isPending ? "Verifying..." : "Verify"}
+            </Button>
+          )}
+        </div>
+      ),
+    }));
+  }, [filteredList, checkPostById, canVerify, statusMutation, openCommodities]);
+
+  const commodityLineColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "commodityName", header: "Commodity" },
+      { key: "unit", header: "Unit" },
+      { key: "quantity", header: "Qty" },
+      { key: "value", header: "Value" },
+      { key: "marketFeePercent", header: "Fee %" },
+    ],
+    [],
+  );
+
+  const commodityLineRows = useMemo((): Record<string, unknown>[] => {
+    return commodityLines.map((l) => ({
+      id: l.id,
+      commodityName: commodityById.get(l.commodityId)?.name ?? l.commodityId,
+      unit: l.unit,
+      quantity: l.quantity,
+      value: l.value,
+      marketFeePercent: l.marketFeePercent ?? "—",
+    }));
+  }, [commodityLines, commodityById]);
+
+  const filterKey = `${filterCheckPostId}|${filterStatus}`;
 
   if (isError) {
     return (
@@ -323,52 +395,15 @@ export default function CheckPostInward() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Entry No</TableHead>
-                  <TableHead>Check Post</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Vehicle</TableHead>
-                  <TableHead>Charges</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="w-[220px]">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredList.map((e) => (
-                  <TableRow key={e.id}>
-                    <TableCell className="font-mono text-sm">{e.entryNo ?? "—"}</TableCell>
-                    <TableCell>{checkPostById.get(e.checkPostId)?.name ?? e.checkPostId}</TableCell>
-                    <TableCell>{e.transactionType}</TableCell>
-                    <TableCell>{e.entryDate}</TableCell>
-                    <TableCell>{e.vehicleNumber ?? "—"}</TableCell>
-                    <TableCell>{e.totalCharges != null ? e.totalCharges : "—"}</TableCell>
-                    <TableCell><Badge variant="secondary">{e.status}</Badge></TableCell>
-                    <TableCell className="space-x-2">
-                      <Button size="sm" variant="outline" onClick={() => openCommodities(e.id)}>
-                        Commodities
-                      </Button>
-                      {canVerify && e.status === "Draft" && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => statusMutation.mutate({ id: e.id, status: "Verified" })}
-                          disabled={statusMutation.isPending}
-                        >
-                          <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-                          {statusMutation.isPending ? "Verifying..." : "Verify"}
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && filteredList.length === 0 && (
-            <p className="text-sm text-muted-foreground py-4">No inward entries.</p>
+            <ClientDataGrid
+              columns={inwardColumns}
+              sourceRows={inwardSourceRows}
+              searchKeys={["entryNo", "checkPostName", "transactionType", "entryDate", "vehicleNumber", "status"]}
+              defaultSortKey="entryDate"
+              defaultSortDir="desc"
+              emptyMessage="No inward entries."
+              resetPageDependency={filterKey}
+            />
           )}
         </CardContent>
       </Card>
@@ -412,35 +447,17 @@ export default function CheckPostInward() {
                 {addCommodityMutation.isPending ? "Adding..." : "Add line"}
               </Button>
             </div>
-            <div className="border rounded-md">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Commodity</TableHead>
-                    <TableHead>Unit</TableHead>
-                    <TableHead className="text-right">Qty</TableHead>
-                    <TableHead className="text-right">Value</TableHead>
-                    <TableHead className="text-right">Fee %</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {commodityLinesLoading ? (
-                    <TableRow><TableCell colSpan={5}>Loading...</TableCell></TableRow>
-                  ) : commodityLines.length === 0 ? (
-                    <TableRow><TableCell colSpan={5}>No commodity lines yet.</TableCell></TableRow>
-                  ) : (
-                    commodityLines.map((l) => (
-                      <TableRow key={l.id}>
-                        <TableCell>{commodityById.get(l.commodityId)?.name ?? l.commodityId}</TableCell>
-                        <TableCell>{l.unit}</TableCell>
-                        <TableCell className="text-right">{l.quantity}</TableCell>
-                        <TableCell className="text-right">{l.value}</TableCell>
-                        <TableCell className="text-right">{l.marketFeePercent ?? "—"}</TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+            <div className="border rounded-md p-1">
+              <ClientDataGrid
+                columns={commodityLineColumns}
+                sourceRows={commodityLineRows}
+                searchKeys={["commodityName", "unit"]}
+                defaultSortKey="commodityName"
+                defaultSortDir="asc"
+                isLoading={commodityLinesLoading}
+                emptyMessage="No commodity lines yet."
+                resetPageDependency={`${selectedInwardId}|${commodityLines.length}`}
+              />
             </div>
           </div>
         </DialogContent>

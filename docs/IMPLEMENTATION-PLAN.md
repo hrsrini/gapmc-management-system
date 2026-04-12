@@ -48,9 +48,9 @@
 | **Auth middleware** | Resolve user from session; load roles + permissions; attach `req.user` and `req.scopedLocationIds` (from user_yards). |
 | **Permission middleware** | For /api/admin: require M-10 permission by method (Read/Create/Update/Delete). For other /api: map path to module (M-01–M-09), method to action; require `hasPermission(user, module, action)`. ADMIN bypass. |
 | **Audit** | On every create/update/delete of business data: `writeAuditLog(req, { module, action, recordId, beforeValue, afterValue })`. |
-| **APIs** | User CRUD (assign roles + yards); Role CRUD; Permission matrix (GET list, POST/DELETE role_permissions); Locations (yards) CRUD; System config get/set; SLA config CRUD; Audit log list (filter by user, module, date). |
+| **APIs** | **App login (create/update, roles, yards):** `POST` / `PUT` `/api/hr/employees/:id/login` in `routes-hr.ts` — **not** `/api/admin/users`. **Admin:** Role CRUD; Permission matrix (GET list, POST/DELETE role_permissions); Locations (yards) CRUD; System config get/set; SLA config CRUD; Audit log list (filter by user, module, date). |
 
-**Status in current app:** Auth, scopedLocationIds, requireModulePermissionByPath, requireAdminPermissionByMethod, writeAuditLog, admin routes exist. Confirm audit is called on all mutable operations.
+**Status in current app:** Auth, scopedLocationIds, requireModulePermissionByPath, requireAdminPermissionByMethod, writeAuditLog, admin routes exist. **User provisioning is HR-only** (employee detail → Login & roles). Confirm audit is called on all mutable operations.
 
 ### 0.3 Frontend
 
@@ -59,7 +59,7 @@
 | **Login** | Session-based; store user + roles + permissions (e.g. from /api/auth/me). |
 | **Route guards** | Protected routes require auth; admin section requires ADMIN or M-10 permission. |
 | **Permission-aware UI** | Helper `can(module, action)`. Hide/disable Create/Edit/Delete where user lacks permission; show “Access denied” on forbidden pages or 403. |
-| **Admin screens** | Users (assign role + locations), Roles, Permission matrix (module × role → checkboxes), Locations (yards), Config, Audit log (list + filters: module, user id, limit), SLA config. |
+| **Admin screens** | **No standalone Users screen.** App login + role + yard assignment: **HR → employee detail → Login & roles**. **Admin:** Roles, Permission matrix (module × role → checkboxes), Locations (yards), Config, Audit log (list + filters: module, user id, limit), SLA config, Finance mappings. |
 
 **Status in current app:** Login, ProtectedRoute, AdminRoute, can(), RequirePermission, sidebar filtering, list/detail permission checks exist. **Pending my action:** payment vouchers and **leave requests** (`pendingMyAction=1`).
 
@@ -78,7 +78,7 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 | Area | Done |
 |------|------|
 | **0.1 DB** | `yards.type` supports **Yard \| CheckPost \| HO** (comment in schema); locations remain single master. |
-| **0.2 Audit** | M-10: yards, roles, users (no password in audit payload), role_permissions assign/remove, SLA config create/update; existing config + tally mapping unchanged. M-06: expenditure head create/update, advance create; vouchers create/update already audited. |
+| **0.2 Audit** | M-10: yards, roles, **HR employee login** create/update (no password in audit payload), role_permissions assign/remove, SLA config create/update; existing config + tally mapping unchanged. M-06: expenditure head create/update, advance create; vouchers create/update already audited. |
 | **0.3 UI** | **Payment Vouchers** and **leave requests**: **“Pending my action”** → `GET /api/ioms/vouchers?pendingMyAction=1` and `GET /api/hr/leaves?pendingMyAction=1` (DV/DA queue + ADMIN where applicable). |
 | **0.4 Reference workflow** | **Payment vouchers** (`server/workflow.ts` + `routes-vouchers.ts`): Draft/Submitted → Verified (DV) → Approved/Rejected/Paid (DA); DO create; segregation + permission checks. |
 
@@ -111,7 +111,7 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 | **M-07 Fleet alerts** | `GET /api/ioms/fleet/renewal-alerts` + banner on vehicles list (`operational-alerts.ts`, 60/30/overdue). |
 | **M-08 AMC alerts** | `GET /api/ioms/amc/renewal-alerts`; Construction AMC UI can consume same pattern. |
 | **M-09 Dak SLA** | `GET /api/ioms/dak/inward/sla-overdue`; hourly `sla-reminder.ts` when `sla_config` rows match M-09/DAK; inward register banner. |
-| **M-08 Land register** | Append-only at API: **no** PUT/DELETE for `land_records` (create + list only). Optional DB enforcement: **`npm run db:apply-land-immutable`** (then **`npm run db:verify-schema`**). |
+| **M-08 Land register** | **POST** create; **`PUT` `/api/ioms/land-records/:id`** for corrections (**DA or Admin only**, audited). Optional DB triggers: **`npm run db:apply-land-immutable`** (then **`npm run db:verify-schema`**). |
 
 ### 1.1 M-05 Receipts Online
 
@@ -190,12 +190,12 @@ Implement or confirm one full workflow (e.g. **Payment Voucher** or **Leave Requ
 
 | Layer | Deliverable |
 |-------|-------------|
-| **DB** | works; work_bills (work_id, voucher_id); amc_contracts; land_register (append-only / no delete); fixed_assets (disposal_date, link to M-06). |
-| **API** | Works CRUD + bills; AMC CRUD; land read-only or append-only; fixed assets CRUD + disposal (DA only). |
+| **DB** | works; work_bills (work_id, voucher_id); amc_contracts; land_records (create + DA/Admin correction per policy); fixed_assets (disposal_date, link to M-06). |
+| **API** | Works CRUD + bills; AMC CRUD; land POST create + **PUT** update (DA/Admin); fixed assets CRUD + disposal (DA only). |
 | **Logic** | AMC renewal alert (cron 60/30 days before contract_end). |
 | **UI** | Works register; work detail + bills; AMC list + renewal alerts; land register; fixed asset register + disposal approval. |
 
-**Remaining gaps:** In-process daily cron for AMC (optional; alerts API exists); full DA-only disposal workflow in UI if not complete. **Land:** DB-level append-only triggers via **`npm run db:apply-land-immutable`** (see `scripts/migrations/002-land-records-immutable.sql`).
+**Remaining gaps:** In-process daily cron for AMC (optional; alerts API exists); full DA-only disposal workflow in UI if not complete. **Land:** optional DB-level immutability triggers via **`npm run db:apply-land-immutable`** (see `scripts/migrations/002-land-records-immutable.sql`); API still supports **DA/Admin PUT** for corrections unless triggers conflict (verify in target environment).
 
 ### 3.4 M-09 Correspondence (Dak)
 
@@ -248,7 +248,7 @@ Use node-cron or a small scheduler process; document in .env.example.
 
 ## Summary: RBAC first, then modules
 
-1. **Phase 0 (RBAC first):** Users, roles, permissions, role_permissions, locations (yards), user_yards, audit_log, system_config, SLA config. Middleware: auth, scopedLocationIds, permission by path/method. UI: login, guards, can(), admin screens (users, roles, permission matrix, locations, config, audit, SLA). One full DO→DV→DA flow.
+1. **Phase 0 (RBAC first):** Users, roles, permissions, role_permissions, locations (yards), user_yards, audit_log, system_config, SLA config. Middleware: auth, scopedLocationIds, permission by path/method. UI: login, guards, can(), **app login via HR employee Login & roles**, admin screens (roles, permission matrix, locations, config, audit, SLA, finance mappings). One full DO→DV→DA flow.
 2. **Phase 1:** M-05 (receipt engine), M-02 (trader, asset, licence, allotment, blocking, MSP).
 3. **Phase 2:** M-03 (rent, ledger, credit note, GSTR-1, auto-invoice), M-04 (commodities, fee, check post, exit permit, bank deposits).
 4. **Phase 3:** M-06 (voucher + statement), M-07 (fleet + alerts), M-08 (works, AMC, land, fixed assets + alerts), M-09 (dak + SLA cron + escalation).
@@ -268,12 +268,12 @@ After pulling these changes, run **`npm run db:push`** so new columns exist: `le
 | **M-01 Leave** | Full **Pending → Verified (DV) → Approved/Rejected (DA)**; DV return to Pending with remarks; **pending my action** filter; sample seed uses do/dv users. |
 | **M-01 Retirement** | Daily cron + HTTP cron; **user disable** on terminal HR status (PUT + cron); notifications via `notify` (webhook/SMTP optional). |
 | **M-04 Adjusted returns** | **Adjustment** purchase rows linked to **Approved** parent; negative `marketFeeAmount`; same DO→DV→DA workflow as originals. |
-| **M-08 Land** | Append-only API; optional DB triggers via **`npm run db:apply-land-immutable`** + **`npm run db:verify-schema`**. |
+| **M-08 Land** | **Create** via POST; **correction** via **`PUT` `/api/ioms/land-records/:id`** (**DA or Admin only**, audited). Optional stricter DB triggers via **`npm run db:apply-land-immutable`** + **`npm run db:verify-schema`**. |
 | **M-08 Disposal** | **PUT `/api/ioms/fixed-assets/:id`** — disposal fields **DA/Admin only**; UI **Dispose** on fixed assets. |
 | **M-09 Dak** | Hourly SLA tick **inserts `dak_escalations`** (one per inward per UTC day); **SLA breach report** page; inward list **`?subject=`** filter (case-insensitive contains). |
 | **M-07/M-08 digest** | Daily cron + HTTP; fleet + AMC alert counts + audit stub. |
 | **Service book** | **PUT** allowed until entry is immutable / Approved. |
 
-**Still external / optional:** live payment gateway (adapter `PAYMENT_GATEWAY_MODE`), Aadhaar eKYC, CGEGIS, weighbridge. **Land DB triggers** are optional but scripted: **`npm run db:apply-land-immutable`** (API remains append-only without them).
+**Still external / optional:** live payment gateway (adapter `PAYMENT_GATEWAY_MODE`), Aadhaar eKYC, CGEGIS, weighbridge device integration (manual weight entry in app). **Land DB triggers** are optional but scripted: **`npm run db:apply-land-immutable`** (tighten DB-level immutability if required; API still allows DA/Admin correction per client sign-off).
 
-**Also delivered:** notify channels (webhook/SMTP), voucher monthly **PDF/XLSX**, Dak **my-pending** / **escalations** / **subject index** + **query-string subject filter**, admin **location create + edit** (yard type HO/CheckPost/Yard), **HR user disable** on separation (PUT + daily cron), **dashboard retirement-upcoming** card (`GET /api/hr/retirement-upcoming?days=90`), **public receipt print/PDF** from browser, **audit log** module list aligned with IOMS writers + **user id** filter.
+**Also delivered:** notify channels (webhook/SMTP), voucher monthly **PDF/XLSX**, Dak **my-pending** / **escalations** / **subject index** + **query-string subject filter**, admin **location create + edit** (yard type HO/CheckPost/Yard), **HR-only app user provisioning** (no `/admin/users`), **HR user disable** on separation (PUT + daily cron), **dashboard retirement-upcoming** card (`GET /api/hr/retirement-upcoming?days=90`), **public receipt print/PDF** from browser, **audit log** module list aligned with IOMS writers + **user id** filter.

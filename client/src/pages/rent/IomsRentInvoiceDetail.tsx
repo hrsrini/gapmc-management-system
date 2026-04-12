@@ -18,6 +18,7 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, ArrowLeft, ShieldCheck, CheckCircle, AlertCircle, SendHorizontal, Banknote, Ban } from "lucide-react";
+import { formatApiDateOrDateTime, formatYearMonthToDisplay } from "@/lib/dateFormat";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 
 interface RentInvoice {
@@ -176,7 +177,7 @@ export default function IomsRentInvoiceDetail() {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[invoice.yardId] ?? invoice.yardId}</div>
-            <div><span className="text-muted-foreground">Period</span><br />{invoice.periodMonth}</div>
+            <div><span className="text-muted-foreground">Period</span><br />{formatYearMonthToDisplay(invoice.periodMonth)}</div>
             <div><span className="text-muted-foreground">Asset</span><br />{assetById[invoice.assetId] ?? invoice.assetId}</div>
             <div><span className="text-muted-foreground">Allotment</span><br />{allotmentById[invoice.allotmentId] ?? invoice.allotmentId}</div>
             <div><span className="text-muted-foreground">Tenant licence</span><br />{licenceById[invoice.tenantLicenceId] ?? invoice.tenantLicenceId}</div>
@@ -185,8 +186,20 @@ export default function IomsRentInvoiceDetail() {
             <div><span className="text-muted-foreground">CGST / SGST</span><br />₹{invoice.cgst.toLocaleString()} / ₹{invoice.sgst.toLocaleString()}</div>
             <div><span className="text-muted-foreground">Total</span><br />₹{invoice.totalAmount.toLocaleString()}</div>
             {invoice.isGovtEntity && <div><span className="text-muted-foreground">Govt entity</span><br />Yes</div>}
-            {invoice.generatedAt && <div><span className="text-muted-foreground">Generated at</span><br />{invoice.generatedAt}</div>}
-            {invoice.approvedAt && <div><span className="text-muted-foreground">Approved at</span><br />{invoice.approvedAt}</div>}
+            {invoice.generatedAt && (
+              <div>
+                <span className="text-muted-foreground">Generated at</span>
+                <br />
+                {formatApiDateOrDateTime(invoice.generatedAt)}
+              </div>
+            )}
+            {invoice.approvedAt && (
+              <div>
+                <span className="text-muted-foreground">Approved at</span>
+                <br />
+                {formatApiDateOrDateTime(invoice.approvedAt)}
+              </div>
+            )}
             {invoice.workflowRevisionCount != null && invoice.workflowRevisionCount > 0 && (
               <div><span className="text-muted-foreground">DV return count</span><br />{invoice.workflowRevisionCount}</div>
             )}

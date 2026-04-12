@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,6 +31,13 @@ interface Employee {
   surname: string;
 }
 
+const columns: ReportTableColumn[] = [
+  { key: "date", header: "Date" },
+  { key: "employeeLabel", header: "Employee" },
+  { key: "_action", header: "Action", sortField: "action" },
+  { key: "reason", header: "Reason" },
+];
+
 export default function HrAttendance() {
   const [employeeId, setEmployeeId] = useState("all");
   const [dateFilter, setDateFilter] = useState("");
@@ -44,6 +52,19 @@ export default function HrAttendance() {
   const employeeLabelById = Object.fromEntries(
     employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
   );
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return list.map((a) => ({
+      id: a.id,
+      date: a.date.slice(0, 10),
+      employeeLabel: employeeLabelById[a.employeeId] ?? a.employeeId,
+      action: a.action,
+      _action: (
+        <Badge variant={a.action === "CheckIn" ? "default" : "secondary"}>{a.action}</Badge>
+      ),
+      reason: a.reason ?? "—",
+    }));
+  }, [list, employeeLabelById]);
 
   if (isError) {
     return (
@@ -77,7 +98,9 @@ export default function HrAttendance() {
                 <SelectContent>
                   <SelectItem value="all">All</SelectItem>
                   {employees.map((e) => (
-                    <SelectItem key={e.id} value={e.id}>{e.empId ?? e.id} — {e.firstName} {e.surname}</SelectItem>
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.empId ?? e.id} — {e.firstName} {e.surname}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -97,32 +120,15 @@ export default function HrAttendance() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Reason</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {list.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4} className="text-muted-foreground text-center py-6">No attendance records.</TableCell>
-                  </TableRow>
-                ) : (
-                  list.map((a) => (
-                    <TableRow key={a.id}>
-                      <TableCell>{a.date}</TableCell>
-                      <TableCell>{employeeLabelById[a.employeeId] ?? a.employeeId}</TableCell>
-                      <TableCell><Badge variant={a.action === "CheckIn" ? "default" : "secondary"}>{a.action}</Badge></TableCell>
-                      <TableCell>{a.reason ?? "—"}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["date", "employeeLabel", "action", "reason"]}
+              defaultSortKey="date"
+              defaultSortDir="desc"
+              emptyMessage="No attendance records."
+              resetPageDependency={url}
+            />
           )}
         </CardContent>
       </Card>

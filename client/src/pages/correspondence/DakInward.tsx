@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
@@ -13,6 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { formatYmdToDisplay } from "@/lib/dateFormat";
 
 interface Inward {
   id: string;
@@ -48,6 +50,41 @@ export default function DakInward() {
   const { data: list, isLoading, isError } = useQuery<Inward[]>({
     queryKey: [inwardListUrl],
   });
+
+  const inwardColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "_diary", header: "Diary No", sortField: "diarySort" },
+      { key: "receivedDate", header: "Received" },
+      { key: "fromParty", header: "From" },
+      { key: "subject", header: "Subject" },
+      { key: "modeOfReceipt", header: "Mode" },
+      { key: "assignedTo", header: "Assigned" },
+      { key: "deadline", header: "Deadline" },
+      { key: "_status", header: "Status", sortField: "status" },
+    ],
+    [],
+  );
+
+  const inwardRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((d) => ({
+      id: d.id,
+      diarySort: d.diaryNo ?? d.id,
+      _diary: (
+        <Link href={`/correspondence/inward/${d.id}`} className="text-primary hover:underline font-mono text-sm">
+          {d.diaryNo ?? d.id}
+        </Link>
+      ),
+      receivedDate: d.receivedDate.slice(0, 10),
+      fromParty: d.fromParty,
+      subject: d.subject,
+      modeOfReceipt: d.modeOfReceipt,
+      assignedTo: d.assignedTo ?? "—",
+      deadline: d.deadline ? d.deadline.slice(0, 10) : "—",
+      status: d.status,
+      _status: <Badge variant="secondary">{d.status}</Badge>,
+    }));
+  }, [list]);
+
   const { data: slaPayload } = useQuery<{ count: number; asOf: string }>({
     queryKey: ["/api/ioms/dak/inward/sla-overdue"],
   });
@@ -83,7 +120,7 @@ export default function DakInward() {
             <Alert variant="destructive" className="mt-3">
               <AlertTitle>Deadline overdue</AlertTitle>
               <AlertDescription>
-                {slaPayload.count} inward item(s) have a deadline on or before {slaPayload.asOf} and are not Closed.
+                {slaPayload.count} inward item(s) have a deadline on or before {formatYmdToDisplay(slaPayload.asOf)} and are not Closed.
               </AlertDescription>
             </Alert>
           )}
@@ -153,39 +190,15 @@ export default function DakInward() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Diary No</TableHead>
-                  <TableHead>Received</TableHead>
-                  <TableHead>From</TableHead>
-                  <TableHead>Subject</TableHead>
-                  <TableHead>Mode</TableHead>
-                  <TableHead>Assigned</TableHead>
-                  <TableHead>Deadline</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((d) => (
-                  <TableRow key={d.id}>
-                    <TableCell className="font-mono text-sm">
-                      <Link href={`/correspondence/inward/${d.id}`} className="text-primary hover:underline">{d.diaryNo ?? d.id}</Link>
-                    </TableCell>
-                    <TableCell>{d.receivedDate}</TableCell>
-                    <TableCell>{d.fromParty}</TableCell>
-                    <TableCell className="max-w-[200px] truncate">{d.subject}</TableCell>
-                    <TableCell>{d.modeOfReceipt}</TableCell>
-                    <TableCell>{d.assignedTo ?? "—"}</TableCell>
-                    <TableCell>{d.deadline ?? "—"}</TableCell>
-                    <TableCell><Badge variant="secondary">{d.status}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No inward dak.</p>
+            <ClientDataGrid
+              columns={inwardColumns}
+              sourceRows={inwardRows}
+              searchKeys={["diarySort", "receivedDate", "fromParty", "subject", "modeOfReceipt", "assignedTo", "deadline", "status"]}
+              defaultSortKey="receivedDate"
+              defaultSortDir="desc"
+              emptyMessage="No inward dak."
+              resetPageDependency={inwardListUrl}
+            />
           )}
         </CardContent>
       </Card>

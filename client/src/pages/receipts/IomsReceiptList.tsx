@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,12 +12,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { Receipt, AlertCircle, ExternalLink } from "lucide-react";
-
 const REVENUE_HEADS = [
   "Rent",
   "GSTInvoice",
@@ -56,6 +56,50 @@ export default function IomsReceiptList() {
   const { data: receipts, isLoading, isError } = useQuery<IomsReceipt[]>({
     queryKey: [url],
   });
+
+  const receiptColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "_receiptNo", header: "Receipt No", sortField: "receiptNo" },
+      { key: "revenueHead", header: "Revenue head" },
+      { key: "payerName", header: "Payer" },
+      { key: "_total", header: "Amount", sortField: "totalAmount" },
+      { key: "paymentMode", header: "Mode" },
+      { key: "_status", header: "Status", sortField: "status" },
+      { key: "createdAt", header: "Created" },
+      { key: "_verify", header: "" },
+    ],
+    [],
+  );
+
+  const receiptRows = useMemo((): Record<string, unknown>[] => {
+    return (receipts ?? []).map((r) => ({
+      id: r.id,
+      receiptNo: r.receiptNo,
+      _receiptNo: (
+        <Link href={`/receipts/ioms/${r.id}`} className="text-primary hover:underline font-mono text-sm">
+          {r.receiptNo}
+        </Link>
+      ),
+      revenueHead: r.revenueHead,
+      payerName: r.payerName ?? "—",
+      totalAmount: r.totalAmount,
+      _total: `₹${Number(r.totalAmount).toLocaleString("en-IN")}`,
+      paymentMode: r.paymentMode,
+      status: r.status,
+      _status: <Badge variant={r.status === "Paid" ? "default" : "secondary"}>{r.status}</Badge>,
+      createdAt: r.createdAt,
+      _verify: (
+        <a
+          href={`/verify/${encodeURIComponent(r.receiptNo)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary text-xs flex items-center gap-1"
+        >
+          Verify <ExternalLink className="h-3 w-3" />
+        </a>
+      ),
+    }));
+  }, [receipts]);
 
   if (isError) {
     return (
@@ -117,52 +161,15 @@ export default function IomsReceiptList() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Receipt No</TableHead>
-                  <TableHead>Revenue head</TableHead>
-                  <TableHead>Payer</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Mode</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(receipts ?? []).map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-mono text-sm">
-                      <Link href={`/receipts/ioms/${r.id}`} className="text-primary hover:underline">{r.receiptNo}</Link>
-                    </TableCell>
-                    <TableCell>{r.revenueHead}</TableCell>
-                    <TableCell>{r.payerName ?? "—"}</TableCell>
-                    <TableCell>₹{Number(r.totalAmount).toLocaleString("en-IN")}</TableCell>
-                    <TableCell>{r.paymentMode}</TableCell>
-                    <TableCell>
-                      <Badge variant={r.status === "Paid" ? "default" : "secondary"}>{r.status}</Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
-                      {r.createdAt ? new Date(r.createdAt).toLocaleString() : "—"}
-                    </TableCell>
-                    <TableCell>
-                      <a
-                        href={`/verify/${encodeURIComponent(r.receiptNo)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary text-xs flex items-center gap-1"
-                      >
-                        Verify <ExternalLink className="h-3 w-3" />
-                      </a>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!receipts || receipts.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No IOMS receipts yet. Receipts are created by other modules (M-02, M-03, M-04, M-06, M-08).</p>
+            <ClientDataGrid
+              columns={receiptColumns}
+              sourceRows={receiptRows}
+              searchKeys={["receiptNo", "revenueHead", "payerName", "paymentMode", "status"]}
+              defaultSortKey="createdAt"
+              defaultSortDir="desc"
+              emptyMessage="No IOMS receipts yet. Receipts are created by other modules (M-02, M-03, M-04, M-06, M-08)."
+              resetPageDependency={url}
+            />
           )}
         </CardContent>
       </Card>

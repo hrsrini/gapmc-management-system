@@ -1,7 +1,9 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { BellRing, AlertCircle } from "lucide-react";
@@ -16,10 +18,34 @@ interface EscalationRow {
   resolvedAt?: string | null;
 }
 
+const columns: ReportTableColumn[] = [
+  { key: "_inward", header: "Inward", sortField: "inwardId" },
+  { key: "escalatedTo", header: "Escalated to" },
+  { key: "escalationReason", header: "Reason" },
+  { key: "escalatedAt", header: "Escalated at" },
+  { key: "resolvedAt", header: "Resolved" },
+];
+
 export default function DakEscalations() {
   const { data: list, isLoading, isError } = useQuery<EscalationRow[]>({
     queryKey: ["/api/ioms/dak/escalations"],
   });
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((r) => ({
+      id: r.id,
+      inwardId: r.inwardId,
+      _inward: (
+        <Link href={`/correspondence/inward/${r.inwardId}`} className="text-primary hover:underline font-mono text-sm">
+          {r.inwardId}
+        </Link>
+      ),
+      escalatedTo: r.escalatedTo,
+      escalationReason: r.escalationReason ?? "—",
+      escalatedAt: r.escalatedAt,
+      resolvedAt: r.resolvedAt ?? "—",
+    }));
+  }, [list]);
 
   if (isError) {
     return (
@@ -55,35 +81,14 @@ export default function DakEscalations() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Inward</TableHead>
-                  <TableHead>Escalated to</TableHead>
-                  <TableHead>Reason</TableHead>
-                  <TableHead>Escalated at</TableHead>
-                  <TableHead>Resolved</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-mono text-sm">
-                      <Link href={`/correspondence/inward/${r.inwardId}`} className="text-primary hover:underline">
-                        {r.inwardId}
-                      </Link>
-                    </TableCell>
-                    <TableCell>{r.escalatedTo}</TableCell>
-                    <TableCell className="max-w-[240px] truncate">{r.escalationReason ?? "—"}</TableCell>
-                    <TableCell>{r.escalatedAt}</TableCell>
-                    <TableCell>{r.resolvedAt ?? "—"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No escalations in your scope.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["inwardId", "escalatedTo", "escalationReason", "escalatedAt", "resolvedAt"]}
+              defaultSortKey="escalatedAt"
+              defaultSortDir="desc"
+              emptyMessage="No escalations in your scope."
+            />
           )}
         </CardContent>
       </Card>

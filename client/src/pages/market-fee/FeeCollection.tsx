@@ -1,10 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -12,7 +11,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -21,13 +19,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Plus, Search, Eye, Wallet, IndianRupee, TrendingUp, Clock, AlertCircle, RefreshCcw } from 'lucide-react';
-import { LOCATIONS } from '@/data/yards';
-import { format } from '@/lib/dateFormat';
+import { Plus, Eye, Wallet, IndianRupee, TrendingUp, Clock, AlertCircle, RefreshCcw } from 'lucide-react';
+import { legacyRowMatchesSelectedApiYard } from '@/lib/legacyYardMatch';
+import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
+import { format, formatDisplayDate } from '@/lib/dateFormat';
 import type { MarketFee } from '@shared/schema';
+import { ClientDataGrid } from '@/components/reports/ClientDataGrid';
+import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
+
+const columns: ReportTableColumn[] = [
+  { key: 'receiptNo', header: 'Receipt No' },
+  { key: 'entryDate', header: 'Date' },
+  { key: '_entryType', header: 'Type', sortField: 'entryType' },
+  { key: 'traderName', header: 'Trader' },
+  { key: 'commodity', header: 'Commodity' },
+  { key: 'quantityLabel', header: 'Quantity' },
+  { key: 'totalValue', header: 'Value' },
+  { key: '_marketFee', header: 'Fee Amount', sortField: 'marketFee' },
+  { key: 'paymentMode', header: 'Mode' },
+  { key: 'locationName', header: 'Location' },
+  { key: '_actions', header: 'Actions' },
+];
 
 export default function FeeCollection() {
-  const [search, setSearch] = useState('');
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [viewEntry, setViewEntry] = useState<MarketFee | null>(null);
 
@@ -35,14 +49,48 @@ export default function FeeCollection() {
     queryKey: ['/api/marketfees'],
   });
 
-  const filteredEntries = (marketFees ?? []).filter((entry) => {
-    const matchesSearch =
-      entry.traderName.toLowerCase().includes(search.toLowerCase()) ||
-      entry.receiptNo.toLowerCase().includes(search.toLowerCase()) ||
-      entry.commodity.toLowerCase().includes(search.toLowerCase());
-    const matchesLocation = selectedLocation === 'all' || entry.locationId.toString() === selectedLocation;
-    return matchesSearch && matchesLocation;
-  });
+  const { data: yards = [] } = useScopedActiveYards();
+
+  const filteredEntries = useMemo(() => {
+    return (marketFees ?? []).filter((entry) =>
+      legacyRowMatchesSelectedApiYard(entry.locationId, entry.locationName, selectedLocation, yards),
+    );
+  }, [marketFees, selectedLocation, yards]);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return filteredEntries.map((entry) => ({
+      id: entry.id,
+      receiptNo: entry.receiptNo,
+      entryDate: entry.entryDate,
+      entryType: entry.entryType,
+      traderName: entry.traderName,
+      commodity: entry.commodity,
+      quantityLabel: `${entry.quantity} ${entry.unit}`,
+      totalValue: entry.totalValue,
+      marketFee: entry.marketFee,
+      paymentMode: entry.paymentMode,
+      locationName: entry.locationName,
+      _entryType: (
+        <Badge variant={entry.entryType === 'Import' ? 'default' : 'secondary'}>{entry.entryType}</Badge>
+      ),
+      _marketFee: (
+        <span className="font-semibold text-accent">₹{entry.marketFee.toLocaleString()}</span>
+      ),
+      _actions: (
+        <div className="flex justify-end">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setViewEntry(entry)}
+            data-testid={`button-view-${entry.id}`}
+            aria-label="View entry"
+          >
+            <Eye className="h-4 w-4" />
+          </Button>
+        </div>
+      ),
+    }));
+  }, [filteredEntries]);
 
   const todayCollection = (marketFees ?? []).filter(
     mf => mf.entryDate === format(new Date(), 'yyyy-MM-dd')
@@ -134,28 +182,19 @@ export default function FeeCollection() {
         <Card>
           <CardHeader className="pb-4">
             <CardTitle className="text-base font-medium">Filters</CardTitle>
+            <p className="text-sm text-muted-foreground">Use the grid search for trader, receipt, commodity, and location name.</p>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search trader, receipt, commodity..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-9"
-                  data-testid="input-search"
-                />
-              </div>
               <Select value={selectedLocation} onValueChange={setSelectedLocation}>
                 <SelectTrigger data-testid="select-location">
                   <SelectValue placeholder="Select Location" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Locations</SelectItem>
-                  {LOCATIONS.map((location) => (
-                    <SelectItem key={location.id} value={location.id.toString()}>
-                      {location.name}
+                  {yards.map((loc) => (
+                    <SelectItem key={loc.id} value={loc.id}>
+                      {loc.name} ({loc.type ?? '—'})
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -165,72 +204,35 @@ export default function FeeCollection() {
         </Card>
 
         <Card>
-          <CardContent className="p-0">
+          <CardContent className="pt-6">
             {isLoading ? (
-              <div className="p-6 space-y-3">
+              <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
                   <Skeleton key={i} className="h-12 w-full" />
                 ))}
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Receipt No</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Trader</TableHead>
-                      <TableHead>Commodity</TableHead>
-                      <TableHead className="text-right">Quantity</TableHead>
-                      <TableHead className="text-right">Value</TableHead>
-                      <TableHead className="text-right">Fee Amount</TableHead>
-                      <TableHead>Mode</TableHead>
-                      <TableHead>Location</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredEntries.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
-                          No entries found
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      filteredEntries.map((entry) => (
-                        <TableRow key={entry.id} data-testid={`row-entry-${entry.id}`}>
-                          <TableCell className="font-medium">{entry.receiptNo}</TableCell>
-                          <TableCell>{format(new Date(entry.entryDate), 'MMM dd, yyyy')}</TableCell>
-                          <TableCell>
-                            <Badge variant={entry.entryType === 'Import' ? 'default' : 'secondary'}>
-                              {entry.entryType}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>{entry.traderName}</TableCell>
-                          <TableCell>{entry.commodity}</TableCell>
-                          <TableCell className="text-right">{entry.quantity} {entry.unit}</TableCell>
-                          <TableCell className="text-right">₹{entry.totalValue.toLocaleString()}</TableCell>
-                          <TableCell className="text-right font-semibold text-accent">₹{entry.marketFee.toLocaleString()}</TableCell>
-                          <TableCell>{entry.paymentMode}</TableCell>
-                          <TableCell className="text-muted-foreground text-xs">{entry.locationName}</TableCell>
-                          <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => setViewEntry(entry)}
-                              data-testid={`button-view-${entry.id}`}
-                              aria-label="View entry"
-                            >
-                              <Eye className="h-4 w-4" />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
+              <ClientDataGrid
+                columns={columns}
+                sourceRows={sourceRows}
+                searchKeys={[
+                  'receiptNo',
+                  'entryDate',
+                  'entryType',
+                  'traderName',
+                  'commodity',
+                  'quantityLabel',
+                  'totalValue',
+                  'marketFee',
+                  'paymentMode',
+                  'locationName',
+                ]}
+                searchPlaceholder="Search trader, receipt, commodity, location…"
+                defaultSortKey="entryDate"
+                defaultSortDir="desc"
+                resetPageDependency={selectedLocation}
+                emptyMessage="No entries found"
+              />
             )}
           </CardContent>
         </Card>
@@ -248,7 +250,7 @@ export default function FeeCollection() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Date</span>
-                  <span>{format(new Date(viewEntry.entryDate), 'dd MMM yyyy')}</span>
+                  <span>{formatDisplayDate(viewEntry.entryDate)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Type</span>

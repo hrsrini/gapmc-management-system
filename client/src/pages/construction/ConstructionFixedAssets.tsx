@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -14,6 +15,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Building2, AlertCircle } from "lucide-react";
+import { formatYmdToDisplay } from "@/lib/dateFormat";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -64,6 +66,56 @@ export default function ConstructionFixedAssets() {
 
   const { data: list = [], isLoading, isError } = useQuery<FixedAsset[]>({ queryKey: [url] });
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y.name ?? y.code ?? y.id])), [yards]);
+
+  const columns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "assetType", header: "Type" },
+      { key: "yardName", header: "Yard" },
+      { key: "acquisitionDate", header: "Acquisition date" },
+      { key: "_acquisitionValue", header: "Acquisition value", sortField: "acquisitionValue" },
+      { key: "_bookValue", header: "Book value", sortField: "bookValueSort" },
+      { key: "_status", header: "Status", sortField: "status" },
+      { key: "disposalSummary", header: "Disposal" },
+      { key: "description", header: "Description" },
+    ];
+    if (canDispose) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [canDispose]);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return list.map((a) => ({
+      id: a.id,
+      assetType: a.assetType,
+      yardName: yardById.get(a.yardId) ?? a.yardId,
+      acquisitionDate: a.acquisitionDate.slice(0, 10),
+      acquisitionValue: a.acquisitionValue,
+      _acquisitionValue: `₹${a.acquisitionValue.toLocaleString()}`,
+      bookValueSort: a.currentBookValue ?? null,
+      _bookValue: a.currentBookValue != null ? `₹${a.currentBookValue.toLocaleString()}` : "—",
+      status: a.status,
+      _status: (
+        <Badge variant="secondary">{a.status}</Badge>
+      ),
+      disposalSummary: a.disposalDate
+        ? `${formatYmdToDisplay(a.disposalDate)}${a.disposalValue != null ? ` · ₹${a.disposalValue.toLocaleString()}` : ""}`
+        : "—",
+      description: a.description ?? "—",
+      _actions: canDispose && a.status !== "Disposed" && !a.disposalDate ? (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            setDisposeAsset(a);
+            setDisposalDate(new Date().toISOString().slice(0, 10));
+            setDisposalValue(a.currentBookValue != null ? String(a.currentBookValue) : "");
+          }}
+        >
+          Dispose
+        </Button>
+      ) : null,
+    }));
+  }, [list, yardById, canDispose]);
 
   const disposeMutation = useMutation({
     mutationFn: async () => {
@@ -140,60 +192,23 @@ export default function ConstructionFixedAssets() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Acquisition date</TableHead>
-                  <TableHead className="text-right">Acquisition value</TableHead>
-                  <TableHead className="text-right">Book value</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Disposal</TableHead>
-                  <TableHead>Description</TableHead>
-                  {canDispose && <TableHead className="w-[120px]">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {list.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={canDispose ? 9 : 8} className="text-muted-foreground text-center py-6">No fixed assets.</TableCell>
-                  </TableRow>
-                ) : (
-                  list.map((a) => (
-                    <TableRow key={a.id}>
-                      <TableCell className="font-medium">{a.assetType}</TableCell>
-                      <TableCell>{a.yardId}</TableCell>
-                      <TableCell>{a.acquisitionDate}</TableCell>
-                      <TableCell className="text-right">₹{a.acquisitionValue.toLocaleString()}</TableCell>
-                      <TableCell className="text-right">{a.currentBookValue != null ? `₹${a.currentBookValue.toLocaleString()}` : "—"}</TableCell>
-                      <TableCell><Badge variant="secondary">{a.status}</Badge></TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {a.disposalDate ? `${a.disposalDate}${a.disposalValue != null ? ` · ₹${a.disposalValue.toLocaleString()}` : ""}` : "—"}
-                      </TableCell>
-                      <TableCell className="max-w-[180px] truncate text-muted-foreground">{a.description ?? "—"}</TableCell>
-                      {canDispose && (
-                        <TableCell>
-                          {a.status !== "Disposed" && !a.disposalDate && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => {
-                                setDisposeAsset(a);
-                                setDisposalDate(new Date().toISOString().slice(0, 10));
-                                setDisposalValue(a.currentBookValue != null ? String(a.currentBookValue) : "");
-                              }}
-                            >
-                              Dispose
-                            </Button>
-                          )}
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={[
+                "assetType",
+                "yardName",
+                "acquisitionDate",
+                "disposalSummary",
+                "description",
+                "status",
+              ]}
+              defaultSortKey="acquisitionDate"
+              defaultSortDir="desc"
+              isLoading={false}
+              emptyMessage="No fixed assets."
+              resetPageDependency={url}
+            />
           )}
         </CardContent>
       </Card>

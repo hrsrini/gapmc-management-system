@@ -1,9 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Select,
@@ -12,7 +11,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
@@ -20,12 +18,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Search, FileText, RefreshCcw, XCircle, FileSignature, AlertCircle } from 'lucide-react';
-import { YARDS } from '@/data/yards';
-import { format } from '@/lib/dateFormat';
+import { FileText, RefreshCcw, XCircle, FileSignature, AlertCircle } from 'lucide-react';
+import { legacyRowMatchesSelectedApiYard } from '@/lib/legacyYardMatch';
+import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
+import { formatDisplayDate } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import type { Agreement } from '@shared/schema';
+import { ClientDataGrid } from '@/components/reports/ClientDataGrid';
+import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
 
 const statusColors: Record<string, string> = {
   Active: 'bg-accent/10 text-accent border-accent/20',
@@ -34,9 +35,21 @@ const statusColors: Record<string, string> = {
   Terminated: 'bg-muted text-muted-foreground border-muted',
 };
 
+const columns: ReportTableColumn[] = [
+  { key: 'agreementId', header: 'Agreement ID' },
+  { key: 'traderName', header: 'Trader' },
+  { key: 'premises', header: 'Premises' },
+  { key: 'yardName', header: 'Yard' },
+  { key: 'startDate', header: 'Start Date' },
+  { key: 'endDate', header: 'End Date' },
+  { key: 'rentAmount', header: 'Rent Amount', sortField: 'rentAmountNum' },
+  { key: 'securityDeposit', header: 'Security Deposit', sortField: 'securityDepositNum' },
+  { key: '_status', header: 'Status', sortField: 'status' },
+  { key: '_actions', header: 'Actions' },
+];
+
 export default function TraderAgreements() {
   const { toast } = useToast();
-  const [search, setSearch] = useState('');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [viewAgreement, setViewAgreement] = useState<Agreement | null>(null);
@@ -45,8 +58,10 @@ export default function TraderAgreements() {
     queryKey: ['/api/agreements'],
   });
 
+  const { data: yards = [] } = useScopedActiveYards();
+
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Agreement> }) => 
+    mutationFn: ({ id, data }: { id: string; data: Partial<Agreement> }) =>
       apiRequest('PUT', `/api/agreements/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/agreements'] });
@@ -56,37 +71,91 @@ export default function TraderAgreements() {
     },
   });
 
-  const filteredAgreements = (agreements ?? []).filter((agreement) => {
-    const matchesSearch =
-      agreement.traderName.toLowerCase().includes(search.toLowerCase()) ||
-      agreement.agreementId.toLowerCase().includes(search.toLowerCase());
-    const matchesYard = selectedYard === 'all' || agreement.yardId.toString() === selectedYard;
-    const matchesStatus = selectedStatus === 'all' || agreement.status === selectedStatus;
-    return matchesSearch && matchesYard && matchesStatus;
-  });
+  const filteredAgreements = useMemo(() => {
+    return (agreements ?? []).filter((agreement) => {
+      const matchesYard = legacyRowMatchesSelectedApiYard(
+        agreement.yardId,
+        agreement.yardName,
+        selectedYard,
+        yards,
+      );
+      const matchesStatus = selectedStatus === 'all' || agreement.status === selectedStatus;
+      return matchesYard && matchesStatus;
+    });
+  }, [agreements, selectedYard, selectedStatus, yards]);
 
-  const handleAction = (action: string, agreement: Agreement) => {
-    if (action === 'View') {
-      setViewAgreement(agreement);
-    } else if (action === 'Terminate') {
-      updateMutation.mutate({
-        id: agreement.id,
-        data: { status: 'Terminated' },
-      }, {
-        onSuccess: () => {
-          toast({
-            title: 'Agreement Terminated',
-            description: `Agreement ${agreement.agreementId} has been terminated`,
-          });
-        },
-      });
-    } else if (action === 'Renew') {
-      toast({
-        title: 'Renew Agreement',
-        description: `Agreement ${agreement.agreementId} renewal initiated`,
-      });
-    }
-  };
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return filteredAgreements.map((agreement) => ({
+      id: agreement.id,
+      agreementId: agreement.agreementId,
+      traderName: agreement.traderName,
+      premises: agreement.premises,
+      yardName: agreement.yardName,
+      startDate: agreement.startDate,
+      endDate: agreement.endDate,
+      rentAmount: `₹${agreement.rentAmount.toLocaleString()}`,
+      rentAmountNum: agreement.rentAmount,
+      securityDeposit: `₹${agreement.securityDeposit.toLocaleString()}`,
+      securityDepositNum: agreement.securityDeposit,
+      status: agreement.status,
+      _status: (
+        <Badge variant="outline" className={statusColors[agreement.status]}>
+          {agreement.status}
+        </Badge>
+      ),
+      _actions: (
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setViewAgreement(agreement)}
+            data-testid={`button-view-${agreement.id}`}
+          >
+            <FileText className="h-4 w-4" />
+          </Button>
+          {(agreement.status === 'Active' || agreement.status === 'Expiring Soon') && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                toast({
+                  title: 'Renew Agreement',
+                  description: `Agreement ${agreement.agreementId} renewal initiated`,
+                });
+              }}
+              data-testid={`button-renew-${agreement.id}`}
+            >
+              <RefreshCcw className="h-4 w-4" />
+            </Button>
+          )}
+          {agreement.status === 'Active' && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-destructive"
+              onClick={() =>
+                updateMutation.mutate(
+                  { id: agreement.id, data: { status: 'Terminated' } },
+                  {
+                    onSuccess: () => {
+                      toast({
+                        title: 'Agreement Terminated',
+                        description: `Agreement ${agreement.agreementId} has been terminated`,
+                      });
+                    },
+                  },
+                )
+              }
+              disabled={updateMutation.isPending}
+              data-testid={`button-terminate-${agreement.id}`}
+            >
+              <XCircle className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      ),
+    }));
+  }, [filteredAgreements, updateMutation.isPending]);
 
   if (isError) {
     return (
@@ -100,6 +169,8 @@ export default function TraderAgreements() {
       </AppShell>
     );
   }
+
+  const filterKey = `${selectedYard}|${selectedStatus}`;
 
   return (
     <AppShell breadcrumbs={[{ label: 'Traders', href: '/traders' }, { label: 'Agreements' }]}>
@@ -115,30 +186,23 @@ export default function TraderAgreements() {
         <Card>
           <CardHeader className="pb-4">
             <CardTitle className="text-base font-medium">Filters</CardTitle>
+            <p className="text-sm text-muted-foreground">Use the grid search for trader name or agreement ID.</p>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search trader or agreement ID..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-9"
-                  data-testid="input-search"
-                />
-              </div>
               <Select value={selectedYard} onValueChange={setSelectedYard}>
                 <SelectTrigger data-testid="select-yard">
                   <SelectValue placeholder="Select Yard" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Yards</SelectItem>
-                  {YARDS.map((yard) => (
-                    <SelectItem key={yard.id} value={yard.id.toString()}>
-                      {yard.name}
-                    </SelectItem>
-                  ))}
+                  {yards
+                    .filter((y) => String(y.type ?? '').toLowerCase() === 'yard')
+                    .map((yard) => (
+                      <SelectItem key={yard.id} value={yard.id}>
+                        {yard.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
               <Select value={selectedStatus} onValueChange={setSelectedStatus}>
@@ -158,97 +222,32 @@ export default function TraderAgreements() {
         </Card>
 
         <Card>
-          <CardContent className="p-0">
+          <CardContent className="pt-6">
             {isLoading ? (
-              <div className="p-6 space-y-3">
+              <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
                   <Skeleton key={i} className="h-12 w-full" />
                 ))}
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Agreement ID</TableHead>
-                      <TableHead>Trader</TableHead>
-                      <TableHead>Premises</TableHead>
-                      <TableHead>Yard</TableHead>
-                      <TableHead>Start Date</TableHead>
-                      <TableHead>End Date</TableHead>
-                      <TableHead className="text-right">Rent Amount</TableHead>
-                      <TableHead className="text-right">Security Deposit</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredAgreements.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
-                          No agreements found
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      filteredAgreements.map((agreement) => (
-                        <TableRow 
-                          key={agreement.id} 
-                          className={agreement.status === 'Expiring Soon' ? 'bg-amber-50 dark:bg-amber-950/20' : ''}
-                          data-testid={`row-agreement-${agreement.id}`}
-                        >
-                          <TableCell className="font-medium">{agreement.agreementId}</TableCell>
-                          <TableCell>{agreement.traderName}</TableCell>
-                          <TableCell>{agreement.premises}</TableCell>
-                          <TableCell className="text-muted-foreground">{agreement.yardName}</TableCell>
-                          <TableCell>{format(new Date(agreement.startDate), 'MMM dd, yyyy')}</TableCell>
-                          <TableCell>{format(new Date(agreement.endDate), 'MMM dd, yyyy')}</TableCell>
-                          <TableCell className="text-right">₹{agreement.rentAmount.toLocaleString()}</TableCell>
-                          <TableCell className="text-right">₹{agreement.securityDeposit.toLocaleString()}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className={statusColors[agreement.status]}>
-                              {agreement.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center justify-end gap-1">
-                              <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                onClick={() => handleAction('View', agreement)}
-                                data-testid={`button-view-${agreement.id}`}
-                              >
-                                <FileText className="h-4 w-4" />
-                              </Button>
-                              {(agreement.status === 'Active' || agreement.status === 'Expiring Soon') && (
-                                <Button 
-                                  variant="ghost" 
-                                  size="icon"
-                                  onClick={() => handleAction('Renew', agreement)}
-                                  data-testid={`button-renew-${agreement.id}`}
-                                >
-                                  <RefreshCcw className="h-4 w-4" />
-                                </Button>
-                              )}
-                              {agreement.status === 'Active' && (
-                                <Button 
-                                  variant="ghost" 
-                                  size="icon" 
-                                  className="text-destructive"
-                                  onClick={() => handleAction('Terminate', agreement)}
-                                  disabled={updateMutation.isPending}
-                                  data-testid={`button-terminate-${agreement.id}`}
-                                >
-                                  <XCircle className="h-4 w-4" />
-                                </Button>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
+              <ClientDataGrid
+                columns={columns}
+                sourceRows={sourceRows}
+                searchKeys={[
+                  'agreementId',
+                  'traderName',
+                  'premises',
+                  'yardName',
+                  'startDate',
+                  'endDate',
+                  'status',
+                ]}
+                searchPlaceholder="Search trader or agreement ID…"
+                defaultSortKey="endDate"
+                defaultSortDir="desc"
+                resetPageDependency={filterKey}
+                emptyMessage="No agreements found"
+              />
             )}
           </CardContent>
         </Card>
@@ -278,11 +277,11 @@ export default function TraderAgreements() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Start</span>
-                  <span>{format(new Date(viewAgreement.startDate), 'dd MMM yyyy')}</span>
+                  <span>{formatDisplayDate(viewAgreement.startDate)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">End</span>
-                  <span>{format(new Date(viewAgreement.endDate), 'dd MMM yyyy')}</span>
+                  <span>{formatDisplayDate(viewAgreement.endDate)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Rent</span>

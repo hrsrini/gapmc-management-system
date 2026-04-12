@@ -17,6 +17,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, ArrowLeft, Loader2 } from "lucide-react";
+import { formatYmdToDisplay } from "@/lib/dateFormat";
 
 interface Yard {
   id: string;
@@ -179,7 +180,7 @@ export default function IomsRentInvoiceForm() {
                   <SelectContent>
                     {allotmentsForYard.map((a) => (
                       <SelectItem key={a.id} value={a.id}>
-                        {a.allotteeName} — {a.assetId} ({a.fromDate} to {a.toDate})
+                        {a.allotteeName} — {a.assetId} ({formatYmdToDisplay(a.fromDate)} to {formatYmdToDisplay(a.toDate)})
                       </SelectItem>
                     ))}
                   </SelectContent>

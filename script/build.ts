@@ -13,7 +13,6 @@ const allowlist = [
   "axios",
   "connect-pg-simple",
   "cors",
-  "date-fns",
   "drizzle-orm",
   "drizzle-zod",
   "express",

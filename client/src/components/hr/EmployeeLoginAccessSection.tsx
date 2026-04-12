@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { KeyRound, Loader2 } from "lucide-react";
 import { ADMIN_403_MESSAGE, fetchApiGet } from "@/lib/queryClient";
+import { isValidEmailFormat, parseIndianMobile10Digits } from "@shared/india-validation";
 
 interface UserRoleRef {
   id: string;
@@ -44,6 +45,7 @@ interface Role {
 interface Yard {
   id: string;
   name: string;
+  isActive?: boolean | null;
 }
 
 interface EmployeeLoginAccessSectionProps {
@@ -109,6 +111,8 @@ export function EmployeeLoginAccessSection({
     queryKey: ["/api/admin/yards"],
     enabled: canM10Read,
   });
+
+  const activeYards = useMemo(() => yards.filter((y) => y.isActive !== false), [yards]);
 
   useEffect(() => {
     if (linkedUser) {
@@ -233,6 +237,20 @@ export function EmployeeLoginAccessSection({
           return;
         }
       }
+      if (!isValidEmailFormat(email)) {
+        toast({ title: "Invalid email", description: "Please enter a valid email address.", variant: "destructive" });
+        return;
+      }
+      const phoneTrimUpd = phone.trim();
+      let phoneNorm: string | null = null;
+      if (phoneTrimUpd) {
+        const d = parseIndianMobile10Digits(phoneTrimUpd);
+        if (!d) {
+          toast({ title: "Invalid phone", description: "Use a valid 10-digit Indian mobile number.", variant: "destructive" });
+          return;
+        }
+        phoneNorm = d;
+      }
       const body: {
         email: string;
         name: string;
@@ -246,7 +264,7 @@ export function EmployeeLoginAccessSection({
         email: email.trim(),
         name: name.trim(),
         username: username.trim() === "" ? null : username.trim().toLowerCase(),
-        phone: phone.trim() === "" ? null : phone.trim(),
+        phone: phoneNorm,
         isActive,
         roleIds: Array.from(selectedRoleIds),
         yardIds: Array.from(selectedYardIds),
@@ -272,11 +290,25 @@ export function EmployeeLoginAccessSection({
       toast({ title: "Passwords do not match", variant: "destructive" });
       return;
     }
+    if (!isValidEmailFormat(email)) {
+      toast({ title: "Invalid email", description: "Please enter a valid email address.", variant: "destructive" });
+      return;
+    }
+    const phoneTrim = phone.trim();
+    let phoneOut: string | undefined;
+    if (phoneTrim) {
+      const d = parseIndianMobile10Digits(phoneTrim);
+      if (!d) {
+        toast({ title: "Invalid phone", description: "Use a valid 10-digit Indian mobile number.", variant: "destructive" });
+        return;
+      }
+      phoneOut = d;
+    }
     createMutation.mutate({
       email: email.trim(),
       name: name.trim(),
       username: username.trim() || undefined,
-      phone: phone.trim() || undefined,
+      phone: phoneOut,
       password,
       roleIds: Array.from(selectedRoleIds),
       yardIds: Array.from(selectedYardIds),
@@ -458,10 +490,10 @@ export function EmployeeLoginAccessSection({
                     <Skeleton className="h-20 w-full" />
                   ) : yardsError && yardsErr instanceof Error ? (
                     <p className="text-xs text-destructive">{yardsErr.message}</p>
-                  ) : yards.length === 0 ? (
+                  ) : activeYards.length === 0 ? (
                     <p className="text-xs text-muted-foreground">No yards. Add under Admin → Locations.</p>
                   ) : (
-                    yards.map((y) => (
+                    activeYards.map((y) => (
                       <label key={y.id} className="flex cursor-pointer items-center gap-2 text-sm">
                         <Checkbox
                           checked={selectedYardIds.has(y.id)}

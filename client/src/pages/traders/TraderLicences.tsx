@@ -4,8 +4,10 @@ import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { FileCheck, AlertCircle } from "lucide-react";
+import { FileCheck, AlertCircle, UserPlus } from "lucide-react";
 import { ReportDataTable, type ReportPagedParams } from "@/components/reports/ReportDataTable";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/context/AuthContext";
 
 interface Licence {
   id: string;
@@ -28,10 +30,14 @@ interface PagedResponse {
 }
 
 export default function TraderLicences() {
+  const { can } = useAuth();
+  const canCreate = can("M-02", "Create");
   const [tableParams, setTableParams] = useState<ReportPagedParams>({
     page: 1,
     pageSize: 25,
     q: "",
+    sortKey: "createdAt",
+    sortDir: "desc",
   });
 
   const mergeParams = useCallback((next: Partial<ReportPagedParams>) => {
@@ -44,6 +50,8 @@ export default function TraderLicences() {
       page: String(tableParams.page),
       pageSize: String(tableParams.pageSize),
       q: tableParams.q,
+      sort: tableParams.sortKey,
+      sortDir: tableParams.sortDir,
     });
     return `/api/ioms/traders/licences?${sp}`;
   }, [tableParams]);
@@ -64,13 +72,13 @@ export default function TraderLicences() {
 
   const columns = useMemo(
     () => [
-      { key: "_licenceLink", header: "Licence no." },
-      { key: "_firmLink", header: "Firm" },
+      { key: "_licenceLink", header: "Licence no.", sortField: "licenceNo" },
+      { key: "_firmLink", header: "Firm", sortField: "firmName" },
       { key: "licenceType", header: "Type" },
-      { key: "yardDisplay", header: "Yard" },
+      { key: "yardDisplay", header: "Yard", sortField: "yardId" },
       { key: "mobile", header: "Mobile" },
       { key: "validTo", header: "Valid To" },
-      { key: "_status", header: "Status" },
+      { key: "_status", header: "Status", sortField: "status" },
     ],
     [],
   );
@@ -95,7 +103,18 @@ export default function TraderLicences() {
         mobile: l.mobile,
         validTo: l.validTo ?? "—",
         _status: (
-          <Badge variant={l.isBlocked ? "destructive" : l.status === "Active" ? "default" : "secondary"}>
+          <Badge
+            variant={
+              l.isBlocked
+                ? "destructive"
+                : l.status === "Active"
+                  ? "default"
+                  : l.status === "Query"
+                    ? "outline"
+                    : "secondary"
+            }
+            className={l.status === "Query" ? "border-amber-600 text-amber-900 dark:text-amber-100" : undefined}
+          >
             {l.isBlocked ? "Blocked" : l.status}
           </Badge>
         ),
@@ -119,15 +138,25 @@ export default function TraderLicences() {
   return (
     <AppShell breadcrumbs={[{ label: "Traders & Assets", href: "/traders/licences" }, { label: "Licences" }]}>
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileCheck className="h-5 w-5" />
-            Trader Licences (M-02)
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            IOMS licence lifecycle — Associated, Functionary, Hamali, Weighman, Assistant. Search by trader name,
-            licence number, or mobile; use pagination for large lists.
-          </p>
+        <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2">
+              <FileCheck className="h-5 w-5" />
+              Trader Licences (M-02)
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              IOMS licence lifecycle — Associated, Functionary, Hamali, Weighman, Assistant. Search by trader name,
+              licence number, or mobile; use pagination for large lists.
+            </p>
+          </div>
+          {canCreate ? (
+            <Button asChild className="shrink-0">
+              <Link href="/traders/licences/new">
+                <UserPlus className="h-4 w-4 mr-2" />
+                Apply for new licence
+              </Link>
+            </Button>
+          ) : null}
         </CardHeader>
         <CardContent>
           <ReportDataTable

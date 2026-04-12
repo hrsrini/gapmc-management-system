@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
@@ -13,14 +13,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Bug, PlusCircle, LayoutDashboard, AlertCircle } from "lucide-react";
 import { BUG_STATUSES } from "@shared/bug-taxonomy";
@@ -60,6 +54,41 @@ export default function BugList() {
       return fetchApiGet<BugRow[]>(url);
     },
   });
+
+  const columns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "_ticketNo", header: "Ticket", sortField: "ticketNo" },
+      { key: "title", header: "Title" },
+      { key: "typeSubtype", header: "Type" },
+      { key: "_severity", header: "Severity", sortField: "severity" },
+      { key: "reporterName", header: "Reporter" },
+      { key: "_status", header: "Status", sortField: "status" },
+      { key: "createdAt", header: "Created" },
+    ],
+    [],
+  );
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((b) => ({
+      id: b.id,
+      ticketNo: b.ticketNo,
+      _ticketNo: (
+        <Link href={`/bugs/${b.id}`} className="text-primary hover:underline font-mono text-sm">
+          {b.ticketNo}
+        </Link>
+      ),
+      title: b.title,
+      typeSubtype: `${b.bugType} / ${b.bugSubtype}`,
+      severity: b.severity,
+      _severity: <Badge variant={severityVariant(b.severity)}>{b.severity}</Badge>,
+      reporterName: b.reporterName,
+      status: b.status,
+      _status: <Badge variant="secondary">{b.status.replace(/_/g, " ")}</Badge>,
+      createdAt: b.createdAt,
+    }));
+  }, [list]);
+
+  const filterKey = `${scope}|${status || "any"}`;
 
   return (
     <AppShell
@@ -146,47 +175,15 @@ export default function BugList() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Ticket</TableHead>
-                  <TableHead>Title</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Severity</TableHead>
-                  <TableHead>Reporter</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((b) => (
-                  <TableRow key={b.id}>
-                    <TableCell className="font-mono text-sm">
-                      <Link href={`/bugs/${b.id}`} className="text-primary hover:underline">
-                        {b.ticketNo}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="max-w-[240px] truncate">{b.title}</TableCell>
-                    <TableCell className="text-sm">
-                      {b.bugType} / {b.bugSubtype}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={severityVariant(b.severity)}>{b.severity}</Badge>
-                    </TableCell>
-                    <TableCell>{b.reporterName}</TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{b.status.replace(/_/g, " ")}</Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-sm whitespace-nowrap">
-                      {b.createdAt?.slice(0, 16)?.replace("T", " ") ?? "—"}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && !isError && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-6">No bugs match the current filters.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["ticketNo", "title", "typeSubtype", "reporterName", "severity", "status"]}
+              defaultSortKey="createdAt"
+              defaultSortDir="desc"
+              emptyMessage="No bugs match the current filters."
+              resetPageDependency={filterKey}
+            />
           )}
         </CardContent>
       </Card>

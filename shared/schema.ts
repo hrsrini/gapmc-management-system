@@ -1,4 +1,25 @@
 import { z } from "zod";
+import { INDIAN_MOBILE_10_RE, isStrictAadhaar12Digits, isValidEmailFormat } from "./india-validation";
+
+const traderMobileSchema = z
+  .string()
+  .transform((s) => s.replace(/\D/g, ""))
+  .refine((s) => INDIAN_MOBILE_10_RE.test(s), {
+    message: "Mobile must be a valid 10-digit Indian number.",
+  });
+
+const traderEmailSchema = z
+  .string()
+  .trim()
+  .refine((s) => isValidEmailFormat(s), { message: "Please enter a valid email address." })
+  .transform((s) => s.trim().toLowerCase());
+
+const traderAadhaarSchema = z
+  .string()
+  .trim()
+  .refine((s) => isStrictAadhaar12Digits(s), {
+    message: "Please enter a valid Aadhaar number (12 digits, no spaces or hyphens).",
+  });
 
 // Trader schema
 export const traderSchema = z.object({
@@ -7,12 +28,12 @@ export const traderSchema = z.object({
   name: z.string(),
   firmName: z.string().optional(),
   type: z.enum(['Individual', 'Firm', 'Pvt Ltd', 'Public Ltd']),
-  mobile: z.string(),
+  mobile: traderMobileSchema,
   phone: z.string().optional(),
-  email: z.string().email(),
+  email: traderEmailSchema,
   residentialAddress: z.string().optional(),
   businessAddress: z.string().optional(),
-  aadhaar: z.string(),
+  aadhaar: traderAadhaarSchema,
   pan: z.string(),
   gst: z.string().optional(),
   epicVoterId: z.string().optional(),

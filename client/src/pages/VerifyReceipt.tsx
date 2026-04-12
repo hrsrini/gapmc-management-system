@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, XCircle, Printer } from "lucide-react";
+import { formatDisplayDateTime } from "@/lib/dateFormat";
 
 interface VerifyResult {
   receiptNo: string;
@@ -107,7 +108,7 @@ export default function VerifyReceipt() {
           </div>
           <div className="flex justify-between text-sm text-muted-foreground">
             <span>Created</span>
-            <span>{data.createdAt ? new Date(data.createdAt).toLocaleString() : "—"}</span>
+            <span>{data.createdAt ? formatDisplayDateTime(data.createdAt) : "—"}</span>
           </div>
           <div className="flex flex-col items-center gap-2 pt-4 border-t print:break-inside-avoid">
             <span className="text-xs text-muted-foreground print:hidden">Scan to open verification page</span>

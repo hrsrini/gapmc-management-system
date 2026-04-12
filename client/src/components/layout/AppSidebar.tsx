@@ -30,7 +30,6 @@ import {
   Shield,
   ScrollText,
   UserCircle,
-  Briefcase,
   FileCheck,
   Building2,
   StickyNote,
@@ -193,9 +192,6 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
       { title: 'Employees', icon: UserCircle, href: '/hr/employees' },
       { title: 'Leave requests (M-01)', icon: Calendar, href: '/hr/leaves' },
       { title: 'Claims (LTC / TA-DA)', icon: Wallet, href: '/hr/claims' },
-      { title: 'Attendance', icon: Clock, href: '/hr/attendance' },
-      { title: 'Timesheets', icon: CalendarDays, href: '/hr/timesheets' },
-      { title: 'Recruitment', icon: Briefcase, href: '/hr/recruitment' },
     ]
   },
   {

@@ -20,6 +20,7 @@ import {
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import { assertRoleIdsNoDvDaConflict } from "./role-constraints";
+import { assertPersonalEmailFormat, HrEmployeeRuleError, normalizeMobile10 } from "./hr-employee-rules";
 
 function userSnapshotForAudit(u: Record<string, unknown> | undefined) {
   if (!u) return undefined;
@@ -38,6 +39,14 @@ export async function resolveUserIdForEmployee(employeeId: string): Promise<stri
   if (emp?.userId) return emp.userId;
   const [u] = await db.select({ id: users.id }).from(users).where(eq(users.employeeId, employeeId)).limit(1);
   return u?.id ?? null;
+}
+
+function sendHrRule(res: Response, e: unknown): boolean {
+  if (e instanceof HrEmployeeRuleError) {
+    sendApiError(res, 400, e.code, e.message);
+    return true;
+  }
+  return false;
 }
 
 function dedupeSortPerms(list: { module: string; action: string }[]): { module: string; action: string }[] {
@@ -299,6 +308,21 @@ export async function handleCreateEmployeeLogin(req: Request, res: Response, emp
       }
     }
     const emailNorm = String(email).trim().toLowerCase();
+    try {
+      assertPersonalEmailFormat(emailNorm);
+    } catch (e) {
+      if (sendHrRule(res, e)) return;
+      throw e;
+    }
+    let phoneNorm: string | null = null;
+    if (phone != null && String(phone).trim() !== "") {
+      try {
+        phoneNorm = normalizeMobile10(String(phone));
+      } catch (e) {
+        if (sendHrRule(res, e)) return;
+        throw e;
+      }
+    }
     const rawU = username != null ? String(username).trim().toLowerCase() : "";
     const usernameVal = rawU === "" ? null : rawU;
     const passwordHash = await hash(passwordStr, 10);
@@ -308,7 +332,7 @@ export async function handleCreateEmployeeLogin(req: Request, res: Response, emp
       email: emailNorm,
       username: usernameVal,
       name: String(name),
-      phone: phone ? String(phone) : null,
+      phone: phoneNorm,
       employeeId: employeeIdRaw,
       passwordHash,
       isActive: true,
@@ -390,13 +414,39 @@ export async function handleUpdateEmployeeLogin(req: Request, res: Response, emp
       passwordUpdate = { passwordHash: await hash(passwordStr, 10) };
     }
 
+    let emailUpdate: { email: string } | Record<string, never> = {};
+    if (email != null) {
+      const emailNorm = String(email).trim().toLowerCase();
+      try {
+        assertPersonalEmailFormat(emailNorm);
+      } catch (e) {
+        if (sendHrRule(res, e)) return;
+        throw e;
+      }
+      emailUpdate = { email: emailNorm };
+    }
+
+    let phoneUpdate: { phone: string | null } | Record<string, never> = {};
+    if (phone !== undefined) {
+      if (phone == null || String(phone).trim() === "") {
+        phoneUpdate = { phone: null };
+      } else {
+        try {
+          phoneUpdate = { phone: normalizeMobile10(String(phone)) };
+        } catch (e) {
+          if (sendHrRule(res, e)) return;
+          throw e;
+        }
+      }
+    }
+
     await db
       .update(users)
       .set({
-        ...(email != null && { email: String(email).trim().toLowerCase() }),
+        ...emailUpdate,
         ...usernameUpdate,
         ...(name != null && { name: String(name) }),
-        ...(phone !== undefined && { phone: phone ? String(phone) : null }),
+        ...phoneUpdate,
         ...(isActive !== undefined && { isActive: Boolean(isActive) }),
         ...passwordUpdate,
         employeeId: employeeIdRaw,

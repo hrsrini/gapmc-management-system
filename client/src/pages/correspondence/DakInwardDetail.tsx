@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { Mail, ArrowLeft, Pencil, ListChecks, Loader2, AlertCircle } from "lucide-react";
+import { formatYmdToDisplay } from "@/lib/dateFormat";
 
 interface Inward {
   id: string;
@@ -64,6 +66,27 @@ export default function DakInwardDetail() {
     queryKey: ["/api/yards"],
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+
+  const actionColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "actionDate", header: "Date" },
+      { key: "actionBy", header: "By" },
+      { key: "actionNote", header: "Note" },
+      { key: "_statusAfter", header: "Status after", sortField: "statusAfterSort" },
+    ],
+    [],
+  );
+
+  const actionRows = useMemo((): Record<string, unknown>[] => {
+    return actions.map((a) => ({
+      id: a.id,
+      actionDate: a.actionDate,
+      actionBy: a.actionBy,
+      actionNote: a.actionNote ?? "—",
+      statusAfterSort: a.statusAfter ?? "",
+      _statusAfter: <Badge variant="outline">{a.statusAfter ?? "—"}</Badge>,
+    }));
+  }, [actions]);
 
   const addActionMutation = useMutation({
     mutationFn: async (body: { inwardId: string; actionBy: string; actionNote?: string; statusAfter?: string }) => {
@@ -142,7 +165,7 @@ export default function DakInwardDetail() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <div><span className="text-muted-foreground">Received date</span><br />{inward.receivedDate}</div>
+            <div><span className="text-muted-foreground">Received date</span><br />{formatYmdToDisplay(inward.receivedDate)}</div>
             <div><span className="text-muted-foreground">From</span><br />{inward.fromParty}</div>
             <div><span className="text-muted-foreground">Mode</span><br />{inward.modeOfReceipt}</div>
             <div><span className="text-muted-foreground">Yard</span><br />{inward.yardId ? (yardById[inward.yardId] ?? inward.yardId) : "—"}</div>
@@ -179,32 +202,15 @@ export default function DakInwardDetail() {
               {actionsLoading ? (
                 <Skeleton className="h-24 w-full" />
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>By</TableHead>
-                      <TableHead>Note</TableHead>
-                      <TableHead>Status after</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {actions.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-muted-foreground text-center py-6">No actions yet.</TableCell>
-                      </TableRow>
-                    ) : (
-                      actions.map((a) => (
-                        <TableRow key={a.id}>
-                          <TableCell>{a.actionDate}</TableCell>
-                          <TableCell>{a.actionBy}</TableCell>
-                          <TableCell>{a.actionNote ?? "—"}</TableCell>
-                          <TableCell><Badge variant="outline">{a.statusAfter ?? "—"}</Badge></TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                <ClientDataGrid
+                  columns={actionColumns}
+                  sourceRows={actionRows}
+                  searchKeys={["actionBy", "actionNote", "statusAfterSort"]}
+                  defaultSortKey="actionDate"
+                  defaultSortDir="desc"
+                  emptyMessage="No actions yet."
+                  resetPageDependency={id}
+                />
               )}
             </TabsContent>
           </Tabs>

@@ -28,6 +28,23 @@ interface Yard {
 
 type ReportKind = "rent" | "voucher" | "receipt" | "staff" | "licences";
 
+function defaultSortKey(kind: ReportKind): string {
+  switch (kind) {
+    case "rent":
+      return "periodMonth";
+    case "voucher":
+      return "createdAt";
+    case "receipt":
+      return "createdAt";
+    case "staff":
+      return "joiningDate";
+    case "licences":
+      return "createdAt";
+    default:
+      return "id";
+  }
+}
+
 function buildPreviewUrl(
   kind: ReportKind,
   yardId: string,
@@ -40,6 +57,8 @@ function buildPreviewUrl(
     page: String(p.page),
     pageSize: String(p.pageSize),
     q: p.q,
+    sort: p.sortKey,
+    sortDir: p.sortDir,
   });
   if (yardId && yardId !== "all") sp.set("yardId", yardId);
   if (from) sp.set("from", from);
@@ -99,6 +118,7 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
         { key: "firstName", header: "First name" },
         { key: "surname", header: "Surname" },
         { key: "designation", header: "Designation" },
+        { key: "joiningDate", header: "Joining" },
         { key: "yardId", header: "Yard" },
         { key: "mobile", header: "Mobile" },
         { key: "status", header: "Status" },
@@ -145,6 +165,8 @@ export default function IomsReports() {
     page: 1,
     pageSize: 25,
     q: "",
+    sortKey: defaultSortKey("licences"),
+    sortDir: "desc",
   });
 
   const mergeTableParams = useCallback((next: Partial<ReportPagedParams>) => {
@@ -156,7 +178,7 @@ export default function IomsReports() {
     [previewKind, yardId, from, to, tableParams],
   );
 
-  const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards/for-reports"] });
   const consolidatedUrl =
     yardId && yardId !== "all"
       ? `/api/hr/reports/consolidated?yardId=${encodeURIComponent(yardId)}`
@@ -337,8 +359,8 @@ export default function IomsReports() {
               Report preview (filter & search)
             </CardTitle>
             <CardDescription>
-              Server-side pagination and search. Horizontal scrollbars are at the top and bottom of the grid; the
-              header stays visible while scrolling vertically.
+              Server-side pagination and search. A synced horizontal bar sits above the grid; the grid also scrolls
+              horizontally at the bottom of the data pane. The header stays visible while scrolling vertically.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -349,7 +371,13 @@ export default function IomsReports() {
                   value={previewKind}
                   onValueChange={(v) => {
                     setPreviewKind(v as ReportKind);
-                    setTableParams({ page: 1, pageSize: 25, q: "" });
+                    setTableParams({
+                      page: 1,
+                      pageSize: 25,
+                      q: "",
+                      sortKey: defaultSortKey(v as ReportKind),
+                      sortDir: "desc",
+                    });
                   }}
                 >
                   <SelectTrigger>

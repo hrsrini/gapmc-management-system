@@ -1,7 +1,9 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
@@ -24,6 +26,32 @@ export default function DakOutward() {
   const { data: list, isLoading, isError } = useQuery<Outward[]>({
     queryKey: ["/api/ioms/dak/outward"],
   });
+
+  const columns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "despatchNo", header: "Despatch No" },
+      { key: "despatchDate", header: "Date" },
+      { key: "toParty", header: "To" },
+      { key: "subject", header: "Subject" },
+      { key: "modeOfDespatch", header: "Mode" },
+      { key: "despatchedBy", header: "Despatched by" },
+      { key: "inwardRefId", header: "Inward ref" },
+    ],
+    [],
+  );
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((d) => ({
+      id: d.id,
+      despatchNo: d.despatchNo ?? "—",
+      despatchDate: d.despatchDate.slice(0, 10),
+      toParty: d.toParty,
+      subject: d.subject,
+      modeOfDespatch: d.modeOfDespatch,
+      despatchedBy: d.despatchedBy ?? "—",
+      inwardRefId: d.inwardRefId ?? "—",
+    }));
+  }, [list]);
 
   const { can } = useAuth();
   const canCreate = can("M-09", "Create");
@@ -62,35 +90,14 @@ export default function DakOutward() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Despatch No</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>To</TableHead>
-                  <TableHead>Subject</TableHead>
-                  <TableHead>Mode</TableHead>
-                  <TableHead>Despatched by</TableHead>
-                  <TableHead>Inward ref</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((d) => (
-                  <TableRow key={d.id}>
-                    <TableCell className="font-mono text-sm">{d.despatchNo ?? "—"}</TableCell>
-                    <TableCell>{d.despatchDate}</TableCell>
-                    <TableCell>{d.toParty}</TableCell>
-                    <TableCell className="max-w-[200px] truncate">{d.subject}</TableCell>
-                    <TableCell>{d.modeOfDespatch}</TableCell>
-                    <TableCell>{d.despatchedBy ?? "—"}</TableCell>
-                    <TableCell className="font-mono text-xs">{d.inwardRefId ?? "—"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No outward dak.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["despatchNo", "despatchDate", "toParty", "subject", "modeOfDespatch", "despatchedBy", "inwardRefId"]}
+              defaultSortKey="despatchDate"
+              defaultSortDir="desc"
+              emptyMessage="No outward dak."
+            />
           )}
         </CardContent>
       </Card>

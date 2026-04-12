@@ -1,7 +1,7 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,6 +9,8 @@ import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { Truck, AlertCircle, PlusCircle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
 interface Vehicle {
   id: string;
@@ -29,6 +31,15 @@ interface FleetRenewalAlert {
   urgency: "overdue" | "30d" | "60d";
 }
 
+const columns: ReportTableColumn[] = [
+  { key: "_reg", header: "Registration", sortField: "registrationNo" },
+  { key: "vehicleType", header: "Type" },
+  { key: "yardName", header: "Yard" },
+  { key: "insuranceExpiry", header: "Insurance" },
+  { key: "fitnessExpiry", header: "Fitness" },
+  { key: "_status", header: "Status", sortField: "status" },
+];
+
 export default function FleetVehicles() {
   const { can } = useAuth();
   const canCreate = can("M-07", "Create");
@@ -45,6 +56,24 @@ export default function FleetVehicles() {
   });
   const fleetAlerts = renewalPayload?.alerts ?? [];
   const overdueFleet = fleetAlerts.filter((a) => a.urgency === "overdue").length;
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((v) => ({
+      id: v.id,
+      registrationNo: v.registrationNo,
+      _reg: (
+        <Link href={`/fleet/vehicles/${v.id}`} className="font-mono text-sm text-primary hover:underline">
+          {v.registrationNo}
+        </Link>
+      ),
+      vehicleType: v.vehicleType,
+      yardName: yardById[v.yardId] ?? v.yardId,
+      insuranceExpiry: v.insuranceExpiry ?? "—",
+      fitnessExpiry: v.fitnessExpiry ?? "—",
+      status: v.status,
+      _status: <Badge variant="secondary">{v.status}</Badge>,
+    }));
+  }, [list, yardById]);
 
   if (isError) {
     return (
@@ -80,7 +109,10 @@ export default function FleetVehicles() {
           {canCreate && (
             <div className="pt-2">
               <Button asChild size="sm">
-                <Link href="/fleet/vehicles/new"><PlusCircle className="h-4 w-4 mr-2" />Add vehicle</Link>
+                <Link href="/fleet/vehicles/new">
+                  <PlusCircle className="h-4 w-4 mr-2" />
+                  Add vehicle
+                </Link>
               </Button>
             </div>
           )}
@@ -89,35 +121,15 @@ export default function FleetVehicles() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Registration</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Insurance</TableHead>
-                  <TableHead>Fitness</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((v) => (
-                  <TableRow key={v.id}>
-                    <TableCell className="font-mono text-sm">
-                      <Link href={`/fleet/vehicles/${v.id}`} className="text-primary hover:underline">{v.registrationNo}</Link>
-                    </TableCell>
-                    <TableCell>{v.vehicleType}</TableCell>
-                    <TableCell>{yardById[v.yardId] ?? v.yardId}</TableCell>
-                    <TableCell>{v.insuranceExpiry ?? "—"}</TableCell>
-                    <TableCell>{v.fitnessExpiry ?? "—"}</TableCell>
-                    <TableCell><Badge variant="secondary">{v.status}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No vehicles.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["registrationNo", "vehicleType", "yardName", "insuranceExpiry", "fitnessExpiry", "status"]}
+              searchPlaceholder="Search by registration, type, yard, expiry, status…"
+              defaultSortKey="registrationNo"
+              defaultSortDir="asc"
+              emptyMessage="No vehicles."
+            />
           )}
         </CardContent>
       </Card>

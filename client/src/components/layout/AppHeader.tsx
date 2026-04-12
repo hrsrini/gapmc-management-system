@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Bell, LogOut, ChevronRight, User, RotateCcw } from 'lucide-react';
 import type { ActivityLog } from '@shared/schema';
+import { formatDisplayDateTime } from '@/lib/dateFormat';
 
 const NOTIFICATIONS_READ_KEY = 'gapmc_notifications_read_before';
 
@@ -135,7 +136,7 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
                   <span className="font-medium text-sm">{log.action}</span>
                   <span className="text-xs text-muted-foreground">{log.module} · {log.user}</span>
                   <span className="text-xs text-muted-foreground">
-                    {log.timestamp ? new Date(log.timestamp).toLocaleString() : ''}
+                    {log.timestamp ? formatDisplayDateTime(log.timestamp) : ''}
                   </span>
                 </DropdownMenuItem>
               ))

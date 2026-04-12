@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import {
@@ -41,6 +42,31 @@ export default function DakSubjectIndex() {
   });
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
   const groups = data?.groups ?? [];
+
+  const subjectColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "sampleSubject", header: "Subject (sample text)" },
+      { key: "count", header: "Inward count" },
+      { key: "_register", header: "" },
+    ],
+    [],
+  );
+
+  const subjectRows = useMemo((): Record<string, unknown>[] => {
+    return groups.map((g, idx) => ({
+      id: `${g.sampleSubject}::${idx}`,
+      sampleSubject: g.sampleSubject,
+      count: g.count,
+      _register: (
+        <Link
+          className="text-sm text-primary hover:underline"
+          href={`/correspondence/inward?subject=${encodeURIComponent(g.sampleSubject)}`}
+        >
+          View register
+        </Link>
+      ),
+    }));
+  }, [groups]);
 
   if (isError) {
     return (
@@ -87,39 +113,15 @@ export default function DakSubjectIndex() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Subject (sample text)</TableHead>
-                  <TableHead className="text-right w-[100px]">Inward count</TableHead>
-                  <TableHead className="w-[140px]" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {groups.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={3} className="text-muted-foreground text-center py-8">
-                      No inward subjects in this scope.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  groups.map((g) => (
-                    <TableRow key={g.sampleSubject}>
-                      <TableCell className="max-w-md">{g.sampleSubject}</TableCell>
-                      <TableCell className="text-right tabular-nums">{g.count}</TableCell>
-                      <TableCell>
-                        <Link
-                          className="text-sm text-primary hover:underline"
-                          href={`/correspondence/inward?subject=${encodeURIComponent(g.sampleSubject)}`}
-                        >
-                          View register
-                        </Link>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={subjectColumns}
+              sourceRows={subjectRows}
+              searchKeys={["sampleSubject"]}
+              defaultSortKey="count"
+              defaultSortDir="desc"
+              emptyMessage="No inward subjects in this scope."
+              resetPageDependency={summaryUrl}
+            />
           )}
         </CardContent>
       </Card>

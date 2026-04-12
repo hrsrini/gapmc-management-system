@@ -6,7 +6,17 @@ import type { Express } from "express";
 import { eq, desc, and, inArray, gte, lte, sql, or, ilike, ne } from "drizzle-orm";
 import { db } from "./db";
 import { sendApiError } from "./api-errors";
-import { parseReportPaging, reportSearchPattern } from "./report-paging";
+import { parseReportPaging, parseReportSort, reportSearchPattern } from "./report-paging";
+import {
+  orderRentReport,
+  orderVoucherReport,
+  orderReceiptReport,
+  orderStaffReport,
+  RENT_REPORT_SORT_ALLOW,
+  VOUCHER_REPORT_SORT_ALLOW,
+  RECEIPT_REPORT_SORT_ALLOW,
+  STAFF_REPORT_SORT_ALLOW,
+} from "./report-order";
 import {
   rentInvoices,
   paymentVouchers,
@@ -177,6 +187,7 @@ export function registerReportsRoutes(app: Express) {
 
       if (req.query.paged === "1") {
         const { page, pageSize, q } = parseReportPaging(req);
+        const { sortKey, sortDir } = parseReportSort(req, RENT_REPORT_SORT_ALLOW, "periodMonth");
         const pattern = reportSearchPattern(q);
         const all = [...conditions];
         if (pattern) {
@@ -197,7 +208,7 @@ export function registerReportsRoutes(app: Express) {
         const [{ c: total }] = wc ? await countQ.where(wc) : await countQ;
         const rentBase = db.select().from(rentInvoices);
         const rentFiltered = wc ? rentBase.where(wc) : rentBase;
-        const dataQ = rentFiltered.orderBy(desc(rentInvoices.periodMonth));
+        const dataQ = rentFiltered.orderBy(...orderRentReport(sortKey, sortDir));
         const rows =
           pageSize === "all"
             ? await dataQ
@@ -251,6 +262,7 @@ export function registerReportsRoutes(app: Express) {
 
       if (req.query.paged === "1") {
         const { page, pageSize, q } = parseReportPaging(req);
+        const { sortKey, sortDir } = parseReportSort(req, VOUCHER_REPORT_SORT_ALLOW, "createdAt");
         const pattern = reportSearchPattern(q);
         const all = [...conditions];
         if (pattern) {
@@ -271,7 +283,7 @@ export function registerReportsRoutes(app: Express) {
         const [{ c: total }] = wc ? await countQ.where(wc) : await countQ;
         const voucherBase = db.select().from(paymentVouchers);
         const voucherFiltered = wc ? voucherBase.where(wc) : voucherBase;
-        const dataQ = voucherFiltered.orderBy(desc(paymentVouchers.createdAt));
+        const dataQ = voucherFiltered.orderBy(...orderVoucherReport(sortKey, sortDir));
         const rows =
           pageSize === "all"
             ? await dataQ
@@ -324,6 +336,7 @@ export function registerReportsRoutes(app: Express) {
 
       if (req.query.paged === "1") {
         const { page, pageSize, q } = parseReportPaging(req);
+        const { sortKey, sortDir } = parseReportSort(req, RECEIPT_REPORT_SORT_ALLOW, "createdAt");
         const pattern = reportSearchPattern(q);
         const all = [...conditions];
         if (pattern) {
@@ -345,7 +358,7 @@ export function registerReportsRoutes(app: Express) {
         const [{ c: total }] = wc ? await countQ.where(wc) : await countQ;
         const receiptBase = db.select().from(iomsReceipts);
         const receiptFiltered = wc ? receiptBase.where(wc) : receiptBase;
-        const dataQ = receiptFiltered.orderBy(desc(iomsReceipts.createdAt));
+        const dataQ = receiptFiltered.orderBy(...orderReceiptReport(sortKey, sortDir));
         const rows =
           pageSize === "all"
             ? await dataQ
@@ -422,6 +435,7 @@ export function registerReportsRoutes(app: Express) {
 
       if (req.query.paged === "1") {
         const { page, pageSize, q } = parseReportPaging(req);
+        const { sortKey, sortDir } = parseReportSort(req, STAFF_REPORT_SORT_ALLOW, "joiningDate");
         const pattern = reportSearchPattern(q);
         const all = [...baseConditions];
         if (pattern) {
@@ -445,7 +459,7 @@ export function registerReportsRoutes(app: Express) {
         const [{ c: total }] = wc ? await countQ.where(wc) : await countQ;
         const staffBase = db.select().from(employees);
         const staffFiltered = wc ? staffBase.where(wc) : staffBase;
-        const dataQ = staffFiltered.orderBy(baseOrder);
+        const dataQ = staffFiltered.orderBy(...orderStaffReport(sortKey, sortDir));
         const rows =
           pageSize === "all"
             ? await dataQ

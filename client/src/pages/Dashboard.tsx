@@ -1,10 +1,12 @@
+import { useMemo } from 'react';
 import { Link } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ClientDataGrid } from '@/components/reports/ClientDataGrid';
+import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
 import { Skeleton } from '@/components/ui/skeleton';
 import { 
   Users, 
@@ -17,7 +19,6 @@ import {
   UserPlus,
   Calendar
 } from 'lucide-react';
-import { format } from '@/lib/dateFormat';
 import type { ActivityLog } from '@shared/schema';
 
 interface Stats {
@@ -75,6 +76,26 @@ export default function Dashboard() {
     queryKey: ['/api/hr/retirement-upcoming?days=90'],
     enabled: canHrRead,
   });
+
+  const activityColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: 'action', header: 'Action' },
+      { key: 'module', header: 'Module' },
+      { key: 'user', header: 'User' },
+      { key: 'loggedAt', header: 'Timestamp' },
+    ],
+    [],
+  );
+
+  const activityRows = useMemo((): Record<string, unknown>[] => {
+    return (activityLogs ?? []).map((log) => ({
+      id: log.id,
+      action: log.action,
+      module: log.module,
+      user: log.user,
+      loggedAt: log.timestamp,
+    }));
+  }, [activityLogs]);
 
   const statCards = [
     {
@@ -217,28 +238,16 @@ export default function Dashboard() {
                 ))}
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Action</TableHead>
-                    <TableHead>Module</TableHead>
-                    <TableHead>User</TableHead>
-                    <TableHead>Timestamp</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {activityLogs?.map((log) => (
-                    <TableRow key={log.id} data-testid={`row-activity-${log.id}`}>
-                      <TableCell className="font-medium">{log.action}</TableCell>
-                      <TableCell>{log.module}</TableCell>
-                      <TableCell>{log.user}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {format(new Date(log.timestamp), 'MMM dd, yyyy HH:mm')}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <div data-testid="grid-recent-activity">
+                <ClientDataGrid
+                  columns={activityColumns}
+                  sourceRows={activityRows}
+                  searchKeys={['action', 'module', 'user']}
+                  defaultSortKey="loggedAt"
+                  defaultSortDir="desc"
+                  emptyMessage="No recent activity."
+                />
+              </div>
             )}
           </CardContent>
         </Card>

@@ -17,7 +17,9 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { ArrowLeftRight, Save, Printer, X, AlertCircle } from 'lucide-react';
-import { LOCATIONS, COMMODITIES, VEHICLE_TYPES, UNITS } from '@/data/yards';
+import { COMMODITIES, VEHICLE_TYPES, UNITS } from '@/data/yards';
+import { apiYardToLegacyYardId } from '@/lib/legacyYardMatch';
+import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
 import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Trader } from '@shared/schema';
@@ -42,6 +44,8 @@ export default function ImportExport() {
     queryKey: ['/api/traders'],
   });
 
+  const { data: yards = [], isLoading: yardsLoading } = useScopedActiveYards();
+
   const selectedTrader = useMemo(() => {
     return (traders ?? []).find(t => t.id === selectedTraderId);
   }, [traders, selectedTraderId]);
@@ -55,8 +59,8 @@ export default function ImportExport() {
   }, [selectedCommodity]);
 
   const selectedLocationData = useMemo(() => {
-    return LOCATIONS.find(l => l.id.toString() === locationId);
-  }, [locationId]);
+    return yards.find((l) => l.id === locationId);
+  }, [yards, locationId]);
 
   const totalValue = useMemo(() => quantity * ratePerUnit, [quantity, ratePerUnit]);
   const marketFee = useMemo(() => Math.round(totalValue * 0.025), [totalValue]);
@@ -86,6 +90,16 @@ export default function ImportExport() {
       return;
     }
 
+    const legacyLoc = selectedLocationData ? apiYardToLegacyYardId(selectedLocationData) : null;
+    if (legacyLoc == null) {
+      toast({
+        title: 'Validation Error',
+        description: 'Select a location from your assigned list (code must match the legacy register).',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     createMutation.mutate({
       receiptNo,
       entryType,
@@ -103,7 +117,7 @@ export default function ImportExport() {
       marketFee,
       vehicleType: vehicleType || 'Truck',
       vehicleNumber: vehicleNumber || 'N/A',
-      locationId: parseInt(locationId),
+      locationId: legacyLoc,
       locationName: selectedLocationData?.name || '',
       entryDate: format(new Date(entryDateTime), 'yyyy-MM-dd'),
       paymentMode,
@@ -122,6 +136,7 @@ export default function ImportExport() {
           setQuantity(0);
           setRatePerUnit(0);
           setVehicleNumber('');
+          setLocationId('');
         }
       },
     });
@@ -313,14 +328,14 @@ export default function ImportExport() {
               </div>
               <div className="space-y-2">
                 <Label>Entry Location *</Label>
-                <Select value={locationId} onValueChange={setLocationId}>
+                <Select value={locationId} onValueChange={setLocationId} disabled={yardsLoading}>
                   <SelectTrigger data-testid="select-location">
-                    <SelectValue placeholder="Select location" />
+                    <SelectValue placeholder={yardsLoading ? 'Loading locations…' : 'Select location'} />
                   </SelectTrigger>
                   <SelectContent>
-                    {LOCATIONS.map((loc) => (
-                      <SelectItem key={loc.id} value={loc.id.toString()}>
-                        {loc.name} ({loc.type})
+                    {yards.map((loc) => (
+                      <SelectItem key={loc.id} value={loc.id}>
+                        {loc.name} ({loc.type ?? '—'})
                       </SelectItem>
                     ))}
                   </SelectContent>

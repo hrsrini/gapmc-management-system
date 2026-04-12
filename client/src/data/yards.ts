@@ -3,6 +3,8 @@ export interface Location {
   name: string;
   code: string;
   type: 'Yard' | 'CheckPost';
+  /** When false, excluded from operational location dropdowns (reports may still use full list). */
+  isActive?: boolean;
 }
 
 export const LOCATIONS: Location[] = [
@@ -21,7 +23,9 @@ export const LOCATIONS: Location[] = [
   { id: 13, name: 'Dodamarg Check Post', code: 'DODA', type: 'CheckPost' }
 ];
 
+export const ACTIVE_LOCATIONS = LOCATIONS.filter((l) => l.isActive !== false);
 export const YARDS = LOCATIONS.filter(l => l.type === 'Yard');
+export const ACTIVE_YARDS = ACTIVE_LOCATIONS.filter((l) => l.type === 'Yard');
 export const CHECKPOSTS = LOCATIONS.filter(l => l.type === 'CheckPost');
 
 export const COMMODITIES = [

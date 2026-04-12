@@ -4,6 +4,7 @@
 import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { employees } from "@shared/db-schema";
+import { INDIAN_MOBILE_10_RE, isStrictAadhaar12Digits } from "@shared/india-validation";
 
 const EMP_ID_RE = /^EMP-(\d{3})$/i;
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -27,15 +28,25 @@ export class HrEmployeeRuleError extends Error {
   }
 }
 
-/** Last 4 digits → masked token BR-EMP-02 (XXXX-XXXX-1234). Full 12-digit input also accepted (uses last 4). */
+const MASKED_AADHAAR_RE = /^XXXX-XXXX-(\d{4})$/i;
+
+/**
+ * Accepts stored masked token (XXXX-XXXX-####) or exactly 12 digits (no spaces); stores masked BR-EMP-02.
+ */
 export function normalizeAadhaarMasked(input: string | null | undefined): string | null {
   if (input == null || String(input).trim() === "") return null;
-  const d = String(input).replace(/\D/g, "");
-  if (d.length < 4) {
-    throw new HrEmployeeRuleError("HR_EMP_AADHAAR_MASK", "Aadhaar: provide at least the last 4 digits (stored as XXXX-XXXX-####).");
+  const raw = String(input).trim();
+  const masked = MASKED_AADHAAR_RE.exec(raw);
+  if (masked) {
+    return `XXXX-XXXX-${masked[1]}`;
   }
-  const last4 = d.slice(-4);
-  return `XXXX-XXXX-${last4}`;
+  if (!isStrictAadhaar12Digits(raw)) {
+    throw new HrEmployeeRuleError(
+      "HR_EMP_AADHAAR_FORMAT",
+      "Please enter a valid Aadhaar number (12 digits, no spaces or hyphens).",
+    );
+  }
+  return `XXXX-XXXX-${raw.slice(-4)}`;
 }
 
 export function normalizePan(input: string | null | undefined): string | null {
@@ -53,6 +64,24 @@ export function assertPersonalEmailFormat(email: string | null | undefined): voi
   if (!EMAIL_RE.test(e)) {
     throw new HrEmployeeRuleError("HR_EMP_EMAIL_FORMAT", "Personal email must be a valid email address.");
   }
+}
+
+export function assertWorkEmailFormat(email: string | null | undefined): void {
+  if (email == null || String(email).trim() === "") return;
+  const e = String(email).trim().toLowerCase();
+  if (!EMAIL_RE.test(e)) {
+    throw new HrEmployeeRuleError("HR_EMP_WORK_EMAIL_FORMAT", "Work email must be a valid email address.");
+  }
+}
+
+/** Normalizes to 10 digits; null if empty; throws if present but invalid. */
+export function normalizeMobile10(input: string | null | undefined): string | null {
+  if (input == null || String(input).trim() === "") return null;
+  const d = String(input).replace(/\D/g, "");
+  if (!INDIAN_MOBILE_10_RE.test(d)) {
+    throw new HrEmployeeRuleError("HR_EMP_MOBILE_FORMAT", "Mobile must be a valid 10-digit Indian number.");
+  }
+  return d;
 }
 
 function parseIsoDateParts(s: string): { y: number; m: number; d: number } {

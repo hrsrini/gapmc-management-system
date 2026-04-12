@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
@@ -17,7 +17,10 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { UserPlus, Save, X, Check } from 'lucide-react';
-import { YARDS, COMMODITIES } from '@/data/yards';
+import { COMMODITIES } from '@/data/yards';
+import { apiYardToLegacyYardId, legacyYardIdToApiYardId } from '@/lib/legacyYardMatch';
+import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
+import { isValidEmailFormat, isStrictAadhaar12Digits, parseIndianMobile10Digits } from '@shared/india-validation';
 import { Badge } from '@/components/ui/badge';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Trader } from '@shared/schema';
@@ -49,13 +52,26 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
   const [accountNumber, setAccountNumber] = useState(initialData?.accountNumber ?? '');
   const [ifsc, setIfsc] = useState(initialData?.ifscCode ?? '');
   const [branchName, setBranchName] = useState(initialData?.branchName ?? '');
-  const [yardId, setYardId] = useState<string>(initialData?.yardId?.toString() ?? '');
+  const [yardId, setYardId] = useState<string>('');
   const [premises, setPremises] = useState(initialData?.premises ?? '');
   const [premisesType, setPremisesType] = useState<string>(initialData?.premisesType ?? 'Stall');
   const [registrationType, setRegistrationType] = useState<string>(initialData?.registrationType ?? 'Temporary');
   const [selectedCommodities, setSelectedCommodities] = useState<string[]>(initialData?.commodities ?? []);
 
-  const selectedYard = YARDS.find(y => y.id.toString() === yardId);
+  const { data: yards = [], isLoading: yardsLoading } = useScopedActiveYards();
+
+  const yardOptions = useMemo(
+    () => yards.filter((y) => String(y.type ?? '').toLowerCase() === 'yard'),
+    [yards],
+  );
+
+  useEffect(() => {
+    if (!isEdit || initialData?.yardId == null || yardOptions.length === 0) return;
+    const apiId = legacyYardIdToApiYardId(initialData.yardId, yardOptions);
+    setYardId(apiId ?? '');
+  }, [isEdit, initialData?.yardId, yardOptions]);
+
+  const selectedYard = yardOptions.find((y) => y.id === yardId);
 
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest('POST', '/api/traders', data),
@@ -107,17 +123,41 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
       });
       return;
     }
+    if (!isValidEmailFormat(email)) {
+      toast({ title: 'Validation Error', description: 'Please enter a valid email address.', variant: 'destructive' });
+      return;
+    }
+    const mobileDigits = parseIndianMobile10Digits(mobile);
+    if (!mobileDigits) {
+      toast({ title: 'Validation Error', description: 'Mobile must be a valid 10-digit Indian number.', variant: 'destructive' });
+      return;
+    }
+    if (!isStrictAadhaar12Digits(aadhaar)) {
+      toast({ title: 'Validation Error', description: 'Please enter a valid Aadhaar number (12 digits, no spaces).', variant: 'destructive' });
+      return;
+    }
+
+    const apiYard = yardOptions.find((y) => y.id === yardId);
+    const legacyYardId = apiYard ? apiYardToLegacyYardId(apiYard) : null;
+    if (legacyYardId == null) {
+      toast({
+        title: 'Validation Error',
+        description: 'Select a yard from your assigned list (yard code must match the legacy register).',
+        variant: 'destructive',
+      });
+      return;
+    }
 
     const payload = {
       name,
       firmName: firmName || undefined,
       type: applicantType as 'Individual' | 'Firm' | 'Pvt Ltd' | 'Public Ltd',
-      mobile,
+      mobile: mobileDigits,
       phone: phone || undefined,
-      email,
+      email: email.trim().toLowerCase(),
       residentialAddress: residentialAddress || undefined,
       businessAddress: businessAddress || undefined,
-      aadhaar,
+      aadhaar: aadhaar.trim(),
       pan,
       gst: gst || undefined,
       epicVoterId: epic || undefined,
@@ -125,8 +165,8 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
       accountNumber: accountNumber || undefined,
       ifscCode: ifsc || undefined,
       branchName: branchName || undefined,
-      yardId: parseInt(yardId),
-      yardName: selectedYard?.name || '',
+      yardId: legacyYardId,
+      yardName: apiYard?.name || '',
       premises: premises || 'Stall 1',
       premisesType: premisesType as 'Stall' | 'Godown' | 'Shop',
       registrationType: registrationType as 'Temporary' | 'Permanent',
@@ -147,7 +187,7 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
         },
       });
     } else {
-      const assetId = `TRD-${selectedYard?.code || 'YARD'}-${Date.now().toString().slice(-6)}`;
+      const assetId = `TRD-${apiYard?.code || 'YARD'}-${Date.now().toString().slice(-6)}`;
       createMutation.mutate({ ...payload, assetId }, {
         onSuccess: () => {
           toast({
@@ -259,8 +299,9 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
                 <Input
                   id="mobile"
                   value={mobile}
-                  onChange={(e) => setMobile(e.target.value)}
+                  onChange={(e) => setMobile(e.target.value.replace(/\D/g, "").slice(0, 10))}
                   placeholder="10-digit mobile"
+                  inputMode="numeric"
                   data-testid="input-mobile"
                 />
               </div>
@@ -300,8 +341,9 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
                 <Input
                   id="aadhaar"
                   value={aadhaar}
-                  onChange={(e) => setAadhaar(e.target.value)}
-                  placeholder="XXXX-XXXX-XXXX"
+                  onChange={(e) => setAadhaar(e.target.value.replace(/\D/g, "").slice(0, 12))}
+                  placeholder="12 digits, no spaces"
+                  inputMode="numeric"
                   data-testid="input-aadhaar"
                 />
               </div>
@@ -397,13 +439,13 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label>Yard *</Label>
-                <Select value={yardId} onValueChange={setYardId}>
+                <Select value={yardId} onValueChange={setYardId} disabled={yardsLoading}>
                   <SelectTrigger data-testid="select-yard">
-                    <SelectValue placeholder="Select yard" />
+                    <SelectValue placeholder={yardsLoading ? 'Loading yards…' : 'Select yard'} />
                   </SelectTrigger>
                   <SelectContent>
-                    {YARDS.map((yard) => (
-                      <SelectItem key={yard.id} value={yard.id.toString()}>
+                    {yardOptions.map((yard) => (
+                      <SelectItem key={yard.id} value={yard.id}>
                         {yard.name}
                       </SelectItem>
                     ))}

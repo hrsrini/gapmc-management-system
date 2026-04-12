@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import {
   Select,
   SelectContent,
@@ -13,6 +14,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MapPin, AlertCircle } from "lucide-react";
+import { formatYmdToDisplay } from "@/lib/dateFormat";
 
 interface LandRecord {
   id: string;
@@ -44,6 +46,40 @@ export default function ConstructionLandRecords() {
 
   const { data: list = [], isLoading, isError } = useQuery<LandRecord[]>({ queryKey: [url] });
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y.name ?? y.code ?? y.id])), [yards]);
+
+  const columns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "surveyNo", header: "Survey no" },
+      { key: "yardName", header: "Yard" },
+      { key: "village", header: "Village" },
+      { key: "taluk", header: "Taluk" },
+      { key: "_areaSqm", header: "Area (sqm)", sortField: "areaSqm" },
+      { key: "saleDeedSummary", header: "Sale deed" },
+      { key: "createdAt", header: "Created" },
+    ],
+    [],
+  );
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return list.map((r) => {
+      const saleDeedSummary = [r.saleDeedNo ?? "", r.saleDeedDate ? formatYmdToDisplay(r.saleDeedDate) : ""]
+        .filter(Boolean)
+        .join(" ")
+        .trim() || "—";
+      return {
+        id: r.id,
+        surveyNo: r.surveyNo,
+        yardName: yardById.get(r.yardId) ?? r.yardId,
+        village: r.village ?? "—",
+        taluk: r.taluk ?? "—",
+        areaSqm: r.areaSqm ?? null,
+        _areaSqm: r.areaSqm != null ? r.areaSqm.toLocaleString() : "—",
+        saleDeedSummary,
+        createdAt: r.createdAt,
+      };
+    });
+  }, [list, yardById]);
 
   if (isError) {
     return (
@@ -86,38 +122,15 @@ export default function ConstructionLandRecords() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Survey no</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Village</TableHead>
-                  <TableHead>Taluk</TableHead>
-                  <TableHead className="text-right">Area (sqm)</TableHead>
-                  <TableHead>Sale deed</TableHead>
-                  <TableHead>Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {list.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground text-center py-6">No land records.</TableCell>
-                  </TableRow>
-                ) : (
-                  list.map((r) => (
-                    <TableRow key={r.id}>
-                      <TableCell className="font-mono text-sm">{r.surveyNo}</TableCell>
-                      <TableCell>{r.yardId}</TableCell>
-                      <TableCell>{r.village ?? "—"}</TableCell>
-                      <TableCell>{r.taluk ?? "—"}</TableCell>
-                      <TableCell className="text-right">{r.areaSqm != null ? r.areaSqm.toLocaleString() : "—"}</TableCell>
-                      <TableCell>{r.saleDeedNo ?? "—"} {r.saleDeedDate ? `(${r.saleDeedDate})` : ""}</TableCell>
-                      <TableCell className="text-muted-foreground text-xs">{r.createdAt}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["surveyNo", "yardName", "village", "taluk", "saleDeedSummary"]}
+              defaultSortKey="createdAt"
+              defaultSortDir="desc"
+              emptyMessage="No land records."
+              resetPageDependency={url}
+            />
           )}
         </CardContent>
       </Card>

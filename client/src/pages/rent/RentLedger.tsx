@@ -1,12 +1,17 @@
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BookOpen, AlertCircle } from "lucide-react";
+import {
+  ReportDataTable,
+  type ReportPagedParams,
+  type ReportTableColumn,
+} from "@/components/reports/ReportDataTable";
+import { sliceClientReport } from "@/lib/clientReportSlice";
 
 interface LedgerEntry {
   id: string;
@@ -29,14 +34,40 @@ interface RentInvoiceRef {
   invoiceNo?: string | null;
 }
 
+const columns: ReportTableColumn[] = [
+  { key: "entryDate", header: "Entry date" },
+  { key: "tenantLicenceId", header: "Tenant licence" },
+  { key: "assetDisplay", header: "Asset" },
+  { key: "entryType", header: "Type" },
+  { key: "_debit", header: "Debit", sortField: "debit" },
+  { key: "_credit", header: "Credit", sortField: "credit" },
+  { key: "_balance", header: "Balance", sortField: "balance" },
+  { key: "refDisplay", header: "Invoice / Receipt" },
+];
+
 export default function RentLedger() {
   const [tenantLicenceId, setTenantLicenceId] = useState("");
   const [assetId, setAssetId] = useState("");
+  const [tableParams, setTableParams] = useState<ReportPagedParams>({
+    page: 1,
+    pageSize: 25,
+    q: "",
+    sortKey: "entryDate",
+    sortDir: "desc",
+  });
+
+  const mergeParams = useCallback((next: Partial<ReportPagedParams>) => {
+    setTableParams((s) => ({ ...s, ...next }));
+  }, []);
 
   const params = new URLSearchParams();
   if (tenantLicenceId.trim()) params.set("tenantLicenceId", tenantLicenceId.trim());
   if (assetId.trim()) params.set("assetId", assetId.trim());
   const url = params.toString() ? `/api/ioms/rent/ledger?${params.toString()}` : "/api/ioms/rent/ledger";
+
+  useEffect(() => {
+    setTableParams((p) => ({ ...p, page: 1 }));
+  }, [url]);
 
   const { data: list = [], isLoading, isError } = useQuery<LedgerEntry[]>({ queryKey: [url] });
   const { data: assets = [] } = useQuery<AssetRef[]>({
@@ -47,6 +78,50 @@ export default function RentLedger() {
   });
   const assetLabelById = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
   const invoiceLabelById = Object.fromEntries(invoices.map((i) => [i.id, i.invoiceNo ?? i.id]));
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return list.map((e) => ({
+      id: e.id,
+      entryDate: e.entryDate.slice(0, 10),
+      tenantLicenceId: e.tenantLicenceId,
+      assetDisplay: assetLabelById[e.assetId] ?? e.assetId,
+      entryType: e.entryType,
+      debit: e.debit,
+      credit: e.credit,
+      balance: e.balance,
+      _debit: `₹${e.debit.toLocaleString()}`,
+      _credit: `₹${e.credit.toLocaleString()}`,
+      _balance: `₹${e.balance.toLocaleString()}`,
+      refDisplay:
+        e.invoiceId != null && e.invoiceId !== ""
+          ? (invoiceLabelById[e.invoiceId] ?? e.invoiceId)
+          : (e.receiptId ?? "—"),
+    }));
+  }, [list, assetLabelById, invoiceLabelById]);
+
+  const { rows, total } = useMemo(
+    () =>
+      sliceClientReport(sourceRows, tableParams, [
+        "entryDate",
+        "tenantLicenceId",
+        "assetDisplay",
+        "entryType",
+        "debit",
+        "credit",
+        "balance",
+        "refDisplay",
+      ]),
+    [sourceRows, tableParams],
+  );
+
+  const totalPages =
+    tableParams.pageSize === "all" ? 1 : Math.max(1, Math.ceil(total / tableParams.pageSize));
+
+  useEffect(() => {
+    if (total > 0 && tableParams.page > totalPages) {
+      setTableParams((p) => ({ ...p, page: totalPages }));
+    }
+  }, [total, totalPages, tableParams.page]);
 
   if (isError) {
     return (
@@ -69,7 +144,10 @@ export default function RentLedger() {
             <BookOpen className="h-5 w-5" />
             Rent deposit ledger (M-03)
           </CardTitle>
-          <p className="text-sm text-muted-foreground">Per tenant per asset — opening balance, rent, interest, collections.</p>
+          <p className="text-sm text-muted-foreground">
+            Per tenant per asset — opening balance, rent, interest, collections. Use search and column headers to sort;
+            pagination applies after server filter.
+          </p>
           <div className="flex flex-wrap gap-4 pt-2">
             <div className="space-y-1">
               <Label>Tenant licence ID</Label>
@@ -95,42 +173,15 @@ export default function RentLedger() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Entry date</TableHead>
-                  <TableHead>Tenant licence</TableHead>
-                  <TableHead>Asset</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead className="text-right">Debit</TableHead>
-                  <TableHead className="text-right">Credit</TableHead>
-                  <TableHead className="text-right">Balance</TableHead>
-                  <TableHead>Invoice / Receipt</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {list.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-muted-foreground text-center py-6">No ledger entries.</TableCell>
-                  </TableRow>
-                ) : (
-                  list.map((e) => (
-                    <TableRow key={e.id}>
-                      <TableCell>{e.entryDate}</TableCell>
-                      <TableCell className="font-mono text-sm">{e.tenantLicenceId}</TableCell>
-                      <TableCell>{assetLabelById[e.assetId] ?? e.assetId}</TableCell>
-                      <TableCell>{e.entryType}</TableCell>
-                      <TableCell className="text-right">₹{e.debit.toLocaleString()}</TableCell>
-                      <TableCell className="text-right">₹{e.credit.toLocaleString()}</TableCell>
-                      <TableCell className="text-right font-medium">₹{e.balance.toLocaleString()}</TableCell>
-                      <TableCell className="text-muted-foreground text-xs">
-                        {e.invoiceId ? (invoiceLabelById[e.invoiceId] ?? e.invoiceId) : (e.receiptId ?? "—")}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ReportDataTable
+              columns={columns}
+              rows={rows}
+              total={total}
+              params={tableParams}
+              onParamsChange={mergeParams}
+              isLoading={false}
+              searchPlaceholder="Search by date, tenant, asset, type, amounts, invoice/receipt…"
+            />
           )}
         </CardContent>
       </Card>

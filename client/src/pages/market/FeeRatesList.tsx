@@ -1,8 +1,9 @@
 import { useMemo, useState, useEffect } from "react";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -104,6 +105,28 @@ export default function FeeRatesList() {
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
 
+  const columns = useMemo((): ReportTableColumn[] => {
+    return [
+      { key: "commodityName", header: "Commodity" },
+      { key: "validFrom", header: "Valid from" },
+      { key: "validTo", header: "Valid to" },
+      { key: "_feePct", header: "Fee %", sortField: "feePercent" },
+      { key: "yardName", header: "Yard" },
+    ];
+  }, []);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((r) => ({
+      id: r.id,
+      commodityName: commodityMap[r.commodityId] ?? r.commodityId,
+      validFrom: r.validFrom.slice(0, 10),
+      validTo: r.validTo ? r.validTo.slice(0, 10) : null,
+      feePercent: r.feePercent,
+      _feePct: `${r.feePercent}%`,
+      yardName: r.yardId ? (yardById.get(r.yardId)?.name ?? r.yardId) : "—",
+    }));
+  }, [list, commodityMap, yardById]);
+
   if (isError) {
     return (
       <AppShell breadcrumbs={[{ label: "Market (IOMS)", href: "/market/commodities" }, { label: "Fee rates" }]}>
@@ -186,31 +209,15 @@ export default function FeeRatesList() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Commodity</TableHead>
-                  <TableHead>Valid from</TableHead>
-                  <TableHead>Valid to</TableHead>
-                  <TableHead className="text-right">Fee %</TableHead>
-                  <TableHead>Yard</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>{commodityMap[r.commodityId] ?? r.commodityId}</TableCell>
-                    <TableCell>{r.validFrom}</TableCell>
-                    <TableCell>{r.validTo ?? "—"}</TableCell>
-                    <TableCell className="text-right">{r.feePercent}%</TableCell>
-                    <TableCell>{r.yardId ? (yardById.get(r.yardId)?.name ?? r.yardId) : "—"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No fee rates.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["commodityName", "validFrom", "validTo", "feePercent", "yardName", "_feePct"]}
+              searchPlaceholder="Search commodity, dates, fee %, yard…"
+              defaultSortKey="validFrom"
+              defaultSortDir="desc"
+              emptyMessage="No fee rates."
+            />
           )}
         </CardContent>
       </Card>

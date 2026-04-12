@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -22,6 +23,7 @@ import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { HardHat, ArrowLeft, Pencil, FileText, AlertCircle, Plus, Loader2 } from "lucide-react";
+import { formatYmdToDisplay } from "@/lib/dateFormat";
 
 interface Work {
   id: string;
@@ -91,6 +93,33 @@ export default function WorkDetail() {
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
   const voucherNoById = Object.fromEntries(vouchers.map((v) => [v.id, v.voucherNo ?? v.id]));
+
+  const billColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "billNo", header: "Bill No" },
+      { key: "billDate", header: "Date" },
+      { key: "_amount", header: "Amount", sortField: "amount" },
+      { key: "_cumulativePaid", header: "Cumulative paid", sortField: "cumulativePaid" },
+      { key: "_status", header: "Status", sortField: "status" },
+      { key: "voucherLabel", header: "Voucher" },
+    ],
+    [],
+  );
+
+  const billRows = useMemo((): Record<string, unknown>[] => {
+    return bills.map((b) => ({
+      id: b.id,
+      billNo: b.billNo ?? "—",
+      billDate: b.billDate.slice(0, 10),
+      amount: b.amount,
+      _amount: `₹${b.amount.toLocaleString()}`,
+      cumulativePaid: b.cumulativePaid ?? 0,
+      _cumulativePaid: `₹${(b.cumulativePaid ?? 0).toLocaleString()}`,
+      status: b.status,
+      _status: <Badge variant="outline">{b.status}</Badge>,
+      voucherLabel: b.voucherId ? (voucherNoById[b.voucherId] ?? b.voucherId) : "—",
+    }));
+  }, [bills, voucherNoById]);
 
   const addBillMutation = useMutation({
     mutationFn: async (body: { workId: string; billNo?: string; billDate: string; amount: number; cumulativePaid?: number; status?: string }) => {
@@ -188,9 +217,21 @@ export default function WorkDetail() {
             <div><span className="text-muted-foreground">Location</span><br />{work.location ?? "—"}</div>
             <div><span className="text-muted-foreground">Estimate</span><br />{work.estimateAmount != null ? `₹${work.estimateAmount.toLocaleString()}` : "—"}</div>
             <div><span className="text-muted-foreground">Tender value</span><br />{work.tenderValue != null ? `₹${work.tenderValue.toLocaleString()}` : "—"}</div>
-            <div><span className="text-muted-foreground">Work order</span><br />{work.workOrderNo ?? "—"} {work.workOrderDate ? `(${work.workOrderDate})` : ""}</div>
-            <div><span className="text-muted-foreground">Start / End</span><br />{work.startDate ?? "—"} / {work.endDate ?? "—"}</div>
-            <div><span className="text-muted-foreground">Completion</span><br />{work.completionDate ?? "—"}</div>
+            <div>
+              <span className="text-muted-foreground">Work order</span>
+              <br />
+              {work.workOrderNo ?? "—"} {work.workOrderDate ? `(${formatYmdToDisplay(work.workOrderDate)})` : ""}
+            </div>
+            <div>
+              <span className="text-muted-foreground">Start / End</span>
+              <br />
+              {work.startDate ? formatYmdToDisplay(work.startDate) : "—"} / {work.endDate ? formatYmdToDisplay(work.endDate) : "—"}
+            </div>
+            <div>
+              <span className="text-muted-foreground">Completion</span>
+              <br />
+              {work.completionDate ? formatYmdToDisplay(work.completionDate) : "—"}
+            </div>
             {work.description && (
               <div className="md:col-span-2"><span className="text-muted-foreground">Description</span><br />{work.description}</div>
             )}
@@ -229,36 +270,15 @@ export default function WorkDetail() {
               {billsLoading ? (
                 <Skeleton className="h-32 w-full" />
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Bill No</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead className="text-right">Cumulative paid</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Voucher</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {bills.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={6} className="text-muted-foreground text-center py-6">No bills for this work.</TableCell>
-                      </TableRow>
-                    ) : (
-                      bills.map((b) => (
-                        <TableRow key={b.id}>
-                          <TableCell className="font-mono text-sm">{b.billNo ?? "—"}</TableCell>
-                          <TableCell>{b.billDate}</TableCell>
-                          <TableCell className="text-right">₹{b.amount.toLocaleString()}</TableCell>
-                          <TableCell className="text-right">₹{(b.cumulativePaid ?? 0).toLocaleString()}</TableCell>
-                          <TableCell><Badge variant="outline">{b.status}</Badge></TableCell>
-                          <TableCell>{b.voucherId ? (voucherNoById[b.voucherId] ?? b.voucherId) : "—"}</TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                <ClientDataGrid
+                  columns={billColumns}
+                  sourceRows={billRows}
+                  searchKeys={["billNo", "billDate", "status", "voucherLabel"]}
+                  defaultSortKey="billDate"
+                  defaultSortDir="desc"
+                  emptyMessage="No bills for this work."
+                  resetPageDependency={id}
+                />
               )}
             </TabsContent>
           </Tabs>

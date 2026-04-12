@@ -9,19 +9,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, X, ChevronLeft, ChevronRight, ArrowDown, ArrowUp } from "lucide-react";
+import { formatIsoLikeForDisplay, formatYearMonthToDisplay, formatYmdToDisplay } from "@/lib/dateFormat";
 
 export type ReportPageSizeOption = 25 | 50 | "all";
 
 export interface ReportTableColumn {
   key: string;
   header: string;
+  /** Sent as `sort` when this header is clicked. If omitted, `key` is used unless `key` starts with "_". */
+  sortField?: string;
 }
 
 export interface ReportPagedParams {
   page: number;
   pageSize: ReportPageSizeOption;
   q: string;
+  sortKey: string;
+  sortDir: "asc" | "desc";
+}
+
+function resolveSortField(c: ReportTableColumn): string | undefined {
+  if (c.sortField !== undefined) return c.sortField;
+  if (c.key.startsWith("_")) return undefined;
+  return c.key;
 }
 
 interface ReportDataTableProps {
@@ -41,6 +52,18 @@ function cellContent(row: Record<string, unknown>, key: string): ReactNode {
   if (v == null || v === "") return "—";
   if (isValidElement(v)) return v;
   if (typeof v === "object") return JSON.stringify(v);
+  if (typeof v === "string" && /Month$/i.test(key) && /^\d{4}-\d{2}$/.test(v.trim().slice(0, 7))) {
+    return formatYearMonthToDisplay(v);
+  }
+  if (typeof v === "string" && /(At|Date|date|From|To)$/i.test(key)) {
+    const t = v.trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(t) && (t.includes("T") || t.length > 10)) {
+      return formatIsoLikeForDisplay(t);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t.slice(0, 10))) {
+      return formatYmdToDisplay(t);
+    }
+  }
   return String(v);
 }
 
@@ -58,7 +81,6 @@ export function ReportDataTable({
   const [draftQ, setDraftQ] = useState(params.q);
   const topScrollRef = useRef<HTMLDivElement>(null);
   const mainScrollRef = useRef<HTMLDivElement>(null);
-  const bottomScrollRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const [scrollWidth, setScrollWidth] = useState(0);
 
@@ -88,7 +110,7 @@ export function ReportDataTable({
 
   const syncScroll = useCallback((source: HTMLDivElement) => {
     const x = source.scrollLeft;
-    [topScrollRef, mainScrollRef, bottomScrollRef].forEach((r) => {
+    [topScrollRef, mainScrollRef].forEach((r) => {
       if (r.current && r.current !== source) r.current.scrollLeft = x;
     });
   }, []);
@@ -110,7 +132,7 @@ export function ReportDataTable({
 
   const spacer = (
     <div
-      className="h-1 shrink-0"
+      className="h-px shrink-0"
       style={{ width: scrollWidth > 0 ? scrollWidth : "100%" }}
       aria-hidden
     />
@@ -172,7 +194,7 @@ export function ReportDataTable({
 
       <div
         ref={topScrollRef}
-        className="overflow-x-auto overflow-y-hidden border rounded-t-md border-b-0 bg-muted/30"
+        className="min-h-[20px] overflow-x-auto overflow-y-hidden border border-b-0 rounded-t-md border-border bg-muted/30"
         style={{ scrollbarGutter: "stable" }}
         onScroll={(e) => syncScroll(e.currentTarget)}
       >
@@ -181,20 +203,53 @@ export function ReportDataTable({
 
       <div
         ref={mainScrollRef}
-        className="overflow-auto max-h-[min(60vh,560px)] border-x border-border rounded-none scroll-smooth"
+        className="max-h-[min(70vh,640px)] overflow-auto scroll-smooth border-x border-b border-border rounded-b-md [overflow-scrolling:touch] overscroll-x-contain"
         onScroll={(e) => syncScroll(e.currentTarget)}
       >
         <table ref={tableRef} className="w-full caption-bottom text-sm min-w-max border-collapse">
           <thead className="sticky top-0 z-20 bg-background shadow-[0_1px_0_0_hsl(var(--border))]">
             <tr className="border-b">
-              {columns.map((c) => (
-                <th
-                  key={c.key}
-                  className="h-10 px-3 text-left align-middle font-medium text-muted-foreground whitespace-nowrap bg-background"
-                >
-                  {c.header}
-                </th>
-              ))}
+              {columns.map((c) => {
+                const sf = resolveSortField(c);
+                const active = Boolean(sf && params.sortKey === sf);
+                return (
+                  <th
+                    key={c.key}
+                    className="h-10 px-3 text-left align-middle font-medium text-muted-foreground whitespace-nowrap bg-background"
+                    aria-sort={
+                      active ? (params.sortDir === "desc" ? "descending" : "ascending") : undefined
+                    }
+                  >
+                    {sf ? (
+                      <button
+                        type="button"
+                        className="-mx-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-left font-medium hover:bg-muted hover:text-foreground"
+                        onClick={() => {
+                          if (params.sortKey === sf) {
+                            onParamsChange({
+                              sortDir: params.sortDir === "desc" ? "asc" : "desc",
+                              page: 1,
+                            });
+                          } else {
+                            onParamsChange({ sortKey: sf, sortDir: "desc", page: 1 });
+                          }
+                        }}
+                      >
+                        <span className="truncate">{c.header}</span>
+                        {active ? (
+                          params.sortDir === "desc" ? (
+                            <ArrowDown className="h-3.5 w-3.5 shrink-0 text-foreground" aria-hidden />
+                          ) : (
+                            <ArrowUp className="h-3.5 w-3.5 shrink-0 text-foreground" aria-hidden />
+                          )
+                        ) : null}
+                      </button>
+                    ) : (
+                      c.header
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -223,14 +278,6 @@ export function ReportDataTable({
             )}
           </tbody>
         </table>
-      </div>
-
-      <div
-        ref={bottomScrollRef}
-        className="overflow-x-auto overflow-y-hidden border rounded-b-md border-t-0 bg-muted/30"
-        onScroll={(e) => syncScroll(e.currentTarget)}
-      >
-        {spacer}
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-sm text-muted-foreground">

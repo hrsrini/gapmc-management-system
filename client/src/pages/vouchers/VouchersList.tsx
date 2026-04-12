@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -109,6 +110,112 @@ export default function VouchersList() {
     },
   });
 
+  const voucherColumns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "_voucherNo", header: "Voucher No", sortField: "voucherNoSort" },
+      { key: "voucherType", header: "Type" },
+      { key: "yardName", header: "Yard" },
+      { key: "payeeName", header: "Payee" },
+      { key: "amount", header: "Amount" },
+      { key: "_status", header: "Status", sortField: "status" },
+    ];
+    if (canVerify || canApprove || canReturnSubmittedToDraft) {
+      base.push({ key: "_actions", header: "Actions" });
+    }
+    return base;
+  }, [canVerify, canApprove, canReturnSubmittedToDraft]);
+
+  const voucherRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((v) => ({
+      id: v.id,
+      voucherNoSort: v.voucherNo ?? v.id,
+      _voucherNo: (
+        <Link href={`/vouchers/${v.id}`} className="text-primary hover:underline font-mono text-sm">
+          {v.voucherNo ?? v.id.slice(0, 8)}
+        </Link>
+      ),
+      voucherType: v.voucherType,
+      yardName: yardById[v.yardId] ?? v.yardId,
+      payeeName: v.payeeName,
+      amount: v.amount,
+      status: v.status,
+      _status: <Badge variant="secondary">{v.status}</Badge>,
+      _actions: (canVerify || canApprove || canReturnSubmittedToDraft) ? (
+        <div className="flex flex-wrap gap-1">
+          {canVerify && (v.status === "Draft" || v.status === "Submitted") && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => statusMutation.mutate({ id: v.id, status: "Verified" })}
+              disabled={statusMutation.isPending}
+            >
+              <ShieldCheck className="h-3.5 w-3.5 mr-1" />
+              Verify
+            </Button>
+          )}
+          {canReturnSubmittedToDraft && v.status === "Submitted" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setReturnDraftVoucherId(v.id);
+                setReturnDraftRemarks("");
+              }}
+              disabled={statusMutation.isPending}
+            >
+              <SendHorizontal className="h-3.5 w-3.5 mr-1" />
+              Return to draft
+            </Button>
+          )}
+          {canApprove && v.status === "Verified" && (
+            <>
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => statusMutation.mutate({ id: v.id, status: "Approved" })}
+                disabled={statusMutation.isPending}
+              >
+                <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => {
+                  setRejectVoucherId(v.id);
+                  setRejectCode(REJECTION_REASON_CODES[0]);
+                  setRejectRemarks("");
+                }}
+                disabled={statusMutation.isPending}
+              >
+                <XCircle className="h-3.5 w-3.5 mr-1" />
+                Reject
+              </Button>
+            </>
+          )}
+          {canApprove && v.status === "Approved" && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => statusMutation.mutate({ id: v.id, status: "Paid" })}
+              disabled={statusMutation.isPending}
+            >
+              <Banknote className="h-3.5 w-3.5 mr-1" />
+              Mark Paid
+            </Button>
+          )}
+        </div>
+      ) : null,
+    }));
+  }, [
+    list,
+    yardById,
+    canVerify,
+    canApprove,
+    canReturnSubmittedToDraft,
+    statusMutation,
+  ]);
+
   if (isError) {
     return (
       <AppShell breadcrumbs={[{ label: "Vouchers", href: "/vouchers" }]}>
@@ -162,104 +269,15 @@ export default function VouchersList() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Voucher No</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Payee</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                  {(canVerify || canApprove || canReturnSubmittedToDraft) && (
-                    <TableHead className="w-[280px]">Actions</TableHead>
-                  )}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((v) => (
-                  <TableRow key={v.id}>
-                    <TableCell className="font-mono text-sm">
-                      <Link href={`/vouchers/${v.id}`} className="text-primary hover:underline">{v.voucherNo ?? v.id.slice(0, 8)}</Link>
-                    </TableCell>
-                    <TableCell>{v.voucherType}</TableCell>
-                    <TableCell>{yardById[v.yardId] ?? v.yardId}</TableCell>
-                    <TableCell>{v.payeeName}</TableCell>
-                    <TableCell>{v.amount}</TableCell>
-                    <TableCell><Badge variant="secondary">{v.status}</Badge></TableCell>
-                    {(canVerify || canApprove || canReturnSubmittedToDraft) && (
-                      <TableCell className="space-x-2 flex flex-wrap gap-1">
-                        {canVerify && (v.status === "Draft" || v.status === "Submitted") && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => statusMutation.mutate({ id: v.id, status: "Verified" })}
-                            disabled={statusMutation.isPending}
-                          >
-                            <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-                            Verify
-                          </Button>
-                        )}
-                        {canReturnSubmittedToDraft && v.status === "Submitted" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setReturnDraftVoucherId(v.id);
-                              setReturnDraftRemarks("");
-                            }}
-                            disabled={statusMutation.isPending}
-                          >
-                            <SendHorizontal className="h-3.5 w-3.5 mr-1" />
-                            Return to draft
-                          </Button>
-                        )}
-                        {canApprove && v.status === "Verified" && (
-                          <>
-                            <Button
-                              size="sm"
-                              variant="default"
-                              onClick={() => statusMutation.mutate({ id: v.id, status: "Approved" })}
-                              disabled={statusMutation.isPending}
-                            >
-                              <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                              Approve
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => {
-                                setRejectVoucherId(v.id);
-                                setRejectCode(REJECTION_REASON_CODES[0]);
-                                setRejectRemarks("");
-                              }}
-                              disabled={statusMutation.isPending}
-                            >
-                              <XCircle className="h-3.5 w-3.5 mr-1" />
-                              Reject
-                            </Button>
-                          </>
-                        )}
-                        {canApprove && v.status === "Approved" && (
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => statusMutation.mutate({ id: v.id, status: "Paid" })}
-                            disabled={statusMutation.isPending}
-                          >
-                            <Banknote className="h-3.5 w-3.5 mr-1" />
-                            Mark Paid
-                          </Button>
-                        )}
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No vouchers.</p>
+            <ClientDataGrid
+              columns={voucherColumns}
+              sourceRows={voucherRows}
+              searchKeys={["voucherNoSort", "voucherType", "yardName", "payeeName", "amount", "status"]}
+              defaultSortKey="voucherNoSort"
+              defaultSortDir="desc"
+              emptyMessage="No vouchers."
+              resetPageDependency={pendingOnly}
+            />
           )}
         </CardContent>
       </Card>

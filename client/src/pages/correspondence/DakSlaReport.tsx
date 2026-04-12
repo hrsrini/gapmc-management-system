@@ -1,11 +1,18 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { AlertCircle, ClipboardList } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { formatYmdToDisplay } from "@/lib/dateFormat";
+import {
+  ReportDataTable,
+  type ReportPagedParams,
+  type ReportTableColumn,
+} from "@/components/reports/ReportDataTable";
+import { sliceClientReport } from "@/lib/clientReportSlice";
 
 interface InwardRow {
   id: string;
@@ -24,10 +31,77 @@ interface SlaPayload {
   rows: InwardRow[];
 }
 
+const columns: ReportTableColumn[] = [
+  { key: "diaryNo", header: "Diary" },
+  { key: "deadline", header: "Deadline", sortField: "deadlineSort" },
+  { key: "fromParty", header: "From" },
+  { key: "subject", header: "Subject" },
+  { key: "_status", header: "Status", sortField: "status" },
+  { key: "assignedTo", header: "Assigned" },
+  { key: "_open", header: "" },
+];
+
 export default function DakSlaReport() {
+  const [tableParams, setTableParams] = useState<ReportPagedParams>({
+    page: 1,
+    pageSize: 25,
+    q: "",
+    sortKey: "deadlineSort",
+    sortDir: "asc",
+  });
+
+  const mergeParams = useCallback((next: Partial<ReportPagedParams>) => {
+    setTableParams((s) => ({ ...s, ...next }));
+  }, []);
+
   const { data, isLoading, isError } = useQuery<SlaPayload>({
     queryKey: ["/api/ioms/dak/inward/sla-overdue"],
   });
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    const rows = data?.rows ?? [];
+    return rows.map((r) => {
+      const deadlineRaw = r.deadline?.slice(0, 10) ?? "";
+      return {
+        id: r.id,
+        diaryNo: r.diaryNo ?? "—",
+        deadline: r.deadline ? formatYmdToDisplay(r.deadline) : "—",
+        deadlineSort: deadlineRaw || "9999-12-31",
+        fromParty: r.fromParty,
+        subject: r.subject,
+        status: r.status,
+        _status: <Badge variant="secondary">{r.status}</Badge>,
+        assignedTo: r.assignedTo ?? "—",
+        _open: (
+          <Link href={`/correspondence/inward/${r.id}`} className="text-sm text-primary underline">
+            Open
+          </Link>
+        ),
+      };
+    });
+  }, [data?.rows]);
+
+  const { rows, total } = useMemo(
+    () =>
+      sliceClientReport(sourceRows, tableParams, [
+        "diaryNo",
+        "deadline",
+        "fromParty",
+        "subject",
+        "status",
+        "assignedTo",
+      ]),
+    [sourceRows, tableParams],
+  );
+
+  const totalPages =
+    tableParams.pageSize === "all" ? 1 : Math.max(1, Math.ceil(total / tableParams.pageSize));
+
+  useEffect(() => {
+    if (total > 0 && tableParams.page > totalPages) {
+      setTableParams((p) => ({ ...p, page: totalPages }));
+    }
+  }, [total, totalPages, tableParams.page]);
 
   if (isError) {
     return (
@@ -42,8 +116,6 @@ export default function DakSlaReport() {
     );
   }
 
-  const rows = data?.rows ?? [];
-
   return (
     <AppShell breadcrumbs={[{ label: "Correspondence (M-09)", href: "/correspondence/inward" }, { label: "SLA breach report" }]}>
       <Card>
@@ -53,7 +125,8 @@ export default function DakSlaReport() {
             Dak SLA breach report
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Inward items with deadline on or before {data?.asOf ?? "—"} and status other than Closed. Escalations are created on the hourly SLA job when{" "}
+            Inward items with deadline on or before {data?.asOf ? formatYmdToDisplay(data.asOf) : "—"} and status other than Closed.
+            Escalations are created on the hourly SLA job when{" "}
             <code className="text-xs bg-muted px-1 rounded">sla_config</code> includes M-09/DAK.
           </p>
           {data != null && (
@@ -65,39 +138,16 @@ export default function DakSlaReport() {
         <CardContent>
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
-          ) : rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4">No overdue inward dak in your scope.</p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Diary</TableHead>
-                  <TableHead>Deadline</TableHead>
-                  <TableHead>From</TableHead>
-                  <TableHead>Subject</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Assigned</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>{r.diaryNo ?? "—"}</TableCell>
-                    <TableCell>{r.deadline ?? "—"}</TableCell>
-                    <TableCell className="max-w-[140px] truncate" title={r.fromParty}>{r.fromParty}</TableCell>
-                    <TableCell className="max-w-[200px] truncate" title={r.subject}>{r.subject}</TableCell>
-                    <TableCell><Badge variant="secondary">{r.status}</Badge></TableCell>
-                    <TableCell>{r.assignedTo ?? "—"}</TableCell>
-                    <TableCell>
-                      <Link href={`/correspondence/inward/${r.id}`} className="text-sm text-primary underline">
-                        Open
-                      </Link>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <ReportDataTable
+              columns={columns}
+              rows={rows}
+              total={total}
+              params={tableParams}
+              onParamsChange={mergeParams}
+              isLoading={false}
+              searchPlaceholder="Search by diary no., deadline, from, subject, status, assignee…"
+            />
           )}
         </CardContent>
       </Card>

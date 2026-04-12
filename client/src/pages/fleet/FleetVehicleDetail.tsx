@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -22,6 +23,7 @@ import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { Truck, ArrowLeft, Pencil, Route, Fuel, Wrench, AlertCircle, Plus, Loader2 } from "lucide-react";
+import { formatYmdToDisplay } from "@/lib/dateFormat";
 
 function TripForm({
   vehicleId,
@@ -175,6 +177,27 @@ interface YardRef {
   name: string;
 }
 
+const tripColumns: ReportTableColumn[] = [
+  { key: "tripDate", header: "Date" },
+  { key: "purpose", header: "Purpose" },
+  { key: "route", header: "Route" },
+  { key: "distanceKm", header: "Distance (km)", sortField: "distanceKmNum" },
+  { key: "fuelConsumed", header: "Fuel", sortField: "fuelConsumedNum" },
+];
+
+const fuelColumns: ReportTableColumn[] = [
+  { key: "fuelDate", header: "Date" },
+  { key: "quantityLitres", header: "Quantity (L)", sortField: "quantityLitres" },
+  { key: "totalAmount", header: "Amount", sortField: "totalAmountNum" },
+];
+
+const maintColumns: ReportTableColumn[] = [
+  { key: "serviceDate", header: "Date" },
+  { key: "maintenanceType", header: "Type" },
+  { key: "description", header: "Description" },
+  { key: "cost", header: "Cost", sortField: "costNum" },
+];
+
 export default function FleetVehicleDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
@@ -207,6 +230,40 @@ export default function FleetVehicleDetail() {
     queryKey: ["/api/yards"],
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+
+  const tripRows = useMemo((): Record<string, unknown>[] => {
+    return trips.map((t) => ({
+      id: t.id,
+      tripDate: t.tripDate,
+      purpose: t.purpose ?? "—",
+      route: t.route ?? "—",
+      distanceKm: t.distanceKm ?? "—",
+      distanceKmNum: t.distanceKm ?? null,
+      fuelConsumed: t.fuelConsumed ?? "—",
+      fuelConsumedNum: t.fuelConsumed ?? null,
+    }));
+  }, [trips]);
+
+  const fuelRows = useMemo((): Record<string, unknown>[] => {
+    return fuelEntries.map((f) => ({
+      id: f.id,
+      fuelDate: f.fuelDate,
+      quantityLitres: f.quantityLitres,
+      totalAmount: f.totalAmount != null ? `₹${f.totalAmount}` : "—",
+      totalAmountNum: f.totalAmount ?? null,
+    }));
+  }, [fuelEntries]);
+
+  const maintRows = useMemo((): Record<string, unknown>[] => {
+    return maintenanceEntries.map((m) => ({
+      id: m.id,
+      serviceDate: m.serviceDate,
+      maintenanceType: m.maintenanceType,
+      description: m.description ?? "—",
+      cost: m.cost != null ? `₹${m.cost}` : "—",
+      costNum: m.cost ?? null,
+    }));
+  }, [maintenanceEntries]);
 
   const invalidateVehicleLists = () => {
     queryClient.invalidateQueries({ queryKey: [`/api/ioms/fleet/vehicles/${id}/trips`] });
@@ -324,10 +381,25 @@ export default function FleetVehicleDetail() {
                 <div><span className="text-muted-foreground">Type</span><p className="font-medium">{vehicle.vehicleType}</p></div>
                 <div><span className="text-muted-foreground">Yard</span><p className="font-medium">{yardById[vehicle.yardId] ?? vehicle.yardId}</p></div>
                 {vehicle.capacity && <div><span className="text-muted-foreground">Capacity</span><p>{vehicle.capacity}</p></div>}
-                {vehicle.purchaseDate && <div><span className="text-muted-foreground">Purchase date</span><p>{vehicle.purchaseDate}</p></div>}
+                {vehicle.purchaseDate && (
+                  <div>
+                    <span className="text-muted-foreground">Purchase date</span>
+                    <p>{formatYmdToDisplay(vehicle.purchaseDate)}</p>
+                  </div>
+                )}
                 {vehicle.purchaseValue != null && <div><span className="text-muted-foreground">Purchase value</span><p>₹{vehicle.purchaseValue}</p></div>}
-                {vehicle.insuranceExpiry && <div><span className="text-muted-foreground">Insurance expiry</span><p>{vehicle.insuranceExpiry}</p></div>}
-                {vehicle.fitnessExpiry && <div><span className="text-muted-foreground">Fitness expiry</span><p>{vehicle.fitnessExpiry}</p></div>}
+                {vehicle.insuranceExpiry && (
+                  <div>
+                    <span className="text-muted-foreground">Insurance expiry</span>
+                    <p>{formatYmdToDisplay(vehicle.insuranceExpiry)}</p>
+                  </div>
+                )}
+                {vehicle.fitnessExpiry && (
+                  <div>
+                    <span className="text-muted-foreground">Fitness expiry</span>
+                    <p>{formatYmdToDisplay(vehicle.fitnessExpiry)}</p>
+                  </div>
+                )}
               </CardContent>
             </Card>
             <Tabs defaultValue="trips" className="w-full">
@@ -352,32 +424,16 @@ export default function FleetVehicleDetail() {
                       </Dialog>
                     </div>
                     )}
-                    {trips.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No trip records.</p>
-                    ) : (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Date</TableHead>
-                            <TableHead>Purpose</TableHead>
-                            <TableHead>Route</TableHead>
-                            <TableHead>Distance (km)</TableHead>
-                            <TableHead>Fuel</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {trips.map((t) => (
-                            <TableRow key={t.id}>
-                              <TableCell>{t.tripDate}</TableCell>
-                              <TableCell>{t.purpose ?? "—"}</TableCell>
-                              <TableCell>{t.route ?? "—"}</TableCell>
-                              <TableCell>{t.distanceKm ?? "—"}</TableCell>
-                              <TableCell>{t.fuelConsumed ?? "—"}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    )}
+                    <ClientDataGrid
+                      columns={tripColumns}
+                      sourceRows={tripRows}
+                      searchKeys={["tripDate", "purpose", "route", "distanceKm", "fuelConsumed"]}
+                      searchPlaceholder="Search trips…"
+                      defaultSortKey="tripDate"
+                      defaultSortDir="desc"
+                      resetPageDependency={id}
+                      emptyMessage="No trip records."
+                    />
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -397,28 +453,16 @@ export default function FleetVehicleDetail() {
                       </Dialog>
                     </div>
                     )}
-                    {fuelEntries.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No fuel records.</p>
-                    ) : (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Date</TableHead>
-                            <TableHead>Quantity (L)</TableHead>
-                            <TableHead>Amount</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {fuelEntries.map((f) => (
-                            <TableRow key={f.id}>
-                              <TableCell>{f.fuelDate}</TableCell>
-                              <TableCell>{f.quantityLitres}</TableCell>
-                              <TableCell>{f.totalAmount != null ? `₹${f.totalAmount}` : "—"}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    )}
+                    <ClientDataGrid
+                      columns={fuelColumns}
+                      sourceRows={fuelRows}
+                      searchKeys={["fuelDate", "quantityLitres", "totalAmount"]}
+                      searchPlaceholder="Search fuel entries…"
+                      defaultSortKey="fuelDate"
+                      defaultSortDir="desc"
+                      resetPageDependency={id}
+                      emptyMessage="No fuel records."
+                    />
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -438,30 +482,16 @@ export default function FleetVehicleDetail() {
                       </Dialog>
                     </div>
                     )}
-                    {maintenanceEntries.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No maintenance records.</p>
-                    ) : (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Date</TableHead>
-                            <TableHead>Type</TableHead>
-                            <TableHead>Description</TableHead>
-                            <TableHead>Cost</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {maintenanceEntries.map((m) => (
-                            <TableRow key={m.id}>
-                              <TableCell>{m.serviceDate}</TableCell>
-                              <TableCell>{m.maintenanceType}</TableCell>
-                              <TableCell>{m.description ?? "—"}</TableCell>
-                              <TableCell>{m.cost != null ? `₹${m.cost}` : "—"}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    )}
+                    <ClientDataGrid
+                      columns={maintColumns}
+                      sourceRows={maintRows}
+                      searchKeys={["serviceDate", "maintenanceType", "description", "cost"]}
+                      searchPlaceholder="Search maintenance…"
+                      defaultSortKey="serviceDate"
+                      defaultSortDir="desc"
+                      resetPageDependency={id}
+                      emptyMessage="No maintenance records."
+                    />
                   </CardContent>
                 </Card>
               </TabsContent>

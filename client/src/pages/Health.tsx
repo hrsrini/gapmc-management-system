@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, XCircle, Clock, Database } from "lucide-react";
+import { formatDisplayDateTime } from "@/lib/dateFormat";
 
 interface HealthResponse {
   status: "ok" | "degraded";
@@ -104,7 +105,7 @@ export default function Health() {
             </span>
           </div>
           <p className="text-xs text-muted-foreground">
-            Last checked: {new Date(data.timestamp).toLocaleString()}
+            Last checked: {formatDisplayDateTime(data.timestamp)}
           </p>
           <button
             type="button"

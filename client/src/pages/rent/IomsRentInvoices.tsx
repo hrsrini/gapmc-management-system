@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +13,6 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
 import { FileText, AlertCircle, CheckCircle, ShieldCheck, Plus, Download } from "lucide-react";
-
 interface RentInvoice {
   id: string;
   invoiceNo?: string | null;
@@ -73,6 +73,65 @@ export default function IomsRentInvoices() {
       toast({ title: "Update failed", description: e.message, variant: "destructive" });
     },
   });
+
+  const invoiceColumns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "_invoiceNo", header: "Invoice No", sortField: "invoiceNoSort" },
+      { key: "periodMonth", header: "Period" },
+      { key: "assetLabel", header: "Asset" },
+      { key: "yardName", header: "Yard" },
+      { key: "rentAmount", header: "Rent" },
+      { key: "totalAmount", header: "Total" },
+      { key: "_status", header: "Status", sortField: "status" },
+    ];
+    if (canVerify || canApprove) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [canVerify, canApprove]);
+
+  const invoiceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((r) => ({
+      id: r.id,
+      invoiceNoSort: r.invoiceNo ?? r.id,
+      _invoiceNo: (
+        <Link href={`/rent/ioms/invoices/${r.id}`} className="text-primary hover:underline font-mono text-sm">
+          {r.invoiceNo ?? r.id}
+        </Link>
+      ),
+      periodMonth: r.periodMonth,
+      assetLabel: assetLabelById[r.assetId] ?? r.assetId,
+      yardName: yardById[r.yardId] ?? r.yardId,
+      rentAmount: r.rentAmount,
+      totalAmount: r.totalAmount,
+      status: r.status,
+      _status: <Badge variant="secondary">{r.status}</Badge>,
+      _actions: (canVerify || canApprove) ? (
+        <div className="flex flex-wrap gap-2">
+          {canVerify && r.status === "Draft" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => statusMutation.mutate({ id: r.id, status: "Verified" })}
+              disabled={statusMutation.isPending}
+            >
+              <ShieldCheck className="h-3.5 w-3.5 mr-1" />
+              Verify
+            </Button>
+          )}
+          {canApprove && r.status === "Verified" && (
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => statusMutation.mutate({ id: r.id, status: "Approved" })}
+              disabled={statusMutation.isPending}
+            >
+              <CheckCircle className="h-3.5 w-3.5 mr-1" />
+              Approve
+            </Button>
+          )}
+        </div>
+      ) : null,
+    }));
+  }, [list, assetLabelById, yardById, canVerify, canApprove, statusMutation]);
 
   const handleExportGstr1 = async () => {
     const from = gstr1From.trim();
@@ -159,64 +218,14 @@ export default function IomsRentInvoices() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Invoice No</TableHead>
-                  <TableHead>Period</TableHead>
-                  <TableHead>Asset</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Rent</TableHead>
-                  <TableHead>Total</TableHead>
-                  <TableHead>Status</TableHead>
-                  {(canVerify || canApprove) && <TableHead className="w-[180px]">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-mono text-sm">
-                      <Link href={`/rent/ioms/invoices/${r.id}`} className="text-primary hover:underline">{r.invoiceNo ?? r.id}</Link>
-                    </TableCell>
-                    <TableCell>{r.periodMonth}</TableCell>
-                    <TableCell>{assetLabelById[r.assetId] ?? r.assetId}</TableCell>
-                    <TableCell>{yardById[r.yardId] ?? r.yardId}</TableCell>
-                    <TableCell>{r.rentAmount}</TableCell>
-                    <TableCell>{r.totalAmount}</TableCell>
-                    <TableCell><Badge variant="secondary">{r.status}</Badge></TableCell>
-                    {(canVerify || canApprove) && (
-                      <TableCell className="space-x-2">
-                        {canVerify && r.status === "Draft" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => statusMutation.mutate({ id: r.id, status: "Verified" })}
-                            disabled={statusMutation.isPending}
-                          >
-                            <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-                            Verify
-                          </Button>
-                        )}
-                        {canApprove && r.status === "Verified" && (
-                          <Button
-                            size="sm"
-                            variant="default"
-                            onClick={() => statusMutation.mutate({ id: r.id, status: "Approved" })}
-                            disabled={statusMutation.isPending}
-                          >
-                            <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                            Approve
-                          </Button>
-                        )}
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No IOMS rent invoices. Existing invoices are under Rent & Tax.</p>
+            <ClientDataGrid
+              columns={invoiceColumns}
+              sourceRows={invoiceRows}
+              searchKeys={["invoiceNoSort", "periodMonth", "assetLabel", "yardName", "status"]}
+              defaultSortKey="periodMonth"
+              defaultSortDir="desc"
+              emptyMessage="No IOMS rent invoices. Existing invoices are under Rent & Tax."
+            />
           )}
         </CardContent>
       </Card>

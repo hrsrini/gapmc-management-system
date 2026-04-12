@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +11,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Package, AlertCircle, Plus, Pencil } from "lucide-react";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
 interface Commodity {
   id: string;
@@ -87,7 +88,7 @@ export default function CommoditiesList() {
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
 
-  const openEdit = (c: Commodity) => {
+  const openEdit = useCallback((c: Commodity) => {
     setEditId(c.id);
     setName(c.name ?? "");
     setVariety(c.variety ?? "");
@@ -95,7 +96,42 @@ export default function CommoditiesList() {
     setGradeType(c.gradeType ?? "");
     setIsActive(c.isActive !== false);
     setEditOpen(true);
-  };
+  }, []);
+
+  const columns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "name", header: "Name" },
+      { key: "variety", header: "Variety" },
+      { key: "unit", header: "Unit" },
+      { key: "gradeType", header: "Grade" },
+      { key: "_status", header: "Status", sortField: "statusSort" },
+    ];
+    if (canUpdate) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [canUpdate]);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((c) => {
+      const active = c.isActive !== false;
+      const row: Record<string, unknown> = {
+        id: c.id,
+        name: c.name,
+        variety: c.variety ?? "—",
+        unit: c.unit ?? "—",
+        gradeType: c.gradeType ?? "—",
+        statusSort: active ? "Active" : "Inactive",
+        _status: <Badge variant={active ? "default" : "secondary"}>{active ? "Active" : "Inactive"}</Badge>,
+      };
+      if (canUpdate) {
+        row._actions = (
+          <Button size="sm" variant="outline" onClick={() => openEdit(c)}>
+            <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
+          </Button>
+        );
+      }
+      return row;
+    });
+  }, [list, canUpdate, openEdit]);
 
   if (isError) {
     return (
@@ -124,23 +160,46 @@ export default function CommoditiesList() {
           {canCreate && (
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
               <DialogTrigger asChild>
-                <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Add commodity</Button>
+                <Button size="sm">
+                  <Plus className="h-4 w-4 mr-1" /> Add commodity
+                </Button>
               </DialogTrigger>
               <DialogContent>
-                <DialogHeader><DialogTitle>Create commodity</DialogTitle></DialogHeader>
+                <DialogHeader>
+                  <DialogTitle>Create commodity</DialogTitle>
+                </DialogHeader>
                 <div className="space-y-3">
-                  <div className="space-y-1"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
-                  <div className="space-y-1"><Label>Variety</Label><Input value={variety} onChange={(e) => setVariety(e.target.value)} /></div>
+                  <div className="space-y-1">
+                    <Label>Name</Label>
+                    <Input value={name} onChange={(e) => setName(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Variety</Label>
+                    <Input value={variety} onChange={(e) => setVariety(e.target.value)} />
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1"><Label>Unit</Label><Input value={unit} onChange={(e) => setUnit(e.target.value)} /></div>
-                    <div className="space-y-1"><Label>Grade type</Label><Input value={gradeType} onChange={(e) => setGradeType(e.target.value)} /></div>
+                    <div className="space-y-1">
+                      <Label>Unit</Label>
+                      <Input value={unit} onChange={(e) => setUnit(e.target.value)} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Grade type</Label>
+                      <Input value={gradeType} onChange={(e) => setGradeType(e.target.value)} />
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <input id="commodity-active-new" type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+                    <input
+                      id="commodity-active-new"
+                      type="checkbox"
+                      checked={isActive}
+                      onChange={(e) => setIsActive(e.target.checked)}
+                    />
                     <Label htmlFor="commodity-active-new">Active</Label>
                   </div>
                   <div className="flex justify-end gap-2">
-                    <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createMutation.isPending}>Cancel</Button>
+                    <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createMutation.isPending}>
+                      Cancel
+                    </Button>
                     <Button disabled={!name.trim() || createMutation.isPending} onClick={() => createMutation.mutate()}>
                       {createMutation.isPending ? "Creating..." : "Create"}
                     </Button>
@@ -154,62 +213,55 @@ export default function CommoditiesList() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Variety</TableHead>
-                  <TableHead>Unit</TableHead>
-                  <TableHead>Grade</TableHead>
-                  <TableHead>Status</TableHead>
-                  {canUpdate && <TableHead className="w-[100px]">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((c) => (
-                  <TableRow key={c.id}>
-                    <TableCell className="font-medium">{c.name}</TableCell>
-                    <TableCell>{c.variety ?? "—"}</TableCell>
-                    <TableCell>{c.unit ?? "—"}</TableCell>
-                    <TableCell>{c.gradeType ?? "—"}</TableCell>
-                    <TableCell>
-                      <Badge variant={c.isActive !== false ? "default" : "secondary"}>
-                        {c.isActive !== false ? "Active" : "Inactive"}
-                      </Badge>
-                    </TableCell>
-                    {canUpdate && (
-                      <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => openEdit(c)}>
-                          <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
-                        </Button>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No commodities. Fee Collection uses existing market fee entries.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["name", "variety", "unit", "gradeType", "statusSort"]}
+              searchPlaceholder="Search commodities…"
+              defaultSortKey="name"
+              defaultSortDir="asc"
+              emptyMessage="No commodities. Fee Collection uses existing market fee entries."
+            />
           )}
         </CardContent>
       </Card>
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Edit commodity</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Edit commodity</DialogTitle>
+          </DialogHeader>
           <div className="space-y-3">
-            <div className="space-y-1"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
-            <div className="space-y-1"><Label>Variety</Label><Input value={variety} onChange={(e) => setVariety(e.target.value)} /></div>
+            <div className="space-y-1">
+              <Label>Name</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Variety</Label>
+              <Input value={variety} onChange={(e) => setVariety(e.target.value)} />
+            </div>
             <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1"><Label>Unit</Label><Input value={unit} onChange={(e) => setUnit(e.target.value)} /></div>
-              <div className="space-y-1"><Label>Grade type</Label><Input value={gradeType} onChange={(e) => setGradeType(e.target.value)} /></div>
+              <div className="space-y-1">
+                <Label>Unit</Label>
+                <Input value={unit} onChange={(e) => setUnit(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>Grade type</Label>
+                <Input value={gradeType} onChange={(e) => setGradeType(e.target.value)} />
+              </div>
             </div>
             <div className="flex items-center gap-2">
-              <input id="commodity-active-edit" type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+              <input
+                id="commodity-active-edit"
+                type="checkbox"
+                checked={isActive}
+                onChange={(e) => setIsActive(e.target.checked)}
+              />
               <Label htmlFor="commodity-active-edit">Active</Label>
             </div>
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setEditOpen(false)} disabled={updateMutation.isPending}>Cancel</Button>
+              <Button variant="outline" onClick={() => setEditOpen(false)} disabled={updateMutation.isPending}>
+                Cancel
+              </Button>
               <Button disabled={!name.trim() || updateMutation.isPending} onClick={() => updateMutation.mutate()}>
                 {updateMutation.isPending ? "Saving..." : "Save"}
               </Button>

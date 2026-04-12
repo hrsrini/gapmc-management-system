@@ -44,6 +44,8 @@ import {
   normalizePan,
   normalizeAadhaarMasked,
   assertPersonalEmailFormat,
+  assertWorkEmailFormat,
+  normalizeMobile10,
   assertEmployeeUniqueness,
   allocateNextEmpId,
   isDraftOrSubmitted,
@@ -190,12 +192,20 @@ export function registerHrRoutes(app: Express) {
       let panNorm: string | null;
       let aadhaarMasked: string | null;
       let personalEmailNorm: string | null;
+      let mobileNorm: string | null;
+      let workEmailNorm: string | null;
       try {
         personalEmailNorm =
           body.personalEmail != null && String(body.personalEmail).trim() !== ""
             ? String(body.personalEmail).trim().toLowerCase()
             : null;
         assertPersonalEmailFormat(personalEmailNorm);
+        workEmailNorm =
+          body.workEmail != null && String(body.workEmail).trim() !== ""
+            ? String(body.workEmail).trim().toLowerCase()
+            : null;
+        assertWorkEmailFormat(workEmailNorm);
+        mobileNorm = normalizeMobile10(body.mobile ?? null);
         panNorm = normalizePan(body.pan);
         aadhaarMasked = normalizeAadhaarMasked(body.aadhaarToken ?? body.aadhaar ?? null);
         assertJoiningAndDob(String(body.joiningDate ?? ""), body.dob != null ? String(body.dob) : null);
@@ -226,8 +236,8 @@ export function registerHrRoutes(app: Express) {
         pan: panNorm,
         dob: body.dob ? String(body.dob) : null,
         retirementDate: body.retirementDate ? String(body.retirementDate) : null,
-        mobile: body.mobile ? String(body.mobile) : null,
-        workEmail: body.workEmail ? String(body.workEmail) : null,
+        mobile: mobileNorm,
+        workEmail: workEmailNorm,
         personalEmail: personalEmailNorm,
         userId: null,
         createdAt: now(),
@@ -367,12 +377,20 @@ export function registerHrRoutes(app: Express) {
       let panNorm: string | null;
       let aadhaarMasked: string | null;
       let personalEmailNorm: string | null;
+      let workEmailNorm: string | null;
+      let mobileNorm: string | null;
       try {
         personalEmailNorm =
           merged.personalEmail != null && String(merged.personalEmail).trim() !== ""
             ? String(merged.personalEmail).trim().toLowerCase()
             : null;
         assertPersonalEmailFormat(personalEmailNorm);
+        workEmailNorm =
+          merged.workEmail != null && String(merged.workEmail).trim() !== ""
+            ? String(merged.workEmail).trim().toLowerCase()
+            : null;
+        assertWorkEmailFormat(workEmailNorm);
+        mobileNorm = normalizeMobile10(merged.mobile);
         panNorm = normalizePan(merged.pan);
         aadhaarMasked = normalizeAadhaarMasked(merged.aadhaarToken);
         assertJoiningAndDob(merged.joiningDate, merged.dob);
@@ -387,10 +405,14 @@ export function registerHrRoutes(app: Express) {
         throw e;
       }
 
-      const setPayload = { ...updates, pan: panNorm, aadhaarToken: aadhaarMasked, personalEmail: personalEmailNorm } as Record<
-        string,
-        string | null
-      >;
+      const setPayload = {
+        ...updates,
+        pan: panNorm,
+        aadhaarToken: aadhaarMasked,
+        personalEmail: personalEmailNorm,
+        workEmail: workEmailNorm,
+        mobile: mobileNorm,
+      } as Record<string, string | null>;
 
       const terminalStatuses = ["Inactive", "Retired", "Suspended", "Resigned"];
       await db.transaction(async (tx) => {

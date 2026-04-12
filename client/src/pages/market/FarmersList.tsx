@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -98,7 +99,7 @@ export default function FarmersList() {
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
 
-  const openEdit = (f: Farmer) => {
+  const openEdit = useCallback((f: Farmer) => {
     setEditId(f.id);
     setName(f.name ?? "");
     setYardId(f.yardId ?? "");
@@ -107,7 +108,42 @@ export default function FarmersList() {
     setDistrict(f.district ?? "");
     setMobile(f.mobile ?? "");
     setEditOpen(true);
-  };
+  }, []);
+
+  const columns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "name", header: "Name" },
+      { key: "yardName", header: "Yard" },
+      { key: "village", header: "Village" },
+      { key: "taluk", header: "Taluk" },
+      { key: "district", header: "District" },
+      { key: "mobile", header: "Mobile" },
+    ];
+    if (canUpdate) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [canUpdate]);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((f) => {
+      const row: Record<string, unknown> = {
+        id: f.id,
+        name: f.name,
+        yardName: yardById.get(f.yardId)?.name ?? f.yardId,
+        village: f.village ?? "—",
+        taluk: f.taluk ?? "—",
+        district: f.district ?? "—",
+        mobile: f.mobile ?? "—",
+      };
+      if (canUpdate) {
+        row._actions = (
+          <Button size="sm" variant="outline" onClick={() => openEdit(f)}>
+            <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
+          </Button>
+        );
+      }
+      return row;
+    });
+  }, [list, yardById, canUpdate, openEdit]);
 
   if (isError) {
     return (
@@ -179,41 +215,15 @@ export default function FarmersList() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Village</TableHead>
-                  <TableHead>Taluk</TableHead>
-                  <TableHead>District</TableHead>
-                  <TableHead>Mobile</TableHead>
-                  {canUpdate && <TableHead className="w-[100px]">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((f) => (
-                  <TableRow key={f.id}>
-                    <TableCell className="font-medium">{f.name}</TableCell>
-                    <TableCell>{yardById.get(f.yardId)?.name ?? f.yardId}</TableCell>
-                    <TableCell>{f.village ?? "—"}</TableCell>
-                    <TableCell>{f.taluk ?? "—"}</TableCell>
-                    <TableCell>{f.district ?? "—"}</TableCell>
-                    <TableCell>{f.mobile ?? "—"}</TableCell>
-                    {canUpdate && (
-                      <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => openEdit(f)}>
-                          <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
-                        </Button>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No farmers.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["name", "yardName", "village", "taluk", "district", "mobile"]}
+              searchPlaceholder="Search farmers…"
+              defaultSortKey="name"
+              defaultSortDir="asc"
+              emptyMessage="No farmers."
+            />
           )}
         </CardContent>
       </Card>

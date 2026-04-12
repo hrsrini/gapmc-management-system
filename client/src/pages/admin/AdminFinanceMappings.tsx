@@ -1,7 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -61,6 +63,72 @@ export default function AdminFinanceMappings() {
     return localMap[h.id] ?? h.tallyLedgerId ?? "__none__";
   }
 
+  const headColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "code", header: "Code" },
+      { key: "description", header: "Description" },
+      { key: "_ledgerSelect", header: "Tally ledger" },
+      { key: "_save", header: "" },
+    ],
+    [],
+  );
+
+  const headRows = useMemo((): Record<string, unknown>[] => {
+    return heads.map((h) => ({
+      id: h.id,
+      code: h.code,
+      description: h.description,
+      _ledgerSelect: (
+        <Select value={valueFor(h)} onValueChange={(v) => setLocalMap((m) => ({ ...m, [h.id]: v }))}>
+          <SelectTrigger className="w-[280px]">
+            <SelectValue placeholder="Select ledger" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">— None —</SelectItem>
+            {ledgers.map((l) => (
+              <SelectItem key={l.id} value={l.id}>
+                {l.ledgerName} ({l.primaryGroup})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ),
+      _save: (
+        <Button
+          size="sm"
+          disabled={mutation.isPending}
+          onClick={() => {
+            const v = valueFor(h);
+            mutation.mutate({
+              headId: h.id,
+              tallyLedgerId: v === "__none__" ? null : v,
+            });
+          }}
+        >
+          Save
+        </Button>
+      ),
+    }));
+  }, [heads, ledgers, localMap, mutation]);
+
+  const ledgerColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "ledgerName", header: "Name" },
+      { key: "primaryGroup", header: "Group" },
+      { key: "statementClass", header: "Class" },
+    ],
+    [],
+  );
+
+  const ledgerRows = useMemo((): Record<string, unknown>[] => {
+    return ledgers.map((l) => ({
+      id: l.id,
+      ledgerName: l.ledgerName,
+      primaryGroup: l.primaryGroup,
+      statementClass: l.statementClass,
+    }));
+  }, [ledgers]);
+
   return (
     <AppShell
       breadcrumbs={[
@@ -90,57 +158,14 @@ export default function AdminFinanceMappings() {
                 <Loader2 className="h-4 w-4 animate-spin" /> Loading…
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Code</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Tally ledger</TableHead>
-                    <TableHead className="w-[120px]" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {heads.map((h) => (
-                    <TableRow key={h.id}>
-                      <TableCell className="font-mono text-sm">{h.code}</TableCell>
-                      <TableCell>{h.description}</TableCell>
-                      <TableCell>
-                        <Select
-                          value={valueFor(h)}
-                          onValueChange={(v) => setLocalMap((m) => ({ ...m, [h.id]: v }))}
-                        >
-                          <SelectTrigger className="w-[280px]">
-                            <SelectValue placeholder="Select ledger" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__none__">— None —</SelectItem>
-                            {ledgers.map((l) => (
-                              <SelectItem key={l.id} value={l.id}>
-                                {l.ledgerName} ({l.primaryGroup})
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          disabled={mutation.isPending}
-                          onClick={() => {
-                            const v = valueFor(h);
-                            mutation.mutate({
-                              headId: h.id,
-                              tallyLedgerId: v === "__none__" ? null : v,
-                            });
-                          }}
-                        >
-                          Save
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <ClientDataGrid
+                columns={headColumns}
+                sourceRows={headRows}
+                searchKeys={["code", "description"]}
+                defaultSortKey="code"
+                defaultSortDir="asc"
+                emptyMessage="No expenditure heads."
+              />
             )}
           </CardContent>
         </Card>
@@ -151,24 +176,14 @@ export default function AdminFinanceMappings() {
             <CardDescription>Read-only list from <code className="text-xs">tally_ledgers</code> (seed from PDF).</CardDescription>
           </CardHeader>
           <CardContent className="max-h-[320px] overflow-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Group</TableHead>
-                  <TableHead>Class</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {ledgers.map((l) => (
-                  <TableRow key={l.id}>
-                    <TableCell>{l.ledgerName}</TableCell>
-                    <TableCell>{l.primaryGroup}</TableCell>
-                    <TableCell className="text-muted-foreground text-sm">{l.statementClass}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={ledgerColumns}
+              sourceRows={ledgerRows}
+              searchKeys={["ledgerName", "primaryGroup", "statementClass"]}
+              defaultSortKey="ledgerName"
+              defaultSortDir="asc"
+              emptyMessage="No ledgers."
+            />
           </CardContent>
         </Card>
       </div>

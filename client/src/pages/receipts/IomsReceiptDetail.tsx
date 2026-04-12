@@ -10,6 +10,7 @@ import { Receipt, ArrowLeft, AlertCircle, ExternalLink, Download, QrCode } from 
 import QRCode from "qrcode";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { formatDisplayDateTime } from "@/lib/dateFormat";
 
 interface IomsReceipt {
   id: string;
@@ -198,7 +199,7 @@ export default function IomsReceiptDetail() {
             {receipt.gatewayRef && <div><span className="text-muted-foreground">Gateway ref</span><br />{receipt.gatewayRef}</div>}
             {receipt.chequeNo && <div><span className="text-muted-foreground">Cheque no</span><br />{receipt.chequeNo} {receipt.bankName ? `(${receipt.bankName})` : ""}</div>}
             {receipt.sourceModule && <div><span className="text-muted-foreground">Source</span><br />{receipt.sourceModule} {receipt.sourceRecordId ?? ""}</div>}
-            <div><span className="text-muted-foreground">Created</span><br />{receipt.createdAt} by {receipt.createdBy}</div>
+            <div><span className="text-muted-foreground">Created</span><br />{formatDisplayDateTime(receipt.createdAt)} by {receipt.createdBy}</div>
             {canMockPay && receipt.status === "Pending" && (
               <div className="md:col-span-2">
                 <span className="text-muted-foreground">Payment (Mock)</span>

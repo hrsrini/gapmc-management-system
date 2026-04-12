@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -134,13 +135,53 @@ export default function AdminRoles() {
     setOpen(true);
   };
 
-  const handleEdit = (r: Role) => {
+  const handleEdit = useCallback((r: Role) => {
     setEditingId(r.id);
     setName(r.name);
     setTier(r.tier);
     setDescription(r.description ?? "");
     setOpen(true);
-  };
+  }, []);
+
+  const roleColumns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "_tier", header: "Tier", sortField: "tier" },
+      { key: "name", header: "Name" },
+      { key: "description", header: "Description" },
+    ];
+    if (canUpdate || canDelete) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [canUpdate, canDelete]);
+
+  const roleRows = useMemo((): Record<string, unknown>[] => {
+    return (roles ?? []).map((r) => ({
+      id: r.id,
+      tier: r.tier,
+      _tier: <Badge variant="outline">{r.tier}</Badge>,
+      name: r.name,
+      description: r.description ?? "—",
+      _actions: (canUpdate || canDelete) ? (
+        <div className="flex items-center gap-1">
+          {canUpdate && (
+            <Button variant="ghost" size="sm" onClick={() => handleEdit(r)} title="Edit">
+              <Pencil className="h-4 w-4" />
+            </Button>
+          )}
+          {canDelete && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setDeleteId(r.id)}
+              title="Delete"
+              className="text-destructive hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      ) : null,
+    }));
+  }, [roles, canUpdate, canDelete, handleEdit]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -249,50 +290,14 @@ export default function AdminRoles() {
           {isLoading ? (
             <Skeleton className="h-48 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Tier</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead className="w-[100px]">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(roles ?? []).map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>
-                      <Badge variant="outline">{r.tier}</Badge>
-                    </TableCell>
-                    <TableCell>{r.name}</TableCell>
-                    <TableCell className="text-muted-foreground">{r.description ?? "—"}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        {canUpdate && (
-                          <Button variant="ghost" size="sm" onClick={() => handleEdit(r)} title="Edit">
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                        )}
-                        {canDelete && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setDeleteId(r.id)}
-                            title="Delete"
-                            className="text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!roles || roles.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No roles. Add one above or run the M-10 seed script.</p>
+            <ClientDataGrid
+              columns={roleColumns}
+              sourceRows={roleRows}
+              searchKeys={["tier", "name", "description"]}
+              defaultSortKey="tier"
+              defaultSortDir="asc"
+              emptyMessage="No roles. Add one above or run the M-10 seed script."
+            />
           )}
         </CardContent>
       </Card>

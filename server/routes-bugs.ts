@@ -7,7 +7,7 @@ import { eq, and, desc, sql, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import multer from "multer";
 import path from "path";
-import fs from "fs";
+import fs, { createReadStream } from "fs";
 import { z } from "zod";
 import { db } from "./db";
 import {
@@ -30,6 +30,7 @@ const ALLOWED_MIMES = new Set([
   "image/gif",
   "image/webp",
   "application/pdf",
+  "application/x-pdf",
   "text/plain",
 ]);
 
@@ -43,6 +44,43 @@ const ALLOWED_EXT = new Set([
   ".txt",
 ]);
 
+/** Canonical type to store and serve so browsers open PDFs inline (multer often reports octet-stream on Windows). */
+function mimeTypeForExtension(ext: string): string | null {
+  switch (ext) {
+    case ".pdf":
+      return "application/pdf";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".txt":
+      return "text/plain; charset=utf-8";
+    default:
+      return null;
+  }
+}
+
+function persistAttachmentMime(ext: string, reported: string): string {
+  const canonical = mimeTypeForExtension(ext);
+  if (canonical) return canonical;
+  const base = (reported || "").split(";")[0]!.trim().toLowerCase();
+  if (ALLOWED_MIMES.has(base)) return (reported || "").split(";")[0]!.trim();
+  return "application/octet-stream";
+}
+
+function serveAttachmentContentType(ext: string, storedMime: string): string {
+  const canonical = mimeTypeForExtension(ext);
+  if (canonical) return canonical;
+  const base = (storedMime || "").split(";")[0]!.trim().toLowerCase();
+  if (ALLOWED_MIMES.has(base)) return (storedMime || "").split(";")[0]!.trim();
+  return "application/octet-stream";
+}
+
 function ensureUploadDir(): void {
   fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
 }
@@ -55,6 +93,13 @@ function canCommentOnTicket(user: AuthUser | undefined, reporterUserId: string):
   if (!user) return false;
   if (isAdmin(user)) return true;
   return user.id === reporterUserId;
+}
+
+/** Safe ASCII filename for Content-Disposition (avoids header injection). */
+function contentDispositionFilename(original: string): string {
+  const base = path.basename(String(original)).replace(/[\r\n"]/g, "_");
+  const ascii = base.replace(/[^\x20-\x7E]/g, "_");
+  return ascii.length > 0 ? ascii : "file";
 }
 
 async function nextTicketNo(): Promise<string> {
@@ -88,7 +133,20 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024, files: 5 },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ALLOWED_MIMES.has(file.mimetype) && ALLOWED_EXT.has(ext)) {
+    if (!ALLOWED_EXT.has(ext)) {
+      cb(new Error("Invalid file type. Allowed: images, PDF, plain text."));
+      return;
+    }
+    const mime = String(file.mimetype || "")
+      .split(";")[0]!
+      .trim()
+      .toLowerCase();
+    const mimeOk =
+      ALLOWED_MIMES.has(mime) ||
+      mime === "application/octet-stream" ||
+      mime === "binary/octet-stream" ||
+      mime === "";
+    if (mimeOk) {
       cb(null, true);
       return;
     }
@@ -339,7 +397,16 @@ export function registerBugRoutes(app: Express): void {
       let attachmentCount = 0;
       for (const f of files) {
         const ext = path.extname(f.originalname).toLowerCase();
-        if (!ALLOWED_EXT.has(ext) || !ALLOWED_MIMES.has(f.mimetype)) {
+        const reported = String(f.mimetype || "")
+          .split(";")[0]!
+          .trim()
+          .toLowerCase();
+        const acceptedMime =
+          ALLOWED_MIMES.has(reported) ||
+          reported === "application/octet-stream" ||
+          reported === "binary/octet-stream" ||
+          reported === "";
+        if (!ALLOWED_EXT.has(ext) || !acceptedMime) {
           fs.unlink(f.path, () => {});
           continue;
         }
@@ -349,7 +416,7 @@ export function registerBugRoutes(app: Express): void {
           uploadedByUserId: user.id,
           originalFilename: path.basename(f.originalname).slice(0, 255),
           storedFilename: f.filename,
-          mimeType: f.mimetype,
+          mimeType: persistAttachmentMime(ext, f.mimetype),
           sizeBytes: f.size,
           createdAt: ts,
         });
@@ -498,10 +565,22 @@ export function registerBugRoutes(app: Express): void {
         return sendApiError(res, 404, "BUG_ATTACHMENT_FILE_MISSING", "File not found");
       }
 
-      res.setHeader("Content-Type", att.mimeType);
-      res.download(fullPath, att.originalFilename, (err) => {
-        if (err && !res.headersSent) sendApiError(res, 500, "INTERNAL_ERROR", "Download failed");
+      const inline =
+        String(req.query.inline ?? "").trim() === "1" ||
+        String(req.query.disposition ?? "").toLowerCase() === "inline";
+      const fname = contentDispositionFilename(att.originalFilename);
+      const ext =
+        path.extname(att.originalFilename || "").toLowerCase() ||
+        path.extname(safeName).toLowerCase();
+      const contentType = serveAttachmentContentType(ext, att.mimeType);
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${fname}"`);
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      const stream = createReadStream(path.resolve(fullPath));
+      stream.on("error", () => {
+        if (!res.headersSent) sendApiError(res, 500, "INTERNAL_ERROR", "File transfer failed");
       });
+      stream.pipe(res);
     } catch (e) {
       console.error(e);
       if (!res.headersSent) sendApiError(res, 500, "INTERNAL_ERROR", "Download failed");

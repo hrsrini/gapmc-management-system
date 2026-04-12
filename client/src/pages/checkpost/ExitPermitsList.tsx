@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -97,14 +98,40 @@ export default function ExitPermitsList() {
     },
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
-  const openEdit = (p: ExitPermit) => {
+  const openEdit = useCallback((p: ExitPermit) => {
     setEditId(p.id);
     setPermitNo(p.permitNo ?? "");
     setInwardId(p.inwardId ?? "");
     setIssuedDate(p.issuedDate ?? "");
     setOfficerId(p.officerId ?? "");
     setEditOpen(true);
-  };
+  }, []);
+
+  const columns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "permitNo", header: "Permit no" },
+      { key: "inwardLabel", header: "Inward" },
+      { key: "issuedDate", header: "Issued date" },
+      { key: "officerId", header: "Officer" },
+    ];
+    if (canUpdate) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [canUpdate]);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((p) => ({
+      id: p.id,
+      permitNo: p.permitNo,
+      inwardLabel: inwardById.get(p.inwardId)?.entryNo ?? p.inwardId,
+      issuedDate: p.issuedDate.slice(0, 10),
+      officerId: p.officerId,
+      _actions: canUpdate ? (
+        <Button size="sm" variant="outline" onClick={() => openEdit(p)}>
+          <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
+        </Button>
+      ) : null,
+    }));
+  }, [list, inwardById, canUpdate, openEdit]);
 
   if (isError) {
     return (
@@ -172,37 +199,14 @@ export default function ExitPermitsList() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Permit no</TableHead>
-                  <TableHead>Inward</TableHead>
-                  <TableHead>Issued date</TableHead>
-                  <TableHead>Officer</TableHead>
-                  {canUpdate && <TableHead className="w-[100px]">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((p) => (
-                  <TableRow key={p.id}>
-                    <TableCell className="font-mono text-sm">{p.permitNo}</TableCell>
-                    <TableCell>{inwardById.get(p.inwardId)?.entryNo ?? p.inwardId}</TableCell>
-                    <TableCell>{p.issuedDate}</TableCell>
-                    <TableCell>{p.officerId}</TableCell>
-                    {canUpdate && (
-                      <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => openEdit(p)}>
-                          <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
-                        </Button>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No exit permits.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["permitNo", "inwardLabel", "issuedDate", "officerId"]}
+              defaultSortKey="issuedDate"
+              defaultSortDir="desc"
+              emptyMessage="No exit permits."
+            />
           )}
         </CardContent>
       </Card>

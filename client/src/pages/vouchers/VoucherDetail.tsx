@@ -26,6 +26,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Receipt, ArrowLeft, ShieldCheck, CheckCircle, XCircle, Banknote, AlertCircle, SendHorizontal } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
+import { formatApiDateOrDateTime } from "@/lib/dateFormat";
 
 interface Voucher {
   id: string;
@@ -184,7 +185,12 @@ export default function VoucherDetail() {
               {voucher.payeeAccount && <div><span className="text-muted-foreground">Account</span><p className="font-mono text-sm">{voucher.payeeAccount}</p></div>}
               {voucher.payeeBank && <div><span className="text-muted-foreground">Bank</span><p>{voucher.payeeBank}</p></div>}
               {voucher.paymentRef && <div><span className="text-muted-foreground">Payment ref</span><p>{voucher.paymentRef}</p></div>}
-              {voucher.paidAt && <div><span className="text-muted-foreground">Paid at</span><p>{voucher.paidAt}</p></div>}
+              {voucher.paidAt && (
+                <div>
+                  <span className="text-muted-foreground">Paid at</span>
+                  <p>{formatApiDateOrDateTime(voucher.paidAt)}</p>
+                </div>
+              )}
               {voucher.description && <div className="md:col-span-2"><span className="text-muted-foreground">Description</span><p>{voucher.description}</p></div>}
               {voucher.status === "Rejected" && (voucher.rejectionReasonCode || voucher.rejectionRemarks) && (
                 <div className="md:col-span-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">

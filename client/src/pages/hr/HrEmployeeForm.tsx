@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -21,6 +21,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { UserCircle, ArrowLeft, User, Lock, Settings, Loader2, AlertCircle, KeyRound } from "lucide-react";
 import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
+import { isValidEmailFormat, isStrictAadhaar12Digits, parseIndianMobile10Digits } from "@shared/india-validation";
 
 interface Yard {
   id: string;
@@ -108,10 +109,11 @@ export default function HrEmployeeForm() {
     queryKey: ["/api/admin/roles"],
     enabled: !isEdit && canM10Create,
   });
-  const { data: adminYards = [] } = useQuery<Array<{ id: string; name: string }>>({
+  const { data: adminYards = [] } = useQuery<Array<{ id: string; name: string; isActive?: boolean | null }>>({
     queryKey: ["/api/admin/yards"],
     enabled: !isEdit && canM10Create && enableLoginOnCreate,
   });
+  const activeAdminYards = useMemo(() => adminYards.filter((y) => y.isActive !== false), [adminYards]);
 
   useEffect(() => {
     if (employee) {
@@ -217,6 +219,38 @@ export default function HrEmployeeForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const pe = personalEmail.trim() ? personalEmail.trim().toLowerCase() : null;
+    if (pe && !isValidEmailFormat(pe)) {
+      toast({ title: "Invalid personal email", description: "Please enter a valid email address.", variant: "destructive" });
+      return;
+    }
+    const we = workEmail.trim() ? workEmail.trim().toLowerCase() : null;
+    if (we && !isValidEmailFormat(we)) {
+      toast({ title: "Invalid work email", description: "Please enter a valid email address.", variant: "destructive" });
+      return;
+    }
+    let mobileNorm: string | null = null;
+    if (mobile.trim()) {
+      const m = parseIndianMobile10Digits(mobile);
+      if (!m) {
+        toast({ title: "Invalid mobile", description: "Use a valid 10-digit Indian mobile number.", variant: "destructive" });
+        return;
+      }
+      mobileNorm = m;
+    }
+    const aadhaarTrim = aadhaarToken.trim();
+    if (aadhaarTrim) {
+      const masked = /^XXXX-XXXX-\d{4}$/i.test(aadhaarTrim);
+      if (!masked && !isStrictAadhaar12Digits(aadhaarTrim)) {
+        toast({
+          title: "Invalid Aadhaar",
+          description: "Enter exactly 12 digits with no spaces, or the stored masked value.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     const payload: Record<string, unknown> = {
       firstName,
       middleName: middleName || null,
@@ -225,12 +259,12 @@ export default function HrEmployeeForm() {
       designation,
       yardId,
       employeeType,
-      aadhaarToken: aadhaarToken || null,
+      aadhaarToken: aadhaarTrim || null,
       pan: pan || null,
       dob: dob || null,
-      mobile: mobile || null,
-      workEmail: workEmail || null,
-      personalEmail: personalEmail.trim() ? personalEmail.trim().toLowerCase() : null,
+      mobile: mobileNorm,
+      workEmail: we,
+      personalEmail: pe,
       joiningDate,
       retirementDate: retirementDate || null,
       status,
@@ -260,6 +294,15 @@ export default function HrEmployeeForm() {
           toast({
             title: "Employee created",
             description: "Set work email or sign-in email and create login from the employee page.",
+          });
+          setLocation(`/hr/employees/${emp.id}`);
+          return;
+        }
+        if (!isValidEmailFormat(email)) {
+          toast({
+            title: "Employee created",
+            description: "Sign-in email must be a valid email address. Finish login on the employee page.",
+            variant: "destructive",
           });
           setLocation(`/hr/employees/${emp.id}`);
           return;
@@ -410,8 +453,14 @@ export default function HrEmployeeForm() {
               <TabsContent value="personal" className="space-y-4 pt-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <Label>Aadhaar (last 4 digits)</Label>
-                    <Input value={aadhaarToken} onChange={(e) => setAadhaarToken(e.target.value)} placeholder="Stored masked as XXXX-XXXX-####" />
+                    <Label>Aadhaar number</Label>
+                    <Input
+                      value={aadhaarToken}
+                      onChange={(e) => setAadhaarToken(e.target.value)}
+                      placeholder="12 digits, no spaces (stored masked)"
+                      inputMode="numeric"
+                      autoComplete="off"
+                    />
                   </div>
                   <div><Label>PAN</Label><Input value={pan} onChange={(e) => setPan(e.target.value)} /></div>
                   <div><Label>Date of birth</Label><Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} /></div>
@@ -492,7 +541,7 @@ export default function HrEmployeeForm() {
                             <div className="rounded-md border">
                               <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Locations (yards)</div>
                               <div className="p-3 space-y-2 max-h-40 overflow-y-auto">
-                                {adminYards.map((y) => (
+                                {activeAdminYards.map((y) => (
                                   <label key={y.id} className="flex items-center gap-2 text-sm cursor-pointer">
                                     <Checkbox checked={createYardIds.has(y.id)} onCheckedChange={() => toggleCreateYard(y.id)} />
                                     <span>{y.name}</span>

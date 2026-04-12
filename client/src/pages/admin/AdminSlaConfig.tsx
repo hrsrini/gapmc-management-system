@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import {
   Dialog,
   DialogContent,
@@ -100,12 +101,43 @@ export default function AdminSlaConfig() {
     setOpen(true);
   };
 
-  const handleEdit = (row: SlaRow) => {
+  const handleEdit = useCallback((row: SlaRow) => {
     setEditingId(row.id);
     setWorkflow(row.workflow);
     setHours(String(row.hours));
     setAlertRole(row.alertRole ?? "");
-  };
+  }, []);
+
+  const slaColumns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "workflow", header: "Workflow" },
+      { key: "hours", header: "Hours" },
+      { key: "alertRole", header: "Alert role" },
+    ];
+    if (canUpdate) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [canUpdate]);
+
+  const slaRows = useMemo((): Record<string, unknown>[] => {
+    return list.map((row) => ({
+      id: row.id,
+      workflow: row.workflow,
+      hours: row.hours,
+      alertRole: row.alertRole ?? "—",
+      _actions: canUpdate ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            handleEdit(row);
+            setOpen(true);
+          }}
+        >
+          <Pencil className="h-4 w-4" />
+        </Button>
+      ) : null,
+    }));
+  }, [list, canUpdate, handleEdit]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -184,45 +216,14 @@ export default function AdminSlaConfig() {
           {isLoading ? (
             <Skeleton className="h-32 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Workflow</TableHead>
-                  <TableHead className="text-right">Hours</TableHead>
-                  <TableHead>Alert role</TableHead>
-                  <TableHead className="w-[80px]">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {list.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4} className="text-muted-foreground text-center py-6">No SLA config. Add one above.</TableCell>
-                  </TableRow>
-                ) : (
-                  list.map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell className="font-medium">{row.workflow}</TableCell>
-                      <TableCell className="text-right">{row.hours}</TableCell>
-                      <TableCell>{row.alertRole ?? "—"}</TableCell>
-                      <TableCell>
-                        {canUpdate && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              handleEdit(row);
-                              setOpen(true);
-                            }}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={slaColumns}
+              sourceRows={slaRows}
+              searchKeys={["workflow", "hours", "alertRole"]}
+              defaultSortKey="workflow"
+              defaultSortDir="asc"
+              emptyMessage="No SLA config. Add one above."
+            />
           )}
         </CardContent>
       </Card>

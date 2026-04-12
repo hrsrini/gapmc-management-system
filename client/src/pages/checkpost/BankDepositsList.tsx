@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +14,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Landmark, AlertCircle, Plus, ShieldCheck, Pencil } from "lucide-react";
-
 interface BankDeposit {
   id: string;
   checkPostId: string;
@@ -146,7 +146,7 @@ export default function BankDepositsList() {
     },
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
-  const openEdit = (d: BankDeposit) => {
+  const openEdit = useCallback((d: BankDeposit) => {
     setEditId(d.id);
     setCheckPostId(d.checkPostId ?? "");
     setDepositDate(d.depositDate ?? "");
@@ -156,7 +156,55 @@ export default function BankDepositsList() {
     setVoucherDetails("");
     setNarration("");
     setEditOpen(true);
-  };
+  }, []);
+
+  const columns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "depositDate", header: "Deposit date" },
+      { key: "checkPostName", header: "Check post" },
+      { key: "bankName", header: "Bank" },
+      { key: "_amount", header: "Amount", sortField: "amount" },
+      { key: "_status", header: "Status", sortField: "status" },
+      { key: "verifiedBy", header: "Verified by" },
+    ];
+    if (canUpdate || canVerify) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [canUpdate, canVerify]);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((d) => ({
+      id: d.id,
+      depositDate: d.depositDate.slice(0, 10),
+      checkPostName: checkPostById.get(d.checkPostId)?.name ?? d.checkPostId,
+      bankName: d.bankName,
+      amount: d.amount,
+      _amount: `₹${d.amount.toLocaleString()}`,
+      status: d.status,
+      _status: <Badge variant="secondary">{d.status}</Badge>,
+      verifiedBy: d.verifiedBy ?? "—",
+      _actions: (canUpdate || canVerify) ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {canUpdate && d.status !== "Verified" && (
+            <Button size="sm" variant="outline" onClick={() => openEdit(d)}>
+              <Pencil className="h-3.5 w-3.5 mr-1" />
+              Edit
+            </Button>
+          )}
+          {canVerify && d.status !== "Verified" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => verifyMutation.mutate(d.id)}
+              disabled={verifyMutation.isPending || updateMutation.isPending}
+            >
+              <ShieldCheck className="h-3.5 w-3.5 mr-1" />
+              {verifyMutation.isPending ? "Verifying..." : "Verify"}
+            </Button>
+          )}
+        </div>
+      ) : null,
+    }));
+  }, [list, checkPostById, canUpdate, canVerify, openEdit, verifyMutation, updateMutation]);
 
   if (isError) {
     return (
@@ -229,55 +277,14 @@ export default function BankDepositsList() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Deposit date</TableHead>
-                  <TableHead>Check post</TableHead>
-                  <TableHead>Bank</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Verified by</TableHead>
-                  {canUpdate && <TableHead className="w-[100px]">Edit</TableHead>}
-                  {canVerify && <TableHead className="w-[120px]">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((d) => (
-                  <TableRow key={d.id}>
-                    <TableCell>{d.depositDate}</TableCell>
-                    <TableCell>{checkPostById.get(d.checkPostId)?.name ?? d.checkPostId}</TableCell>
-                    <TableCell>{d.bankName}</TableCell>
-                    <TableCell className="text-right">₹{d.amount.toLocaleString()}</TableCell>
-                    <TableCell><Badge variant="secondary">{d.status}</Badge></TableCell>
-                    <TableCell>{d.verifiedBy ?? "—"}</TableCell>
-                    {canUpdate && (
-                      <TableCell>
-                        {d.status !== "Verified" && (
-                          <Button size="sm" variant="outline" onClick={() => openEdit(d)}>
-                            <Pencil className="h-3.5 w-3.5 mr-1" />
-                            Edit
-                          </Button>
-                        )}
-                      </TableCell>
-                    )}
-                    {canVerify && (
-                      <TableCell>
-                        {d.status !== "Verified" && (
-                          <Button size="sm" variant="outline" onClick={() => verifyMutation.mutate(d.id)} disabled={verifyMutation.isPending || updateMutation.isPending}>
-                            <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-                            {verifyMutation.isPending ? "Verifying..." : "Verify"}
-                          </Button>
-                        )}
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No bank deposits.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["depositDate", "checkPostName", "bankName", "status", "verifiedBy"]}
+              defaultSortKey="depositDate"
+              defaultSortDir="desc"
+              emptyMessage="No bank deposits."
+            />
           )}
         </CardContent>
       </Card>

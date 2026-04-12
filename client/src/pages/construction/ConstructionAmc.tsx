@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -51,6 +52,35 @@ export default function ConstructionAmc() {
 
   const { data: list = [], isLoading, isError } = useQuery<AmcContract[]>({ queryKey: [url] });
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y.name ?? y.code ?? y.id])), [yards]);
+
+  const columns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "yardName", header: "Yard" },
+      { key: "contractorName", header: "Contractor" },
+      { key: "periodType", header: "Period type" },
+      { key: "contractStart", header: "Start" },
+      { key: "contractEnd", header: "End" },
+      { key: "_amountPerPeriod", header: "Amount/period", sortField: "amountPerPeriod" },
+      { key: "_status", header: "Status", sortField: "status" },
+    ],
+    [],
+  );
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return list.map((a) => ({
+      id: a.id,
+      yardName: yardById.get(a.yardId) ?? a.yardId,
+      contractorName: a.contractorName,
+      periodType: a.periodType ?? "—",
+      contractStart: a.contractStart.slice(0, 10),
+      contractEnd: a.contractEnd.slice(0, 10),
+      amountPerPeriod: a.amountPerPeriod,
+      _amountPerPeriod: `₹${a.amountPerPeriod.toLocaleString()}`,
+      status: a.status,
+      _status: <Badge variant="secondary">{a.status}</Badge>,
+    }));
+  }, [list, yardById]);
 
   const alertsUrl =
     yardId && yardId !== "all"
@@ -110,38 +140,15 @@ export default function ConstructionAmc() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Contractor</TableHead>
-                  <TableHead>Period type</TableHead>
-                  <TableHead>Start</TableHead>
-                  <TableHead>End</TableHead>
-                  <TableHead className="text-right">Amount/period</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {list.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground text-center py-6">No AMC contracts.</TableCell>
-                  </TableRow>
-                ) : (
-                  list.map((a) => (
-                    <TableRow key={a.id}>
-                      <TableCell>{a.yardId}</TableCell>
-                      <TableCell>{a.contractorName}</TableCell>
-                      <TableCell>{a.periodType ?? "—"}</TableCell>
-                      <TableCell>{a.contractStart}</TableCell>
-                      <TableCell>{a.contractEnd}</TableCell>
-                      <TableCell className="text-right">₹{a.amountPerPeriod.toLocaleString()}</TableCell>
-                      <TableCell><Badge variant="secondary">{a.status}</Badge></TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["yardName", "contractorName", "periodType", "contractStart", "contractEnd", "status"]}
+              defaultSortKey="contractEnd"
+              defaultSortDir="desc"
+              emptyMessage="No AMC contracts."
+              resetPageDependency={url}
+            />
           )}
         </CardContent>
       </Card>

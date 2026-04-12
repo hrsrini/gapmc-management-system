@@ -491,9 +491,12 @@ export const traderLicences = gapmc.table("trader_licences", {
   receiptId: text("receipt_id"),
   validFrom: text("valid_from"),
   validTo: text("valid_to"),
-  status: text("status").notNull(), // Draft | Pending | Active | Expired | Blocked | Rejected
+  status: text("status").notNull(), // Draft | Pending | Query | Active | Expired | Blocked | Rejected
   isBlocked: boolean("is_blocked").default(false),
   blockReason: text("block_reason"),
+  /** Reviewer remarks when the application is returned for correction (query mode). */
+  dvReturnRemarks: text("dv_return_remarks"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   daUser: text("da_user"),

@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,7 +13,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Truck, AlertCircle, Plus, Pencil } from "lucide-react";
-
 interface OutwardEntry {
   id: string;
   checkPostId: string;
@@ -105,7 +105,7 @@ export default function CheckPostOutward() {
     },
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
-  const openEdit = (r: OutwardEntry) => {
+  const openEdit = useCallback((r: OutwardEntry) => {
     setEditId(r.id);
     setCheckPostId(r.checkPostId ?? "");
     setInwardRefId(r.inwardRefId ?? "");
@@ -113,7 +113,35 @@ export default function CheckPostOutward() {
     setVehicleNumber(r.vehicleNumber ?? "");
     setReceiptNumber(r.receiptNumber ?? "");
     setEditOpen(true);
-  };
+  }, []);
+
+  const columns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "entryDate", header: "Entry date" },
+      { key: "checkPostName", header: "Check post" },
+      { key: "inwardLabel", header: "Inward ref" },
+      { key: "vehicleNumber", header: "Vehicle" },
+      { key: "receiptNumber", header: "Receipt no" },
+    ];
+    if (canUpdate) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [canUpdate]);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((r) => ({
+      id: r.id,
+      entryDate: r.entryDate.slice(0, 10),
+      checkPostName: checkPostById.get(r.checkPostId)?.name ?? r.checkPostId,
+      inwardLabel: inwardById.get(r.inwardRefId)?.entryNo ?? r.inwardRefId,
+      vehicleNumber: r.vehicleNumber ?? "—",
+      receiptNumber: r.receiptNumber ?? "—",
+      _actions: canUpdate ? (
+        <Button size="sm" variant="outline" onClick={() => openEdit(r)}>
+          <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
+        </Button>
+      ) : null,
+    }));
+  }, [list, checkPostById, inwardById, canUpdate, openEdit]);
 
   if (isError) {
     return (
@@ -194,39 +222,14 @@ export default function CheckPostOutward() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Entry date</TableHead>
-                  <TableHead>Check post</TableHead>
-                  <TableHead>Inward ref</TableHead>
-                  <TableHead>Vehicle</TableHead>
-                  <TableHead>Receipt no</TableHead>
-                  {canUpdate && <TableHead className="w-[100px]">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>{r.entryDate}</TableCell>
-                    <TableCell>{checkPostById.get(r.checkPostId)?.name ?? r.checkPostId}</TableCell>
-                    <TableCell>{inwardById.get(r.inwardRefId)?.entryNo ?? r.inwardRefId}</TableCell>
-                    <TableCell>{r.vehicleNumber ?? "—"}</TableCell>
-                    <TableCell>{r.receiptNumber ?? "—"}</TableCell>
-                    {canUpdate && (
-                      <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => openEdit(r)}>
-                          <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
-                        </Button>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No outward entries.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["entryDate", "checkPostName", "inwardLabel", "vehicleNumber", "receiptNumber"]}
+              defaultSortKey="entryDate"
+              defaultSortDir="desc"
+              emptyMessage="No outward entries."
+            />
           )}
         </CardContent>
       </Card>

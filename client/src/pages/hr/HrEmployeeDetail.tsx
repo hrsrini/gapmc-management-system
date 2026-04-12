@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
@@ -27,12 +28,27 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { formatApiDateOrDateTime, formatYmdToDisplay } from "@/lib/dateFormat";
 import { useAuth } from "@/context/AuthContext";
 import { fetchApiGet } from "@/lib/queryClient";
 import { UserCircle, ArrowLeft, BookOpen, AlertCircle, Plus, Loader2, FileSignature, KeyRound } from "lucide-react";
 import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
 
 const SERVICE_BOOK_SECTIONS = ["History", "Appendix", "AuditComments", "Verification", "CertMutable", "CertImmutable"];
+
+const serviceBookColumns: ReportTableColumn[] = [
+  { key: "section", header: "Section" },
+  { key: "_status", header: "Status", sortField: "status" },
+  { key: "contentText", header: "Content" },
+  { key: "_approved", header: "Approved", sortField: "approvedAt" },
+];
+
+const contractColumns: ReportTableColumn[] = [
+  { key: "contractType", header: "Contract type" },
+  { key: "payScale", header: "Pay scale" },
+  { key: "startDate", header: "Start date" },
+  { key: "endDate", header: "End date" },
+];
 
 interface Employee {
   id: string;
@@ -113,6 +129,38 @@ export default function HrEmployeeDetail() {
     queryKey: ["/api/yards"],
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+
+  const serviceBookRows = useMemo((): Record<string, unknown>[] => {
+    return serviceBook.map((e) => {
+      const contentText =
+        typeof e.content === "object" && e.content && "text" in e.content
+          ? String((e.content as { text?: string }).text)
+          : "—";
+      const approvedLine = e.approvedAt
+        ? `${formatApiDateOrDateTime(e.approvedAt)}${e.approvedBy ? ` by ${e.approvedBy}` : ""}`
+        : "—";
+      return {
+        id: e.id,
+        section: e.section,
+        status: e.status,
+        contentText,
+        approvedAt: e.approvedAt ?? "",
+        approvedBy: e.approvedBy ?? "",
+        _status: <Badge variant="outline">{e.status}</Badge>,
+        _approved: <span className="text-muted-foreground text-xs">{approvedLine}</span>,
+      };
+    });
+  }, [serviceBook]);
+
+  const contractRows = useMemo((): Record<string, unknown>[] => {
+    return contracts.map((c) => ({
+      id: c.id,
+      contractType: c.contractType,
+      payScale: c.payScale ?? "—",
+      startDate: c.startDate,
+      endDate: c.endDate ?? "",
+    }));
+  }, [contracts]);
 
   const loginProfileUrl = id ? `/api/hr/employees/${id}/login-profile` : "";
   const { data: loginProfile } = useQuery<{ login: { id: string; email: string; isActive: boolean; roles?: { id: string; name: string; tier: string }[] } | null }>({
@@ -300,14 +348,20 @@ export default function HrEmployeeDetail() {
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[employee.yardId] ?? employee.yardId}</div>
             <div><span className="text-muted-foreground">Type</span><br />{employee.employeeType}</div>
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant="secondary">{employee.status}</Badge></div>
-            <div><span className="text-muted-foreground">Joining date</span><br />{employee.joiningDate}</div>
-            <div><span className="text-muted-foreground">DOB</span><br />{employee.dob ?? "—"}</div>
+            <div><span className="text-muted-foreground">Joining date</span><br />{formatYmdToDisplay(employee.joiningDate)}</div>
+            <div><span className="text-muted-foreground">DOB</span><br />{formatYmdToDisplay(employee.dob ?? "")}</div>
             <div><span className="text-muted-foreground">Mobile</span><br />{employee.mobile ?? "—"}</div>
             <div><span className="text-muted-foreground">Work email</span><br />{employee.workEmail ?? "—"}</div>
             <div><span className="text-muted-foreground">Personal email</span><br />{employee.personalEmail ?? "—"}</div>
             <div><span className="text-muted-foreground">PAN</span><br />{employee.pan ?? "—"}</div>
             <div><span className="text-muted-foreground">Aadhaar (masked)</span><br />{employee.aadhaarToken ?? "—"}</div>
-            {employee.retirementDate && <div><span className="text-muted-foreground">Retirement</span><br />{employee.retirementDate}</div>}
+            {employee.retirementDate && (
+              <div>
+                <span className="text-muted-foreground">Retirement</span>
+                <br />
+                {formatYmdToDisplay(employee.retirementDate)}
+              </div>
+            )}
           </div>
 
           {canM10Read && (
@@ -390,32 +444,15 @@ export default function HrEmployeeDetail() {
               {sbLoading ? (
                 <Skeleton className="h-24 w-full" />
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Section</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Content</TableHead>
-                      <TableHead>Approved</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {serviceBook.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-muted-foreground text-center py-6">No service book entries.</TableCell>
-                      </TableRow>
-                    ) : (
-                      serviceBook.map((e) => (
-                        <TableRow key={e.id}>
-                          <TableCell>{e.section}</TableCell>
-                          <TableCell><Badge variant="outline">{e.status}</Badge></TableCell>
-                          <TableCell className="max-w-[200px] truncate">{typeof e.content === "object" && e.content && "text" in e.content ? String((e.content as { text?: string }).text) : "—"}</TableCell>
-                          <TableCell className="text-muted-foreground text-xs">{e.approvedAt ?? "—"} {e.approvedBy ? `by ${e.approvedBy}` : ""}</TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                <ClientDataGrid
+                  columns={serviceBookColumns}
+                  sourceRows={serviceBookRows}
+                  searchKeys={["section", "status", "contentText", "approvedAt", "approvedBy"]}
+                  searchPlaceholder="Search service book…"
+                  defaultSortKey="section"
+                  defaultSortDir="asc"
+                  emptyMessage="No service book entries."
+                />
               )}
             </TabsContent>
             <TabsContent value="contracts" className="pt-2">
@@ -446,32 +483,15 @@ export default function HrEmployeeDetail() {
               {contractsLoading ? (
                 <Skeleton className="h-24 w-full" />
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Contract type</TableHead>
-                      <TableHead>Pay scale</TableHead>
-                      <TableHead>Start date</TableHead>
-                      <TableHead>End date</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {contracts.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-muted-foreground text-center py-6">No contracts.</TableCell>
-                      </TableRow>
-                    ) : (
-                      contracts.map((c) => (
-                        <TableRow key={c.id}>
-                          <TableCell>{c.contractType}</TableCell>
-                          <TableCell>{c.payScale ?? "—"}</TableCell>
-                          <TableCell>{c.startDate}</TableCell>
-                          <TableCell>{c.endDate ?? "—"}</TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                <ClientDataGrid
+                  columns={contractColumns}
+                  sourceRows={contractRows}
+                  searchKeys={["contractType", "payScale", "startDate", "endDate"]}
+                  searchPlaceholder="Search contracts…"
+                  defaultSortKey="startDate"
+                  defaultSortDir="desc"
+                  emptyMessage="No contracts."
+                />
               )}
             </TabsContent>
             <TabsContent value="access" className="pt-2">

@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { sql, inArray } from "drizzle-orm";
+import { sql, inArray, and, eq, or, isNull } from "drizzle-orm";
 import { storage } from "./storage";
 import { db } from "./db";
 import { registerAdminRoutes } from "./routes-admin";
@@ -201,14 +201,34 @@ export async function registerRoutes(
   // Role permissions for all other modules (M-01 .. M-09): path → module, method → action; ADMIN full access, READ_ONLY only Read
   app.use(requireModulePermissionByPath);
 
-  // Yards scoped to current user's assigned locations (for dropdowns, filters)
-  app.get("/api/yards", async (req, res) => {
+  // Reports: scoped yards including inactive (filters must show deactivated locations).
+  app.get("/api/yards/for-reports", async (req, res) => {
     try {
       const ids = req.scopedLocationIds ?? [];
       if (ids.length === 0) {
         return res.json([]);
       }
       const list = await db.select().from(yards).where(inArray(yards.id, ids)).orderBy(yards.name);
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch yards");
+    }
+  });
+
+  // Yards scoped to current user's assigned locations — active only (dropdowns, filters).
+  app.get("/api/yards", async (req, res) => {
+    try {
+      const ids = req.scopedLocationIds ?? [];
+      if (ids.length === 0) {
+        return res.json([]);
+      }
+      const activeCond = or(eq(yards.isActive, true), isNull(yards.isActive));
+      const list = await db
+        .select()
+        .from(yards)
+        .where(and(inArray(yards.id, ids), activeCond))
+        .orderBy(yards.name);
       res.json(list);
     } catch (e) {
       console.error(e);

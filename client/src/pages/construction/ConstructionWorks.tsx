@@ -1,7 +1,9 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,6 +33,38 @@ export default function ConstructionWorks() {
     queryKey: ["/api/yards"],
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+
+  const columns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "_workNo", header: "Work No", sortField: "workNoSort" },
+      { key: "yardName", header: "Yard" },
+      { key: "workType", header: "Type" },
+      { key: "contractorName", header: "Contractor" },
+      { key: "startDate", header: "Start" },
+      { key: "endDate", header: "End" },
+      { key: "_status", header: "Status", sortField: "status" },
+    ],
+    [],
+  );
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((w) => ({
+      id: w.id,
+      workNoSort: w.workNo ?? w.id,
+      _workNo: (
+        <Link href={`/construction/works/${w.id}`} className="text-primary hover:underline font-mono text-sm">
+          {w.workNo ?? w.id}
+        </Link>
+      ),
+      yardName: yardById[w.yardId] ?? w.yardId,
+      workType: w.workType,
+      contractorName: w.contractorName ?? "—",
+      startDate: w.startDate ?? "—",
+      endDate: w.endDate ?? "—",
+      status: w.status,
+      _status: <Badge variant="secondary">{w.status}</Badge>,
+    }));
+  }, [list, yardById]);
 
   if (isError) {
     return (
@@ -66,37 +100,14 @@ export default function ConstructionWorks() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Work No</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Contractor</TableHead>
-                  <TableHead>Start</TableHead>
-                  <TableHead>End</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((w) => (
-                  <TableRow key={w.id}>
-                    <TableCell className="font-mono text-sm">
-                      <Link href={`/construction/works/${w.id}`} className="text-primary hover:underline">{w.workNo ?? w.id}</Link>
-                    </TableCell>
-                    <TableCell>{yardById[w.yardId] ?? w.yardId}</TableCell>
-                    <TableCell>{w.workType}</TableCell>
-                    <TableCell>{w.contractorName ?? "—"}</TableCell>
-                    <TableCell>{w.startDate ?? "—"}</TableCell>
-                    <TableCell>{w.endDate ?? "—"}</TableCell>
-                    <TableCell><Badge variant="secondary">{w.status}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No works.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["workNoSort", "yardName", "workType", "contractorName", "startDate", "endDate", "status"]}
+              defaultSortKey="workNoSort"
+              defaultSortDir="desc"
+              emptyMessage="No works."
+            />
           )}
         </CardContent>
       </Card>

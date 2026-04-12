@@ -1,38 +1,25 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { 
-  Select, 
-  SelectContent, 
-  SelectItem, 
-  SelectTrigger, 
-  SelectValue 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ClientDataGrid } from '@/components/reports/ClientDataGrid';
+import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { 
-  Plus, 
-  Search, 
-  Eye, 
-  Pencil, 
-  Trash2,
-  FileText,
-  AlertCircle,
-  RefreshCcw
-} from 'lucide-react';
-import { YARDS } from '@/data/yards';
-import { format } from '@/lib/dateFormat';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Plus, Eye, Pencil, Trash2, FileText, AlertCircle, RefreshCcw } from 'lucide-react';
+import { legacyRowMatchesSelectedApiYard } from '@/lib/legacyYardMatch';
+import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
+import { formatDisplayDate } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/context/AuthContext';
@@ -52,7 +39,6 @@ export default function RentInvoiceList() {
   const canUpdate = can('M-03', 'Update');
   const canDelete = can('M-03', 'Delete');
   const [, setLocation] = useLocation();
-  const [search, setSearch] = useState('');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null);
@@ -60,6 +46,8 @@ export default function RentInvoiceList() {
   const { data: invoices, isLoading, isError, refetch } = useQuery<Invoice[]>({
     queryKey: ['/api/invoices'],
   });
+
+  const { data: yards = [] } = useScopedActiveYards();
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiRequest('DELETE', `/api/invoices/${id}`),
@@ -73,14 +61,99 @@ export default function RentInvoiceList() {
     },
   });
 
-  const filteredInvoices = (invoices ?? []).filter((invoice) => {
-    const matchesSearch = 
-      invoice.traderName.toLowerCase().includes(search.toLowerCase()) ||
-      invoice.id.toLowerCase().includes(search.toLowerCase());
-    const matchesYard = selectedYard === 'all' || invoice.yardId.toString() === selectedYard;
-    const matchesStatus = selectedStatus === 'all' || invoice.status === selectedStatus;
-    return matchesSearch && matchesYard && matchesStatus;
-  });
+  const filteredInvoices = useMemo(() => {
+    return (invoices ?? []).filter((invoice) => {
+      const matchesYard = legacyRowMatchesSelectedApiYard(
+        invoice.yardId,
+        invoice.yard,
+        selectedYard,
+        yards,
+      );
+      const matchesStatus = selectedStatus === 'all' || invoice.status === selectedStatus;
+      return matchesYard && matchesStatus;
+    });
+  }, [invoices, selectedYard, selectedStatus, yards]);
+
+  const invoiceColumns = useMemo((): ReportTableColumn[] => {
+    return [
+      { key: 'invoiceId', header: 'Invoice No' },
+      { key: 'traderName', header: 'Trader Name' },
+      { key: 'premises', header: 'Premises' },
+      { key: 'yard', header: 'Yard' },
+      { key: 'baseRent', header: 'Amount' },
+      { key: '_gst', header: 'GST', sortField: 'gstSum' },
+      { key: '_total', header: 'Total', sortField: 'total' },
+      { key: '_status', header: 'Status', sortField: 'status' },
+      { key: 'invoiceDate', header: 'Date' },
+      { key: '_actions', header: 'Actions' },
+    ];
+  }, []);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return filteredInvoices.map((invoice) => {
+      const gstSum = invoice.cgst + invoice.sgst;
+      return {
+        id: invoice.id,
+        invoiceId: invoice.id,
+        traderName: invoice.traderName,
+        premises: invoice.premises,
+        yard: invoice.yard,
+        baseRent: invoice.baseRent,
+        gstSum,
+        _gst: `₹${gstSum.toLocaleString()}`,
+        total: invoice.total,
+        _total: `₹${invoice.total.toLocaleString()}`,
+        status: invoice.status,
+        _status: (
+          <Badge variant="outline" className={statusColors[invoice.status] ?? statusColors.Draft}>
+            {invoice.status}
+          </Badge>
+        ),
+        invoiceDate:
+          typeof invoice.invoiceDate === 'string'
+            ? invoice.invoiceDate.slice(0, 10)
+            : String(invoice.invoiceDate ?? ''),
+        _actions: (
+          <div className="flex items-center justify-end gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setViewInvoice(invoice)}
+              data-testid={`button-view-${invoice.id}`}
+              aria-label="View invoice"
+            >
+              <Eye className="h-4 w-4" />
+            </Button>
+            {canUpdate && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setLocation(`/rent/edit/${invoice.id}`)}
+                data-testid={`button-edit-${invoice.id}`}
+                aria-label="Edit invoice"
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+            )}
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-destructive"
+                onClick={() => deleteMutation.mutate(invoice.id)}
+                disabled={deleteMutation.isPending}
+                data-testid={`button-delete-${invoice.id}`}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        ),
+      };
+    });
+  }, [filteredInvoices, canUpdate, canDelete, setLocation, deleteMutation]);
+
+  const filterKey = `${selectedYard}|${selectedStatus}`;
 
   if (isError) {
     return (
@@ -125,30 +198,23 @@ export default function RentInvoiceList() {
         <Card>
           <CardHeader className="pb-4">
             <CardTitle className="text-base font-medium">Filters</CardTitle>
+            <p className="text-sm text-muted-foreground">Use the grid search for invoice id, trader, premises, or yard.</p>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search by trader or invoice..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-9"
-                  data-testid="input-search"
-                />
-              </div>
               <Select value={selectedYard} onValueChange={setSelectedYard}>
                 <SelectTrigger data-testid="select-yard">
                   <SelectValue placeholder="Select Yard" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Yards</SelectItem>
-                  {YARDS.map((yard) => (
-                    <SelectItem key={yard.id} value={yard.id.toString()}>
-                      {yard.name}
-                    </SelectItem>
-                  ))}
+                  {yards
+                    .filter((y) => String(y.type ?? '').toLowerCase() === 'yard')
+                    .map((yard) => (
+                      <SelectItem key={yard.id} value={yard.id}>
+                        {yard.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
               <Select value={selectedStatus} onValueChange={setSelectedStatus}>
@@ -168,95 +234,23 @@ export default function RentInvoiceList() {
         </Card>
 
         <Card>
-          <CardContent className="p-0">
+          <CardContent className="p-6">
             {isLoading ? (
-              <div className="p-6 space-y-3">
+              <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
                   <Skeleton key={i} className="h-12 w-full" />
                 ))}
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Invoice No</TableHead>
-                    <TableHead>Trader Name</TableHead>
-                    <TableHead>Premises</TableHead>
-                    <TableHead>Yard</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead className="text-right">GST</TableHead>
-                    <TableHead className="text-right">Total</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredInvoices.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
-                        No invoices found
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    filteredInvoices.map((invoice) => (
-                      <TableRow key={invoice.id} data-testid={`row-invoice-${invoice.id}`}>
-                        <TableCell className="font-medium">{invoice.id}</TableCell>
-                        <TableCell>{invoice.traderName}</TableCell>
-                        <TableCell>{invoice.premises}</TableCell>
-                        <TableCell className="text-muted-foreground">{invoice.yard}</TableCell>
-                        <TableCell className="text-right">₹{invoice.baseRent.toLocaleString()}</TableCell>
-                        <TableCell className="text-right">₹{(invoice.cgst + invoice.sgst).toLocaleString()}</TableCell>
-                        <TableCell className="text-right font-semibold">₹{invoice.total.toLocaleString()}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={statusColors[invoice.status]}>
-                            {invoice.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {format(new Date(invoice.invoiceDate), 'MMM dd, yyyy')}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center justify-end gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => setViewInvoice(invoice)}
-                              data-testid={`button-view-${invoice.id}`}
-                              aria-label="View invoice"
-                            >
-                              <Eye className="h-4 w-4" />
-                            </Button>
-                            {canUpdate && (
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => setLocation(`/rent/edit/${invoice.id}`)}
-                                data-testid={`button-edit-${invoice.id}`}
-                                aria-label="Edit invoice"
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                            )}
-                            {canDelete && (
-                              <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="text-destructive"
-                                onClick={() => deleteMutation.mutate(invoice.id)}
-                                disabled={deleteMutation.isPending}
-                                data-testid={`button-delete-${invoice.id}`}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            )}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+              <ClientDataGrid
+                columns={invoiceColumns}
+                sourceRows={sourceRows}
+                searchKeys={['invoiceId', 'traderName', 'premises', 'yard', 'status']}
+                defaultSortKey="invoiceDate"
+                defaultSortDir="desc"
+                emptyMessage="No invoices found"
+                resetPageDependency={filterKey}
+              />
             )}
           </CardContent>
         </Card>
@@ -286,7 +280,7 @@ export default function RentInvoiceList() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Invoice Date</span>
-                  <span>{format(new Date(viewInvoice.invoiceDate), 'dd MMM yyyy')}</span>
+                  <span>{formatDisplayDate(viewInvoice.invoiceDate)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Base Rent</span>
@@ -317,9 +311,18 @@ export default function RentInvoiceList() {
                   </Badge>
                 </div>
                 <div className="flex gap-2 pt-2">
-                  <Button variant="outline" size="sm" onClick={() => setViewInvoice(null)}>Close</Button>
+                  <Button variant="outline" size="sm" onClick={() => setViewInvoice(null)}>
+                    Close
+                  </Button>
                   {canUpdate && (
-                    <Button size="sm" onClick={() => { setViewInvoice(null); setLocation(`/rent/edit/${viewInvoice.id}`); }} data-testid="button-edit-from-view">
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setViewInvoice(null);
+                        setLocation(`/rent/edit/${viewInvoice.id}`);
+                      }}
+                      data-testid="button-edit-from-view"
+                    >
                       <Pencil className="h-4 w-4 mr-1" />
                       Edit
                     </Button>

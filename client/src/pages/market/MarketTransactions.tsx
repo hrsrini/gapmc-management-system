@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +23,6 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowRightLeft, AlertCircle, ShieldCheck, CheckCircle, Plus, SendHorizontal } from "lucide-react";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
-
 interface Transaction {
   id: string;
   transactionNo?: string | null;
@@ -246,6 +246,102 @@ export default function MarketTransactions() {
     setAdjustOpen(true);
   }
 
+  const showTxnActions = canVerify || canApprove || canCreate;
+
+  const txnColumns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "transactionNo", header: "Txn No" },
+      { key: "transactionDate", header: "Date" },
+      { key: "yardName", header: "Yard" },
+      { key: "commodityName", header: "Commodity" },
+      { key: "qtyLabel", header: "Qty" },
+      { key: "declaredValue", header: "Value" },
+      { key: "marketFeeAmount", header: "Fee" },
+      { key: "_entryKind", header: "Kind", sortField: "entryKind" },
+      { key: "_status", header: "Status", sortField: "status" },
+    ];
+    if (showTxnActions) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [showTxnActions]);
+
+  const txnRows = useMemo((): Record<string, unknown>[] => {
+    return (list ?? []).map((t) => {
+      const yardName = yardById.get(t.yardId)?.name ?? t.yardId;
+      const commodityName = commodityById.get(t.commodityId)?.name ?? t.commodityId;
+      const kind = t.entryKind ?? "Original";
+      return {
+        id: t.id,
+        transactionNo: t.transactionNo ?? "—",
+        transactionDate: t.transactionDate,
+        yardName,
+        commodityName,
+        qtyLabel: `${t.quantity} ${t.unit}`,
+        declaredValue: t.declaredValue,
+        marketFeeAmount: t.marketFeeAmount,
+        entryKind: kind,
+        status: t.status,
+        _entryKind: (
+          <Badge variant={t.entryKind === "Adjustment" ? "outline" : "secondary"}>{kind}</Badge>
+        ),
+        _status: <Badge variant="secondary">{t.status}</Badge>,
+        _actions: showTxnActions ? (
+          <div className="flex flex-wrap gap-1">
+            {canCreate && t.status === "Approved" && t.entryKind !== "Adjustment" && (
+              <Button size="sm" variant="secondary" onClick={() => openAdjust(t)}>
+                Adjust
+              </Button>
+            )}
+            {canVerify && t.status === "Draft" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => statusMutation.mutate({ id: t.id, status: "Verified" })}
+                disabled={statusMutation.isPending}
+              >
+                <ShieldCheck className="h-3.5 w-3.5 mr-1" />
+                {statusMutation.isPending ? "Updating..." : "Verify"}
+              </Button>
+            )}
+            {canVerify && t.status === "Verified" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setReturnDraftTxnId(t.id);
+                  setReturnDraftRemarks("");
+                }}
+                disabled={statusMutation.isPending}
+              >
+                <SendHorizontal className="h-3.5 w-3.5 mr-1" />
+                Send back
+              </Button>
+            )}
+            {canApprove && t.status === "Verified" && (
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => statusMutation.mutate({ id: t.id, status: "Approved" })}
+                disabled={statusMutation.isPending}
+              >
+                <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                {statusMutation.isPending ? "Updating..." : "Approve"}
+              </Button>
+            )}
+          </div>
+        ) : null,
+      };
+    });
+  }, [
+    list,
+    yardById,
+    commodityById,
+    showTxnActions,
+    canCreate,
+    canVerify,
+    canApprove,
+    statusMutation.isPending,
+  ]);
+
   if (isError) {
     return (
       <AppShell breadcrumbs={[{ label: "Market (IOMS)", href: "/market/transactions" }, { label: "Transactions" }]}>
@@ -383,89 +479,25 @@ export default function MarketTransactions() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Txn No</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Commodity</TableHead>
-                  <TableHead>Qty</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead>Fee</TableHead>
-                  <TableHead>Kind</TableHead>
-                  <TableHead>Status</TableHead>
-                  {(canVerify || canApprove || canCreate) && <TableHead className="w-[260px]">Actions</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(list ?? []).map((t) => (
-                  <TableRow key={t.id}>
-                    <TableCell className="font-mono text-sm">{t.transactionNo ?? "—"}</TableCell>
-                    <TableCell>{t.transactionDate}</TableCell>
-                    <TableCell>{yardById.get(t.yardId)?.name ?? t.yardId}</TableCell>
-                    <TableCell>{commodityById.get(t.commodityId)?.name ?? t.commodityId}</TableCell>
-                    <TableCell>{t.quantity} {t.unit}</TableCell>
-                    <TableCell>{t.declaredValue}</TableCell>
-                    <TableCell>{t.marketFeeAmount}</TableCell>
-                    <TableCell>
-                      <Badge variant={t.entryKind === "Adjustment" ? "outline" : "secondary"}>
-                        {t.entryKind ?? "Original"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell><Badge variant="secondary">{t.status}</Badge></TableCell>
-                    {(canVerify || canApprove || canCreate) && (
-                      <TableCell className="flex flex-wrap gap-1">
-                        {canCreate && t.status === "Approved" && t.entryKind !== "Adjustment" && (
-                          <Button size="sm" variant="secondary" onClick={() => openAdjust(t)}>
-                            Adjust
-                          </Button>
-                        )}
-                        {canVerify && t.status === "Draft" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => statusMutation.mutate({ id: t.id, status: "Verified" })}
-                            disabled={statusMutation.isPending}
-                          >
-                            <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-                            {statusMutation.isPending ? "Updating..." : "Verify"}
-                          </Button>
-                        )}
-                        {canVerify && t.status === "Verified" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setReturnDraftTxnId(t.id);
-                              setReturnDraftRemarks("");
-                            }}
-                            disabled={statusMutation.isPending}
-                          >
-                            <SendHorizontal className="h-3.5 w-3.5 mr-1" />
-                            Send back
-                          </Button>
-                        )}
-                        {canApprove && t.status === "Verified" && (
-                          <Button
-                            size="sm"
-                            variant="default"
-                            onClick={() => statusMutation.mutate({ id: t.id, status: "Approved" })}
-                            disabled={statusMutation.isPending}
-                          >
-                            <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                            {statusMutation.isPending ? "Updating..." : "Approve"}
-                          </Button>
-                        )}
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!list || list.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No purchase transactions. Fee Collection uses existing market fee entries.</p>
+            <ClientDataGrid
+              columns={txnColumns}
+              sourceRows={txnRows}
+              searchKeys={[
+                "transactionNo",
+                "transactionDate",
+                "yardName",
+                "commodityName",
+                "qtyLabel",
+                "declaredValue",
+                "marketFeeAmount",
+                "entryKind",
+                "status",
+              ]}
+              searchPlaceholder="Search transactions…"
+              defaultSortKey="transactionDate"
+              defaultSortDir="desc"
+              emptyMessage="No purchase transactions. Fee Collection uses existing market fee entries."
+            />
           )}
         </CardContent>
       </Card>

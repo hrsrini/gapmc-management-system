@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'wouter';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -12,7 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ClientDataGrid } from '@/components/reports/ClientDataGrid';
+import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -22,18 +22,18 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { 
-  Plus, 
-  Search, 
-  Eye, 
-  Printer, 
+import {
+  Plus,
+  Eye,
+  Printer,
   XCircle,
   Receipt as ReceiptIcon,
   AlertCircle,
-  RefreshCcw
+  RefreshCcw,
 } from 'lucide-react';
-import { YARDS } from '@/data/yards';
-import { format } from '@/lib/dateFormat';
+import { legacyRowMatchesSelectedApiYard } from '@/lib/legacyYardMatch';
+import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
+import { formatDisplayDate } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/context/AuthContext';
@@ -46,11 +46,22 @@ const typeColors: Record<string, string> = {
   Other: 'bg-muted text-muted-foreground border-muted',
 };
 
+const receiptColumns: ReportTableColumn[] = [
+  { key: 'receiptNo', header: 'Receipt No' },
+  { key: 'receiptDate', header: 'Date' },
+  { key: '_type', header: 'Type', sortField: 'type' },
+  { key: 'traderName', header: 'Trader' },
+  { key: 'head', header: 'Head' },
+  { key: '_total', header: 'Amount', sortField: 'total' },
+  { key: 'paymentMode', header: 'Mode' },
+  { key: 'issuedBy', header: 'Issued By' },
+  { key: '_actions', header: 'Actions' },
+];
+
 export default function ReceiptList() {
   const { toast } = useToast();
   const { can } = useAuth();
   const canCreate = can('M-05', 'Create');
-  const [search, setSearch] = useState('');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [viewReceipt, setViewReceipt] = useState<Receipt | null>(null);
@@ -69,6 +80,8 @@ export default function ReceiptList() {
     queryKey: ['/api/receipts'],
   });
 
+  const { data: yards = [] } = useScopedActiveYards();
+
   const voidMutation = useMutation({
     mutationFn: (id: string) => apiRequest('PUT', `/api/receipts/${id}`, { status: 'Voided' }),
     onSuccess: () => {
@@ -80,14 +93,83 @@ export default function ReceiptList() {
     },
   });
 
-  const filteredReceipts = (receipts ?? []).filter((receipt) => {
-    const matchesSearch =
-      receipt.traderName.toLowerCase().includes(search.toLowerCase()) ||
-      receipt.receiptNo.toLowerCase().includes(search.toLowerCase());
-    const matchesYard = selectedYard === 'all' || receipt.yardId.toString() === selectedYard;
-    const matchesType = selectedType === 'all' || receipt.type === selectedType;
-    return matchesSearch && matchesYard && matchesType;
-  });
+  const filteredReceipts = useMemo(() => {
+    return (receipts ?? []).filter((receipt) => {
+      const matchesYard = legacyRowMatchesSelectedApiYard(
+        receipt.yardId,
+        receipt.yardName,
+        selectedYard,
+        yards,
+      );
+      const matchesType = selectedType === 'all' || receipt.type === selectedType;
+      return matchesYard && matchesType;
+    });
+  }, [receipts, selectedYard, selectedType, yards]);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return filteredReceipts.map((receipt) => ({
+      id: receipt.id,
+      receiptNo: receipt.receiptNo,
+      receiptDate:
+        typeof receipt.receiptDate === 'string'
+          ? receipt.receiptDate.slice(0, 10)
+          : String(receipt.receiptDate ?? ''),
+      type: receipt.type,
+      _type: (
+        <Badge variant="outline" className={typeColors[receipt.type] ?? typeColors.Other}>
+          {receipt.type}
+        </Badge>
+      ),
+      traderName: receipt.traderName,
+      head: receipt.head,
+      total: receipt.total,
+      _total: `₹${receipt.total.toLocaleString()}`,
+      paymentMode: receipt.paymentMode,
+      issuedBy: receipt.issuedBy,
+      _actions: (
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              setViewReceipt(receipt);
+              setAutoPrint(false);
+            }}
+            data-testid={`button-view-${receipt.id}`}
+            aria-label="View receipt"
+          >
+            <Eye className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              setViewReceipt(receipt);
+              setAutoPrint(true);
+            }}
+            data-testid={`button-print-${receipt.id}`}
+            aria-label="Print receipt"
+          >
+            <Printer className="h-4 w-4" />
+          </Button>
+          {receipt.status === 'Active' && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-destructive"
+              onClick={() => voidMutation.mutate(receipt.id)}
+              disabled={voidMutation.isPending}
+              data-testid={`button-void-${receipt.id}`}
+            >
+              <XCircle className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      ),
+    }));
+  }, [filteredReceipts, voidMutation]);
+
+  const filterKey = `${selectedYard}|${selectedType}`;
 
   if (isError) {
     return (
@@ -132,19 +214,10 @@ export default function ReceiptList() {
         <Card>
           <CardHeader className="pb-4">
             <CardTitle className="text-base font-medium">Filters</CardTitle>
+            <p className="text-sm text-muted-foreground">Use the grid search for receipt number, trader, head, etc.</p>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search receipt or trader..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-9"
-                  data-testid="input-search"
-                />
-              </div>
               <Select value={selectedType} onValueChange={setSelectedType}>
                 <SelectTrigger data-testid="select-type">
                   <SelectValue placeholder="Receipt Type" />
@@ -163,11 +236,13 @@ export default function ReceiptList() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Yards</SelectItem>
-                  {YARDS.map((yard) => (
-                    <SelectItem key={yard.id} value={yard.id.toString()}>
-                      {yard.name}
-                    </SelectItem>
-                  ))}
+                  {yards
+                    .filter((y) => String(y.type ?? '').toLowerCase() === 'yard')
+                    .map((yard) => (
+                      <SelectItem key={yard.id} value={yard.id}>
+                        {yard.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -175,91 +250,23 @@ export default function ReceiptList() {
         </Card>
 
         <Card>
-          <CardContent className="p-0">
+          <CardContent className="p-6">
             {isLoading ? (
-              <div className="p-6 space-y-3">
+              <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
                   <Skeleton key={i} className="h-12 w-full" />
                 ))}
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Receipt No</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Trader</TableHead>
-                      <TableHead>Head</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>Mode</TableHead>
-                      <TableHead>Issued By</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredReceipts.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                          No receipts found
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      filteredReceipts.map((receipt) => (
-                        <TableRow key={receipt.id} data-testid={`row-receipt-${receipt.id}`}>
-                          <TableCell className="font-medium font-mono">{receipt.receiptNo}</TableCell>
-                          <TableCell>{format(new Date(receipt.receiptDate), 'MMM dd, yyyy')}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className={typeColors[receipt.type]}>
-                              {receipt.type}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>{receipt.traderName}</TableCell>
-                          <TableCell className="text-muted-foreground">{receipt.head}</TableCell>
-                          <TableCell className="text-right font-semibold">₹{receipt.total.toLocaleString()}</TableCell>
-                          <TableCell>{receipt.paymentMode}</TableCell>
-                          <TableCell className="text-muted-foreground">{receipt.issuedBy}</TableCell>
-                          <TableCell>
-                            <div className="flex items-center justify-end gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => { setViewReceipt(receipt); setAutoPrint(false); }}
-                                data-testid={`button-view-${receipt.id}`}
-                                aria-label="View receipt"
-                              >
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => { setViewReceipt(receipt); setAutoPrint(true); }}
-                                data-testid={`button-print-${receipt.id}`}
-                                aria-label="Print receipt"
-                              >
-                                <Printer className="h-4 w-4" />
-                              </Button>
-                              {receipt.status === 'Active' && (
-                                <Button 
-                                  variant="ghost" 
-                                  size="icon" 
-                                  className="text-destructive"
-                                  onClick={() => voidMutation.mutate(receipt.id)}
-                                  disabled={voidMutation.isPending}
-                                  data-testid={`button-void-${receipt.id}`}
-                                >
-                                  <XCircle className="h-4 w-4" />
-                                </Button>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
+              <ClientDataGrid
+                columns={receiptColumns}
+                sourceRows={sourceRows}
+                searchKeys={['receiptNo', 'receiptDate', 'type', 'traderName', 'head', 'paymentMode', 'issuedBy']}
+                defaultSortKey="receiptDate"
+                defaultSortDir="desc"
+                emptyMessage="No receipts found"
+                resetPageDependency={filterKey}
+              />
             )}
           </CardContent>
         </Card>
@@ -283,7 +290,7 @@ export default function ReceiptList() {
                 <div className="grid gap-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Date</span>
-                    <span>{format(new Date(viewReceipt.receiptDate), 'dd MMM yyyy')}</span>
+                    <span>{formatDisplayDate(viewReceipt.receiptDate)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Type</span>
@@ -301,25 +308,25 @@ export default function ReceiptList() {
                     <span className="text-muted-foreground">Amount</span>
                     <span>₹{viewReceipt.amount?.toLocaleString() ?? '—'}</span>
                   </div>
-                  {(viewReceipt.cgst != null && viewReceipt.cgst > 0) && (
+                  {viewReceipt.cgst != null && viewReceipt.cgst > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">CGST</span>
                       <span>₹{viewReceipt.cgst.toLocaleString()}</span>
                     </div>
                   )}
-                  {(viewReceipt.sgst != null && viewReceipt.sgst > 0) && (
+                  {viewReceipt.sgst != null && viewReceipt.sgst > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">SGST</span>
                       <span>₹{viewReceipt.sgst.toLocaleString()}</span>
                     </div>
                   )}
-                  {(viewReceipt.interest != null && viewReceipt.interest > 0) && (
+                  {viewReceipt.interest != null && viewReceipt.interest > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Interest</span>
                       <span>₹{viewReceipt.interest.toLocaleString()}</span>
                     </div>
                   )}
-                  {(viewReceipt.tdsAmount != null && viewReceipt.tdsAmount > 0) && (
+                  {viewReceipt.tdsAmount != null && viewReceipt.tdsAmount > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">TDS</span>
                       <span>₹{viewReceipt.tdsAmount.toLocaleString()}</span>
@@ -347,7 +354,9 @@ export default function ReceiptList() {
               </div>
             )}
             <DialogFooter className="no-print">
-              <Button variant="outline" onClick={() => setViewReceipt(null)}>Close</Button>
+              <Button variant="outline" onClick={() => setViewReceipt(null)}>
+                Close
+              </Button>
               <Button onClick={() => window.print()} data-testid="button-dialog-print">
                 <Printer className="h-4 w-4 mr-2" />
                 Print

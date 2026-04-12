@@ -1,10 +1,12 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Building2, AlertCircle } from "lucide-react";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
 interface Asset {
   id: string;
@@ -17,6 +19,16 @@ interface Asset {
   isActive?: boolean;
 }
 
+const columns: ReportTableColumn[] = [
+  { key: "assetId", header: "Asset ID" },
+  { key: "yardName", header: "Yard" },
+  { key: "assetType", header: "Type" },
+  { key: "complexName", header: "Complex" },
+  { key: "plinthAreaSqft", header: "Plinth (sqft)" },
+  { key: "value", header: "Value" },
+  { key: "_status", header: "Status", sortField: "statusSort" },
+];
+
 export default function AssetList() {
   const { data: assets, isLoading, isError } = useQuery<Asset[]>({
     queryKey: ["/api/ioms/assets"],
@@ -25,6 +37,23 @@ export default function AssetList() {
     queryKey: ["/api/yards"],
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (assets ?? []).map((a) => {
+      const active = a.isActive !== false;
+      return {
+        id: a.id,
+        assetId: a.assetId,
+        yardName: yardById[a.yardId] ?? a.yardId,
+        assetType: a.assetType,
+        complexName: a.complexName ?? "—",
+        plinthAreaSqft: a.plinthAreaSqft != null ? a.plinthAreaSqft : "—",
+        value: a.value != null ? a.value : "—",
+        statusSort: active ? "Active" : "Inactive",
+        _status: <Badge variant={active ? "default" : "secondary"}>{active ? "Active" : "Inactive"}</Badge>,
+      };
+    });
+  }, [assets, yardById]);
 
   if (isError) {
     return (
@@ -53,39 +82,15 @@ export default function AssetList() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Asset ID</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Complex</TableHead>
-                  <TableHead>Plinth (sqft)</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(assets ?? []).map((a) => (
-                  <TableRow key={a.id}>
-                    <TableCell className="font-mono text-sm">{a.assetId}</TableCell>
-                    <TableCell>{yardById[a.yardId] ?? a.yardId}</TableCell>
-                    <TableCell>{a.assetType}</TableCell>
-                    <TableCell>{a.complexName ?? "—"}</TableCell>
-                    <TableCell>{a.plinthAreaSqft != null ? a.plinthAreaSqft : "—"}</TableCell>
-                    <TableCell>{a.value != null ? a.value : "—"}</TableCell>
-                    <TableCell>
-                      <Badge variant={a.isActive !== false ? "default" : "secondary"}>
-                        {a.isActive !== false ? "Active" : "Inactive"}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!assets || assets.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No assets in register.</p>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["assetId", "yardName", "assetType", "complexName", "plinthAreaSqft", "value", "statusSort"]}
+              searchPlaceholder="Search by asset ID, yard, type, complex…"
+              defaultSortKey="assetId"
+              defaultSortDir="asc"
+              emptyMessage="No assets in register."
+            />
           )}
         </CardContent>
       </Card>

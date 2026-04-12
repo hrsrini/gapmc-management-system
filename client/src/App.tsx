@@ -40,12 +40,10 @@ import AdminFinanceMappings from "@/pages/admin/AdminFinanceMappings";
 import HrEmployees from "@/pages/hr/HrEmployees";
 import HrEmployeeDetail from "@/pages/hr/HrEmployeeDetail";
 import HrEmployeeForm from "@/pages/hr/HrEmployeeForm";
-import HrRecruitment from "@/pages/hr/HrRecruitment";
 import LeaveRequests from "@/pages/hr/LeaveRequests";
 import HrClaims from "@/pages/hr/HrClaims";
-import HrAttendance from "@/pages/hr/HrAttendance";
-import HrTimesheets from "@/pages/hr/HrTimesheets";
 import TraderLicences from "@/pages/traders/TraderLicences";
+import TraderLicenceForm from "@/pages/traders/TraderLicenceForm";
 import TraderLicenceDetail from "@/pages/traders/TraderLicenceDetail";
 import TraderBlockingLog from "@/pages/traders/TraderBlockingLog";
 import AssetList from "@/pages/assets/AssetList";
@@ -350,14 +348,19 @@ function Router() {
       <Route path="/hr/claims">
         <ProtectedRoute><HrClaims /></ProtectedRoute>
       </Route>
-      <Route path="/hr/attendance">
-        <ProtectedRoute><HrAttendance /></ProtectedRoute>
+      <Route path="/traders/licences/new">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Create">
+            <TraderLicenceForm />
+          </RequirePermission>
+        </ProtectedRoute>
       </Route>
-      <Route path="/hr/timesheets">
-        <ProtectedRoute><HrTimesheets /></ProtectedRoute>
-      </Route>
-      <Route path="/hr/recruitment">
-        <ProtectedRoute><HrRecruitment /></ProtectedRoute>
+      <Route path="/traders/licences/:id/edit">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Update">
+            <TraderLicenceForm />
+          </RequirePermission>
+        </ProtectedRoute>
       </Route>
       <Route path="/traders/licences/:id">
         <ProtectedRoute><TraderLicenceDetail /></ProtectedRoute>

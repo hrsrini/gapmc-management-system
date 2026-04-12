@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +27,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { KeyRound, AlertCircle, Plus, Loader2 } from "lucide-react";
-
 interface Allotment {
   id: string;
   assetId: string;
@@ -51,6 +51,16 @@ interface Licence {
   firmName: string;
   yardId: string;
 }
+
+const columns: ReportTableColumn[] = [
+  { key: "assetDisplay", header: "Asset" },
+  { key: "allotteeName", header: "Allottee" },
+  { key: "licenceDisplay", header: "Licence" },
+  { key: "fromDate", header: "From" },
+  { key: "toDate", header: "To" },
+  { key: "_status", header: "Status", sortField: "status" },
+  { key: "securityDeposit", header: "Security deposit", sortField: "securityDepositNum" },
+];
 
 export default function AssetAllotments() {
   const [assetIdFilter, setAssetIdFilter] = useState("all");
@@ -84,7 +94,31 @@ export default function AssetAllotments() {
   const { data: licences = [] } = useQuery<Licence[]>({ queryKey: ["/api/ioms/traders/licences"] });
 
   const assetDisplayMap = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
-  assets.forEach((a) => { assetDisplayMap[a.assetId] = a.assetId; });
+  assets.forEach((a) => {
+    assetDisplayMap[a.assetId] = a.assetId;
+  });
+
+  const licenceDisplayById = Object.fromEntries(
+    licences.map((l) => [l.id, `${l.licenceNo ?? l.id} — ${l.firmName}`]),
+  );
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return allotments.map((a) => ({
+      id: a.id,
+      assetDisplay: assetDisplayMap[a.assetId] ?? a.assetId,
+      allotteeName: a.allotteeName,
+      licenceDisplay: licenceDisplayById[a.traderLicenceId] ?? a.traderLicenceId,
+      fromDate: a.fromDate,
+      toDate: a.toDate,
+      status: a.status,
+      securityDeposit:
+        a.securityDeposit != null ? `₹${a.securityDeposit.toLocaleString()}` : "—",
+      securityDepositNum: a.securityDeposit ?? null,
+      _status: (
+        <Badge variant={a.status === "Active" ? "default" : "secondary"}>{a.status}</Badge>
+      ),
+    }));
+  }, [allotments, assetDisplayMap, licenceDisplayById]);
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -224,38 +258,23 @@ export default function AssetAllotments() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Asset</TableHead>
-                  <TableHead>Allottee</TableHead>
-                  <TableHead>Licence</TableHead>
-                  <TableHead>From</TableHead>
-                  <TableHead>To</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Security deposit</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {allotments.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground text-center py-8">No allotments.</TableCell>
-                  </TableRow>
-                ) : (
-                  allotments.map((a) => (
-                    <TableRow key={a.id}>
-                      <TableCell className="font-mono text-sm">{assetDisplayMap[a.assetId] ?? a.assetId}</TableCell>
-                      <TableCell>{a.allotteeName}</TableCell>
-                      <TableCell className="font-mono text-sm">{a.traderLicenceId}</TableCell>
-                      <TableCell>{a.fromDate}</TableCell>
-                      <TableCell>{a.toDate}</TableCell>
-                      <TableCell><Badge variant={a.status === "Active" ? "default" : "secondary"}>{a.status}</Badge></TableCell>
-                      <TableCell className="text-right">{a.securityDeposit != null ? `₹${a.securityDeposit.toLocaleString()}` : "—"}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={[
+                "assetDisplay",
+                "allotteeName",
+                "licenceDisplay",
+                "fromDate",
+                "toDate",
+                "status",
+              ]}
+              searchPlaceholder="Search allotments…"
+              defaultSortKey="fromDate"
+              defaultSortDir="desc"
+              resetPageDependency={listUrl}
+              emptyMessage="No allotments."
+            />
           )}
         </CardContent>
       </Card>

@@ -20,6 +20,23 @@ import { validateDaRejection, validateDvReturnToDraft } from "@shared/workflow-r
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
 
+function formatIsoDateToDDMMYYYY(isoYmd: string): string {
+  const part = String(isoYmd).trim().slice(0, 10);
+  const d = new Date(`${part}T12:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return part;
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+}
+
+/** YYYY-MM (statement month) → DD-MM-YYYY using first of month. */
+function formatYearMonthToDDMMYYYY(ym: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(ym).trim().slice(0, 7));
+  if (!m) return ym;
+  return `01-${m[2]}-${m[1]}`;
+}
+
 export function registerVoucherRoutes(app: Express) {
   const now = () => new Date().toISOString();
 
@@ -223,11 +240,13 @@ export function registerVoucherRoutes(app: Express) {
         await new Promise<void>((resolve, reject) => {
           doc.on("end", () => resolve());
           doc.on("error", reject);
-          doc.fontSize(16).text(`Monthly voucher statement — ${monthRaw}`, { underline: true });
+          doc.fontSize(16).text(`Monthly voucher statement — ${formatYearMonthToDDMMYYYY(monthRaw)}`, { underline: true });
           doc.moveDown();
           doc
             .fontSize(10)
-            .text(`Paid date range: ${monthStart} to ${monthEnd}. Yard filter: ${yardFilter ?? "all scoped locations"}.`);
+            .text(
+              `Paid date range: ${formatIsoDateToDDMMYYYY(monthStart)} to ${formatIsoDateToDDMMYYYY(monthEnd)}. Yard filter: ${yardFilter ?? "all scoped locations"}.`,
+            );
           doc.moveDown();
           for (const r of rows) {
             doc

@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Eye, Trash2, Upload, FileIcon, ImageIcon } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Eye, Trash2, Upload, FileIcon, ImageIcon, Download, ExternalLink } from "lucide-react";
 
 export interface FormFileAttachmentsProps {
   /** Controlled list of files (e.g. before submit). */
@@ -18,6 +25,10 @@ export interface FormFileAttachmentsProps {
 
 function isImage(f: File) {
   return f.type.startsWith("image/");
+}
+
+function isPdf(f: File) {
+  return f.type === "application/pdf" || /\.pdf$/i.test(f.name);
 }
 
 export function FormFileAttachments({
@@ -94,7 +105,7 @@ export function FormFileAttachments({
               <div className="flex items-center gap-2 min-w-0 flex-1">
                 {isImage(f) ? (
                   <img src={urls[i] ?? ""} alt="" className="h-10 w-10 rounded object-cover border shrink-0" />
-                ) : f.type === "application/pdf" ? (
+                ) : isPdf(f) ? (
                   <FileIcon className="h-10 w-10 text-red-600 shrink-0" />
                 ) : (
                   <ImageIcon className="h-10 w-10 text-muted-foreground shrink-0" />
@@ -104,11 +115,55 @@ export function FormFileAttachments({
                 </span>
                 <span className="text-muted-foreground shrink-0">({(f.size / 1024).toFixed(1)} KB)</span>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <Button type="button" variant="outline" size="sm" asChild disabled={disabled}>
-                  <a href={urls[i]} target="_blank" rel="noreferrer">
-                    <Eye className="h-4 w-4 mr-1" />
-                    View
+              <div className="flex flex-wrap items-center gap-1 shrink-0">
+                {(isPdf(f) || isImage(f)) && urls[i] ? (
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button type="button" variant="outline" size="sm" disabled={disabled}>
+                        <Eye className="h-4 w-4 mr-1" />
+                        Preview
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-4xl w-[95vw] h-[min(85vh,720px)] flex flex-col gap-0 p-0">
+                      <DialogHeader className="p-4 pb-2 border-b shrink-0">
+                        <DialogTitle className="truncate pr-8">{f.name}</DialogTitle>
+                      </DialogHeader>
+                      <div className="flex-1 min-h-0 p-2">
+                        {isPdf(f) ? (
+                          <object
+                            data={urls[i]}
+                            type="application/pdf"
+                            className="w-full h-full min-h-[480px] rounded border bg-muted/30"
+                            aria-label={f.name}
+                          >
+                            <div className="flex flex-col items-center justify-center gap-3 p-6 text-sm text-center text-muted-foreground min-h-[320px]">
+                              <p>Preview is not available in this view.</p>
+                              <Button type="button" variant="outline" size="sm" asChild>
+                                <a href={urls[i]} target="_blank" rel="noreferrer">
+                                  Open PDF in new tab
+                                </a>
+                              </Button>
+                            </div>
+                          </object>
+                        ) : (
+                          <div className="flex justify-center items-start overflow-auto max-h-[calc(85vh-8rem)] p-2">
+                            <img src={urls[i]} alt={f.name} className="max-w-full h-auto rounded border" />
+                          </div>
+                        )}
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+                ) : null}
+                <Button type="button" variant="outline" size="sm" asChild disabled={disabled || !urls[i]}>
+                  <a href={urls[i] ?? "#"} target="_blank" rel="noreferrer">
+                    <ExternalLink className="h-4 w-4 mr-1" />
+                    Open
+                  </a>
+                </Button>
+                <Button type="button" variant="outline" size="sm" asChild disabled={disabled || !urls[i]}>
+                  <a href={urls[i] ?? "#"} download={f.name}>
+                    <Download className="h-4 w-4 mr-1" />
+                    Download
                   </a>
                 </Button>
                 <Button
@@ -136,7 +191,7 @@ export function FormFileAttachments({
           onClick={openInput}
         >
           <Upload className="h-4 w-4 mr-2" />
-          {files.length === 0 ? "Choose file(s)" : "Add / replace (more files)"}
+          {files.length === 0 ? "Choose file(s)" : "Add more files"}
         </Button>
         {files.length > 0 ? (
           <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={() => onChange([])}>

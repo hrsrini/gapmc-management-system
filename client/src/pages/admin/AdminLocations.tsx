@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MapPin, AlertCircle, Pencil, Loader2, Plus } from "lucide-react";
@@ -73,7 +74,7 @@ export default function AdminLocations() {
     setOpen(true);
   };
 
-  const openEdit = (y: Yard) => {
+  const openEdit = useCallback((y: Yard) => {
     setDialogMode("edit");
     setEditing(y);
     setName(y.name);
@@ -84,7 +85,40 @@ export default function AdminLocations() {
     setAddress(y.address ?? "");
     setIsActive(y.isActive);
     setOpen(true);
-  };
+  }, []);
+
+  const locationColumns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "code", header: "Code" },
+      { key: "name", header: "Name" },
+      { key: "_type", header: "Type", sortField: "type" },
+      { key: "phoneDisplay", header: "Phone" },
+      { key: "statusLabel", header: "Status", sortField: "isActive" },
+    ];
+    if (canUpdate) base.push({ key: "_actions", header: "" });
+    return base;
+  }, [canUpdate]);
+
+  const locationRows = useMemo((): Record<string, unknown>[] => {
+    return (yards ?? []).map((y) => ({
+      id: y.id,
+      code: y.code,
+      name: y.name,
+      type: y.type,
+      _type: (
+        <Badge variant={y.type === "Yard" ? "default" : y.type === "HO" ? "outline" : "secondary"}>{y.type}</Badge>
+      ),
+      phoneDisplay: y.phone ?? y.mobile ?? "—",
+      isActive: y.isActive,
+      statusLabel: y.isActive ? "Active" : "Inactive",
+      _actions: canUpdate ? (
+        <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(y)}>
+          <Pencil className="h-4 w-4 mr-1" />
+          Edit
+        </Button>
+      ) : null,
+    }));
+  }, [yards, canUpdate, openEdit]);
 
   const createMutation = useMutation({
     mutationFn: async (body: {
@@ -110,6 +144,7 @@ export default function AdminLocations() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/yards"] });
       queryClient.invalidateQueries({ queryKey: ["/api/yards"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/yards/for-reports"] });
       toast({ title: "Location created" });
       setOpen(false);
     },
@@ -147,6 +182,7 @@ export default function AdminLocations() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/yards"] });
       queryClient.invalidateQueries({ queryKey: ["/api/yards"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/yards/for-reports"] });
       toast({ title: "Location updated" });
       setOpen(false);
       setEditing(null);
@@ -220,42 +256,14 @@ export default function AdminLocations() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Code</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Phone</TableHead>
-                  <TableHead>Status</TableHead>
-                  {canUpdate ? <TableHead className="w-[100px]" /> : null}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(yards ?? []).map((y) => (
-                  <TableRow key={y.id}>
-                    <TableCell className="font-mono">{y.code}</TableCell>
-                    <TableCell>{y.name}</TableCell>
-                    <TableCell>
-                      <Badge variant={y.type === "Yard" ? "default" : y.type === "HO" ? "outline" : "secondary"}>{y.type}</Badge>
-                    </TableCell>
-                    <TableCell>{y.phone ?? y.mobile ?? "—"}</TableCell>
-                    <TableCell>{y.isActive ? "Active" : "Inactive"}</TableCell>
-                    {canUpdate ? (
-                      <TableCell>
-                        <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(y)}>
-                          <Pencil className="h-4 w-4 mr-1" />
-                          Edit
-                        </Button>
-                      </TableCell>
-                    ) : null}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!yards || yards.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No locations. Run the M-10 seed script.</p>
+            <ClientDataGrid
+              columns={locationColumns}
+              sourceRows={locationRows}
+              searchKeys={["code", "name", "type", "phoneDisplay", "statusLabel"]}
+              defaultSortKey="code"
+              defaultSortDir="asc"
+              emptyMessage="No locations. Run the M-10 seed script."
+            />
           )}
         </CardContent>
       </Card>

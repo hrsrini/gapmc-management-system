@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -101,6 +102,28 @@ export default function VoucherMonthlyStatement() {
   const downloadXlsx = () => downloadBlob("xlsx", "xlsx");
   const downloadPdf = () => downloadBlob("pdf", "pdf");
 
+  const statementColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "headCode", header: "Head code" },
+      { key: "headDescription", header: "Description" },
+      { key: "voucherCount", header: "Vouchers" },
+      { key: "_totalAmount", header: "Total (INR)", sortField: "totalAmount" },
+    ],
+    [],
+  );
+
+  const statementRows = useMemo((): Record<string, unknown>[] => {
+    if (!data) return [];
+    return data.rows.map((r) => ({
+      id: r.expenditureHeadId,
+      headCode: r.headCode,
+      headDescription: r.headDescription || "—",
+      voucherCount: r.voucherCount,
+      totalAmount: r.totalAmount,
+      _totalAmount: `₹${r.totalAmount.toLocaleString()}`,
+    }));
+  }, [data]);
+
   if (isError) {
     return (
       <AppShell breadcrumbs={[{ label: "Vouchers", href: "/vouchers" }, { label: "Monthly statement" }]}>
@@ -181,34 +204,15 @@ export default function VoucherMonthlyStatement() {
                 {data.yardId ? ` · Yard: ${yardLabel(data.yardId)}` : ""} · {data.voucherCount} paid voucher(s) · Grand
                 total ₹{data.grandTotal.toLocaleString()}
               </p>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Head code</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead className="text-right">Vouchers</TableHead>
-                    <TableHead className="text-right">Total (INR)</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.rows.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={4} className="text-muted-foreground text-center py-6">
-                        No paid vouchers in this month for the selected filter.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    data.rows.map((r) => (
-                      <TableRow key={r.expenditureHeadId}>
-                        <TableCell className="font-mono text-sm">{r.headCode}</TableCell>
-                        <TableCell>{r.headDescription || "—"}</TableCell>
-                        <TableCell className="text-right">{r.voucherCount}</TableCell>
-                        <TableCell className="text-right">₹{r.totalAmount.toLocaleString()}</TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+              <ClientDataGrid
+                columns={statementColumns}
+                sourceRows={statementRows}
+                searchKeys={["headCode", "headDescription"]}
+                defaultSortKey="headCode"
+                defaultSortDir="asc"
+                emptyMessage="No paid vouchers in this month for the selected filter."
+                resetPageDependency={`${month}|${yardId}`}
+              />
             </>
           ) : null}
         </CardContent>

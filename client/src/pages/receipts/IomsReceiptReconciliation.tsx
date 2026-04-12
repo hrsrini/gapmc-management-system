@@ -1,13 +1,14 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { AlertCircle, RefreshCcw, Receipt, CircleCheck, XCircle } from "lucide-react";
 import { Link } from "wouter";
-import { formatDistanceToNow } from "date-fns";
 import { useAuth } from "@/context/AuthContext";
 
 type GatewayLogStatus = "Initiated" | "Paid" | "Failed" | "Reconciled";
@@ -31,7 +32,18 @@ export default function IomsReceiptReconciliation() {
   const { can } = useAuth();
   const canRead = can("M-05", "Read");
 
-  const { data, isLoading, isError, refetch, isFetching } = useQuery<ReconciliationResponse>({
+  const unmatchedColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "_status", header: "Status", sortField: "status" },
+      { key: "gatewayTxnId", header: "Gateway txn" },
+      { key: "_receipt", header: "Receipt ID", sortField: "receiptId" },
+      { key: "_amount", header: "Amount", sortField: "amount" },
+      { key: "createdAt", header: "Created" },
+    ],
+    [],
+  );
+
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery<ReconciliationResponse>({
     queryKey: ["/api/ioms/receipts/reconciliation"],
     queryFn: async () => {
       const res = await fetch("/api/ioms/receipts/reconciliation", { credentials: "include" });
@@ -39,9 +51,38 @@ export default function IomsReceiptReconciliation() {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as { error?: string }).error ?? res.statusText);
       }
-      return res.json();
+      return (await res.json()) as ReconciliationResponse;
     },
   });
+
+  const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+  const unmatchedRows = useMemo((): Record<string, unknown>[] => {
+    if (!data) return [];
+    return data.unmatchedLogs.map((log) => ({
+      id: log.id,
+      status: log.status,
+      _status: (
+        <Badge
+          variant={
+            log.status === "Paid" ? "default" : log.status === "Failed" ? "destructive" : "secondary"
+          }
+        >
+          {log.status}
+        </Badge>
+      ),
+      gatewayTxnId: log.gatewayTxnId ?? "—",
+      receiptId: log.receiptId,
+      _receipt: (
+        <Link href={`/receipts/ioms/${log.receiptId}`} className="text-primary hover:underline font-mono text-xs">
+          {log.receiptId.slice(0, 10)}…
+        </Link>
+      ),
+      amount: log.amount,
+      _amount: `₹${Number(log.amount).toLocaleString("en-IN")}`,
+      createdAt: log.createdAt,
+    }));
+  }, [data]);
 
   if (!canRead) {
     return (
@@ -80,14 +121,17 @@ export default function IomsReceiptReconciliation() {
         <CardContent className="space-y-4">
           {isLoading ? (
             <Skeleton className="h-72 w-full" />
-          ) : isError || !data ? (
+          ) : isError ? (
             <div className="bg-destructive/10 border border-destructive/20 rounded-md p-4 flex items-start gap-3">
               <AlertCircle className="h-5 w-5 text-destructive mt-0.5" />
               <div className="space-y-1">
                 <div className="font-medium text-destructive">Failed to load reconciliation</div>
+                <div className="text-sm text-muted-foreground">{errorMessage}</div>
                 <div className="text-sm text-muted-foreground">Try again with Refresh.</div>
               </div>
             </div>
+          ) : !data ? (
+            <div className="text-sm text-muted-foreground py-6">No data.</div>
           ) : (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -124,46 +168,15 @@ export default function IomsReceiptReconciliation() {
                   {data.unmatchedLogs.length === 0 ? (
                     <div className="text-sm text-muted-foreground py-6 text-center">No unmatched logs in this window.</div>
                   ) : (
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Gateway txn</TableHead>
-                          <TableHead>Receipt ID</TableHead>
-                          <TableHead>Amount</TableHead>
-                          <TableHead>Created</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {data.unmatchedLogs.map((log) => (
-                          <TableRow key={log.id}>
-                            <TableCell>
-                              <Badge
-                                variant={
-                                  log.status === "Paid"
-                                    ? "default"
-                                    : log.status === "Failed"
-                                      ? "destructive"
-                                      : "secondary"
-                                }
-                              >
-                                {log.status}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="font-mono text-xs">{log.gatewayTxnId ?? "—"}</TableCell>
-                            <TableCell className="font-mono text-xs">
-                              <Link href={`/receipts/ioms/${log.receiptId}`} className="text-primary hover:underline">
-                                {log.receiptId.slice(0, 10)}…
-                              </Link>
-                            </TableCell>
-                            <TableCell>₹{Number(log.amount).toLocaleString("en-IN")}</TableCell>
-                            <TableCell className="text-muted-foreground text-xs">
-                              {log.createdAt ? formatDistanceToNow(new Date(log.createdAt), { addSuffix: true }) : "—"}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                    <ClientDataGrid
+                      columns={unmatchedColumns}
+                      sourceRows={unmatchedRows}
+                      searchKeys={["status", "gatewayTxnId", "receiptId"]}
+                      defaultSortKey="createdAt"
+                      defaultSortDir="desc"
+                      emptyMessage="No unmatched logs."
+                      resetPageDependency={data.unmatchedLogs.length}
+                    />
                   )}
                 </CardContent>
               </Card>

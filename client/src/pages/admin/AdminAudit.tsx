@@ -1,14 +1,21 @@
-import { useState, Fragment } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ScrollText, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { ScrollText, AlertCircle, FileJson } from "lucide-react";
+import { formatDisplayDateTime } from "@/lib/dateFormat";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 
 /** Values must match `audit_log.module` written by the API. */
 const MODULE_OPTIONS = [
@@ -47,7 +54,8 @@ export default function AdminAudit() {
   const [moduleFilter, setModuleFilter] = useState("");
   const [userIdFilter, setUserIdFilter] = useState("");
   const [limit, setLimit] = useState(100);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [detailEntry, setDetailEntry] = useState<AuditEntry | null>(null);
+
   const params = new URLSearchParams();
   if (moduleFilter) params.set("module", moduleFilter);
   if (userIdFilter.trim()) params.set("userId", userIdFilter.trim());
@@ -56,6 +64,30 @@ export default function AdminAudit() {
   const { data: entries, isLoading, isError } = useQuery<AuditEntry[]>({
     queryKey: [url],
   });
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (entries ?? []).map((e) => {
+      const hasDetails = e.beforeValue != null || e.afterValue != null;
+      return {
+        id: e.id,
+        createdAt: e.createdAt,
+        _timeDisplay: e.createdAt ? formatDisplayDateTime(e.createdAt) : "—",
+        userLabel: e.userEmail ?? e.userName ?? e.userId,
+        module: e.module,
+        action: e.action,
+        recordId: e.recordId ?? "—",
+        ip: e.ip ?? "—",
+        _details: hasDetails ? (
+          <Button type="button" variant="ghost" size="sm" className="h-8 gap-1" onClick={() => setDetailEntry(e)}>
+            <FileJson className="h-4 w-4" />
+            Details
+          </Button>
+        ) : (
+          <span className="text-muted-foreground text-xs">—</span>
+        ),
+      };
+    });
+  }, [entries]);
 
   if (isError) {
     return (
@@ -126,88 +158,60 @@ export default function AdminAudit() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-8" />
-                  <TableHead>Time</TableHead>
-                  <TableHead>User</TableHead>
-                  <TableHead>Module</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Record</TableHead>
-                  <TableHead className="text-muted-foreground">IP</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(entries ?? []).map((e) => {
-                  const hasDetails = e.beforeValue != null || e.afterValue != null;
-                  const isExpanded = expandedId === e.id;
-                  return (
-                    <Fragment key={e.id}>
-                      <TableRow>
-                        <TableCell className="w-8 p-1">
-                          {hasDetails ? (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={() => setExpandedId(isExpanded ? null : e.id)}
-                              aria-label={isExpanded ? "Hide details" : "Show details"}
-                            >
-                              {isExpanded ? (
-                                <ChevronDown className="h-4 w-4" />
-                              ) : (
-                                <ChevronRight className="h-4 w-4" />
-                              )}
-                            </Button>
-                          ) : null}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
-                          {e.createdAt ? new Date(e.createdAt).toLocaleString() : "—"}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {e.userEmail ?? e.userName ?? e.userId}
-                        </TableCell>
-                        <TableCell>{e.module}</TableCell>
-                        <TableCell>{e.action}</TableCell>
-                        <TableCell className="font-mono text-xs truncate max-w-[120px]">{e.recordId ?? "—"}</TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{e.ip ?? "—"}</TableCell>
-                      </TableRow>
-                      {isExpanded && hasDetails && (
-                        <TableRow className="bg-muted/30 hover:bg-muted/30">
-                          <TableCell colSpan={7} className="p-4 align-top">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                              {e.beforeValue != null && (
-                                <div>
-                                  <span className="font-medium text-muted-foreground">Before</span>
-                                  <pre className="mt-1 p-2 rounded bg-background border overflow-auto max-h-48 font-mono text-[11px]">
-                                    {JSON.stringify(e.beforeValue, null, 2)}
-                                  </pre>
-                                </div>
-                              )}
-                              {e.afterValue != null && (
-                                <div>
-                                  <span className="font-medium text-muted-foreground">After</span>
-                                  <pre className="mt-1 p-2 rounded bg-background border overflow-auto max-h-48 font-mono text-[11px]">
-                                    {JSON.stringify(e.afterValue, null, 2)}
-                                  </pre>
-                                </div>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </Fragment>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
-          {!isLoading && (!entries || entries.length === 0) && (
-            <p className="text-sm text-muted-foreground py-4">No audit entries yet.</p>
+            <ClientDataGrid
+              columns={[
+                { key: "_details", header: "" },
+                { key: "_timeDisplay", header: "Time", sortField: "createdAt" },
+                { key: "userLabel", header: "User" },
+                { key: "module", header: "Module" },
+                { key: "action", header: "Action" },
+                { key: "recordId", header: "Record" },
+                { key: "ip", header: "IP" },
+              ]}
+              sourceRows={sourceRows}
+              searchKeys={["createdAt", "userLabel", "module", "action", "recordId", "ip"]}
+              searchPlaceholder="Search time, user, module, action, record, IP…"
+              defaultSortKey="createdAt"
+              defaultSortDir="desc"
+              resetPageDependency={url}
+              emptyMessage="No audit entries yet."
+            />
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={detailEntry != null} onOpenChange={(o) => !o && setDetailEntry(null)}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Audit entry details</DialogTitle>
+          </DialogHeader>
+          {detailEntry && (
+            <div className="space-y-3 text-xs">
+              <p className="text-muted-foreground">
+                {detailEntry.module} · {detailEntry.action} · {detailEntry.recordId ?? "—"}
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {detailEntry.beforeValue != null && (
+                  <div>
+                    <span className="font-medium text-muted-foreground">Before</span>
+                    <pre className="mt-1 p-2 rounded bg-muted border overflow-auto max-h-64 font-mono text-[11px]">
+                      {JSON.stringify(detailEntry.beforeValue, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                {detailEntry.afterValue != null && (
+                  <div>
+                    <span className="font-medium text-muted-foreground">After</span>
+                    <pre className="mt-1 p-2 rounded bg-muted border overflow-auto max-h-64 font-mono text-[11px]">
+                      {JSON.stringify(detailEntry.afterValue, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

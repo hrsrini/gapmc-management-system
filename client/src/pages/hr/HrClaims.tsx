@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,6 +26,8 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Wallet, Plane, Car, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
 interface LtcClaim {
   id: string;
@@ -57,6 +58,14 @@ interface Employee {
   firstName: string;
   surname: string;
 }
+
+const ltcColumns: ReportTableColumn[] = [
+  { key: "employeeLabel", header: "Employee" },
+  { key: "claimDate", header: "Claim date" },
+  { key: "period", header: "Period" },
+  { key: "amount", header: "Amount", sortField: "amountNum" },
+  { key: "_status", header: "Status", sortField: "status" },
+];
 
 export default function HrClaims() {
   const { user } = useAuth();
@@ -119,6 +128,123 @@ export default function HrClaims() {
   const isError = ltcError || tadaError;
   const showTadaActions = canVerify || canApprove;
 
+  const tadaColumns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "employeeLabel", header: "Employee" },
+      { key: "travelDate", header: "Travel date" },
+      { key: "purpose", header: "Purpose" },
+      { key: "amount", header: "Amount", sortField: "amountNum" },
+      { key: "_statusBlock", header: "Status", sortField: "status" },
+    ];
+    if (showTadaActions) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [showTadaActions]);
+
+  const ltcRows = useMemo((): Record<string, unknown>[] => {
+    return ltcList.map((c) => ({
+      id: c.id,
+      employeeLabel: employeeLabelById[c.employeeId] ?? c.employeeId,
+      claimDate: c.claimDate,
+      period: c.period ?? "—",
+      amount: `₹${c.amount.toLocaleString()}`,
+      amountNum: c.amount,
+      status: c.status,
+      _status: <Badge variant="secondary">{c.status}</Badge>,
+    }));
+  }, [ltcList, employeeLabelById]);
+
+  const tadaRows = useMemo((): Record<string, unknown>[] => {
+    return tadaList.map((c) => ({
+      id: c.id,
+      employeeLabel: employeeLabelById[c.employeeId] ?? c.employeeId,
+      travelDate: c.travelDate,
+      purpose: c.purpose,
+      amount: `₹${c.amount.toLocaleString()}`,
+      amountNum: c.amount,
+      status: c.status,
+      rejectionSnippet:
+        c.status === "Rejected" && c.rejectionRemarks
+          ? `${c.rejectionReasonCode ?? ""}: ${c.rejectionRemarks}`
+          : "",
+      dvReturnSnippet: c.dvReturnRemarks ? `DV return: ${c.dvReturnRemarks}` : "",
+      _statusBlock: (
+        <div className="flex flex-col gap-1">
+          <Badge variant="secondary">{c.status}</Badge>
+          {c.status === "Rejected" && c.rejectionRemarks && (
+            <span className="text-xs text-muted-foreground line-clamp-2" title={c.rejectionRemarks}>
+              {c.rejectionReasonCode}: {c.rejectionRemarks}
+            </span>
+          )}
+          {c.dvReturnRemarks && (
+            <span className="text-xs text-muted-foreground line-clamp-2" title={c.dvReturnRemarks}>
+              DV return: {c.dvReturnRemarks}
+            </span>
+          )}
+        </div>
+      ),
+      _actions: showTadaActions ? (
+        <div className="flex flex-wrap gap-1">
+          {canVerify && c.status === "Pending" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => tadaStatusMutation.mutate({ id: c.id, status: "Verified" })}
+              disabled={tadaStatusMutation.isPending}
+            >
+              <ShieldCheck className="h-3.5 w-3.5 mr-1" />
+              Verify
+            </Button>
+          )}
+          {canVerify && c.status === "Verified" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setTadaReturnId(c.id);
+                setTadaReturnRemarks("");
+              }}
+              disabled={tadaStatusMutation.isPending}
+            >
+              <SendHorizontal className="h-3.5 w-3.5 mr-1" />
+              Send back
+            </Button>
+          )}
+          {canApprove && c.status === "Verified" && (
+            <>
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => tadaStatusMutation.mutate({ id: c.id, status: "Approved" })}
+                disabled={tadaStatusMutation.isPending}
+              >
+                <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => {
+                  setTadaRejectId(c.id);
+                  setTadaRejectCode(REJECTION_REASON_CODES[0]);
+                  setTadaRejectRemarks("");
+                }}
+                disabled={tadaStatusMutation.isPending}
+              >
+                <XCircle className="h-3.5 w-3.5 mr-1" />
+                Reject
+              </Button>
+            </>
+          )}
+        </div>
+      ) : null,
+    }));
+  }, [tadaList, employeeLabelById, showTadaActions, canVerify, canApprove, tadaStatusMutation.isPending]);
+
+  const tadaSearchKeys = useMemo(() => {
+    const keys = ["employeeLabel", "travelDate", "purpose", "status", "rejectionSnippet", "dvReturnSnippet"];
+    return keys;
+  }, []);
+
   if (isError) {
     return (
       <AppShell breadcrumbs={[{ label: "HR", href: "/hr/employees" }, { label: "Claims" }]}>
@@ -151,34 +277,15 @@ export default function HrClaims() {
             {ltcLoading ? (
               <Skeleton className="h-32 w-full" />
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Employee</TableHead>
-                    <TableHead>Claim date</TableHead>
-                    <TableHead>Period</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {ltcList.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-muted-foreground text-center py-6">No LTC claims.</TableCell>
-                    </TableRow>
-                  ) : (
-                    ltcList.map((c) => (
-                      <TableRow key={c.id}>
-                        <TableCell>{employeeLabelById[c.employeeId] ?? c.employeeId}</TableCell>
-                        <TableCell>{c.claimDate}</TableCell>
-                        <TableCell>{c.period ?? "—"}</TableCell>
-                        <TableCell className="text-right">₹{c.amount.toLocaleString()}</TableCell>
-                        <TableCell><Badge variant="secondary">{c.status}</Badge></TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+              <ClientDataGrid
+                columns={ltcColumns}
+                sourceRows={ltcRows}
+                searchKeys={["employeeLabel", "claimDate", "period", "status"]}
+                searchPlaceholder="Search LTC claims…"
+                defaultSortKey="claimDate"
+                defaultSortDir="desc"
+                emptyMessage="No LTC claims."
+              />
             )}
           </div>
           <div>
@@ -187,7 +294,8 @@ export default function HrClaims() {
               TA/DA claims
             </h3>
             <p className="text-sm text-muted-foreground mb-2">
-              Workflow: Pending (DO) → Verified (DV) → Approved or Rejected (DA). DV may return Verified → Pending with remarks.
+              Workflow: Pending (DO) → Verified (DV) → Approved or Rejected (DA). DV may return Verified → Pending with
+              remarks.
             </p>
             <div className="flex items-center gap-2 mb-3">
               <Checkbox
@@ -202,104 +310,16 @@ export default function HrClaims() {
             {tadaLoading ? (
               <Skeleton className="h-32 w-full" />
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Employee</TableHead>
-                    <TableHead>Travel date</TableHead>
-                    <TableHead>Purpose</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead>Status</TableHead>
-                    {showTadaActions && <TableHead className="w-[280px]">Actions</TableHead>}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {tadaList.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={showTadaActions ? 6 : 5} className="text-muted-foreground text-center py-6">No TA/DA claims.</TableCell>
-                    </TableRow>
-                  ) : (
-                    tadaList.map((c) => (
-                      <TableRow key={c.id}>
-                        <TableCell>{employeeLabelById[c.employeeId] ?? c.employeeId}</TableCell>
-                        <TableCell>{c.travelDate}</TableCell>
-                        <TableCell className="max-w-[200px] truncate">{c.purpose}</TableCell>
-                        <TableCell className="text-right">₹{c.amount.toLocaleString()}</TableCell>
-                        <TableCell>
-                          <div className="flex flex-col gap-1">
-                            <Badge variant="secondary">{c.status}</Badge>
-                            {c.status === "Rejected" && c.rejectionRemarks && (
-                              <span className="text-xs text-muted-foreground line-clamp-2" title={c.rejectionRemarks}>
-                                {c.rejectionReasonCode}: {c.rejectionRemarks}
-                              </span>
-                            )}
-                            {c.dvReturnRemarks && (
-                              <span className="text-xs text-muted-foreground line-clamp-2" title={c.dvReturnRemarks}>
-                                DV return: {c.dvReturnRemarks}
-                              </span>
-                            )}
-                          </div>
-                        </TableCell>
-                        {showTadaActions && (
-                          <TableCell className="flex flex-wrap gap-1">
-                            {canVerify && c.status === "Pending" && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => tadaStatusMutation.mutate({ id: c.id, status: "Verified" })}
-                                disabled={tadaStatusMutation.isPending}
-                              >
-                                <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-                                Verify
-                              </Button>
-                            )}
-                            {canVerify && c.status === "Verified" && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  setTadaReturnId(c.id);
-                                  setTadaReturnRemarks("");
-                                }}
-                                disabled={tadaStatusMutation.isPending}
-                              >
-                                <SendHorizontal className="h-3.5 w-3.5 mr-1" />
-                                Send back
-                              </Button>
-                            )}
-                            {canApprove && c.status === "Verified" && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="default"
-                                  onClick={() => tadaStatusMutation.mutate({ id: c.id, status: "Approved" })}
-                                  disabled={tadaStatusMutation.isPending}
-                                >
-                                  <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                                  Approve
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => {
-                                    setTadaRejectId(c.id);
-                                    setTadaRejectCode(REJECTION_REASON_CODES[0]);
-                                    setTadaRejectRemarks("");
-                                  }}
-                                  disabled={tadaStatusMutation.isPending}
-                                >
-                                  <XCircle className="h-3.5 w-3.5 mr-1" />
-                                  Reject
-                                </Button>
-                              </>
-                            )}
-                          </TableCell>
-                        )}
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+              <ClientDataGrid
+                columns={tadaColumns}
+                sourceRows={tadaRows}
+                searchKeys={tadaSearchKeys}
+                searchPlaceholder="Search TA/DA claims…"
+                defaultSortKey="travelDate"
+                defaultSortDir="desc"
+                resetPageDependency={tadaListUrl}
+                emptyMessage="No TA/DA claims."
+              />
             )}
           </div>
         </CardContent>

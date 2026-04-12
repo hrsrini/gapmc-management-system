@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import {
   Select,
   SelectContent,
@@ -74,6 +75,37 @@ export default function VouchersAdvances() {
     employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
   );
 
+  const columns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "_voucher", header: "Voucher", sortField: "voucherNoSort" },
+      { key: "employeeLabel", header: "Employee" },
+      { key: "purpose", header: "Purpose" },
+      { key: "_amount", header: "Amount", sortField: "amount" },
+      { key: "_recovered", header: "Recovered", sortField: "recoveredAmount" },
+      { key: "recoverySchedule", header: "Recovery schedule" },
+    ],
+    [],
+  );
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return advances.map((a) => ({
+      id: a.id,
+      voucherNoSort: voucherNoMap[a.voucherId] ?? a.voucherId,
+      _voucher: (
+        <Link href={`/vouchers/${a.voucherId}`} className="text-primary hover:underline font-mono text-sm">
+          {voucherNoMap[a.voucherId] ?? a.voucherId}
+        </Link>
+      ),
+      employeeLabel: employeeLabelById[a.employeeId] ?? a.employeeId,
+      purpose: a.purpose,
+      amount: a.amount,
+      _amount: `₹${a.amount.toLocaleString()}`,
+      recoveredAmount: a.recoveredAmount ?? 0,
+      _recovered: `₹${(a.recoveredAmount ?? 0).toLocaleString()}`,
+      recoverySchedule: a.recoverySchedule ?? "—",
+    }));
+  }, [advances, voucherNoMap, employeeLabelById]);
+
   return (
     <AppShell breadcrumbs={[{ label: "Vouchers", href: "/vouchers" }, { label: "Advance requests" }]}>
       <Card>
@@ -101,40 +133,15 @@ export default function VouchersAdvances() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Voucher</TableHead>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Purpose</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="text-right">Recovered</TableHead>
-                  <TableHead>Recovery schedule</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {advances.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-muted-foreground text-center py-8">No advance requests.</TableCell>
-                  </TableRow>
-                ) : (
-                  advances.map((a) => (
-                    <TableRow key={a.id}>
-                      <TableCell className="font-mono text-sm">
-                        <Link href={`/vouchers/${a.voucherId}`} className="text-primary hover:underline">
-                          {voucherNoMap[a.voucherId] ?? a.voucherId}
-                        </Link>
-                      </TableCell>
-                      <TableCell>{employeeLabelById[a.employeeId] ?? a.employeeId}</TableCell>
-                      <TableCell>{a.purpose}</TableCell>
-                      <TableCell className="text-right">₹{a.amount.toLocaleString()}</TableCell>
-                      <TableCell className="text-right">₹{(a.recoveredAmount ?? 0).toLocaleString()}</TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{a.recoverySchedule ?? "—"}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["voucherNoSort", "employeeLabel", "purpose", "recoverySchedule"]}
+              defaultSortKey="voucherNoSort"
+              defaultSortDir="desc"
+              emptyMessage="No advance requests."
+              resetPageDependency={listUrl}
+            />
           )}
         </CardContent>
       </Card>

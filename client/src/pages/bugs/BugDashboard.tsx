@@ -1,17 +1,12 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Bar,
@@ -52,10 +47,62 @@ function toChartData(obj: Record<string, number>) {
   }));
 }
 
+const recentAllColumns: ReportTableColumn[] = [
+  { key: "_ticketNo", header: "Ticket", sortField: "ticketNo" },
+  { key: "title", header: "Title" },
+  { key: "reporterName", header: "Reporter" },
+  { key: "_severity", header: "Severity", sortField: "severity" },
+  { key: "_status", header: "Status", sortField: "status" },
+];
+
+const recentMineColumns: ReportTableColumn[] = [
+  { key: "_ticketNo", header: "Ticket", sortField: "ticketNo" },
+  { key: "title", header: "Title" },
+  { key: "_severity", header: "Severity", sortField: "severity" },
+  { key: "_status", header: "Status", sortField: "status" },
+];
+
 export default function BugDashboard() {
   const { data, isLoading, isError, error } = useQuery<DashboardData>({
     queryKey: ["/api/bugs/dashboard"],
   });
+
+  const recentAllRows = useMemo((): Record<string, unknown>[] => {
+    if (!data) return [];
+    return data.recentAll.map((r) => ({
+      id: r.id,
+      ticketNo: r.ticketNo,
+      _ticketNo: (
+        <Link href={`/bugs/${r.id}`} className="text-primary hover:underline font-mono text-sm">
+          {r.ticketNo}
+        </Link>
+      ),
+      title: r.title,
+      reporterName: r.reporterName ?? "—",
+      severity: r.severity,
+      _severity: <Badge variant="outline">{r.severity}</Badge>,
+      status: r.status,
+      _status: <Badge variant="secondary">{r.status.replace(/_/g, " ")}</Badge>,
+    }));
+  }, [data]);
+
+  const recentMineRows = useMemo((): Record<string, unknown>[] => {
+    if (!data) return [];
+    return data.recentMine.map((r) => ({
+      id: r.id,
+      ticketNo: r.ticketNo,
+      _ticketNo: (
+        <Link href={`/bugs/${r.id}`} className="text-primary hover:underline font-mono text-sm">
+          {r.ticketNo}
+        </Link>
+      ),
+      title: r.title,
+      severity: r.severity,
+      _severity: <Badge variant="outline">{r.severity}</Badge>,
+      status: r.status,
+      _status: <Badge variant="secondary">{r.status.replace(/_/g, " ")}</Badge>,
+    }));
+  }, [data]);
 
   return (
     <AppShell
@@ -185,39 +232,14 @@ export default function BugDashboard() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Ticket</TableHead>
-                      <TableHead>Title</TableHead>
-                      <TableHead>Reporter</TableHead>
-                      <TableHead>Severity</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.recentAll.map((r) => (
-                      <TableRow key={r.id}>
-                        <TableCell className="font-mono text-sm">
-                          <Link href={`/bugs/${r.id}`} className="text-primary hover:underline">
-                            {r.ticketNo}
-                          </Link>
-                        </TableCell>
-                        <TableCell className="max-w-[200px] truncate">{r.title}</TableCell>
-                        <TableCell>{r.reporterName ?? "—"}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{r.severity}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">{r.status.replace(/_/g, " ")}</Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                {data.recentAll.length === 0 && (
-                  <p className="text-sm text-muted-foreground py-4">No tickets yet.</p>
-                )}
+                <ClientDataGrid
+                  columns={recentAllColumns}
+                  sourceRows={recentAllRows}
+                  searchKeys={["ticketNo", "title", "reporterName", "severity", "status"]}
+                  defaultSortKey="ticketNo"
+                  defaultSortDir="desc"
+                  emptyMessage="No tickets yet."
+                />
               </CardContent>
             </Card>
 
@@ -226,37 +248,14 @@ export default function BugDashboard() {
                 <CardTitle className="text-base">Recent — reported by me</CardTitle>
               </CardHeader>
               <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Ticket</TableHead>
-                      <TableHead>Title</TableHead>
-                      <TableHead>Severity</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.recentMine.map((r) => (
-                      <TableRow key={r.id}>
-                        <TableCell className="font-mono text-sm">
-                          <Link href={`/bugs/${r.id}`} className="text-primary hover:underline">
-                            {r.ticketNo}
-                          </Link>
-                        </TableCell>
-                        <TableCell className="max-w-[200px] truncate">{r.title}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{r.severity}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">{r.status.replace(/_/g, " ")}</Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                {data.recentMine.length === 0 && (
-                  <p className="text-sm text-muted-foreground py-4">You have not reported any bugs yet.</p>
-                )}
+                <ClientDataGrid
+                  columns={recentMineColumns}
+                  sourceRows={recentMineRows}
+                  searchKeys={["ticketNo", "title", "severity", "status"]}
+                  defaultSortKey="ticketNo"
+                  defaultSortDir="desc"
+                  emptyMessage="You have not reported any bugs yet."
+                />
               </CardContent>
             </Card>
           </>

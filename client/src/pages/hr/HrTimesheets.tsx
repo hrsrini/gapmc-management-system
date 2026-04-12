@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,18 +12,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter,
-} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { CalendarDays, AlertCircle, CheckCircle, Loader2, Plus } from "lucide-react";
+import { CalendarDays, AlertCircle, CheckCircle, Loader2 } from "lucide-react";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
 interface Timesheet {
   id: string;
@@ -42,6 +34,17 @@ interface Employee {
   firstName: string;
   surname: string;
 }
+
+const columns: ReportTableColumn[] = [
+  { key: "periodStart", header: "Period start" },
+  { key: "periodEnd", header: "Period end" },
+  { key: "employeeLabel", header: "Employee" },
+  { key: "totalAttendance", header: "Attendance", sortField: "totalAttendanceNum" },
+  { key: "totalTimesheet", header: "Timesheet hrs", sortField: "totalTimesheetNum" },
+  { key: "_status", header: "Status", sortField: "status" },
+  { key: "validatedBy", header: "Validated by" },
+  { key: "_actions", header: "Actions" },
+];
 
 export default function HrTimesheets() {
   const [employeeId, setEmployeeId] = useState("all");
@@ -87,7 +90,13 @@ export default function HrTimesheets() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (body: { employeeId: string; periodStart: string; periodEnd: string; totalAttendance?: number | null; totalTimesheet?: number | null }) => {
+    mutationFn: async (body: {
+      employeeId: string;
+      periodStart: string;
+      periodEnd: string;
+      totalAttendance?: number | null;
+      totalTimesheet?: number | null;
+    }) => {
       const res = await fetch("/api/hr/timesheets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -125,6 +134,42 @@ export default function HrTimesheets() {
     });
   };
 
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return list.map((t) => ({
+      id: t.id,
+      periodStart: t.periodStart,
+      periodEnd: t.periodEnd,
+      employeeLabel: employeeLabelById[t.employeeId] ?? t.employeeId,
+      totalAttendance: t.totalAttendance ?? "—",
+      totalTimesheet: t.totalTimesheet ?? "—",
+      totalAttendanceNum: t.totalAttendance ?? null,
+      totalTimesheetNum: t.totalTimesheet ?? null,
+      status: t.status,
+      validatedBy: t.validatedBy ?? "—",
+      _status: (
+        <Badge variant={t.status === "Validated" ? "default" : "secondary"}>{t.status}</Badge>
+      ),
+      _actions:
+        t.status === "Draft" ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => validateMutation.mutate(t.id)}
+            disabled={validateMutation.isPending}
+          >
+            {validateMutation.isPending && validateMutation.variables === t.id ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle className="h-4 w-4 mr-1" />
+            )}
+            Validate
+          </Button>
+        ) : (
+          <span className="text-muted-foreground text-sm">—</span>
+        ),
+    }));
+  }, [list, employeeLabelById, validateMutation.isPending, validateMutation.variables]);
+
   if (isError) {
     return (
       <AppShell breadcrumbs={[{ label: "HR", href: "/hr/employees" }, { label: "Timesheets" }]}>
@@ -156,7 +201,9 @@ export default function HrTimesheets() {
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
                 {employees.map((e) => (
-                  <SelectItem key={e.id} value={e.id}>{e.empId ?? e.id} — {e.firstName} {e.surname}</SelectItem>
+                  <SelectItem key={e.id} value={e.id}>
+                    {e.empId ?? e.id} — {e.firstName} {e.surname}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -166,52 +213,22 @@ export default function HrTimesheets() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Period start</TableHead>
-                  <TableHead>Period end</TableHead>
-                  <TableHead>Employee</TableHead>
-                  <TableHead className="text-right">Attendance</TableHead>
-                  <TableHead className="text-right">Timesheet hrs</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Validated by</TableHead>
-                  <TableHead className="w-[100px]">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {list.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-muted-foreground text-center py-6">No timesheets.</TableCell>
-                  </TableRow>
-                ) : (
-                  list.map((t) => (
-                    <TableRow key={t.id}>
-                      <TableCell>{t.periodStart}</TableCell>
-                      <TableCell>{t.periodEnd}</TableCell>
-                      <TableCell>{employeeLabelById[t.employeeId] ?? t.employeeId}</TableCell>
-                      <TableCell className="text-right">{t.totalAttendance ?? "—"}</TableCell>
-                      <TableCell className="text-right">{t.totalTimesheet ?? "—"}</TableCell>
-                      <TableCell><Badge variant={t.status === "Validated" ? "default" : "secondary"}>{t.status}</Badge></TableCell>
-                      <TableCell>{t.validatedBy ?? "—"}</TableCell>
-                      <TableCell>
-                        {t.status === "Draft" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => validateMutation.mutate(t.id)}
-                            disabled={validateMutation.isPending}
-                          >
-                            {validateMutation.isPending && validateMutation.variables === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4 mr-1" />}
-                            Validate
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={[
+                "periodStart",
+                "periodEnd",
+                "employeeLabel",
+                "status",
+                "validatedBy",
+              ]}
+              searchPlaceholder="Search by period, employee, status…"
+              defaultSortKey="periodStart"
+              defaultSortDir="desc"
+              resetPageDependency={url}
+              emptyMessage="No timesheets."
+            />
           )}
         </CardContent>
       </Card>

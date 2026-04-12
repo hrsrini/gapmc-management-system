@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -97,6 +98,30 @@ export default function TraderBlockingLog() {
     onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
   });
 
+  const columns = useMemo((): ReportTableColumn[] => {
+    return [
+      { key: "licenceLabel", header: "Licence" },
+      { key: "_action", header: "Action", sortField: "action" },
+      { key: "reason", header: "Reason" },
+      { key: "actionedBy", header: "Actioned by" },
+      { key: "actionedAt", header: "Actioned at" },
+    ];
+  }, []);
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return log.map((entry) => ({
+      id: entry.id,
+      licenceLabel: licenceLabelById[entry.traderLicenceId] ?? entry.traderLicenceId,
+      action: entry.action,
+      _action: (
+        <Badge variant={entry.action === "Blocked" ? "destructive" : "default"}>{entry.action}</Badge>
+      ),
+      reason: entry.reason,
+      actionedBy: entry.actionedBy,
+      actionedAt: entry.actionedAt,
+    }));
+  }, [log, licenceLabelById]);
+
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
     createMutation.mutate({
@@ -188,36 +213,16 @@ export default function TraderBlockingLog() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Licence</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Reason</TableHead>
-                  <TableHead>Actioned by</TableHead>
-                  <TableHead>Actioned at</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {log.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-muted-foreground text-center py-8">No blocking log entries.</TableCell>
-                  </TableRow>
-                ) : (
-                  log.map((entry) => (
-                    <TableRow key={entry.id}>
-                      <TableCell>{licenceLabelById[entry.traderLicenceId] ?? entry.traderLicenceId}</TableCell>
-                      <TableCell>
-                        <Badge variant={entry.action === "Blocked" ? "destructive" : "default"}>{entry.action}</Badge>
-                      </TableCell>
-                      <TableCell>{entry.reason}</TableCell>
-                      <TableCell>{entry.actionedBy}</TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{entry.actionedAt}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["licenceLabel", "action", "reason", "actionedBy", "actionedAt"]}
+              searchPlaceholder="Search licence, action, reason, user, date…"
+              defaultSortKey="actionedAt"
+              defaultSortDir="desc"
+              resetPageDependency={listUrl}
+              emptyMessage="No blocking log entries."
+            />
           )}
         </CardContent>
       </Card>

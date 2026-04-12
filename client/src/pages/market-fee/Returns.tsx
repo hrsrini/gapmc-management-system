@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -14,6 +14,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ClientDataGrid } from '@/components/reports/ClientDataGrid';
+import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
+import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { ClipboardList, Save, Send, AlertCircle, Database } from 'lucide-react';
 import { COMMODITIES } from '@/data/yards';
@@ -98,6 +101,41 @@ export default function Returns() {
   });
 
   const selectedTrader = (traders ?? []).find(t => t.id === selectedTraderId);
+
+  const submittedReturnColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: 'traderName', header: 'Trader' },
+      { key: 'period', header: 'Period' },
+      { key: 'commodity', header: 'Commodity' },
+      { key: 'openingBalance', header: 'Opening' },
+      { key: 'locallyProcured', header: 'Locally procured' },
+      { key: 'purchasedFromTrader', header: 'Purchased' },
+      { key: 'sales', header: 'Sales' },
+      { key: 'closingBalance', header: 'Closing' },
+      { key: '_status', header: 'Status', sortField: 'status' },
+    ],
+    [],
+  );
+
+  const submittedReturnRows = useMemo((): Record<string, unknown>[] => {
+    return submittedReturns.map((r) => ({
+      id: r.id,
+      traderName: r.traderName,
+      period: r.period ?? '',
+      commodity: r.commodity,
+      openingBalance: Number(r.openingBalance ?? 0),
+      locallyProcured: Number(r.locallyProcured ?? 0),
+      purchasedFromTrader: Number(r.purchasedFromTrader ?? 0),
+      sales: Number(r.sales ?? 0),
+      closingBalance: Number(r.closingBalance ?? 0),
+      status: r.status ?? '',
+      _status: (
+        <Badge variant="outline" className={r.status === 'Submitted' ? 'bg-accent/10 text-accent border-accent/20' : ''}>
+          {r.status}
+        </Badge>
+      ),
+    }));
+  }, [submittedReturns]);
 
   const updateEntry = (index: number, field: keyof ReturnEntry, value: number) => {
     setEntries(prev => {
@@ -228,42 +266,14 @@ export default function Returns() {
                 </Button>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Trader</TableHead>
-                      <TableHead>Period</TableHead>
-                      <TableHead>Commodity</TableHead>
-                      <TableHead className="text-right">Opening</TableHead>
-                      <TableHead className="text-right">Locally procured</TableHead>
-                      <TableHead className="text-right">Purchased</TableHead>
-                      <TableHead className="text-right">Sales</TableHead>
-                      <TableHead className="text-right">Closing</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {submittedReturns.map((r) => (
-                      <TableRow key={r.id}>
-                        <TableCell className="font-medium">{r.traderName}</TableCell>
-                        <TableCell>{r.period}</TableCell>
-                        <TableCell>{r.commodity}</TableCell>
-                        <TableCell className="text-right">{Number(r.openingBalance ?? 0)}</TableCell>
-                        <TableCell className="text-right">{Number(r.locallyProcured ?? 0)}</TableCell>
-                        <TableCell className="text-right">{Number(r.purchasedFromTrader ?? 0)}</TableCell>
-                        <TableCell className="text-right">{Number(r.sales ?? 0)}</TableCell>
-                        <TableCell className="text-right font-medium">{Number(r.closingBalance ?? 0)}</TableCell>
-                        <TableCell>
-                          <span className={`text-xs font-medium px-2 py-0.5 rounded ${r.status === 'Submitted' ? 'bg-accent/10 text-accent' : 'bg-muted text-muted-foreground'}`}>
-                            {r.status}
-                          </span>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+              <ClientDataGrid
+                columns={submittedReturnColumns}
+                sourceRows={submittedReturnRows}
+                searchKeys={['traderName', 'period', 'commodity', 'status']}
+                defaultSortKey="period"
+                defaultSortDir="desc"
+                emptyMessage="No submitted returns."
+              />
             )}
           </CardContent>
         </Card>

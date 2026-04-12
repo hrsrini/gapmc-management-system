@@ -1,8 +1,10 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -32,6 +34,17 @@ interface Yard {
   name: string;
 }
 
+const columns: ReportTableColumn[] = [
+  { key: "_assetId", header: "Asset ID", sortField: "assetIdSort" },
+  { key: "yardName", header: "Yard" },
+  { key: "assetType", header: "Type" },
+  { key: "complexName", header: "Complex" },
+  { key: "previousAllottee", header: "Previous allottee" },
+  { key: "vacatedOn", header: "Vacated on" },
+  { key: "daUser", header: "Officer (DA)" },
+  { key: "_lastRent", header: "Last rent", sortField: "lastRentSort" },
+];
+
 export default function AssetsVacant() {
   const yardId = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("yardId") ?? "";
 
@@ -55,6 +68,30 @@ export default function AssetsVacant() {
     else url.searchParams.delete("yardId");
     window.location.href = url.pathname + url.search;
   };
+
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (vacant ?? []).map((row) => {
+      const toDate = row.lastAllotment?.toDate;
+      return {
+        id: row.asset.id,
+        assetIdSort: row.asset.assetId,
+        _assetId: (
+          <Link href={`/assets`} className="text-primary hover:underline font-mono text-sm">
+            {row.asset.assetId}
+          </Link>
+        ),
+        yardName: yardById[row.asset.yardId] ?? row.asset.yardId,
+        assetType: row.asset.assetType,
+        complexName: row.asset.complexName ?? "—",
+        previousAllottee: row.lastAllotment?.allotteeName ?? "—",
+        vacatedOn: toDate ? toDate.slice(0, 10) : "—",
+        daUser: row.lastAllotment?.daUser ?? "—",
+        lastRentSort: row.lastRentAmount ?? null,
+        _lastRent:
+          row.lastRentAmount != null ? `₹${row.lastRentAmount.toLocaleString()}` : "—",
+      };
+    });
+  }, [vacant, yardById]);
 
   if (isError) {
     return (
@@ -89,7 +126,9 @@ export default function AssetsVacant() {
             <SelectContent>
               <SelectItem value="all">All yards</SelectItem>
               {(yards ?? []).map((y) => (
-                <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>
+                <SelectItem key={y.id} value={y.id}>
+                  {y.name}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -98,46 +137,15 @@ export default function AssetsVacant() {
           {isLoading ? (
             <Skeleton className="h-64 w-full" />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Asset ID</TableHead>
-                  <TableHead>Yard</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Complex</TableHead>
-                  <TableHead>Previous allottee</TableHead>
-                  <TableHead>Vacated on</TableHead>
-                  <TableHead>Officer (DA)</TableHead>
-                  <TableHead>Last rent</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(vacant ?? []).length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-muted-foreground text-center py-8">
-                      No vacant assets.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  (vacant ?? []).map((row) => (
-                    <TableRow key={row.asset.id}>
-                      <TableCell className="font-mono text-sm">
-                        <Link href={`/assets`} className="text-primary hover:underline">{row.asset.assetId}</Link>
-                      </TableCell>
-                      <TableCell>{yardById[row.asset.yardId] ?? row.asset.yardId}</TableCell>
-                      <TableCell>{row.asset.assetType}</TableCell>
-                      <TableCell>{row.asset.complexName ?? "—"}</TableCell>
-                      <TableCell>{row.lastAllotment?.allotteeName ?? "—"}</TableCell>
-                      <TableCell>{row.lastAllotment?.toDate ?? "—"}</TableCell>
-                      <TableCell>{row.lastAllotment?.daUser ?? "—"}</TableCell>
-                      <TableCell>
-                        {row.lastRentAmount != null ? `₹${row.lastRentAmount.toLocaleString()}` : "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              searchKeys={["assetIdSort", "yardName", "assetType", "complexName", "previousAllottee", "vacatedOn", "daUser"]}
+              defaultSortKey="vacatedOn"
+              defaultSortDir="desc"
+              emptyMessage="No vacant assets."
+              resetPageDependency={yardId}
+            />
           )}
         </CardContent>
       </Card>

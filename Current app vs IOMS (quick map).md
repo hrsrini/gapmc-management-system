@@ -2,48 +2,35 @@
 
 | IOMS module | In current GAPMC app | Gap |
 |-------------|----------------------|-----|
-| **M-01 HRMS** | — | New. No employee, attendance, leave, service book, TA/DA, CGEGIS, retirement. |
-| **M-02 Trader & Asset** | Traders, agreements, yards (client-side list). | No licence lifecycle, eKYC, asset register, shop allotment, blocking log, MSP settings, 14 yards/check posts as DB master. |
-| **M-03 Rent / GST** | Invoices, rent, GST. | No auto-generation on 1st, no Govt Track B, no credit note workflow, no GSTR-1 export, no rent deposit ledger as described. |
-| **M-04 Market Fee** | Fee collection, import/export, stock returns. | No commodity master in DB, no check post inward/outward, no exit permit, no weighbridge, no MSP, no purchase entity/farmer. |
-| **M-05 Receipts** | Receipt list/form, receipt types. | No unified receipt engine, no GAPLMB/[LOC]/[FY]/[HEAD]/[NNN], no online gateway, no QR PDF. |
-| **M-06 Payment Voucher** | — | New. Expenditure, advances, DO→DV→DA. |
-| **M-07 Fleet** | — | New. Vehicle master, log, fuel, maintenance. |
-| **M-08 Construction** | — | New. Works, AMC, land, fixed assets. |
-| **M-09 Correspondence** | — | New. Inward/outward dak, action, escalation. |
-| **M-10 RBAC & Admin** | Simple login (admin hardcoded). | No roles (DO/DV/DA), no location scope, no permission matrix, no SLA, no full audit log. |
+| **M-01 HRMS** | **Implemented:** employee register (Draft/Submitted → DA **EMP-ID** approval BR-EMP-06), detail + **Login & roles**; **leave** DO→DV→DA + pending-my-action; **claims** (LTC / TA-DA) workflow UI; attendance + timesheets screens; recruitment; service book + contracts APIs (partial UI depth vs SRS); retirement **cron** + dashboard card; **user disable** on separation. | **Residual:** Aadhaar **eKYC** (out of scope); **CGEGIS** on hold; consolidated HR **report pack** / staff exports beyond current APIs; SRS **3-tab** employee form + photo gallery parity if still required. |
+| **M-02 Trader & Asset** | **IOMS:** `trader_licences` lifecycle DO→DV→DA; detail (**non-GST**, stock openings); **assistants** tied to active primary; **assets**, **allotments**, **vacant**; **blocking log**; **MSP** settings; **licence expiry cron**; yards/check posts in **DB** (seed). **Legacy:** trader directory, agreements (parallel paths). | **Residual:** **Trader portal** online application **Phase 2**; **eKYC**/document upload depth per SRS; optional **portal** self-service. |
+| **M-03 Rent / GST** | **IOMS:** rent **invoices** workflow; **credit notes** (rules on Approved / not Paid); **rent deposit ledger**; **GSTR-1** JSON export; **monthly draft cron**; govt / exempt / **non-GST tenant** zero-GST handling; **legacy** rent invoice screens may remain for regression. | **Residual:** **TDS** rules and ledger treatment (**client pending**); **GSTR-1** filing scope per yard vs HO (**client**); live **payment gateway**; branded **server PDF** if mandated; interest formula for dishonoured cheques (**client**). |
+| **M-04 Market Fee** | **IOMS:** **commodities**, **fee rates**, **farmers** (Krishi card + location fields); **purchase transactions** DO→DV→DA + **adjustments** on approved parent; **check post** inward/outward, exit permits, bank deposits; **IOMS reports** (e.g. arrivals vs passway/transit); **manual weight** only (no device API). **Legacy:** fee collection, import/export, stock returns. | **Residual:** **Weighbridge device** integration; **offline** check-post queue if required; some **periodic / SRS** report slices; market-fee **policy** items in client clarification list. |
+| **M-05 Receipts** | **IOMS:** central engine **`GAPLMB/[LOC]/[FY]/[HEAD]/[NNN]`**; list/detail; **QR** + **public verify** (can be disabled via env); **reconciliation**; Phase 1 **Cash / Cheque / DD**; **cheque dishonour** → status **Reversed** + audit (rent/interest recalc **formula pending**); optional webhook **HMAC**. **Legacy:** older receipt list/form still available. | **Residual:** **Payment gateway** live; **~64 legacy types → six heads** sign-off; **public verify** production policy; **server vs print** PDF policy. |
+| **M-06 Payment Voucher** | **Implemented:** **expenditure heads**; **payment vouchers** DO→DV→DA + pending-my-action; **advances** register; **monthly statement** JSON/CSV/XLSX/**PDF**; yard scope + audit. | **Residual:** **Salary** computed where (M-01 vs M-06) — **client**; **supporting docs** storage (disk vs S3 vs DMS); **budget caps** — **client**; payroll **advance recovery** explicitly **out of scope** per client. |
+| **M-07 Fleet** | **Implemented:** **vehicles** CRUD; **trips**, **fuel**, **maintenance**; renewal / alert **banner** + APIs; links to vouchers where wired. | **Residual:** **Fuel** model (per trip vs central store) — **client**; **maintenance** rule (km vs calendar vs both) — **client**. |
+| **M-08 Construction** | **Implemented:** **works** + bills; **AMC** contracts/bills + optional **monthly bill cron**; **land** register create + **DA/Admin PUT** corrections (audited); **fixed assets** + **DA/Admin disposal**; renewal/digest **crons** with notify stub. | **Residual:** **Works / tendering** scope (internal-only until client lifts); **AMC** cadence sign-off; **depreciation** manual in first release (by design); optional **land** DB immutability triggers vs API behaviour — verify env. |
+| **M-09 Correspondence** | **Implemented:** **Dak inward** (filters, **subject** query, **auto diary number** when blank, `dak_diary_sequence_scope`); **outward**; **my pending**, **escalations**, **subject index**; **SLA** overdue banner + **SLA report**; hourly **escalation** persistence; assignee-based escalation target. | **Residual:** **Scan** storage (project vs DMS); **outward letterhead** template owner; **diary numbering** policy (per yard vs central) production confirm; full **UC-COR** state names vs simplified model — document gaps in UAT. |
+| **M-10 RBAC & Admin** | **Implemented:** session login; tiers DO / DV / DA / READ_ONLY / ADMIN; **permission matrix** (module × action); **yard/location scope** (`user_yards`); **system_config**, **sla_config**; **audit_log**; admin UI for roles, matrix, locations, config, audit, SLA, finance mappings. **App user provisioning is HR-only** (no `/admin/users`): **`/hr/employees/{id}` → Login & roles** + `POST`/`PUT` `/api/hr/employees/:id/login`. | **Residual:** maker–checker on sensitive config if SRS mandates; government SSO/IdP if required later; formal password-reset policy per SRS. |
 
-So you need: **cross-cutting workflow + RBAC first**, then **extend existing modules**, then **add new modules**.
+**Roadmap:** **M-10** and **M-01–M-09** above reflect **delivered vs residual** in the repo (refresh aligned with `docs/IMPLEMENTATION-PLAN.md` and `docs/test_plan.csv`). Use those docs and **`docs/CLIENT-CLARIFICATION-PENDING.md`** for open client decisions.
+
+### Further pointers (M-10 identity)
+
+The **module table** is the summary; use this for routes and files that are easy to miss in UAT:
+
+- **There is no `/admin/users` page.** Application logins are **provisioned only from HR**: **`/hr/employees/{id}` → Login & roles** (`client/src/components/hr/EmployeeLoginAccessSection.tsx`), using **`POST` / `PUT` `/api/hr/employees/:id/login`** and **`GET` `/api/hr/employees/:id/login-profile`** (`server/routes-hr.ts`). `server/routes-admin.ts` does **not** expose standalone user CRUD.
+- **Admin (M-10) screens** (governance, not end-user list): **`/admin/roles`**, **`/admin/permissions`**, **`/admin/locations`**, **`/admin/config`**, **`/admin/audit`**, **`/admin/sla-config`**, **`/admin/finance-mappings`**.
 
 ---
 
 ## 2. Cross-cutting: do these first
 
-All modules assume:
+**Already in place in this repo:** RBAC (M-10), yard/location scope, audit log, and the common **DO → DV → DA** workflow pattern are the foundation for all modules.
 
-- **Three-tier approval:** DO (create/edit) → DV (verify) → DA (approve). Record is “draft” until DA approves.
-- **RBAC (M-10):** Users have role (DO/DV/DA/Admin/Read-only) and **location scope** (which yards/HO they can see).
-- **Audit:** Every state change stored (who, when, before/after, IP).
-
-**Suggested approach:**
-
-1. **DB**
-   - `gapmc.users` (or reuse/extend auth): user id, login, role (DO/DV/DA/Admin/ReadOnly), employee_id (nullable, for M-01 link later).
-   - `gapmc.user_locations`: user_id, location_id (yard/HO).
-   - `gapmc.locations`: id, code, name, type (Yard/CheckPost/HO), address, etc. (move from client `yards.ts` into DB).
-   - `gapmc.audit_log`: table_name, record_id, action, user_id, old_value (jsonb), new_value (jsonb), ip, created_at.
-   - `gapmc.workflow_state`: optional; or add `status` + `approved_by` + `approved_at` on each transactional table.
-
-2. **Backend**
-   - Middleware: resolve user from session/JWT, attach `user` and `scopedLocationIds` to `req`.
-   - Helper: “can user in role X perform action Y on this record?” (and optionally “in this location?”).
-   - On every create/update/delete of business data: insert into `audit_log`; enforce “only DO can create draft”, “only DV can move to verified”, “only DA can approve”.
-
-3. **Frontend**
-   - Route guard: allow access by role + location (e.g. hide “Approve” unless DA, hide other yards unless Admin).
-   - Lists/filters: restrict to `scopedLocationIds` (and optionally “pending my action” for DV/DA).
-
-Once this is in place, every new module can use the same pattern: status (Draft → Verified → Approved), approval fields, and audit.
+- **Build & dependency order**: `docs/IMPLEMENTATION-PLAN.md`
+- **Module-by-module UAT execution + checklist**: `docs/test_plan.csv` (exportable to Excel)
+- **Client decisions still pending (policy/master data)**: `docs/CLIENT-CLARIFICATION-PENDING.md`
 
 ---
 

@@ -233,18 +233,34 @@ export default function BugDetail() {
                 Attachments
               </CardTitle>
             </CardHeader>
-            <CardContent className="flex flex-wrap gap-2">
-              {data.attachments.map((a) => (
-                <a
-                  key={a.id}
-                  href={`/api/bugs/${t.id}/attachments/${a.id}/download`}
-                  className="text-sm text-primary underline-offset-4 hover:underline"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {a.originalFilename}
-                </a>
-              ))}
+            <CardContent className="space-y-2">
+              {data.attachments.map((a) => {
+                const base = `/api/bugs/${t.id}/attachments/${a.id}/download`;
+                const viewUrl = `${base}?inline=1`;
+                return (
+                  <div key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                    <span className="font-medium truncate max-w-[200px]" title={a.originalFilename}>
+                      {a.originalFilename}
+                    </span>
+                    <a
+                      href={viewUrl}
+                      className="text-primary underline-offset-4 hover:underline"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View
+                    </a>
+                    <span className="text-muted-foreground">·</span>
+                    <a
+                      href={base}
+                      className="text-primary underline-offset-4 hover:underline"
+                      download={a.originalFilename}
+                    >
+                      Download
+                    </a>
+                  </div>
+                );
+              })}
             </CardContent>
           </Card>
         )}
