@@ -24,6 +24,7 @@ import { SYSTEM_CONFIG_KEYS } from "@shared/system-config-defaults";
 import { getMergedSystemConfig } from "./system-config";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
+import { HrEmployeeRuleError, normalizeMobile10 } from "./hr-employee-rules";
 
 export function registerAdminRoutes(app: Express) {
   const now = () => new Date().toISOString();
@@ -45,6 +46,15 @@ export function registerAdminRoutes(app: Express) {
       if (!name || !code || !type) {
         return sendApiError(res, 400, "ADMIN_YARD_FIELDS_REQUIRED", "name, code, type required");
       }
+      let mobileNorm: string | null;
+      try {
+        mobileNorm = normalizeMobile10(mobile ?? null);
+      } catch (e) {
+        if (e instanceof HrEmployeeRuleError) {
+          return sendApiError(res, 400, e.code, e.message);
+        }
+        throw e;
+      }
       const id = nanoid();
       await db.insert(yards).values({
         id,
@@ -52,7 +62,7 @@ export function registerAdminRoutes(app: Express) {
         code: String(code),
         type: String(type),
         phone: phone ? String(phone) : null,
-        mobile: mobile ? String(mobile) : null,
+        mobile: mobileNorm,
         address: address ? String(address) : null,
         isActive: true,
       });
@@ -72,12 +82,25 @@ export function registerAdminRoutes(app: Express) {
       const id = req.params.id;
       const [before] = await db.select().from(yards).where(eq(yards.id, id)).limit(1);
       const { name, code, type, phone, mobile, address, isActive } = req.body;
+      let mobilePatch: { mobile: string | null } | null = null;
+      if (mobile !== undefined) {
+        try {
+          mobilePatch = {
+            mobile: normalizeMobile10(mobile == null || String(mobile).trim() === "" ? null : mobile),
+          };
+        } catch (e) {
+          if (e instanceof HrEmployeeRuleError) {
+            return sendApiError(res, 400, e.code, e.message);
+          }
+          throw e;
+        }
+      }
       await db.update(yards).set({
         ...(name != null && { name: String(name) }),
         ...(code != null && { code: String(code) }),
         ...(type != null && { type: String(type) }),
         ...(phone !== undefined && { phone: phone ? String(phone) : null }),
-        ...(mobile !== undefined && { mobile: mobile ? String(mobile) : null }),
+        ...(mobilePatch ?? {}),
         ...(address !== undefined && { address: address ? String(address) : null }),
         ...(isActive !== undefined && { isActive: Boolean(isActive) }),
       }).where(eq(yards.id, id));

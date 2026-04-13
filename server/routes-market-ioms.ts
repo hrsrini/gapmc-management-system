@@ -4,7 +4,7 @@
  * check_post_inward, check_post_inward_commodities, check_post_outward, exit_permits, check_post_bank_deposits.
  * Does not touch existing gapmc.market_fees (live table).
  */
-import type { Express } from "express";
+import type { Express, Response } from "express";
 import { eq, desc, and, or, inArray, sql } from "drizzle-orm";
 import { db } from "./db";
 import {
@@ -30,9 +30,18 @@ import {
 } from "./workflow";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
+import { HrEmployeeRuleError, normalizeAadhaarMasked, normalizeMobile10 } from "./hr-employee-rules";
 import { validateDvReturnToDraft } from "@shared/workflow-rejection";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
+
+function sendHrRule(res: Response, e: unknown): boolean {
+  if (e instanceof HrEmployeeRuleError) {
+    sendApiError(res, 400, e.code, e.message);
+    return true;
+  }
+  return false;
+}
 
 export function registerMarketIomsRoutes(app: Express) {
   const isScopedCheckPost = (req: { scopedLocationIds?: string[] }, checkPostId: string) => {
@@ -171,6 +180,15 @@ export function registerMarketIomsRoutes(app: Express) {
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
         return sendApiError(res, 403, "IOMS_MARKET_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
+      let aadhaarNorm: string | null;
+      let mobileNorm: string | null;
+      try {
+        aadhaarNorm = normalizeAadhaarMasked(body.aadhaarToken ?? null);
+        mobileNorm = normalizeMobile10(body.mobile ?? null);
+      } catch (e) {
+        if (sendHrRule(res, e)) return;
+        throw e;
+      }
       const id = nanoid();
       await db.insert(farmers).values({
         id,
@@ -180,8 +198,8 @@ export function registerMarketIomsRoutes(app: Express) {
         village: body.village ? String(body.village) : null,
         taluk: body.taluk ? String(body.taluk) : null,
         district: body.district ? String(body.district) : null,
-        mobile: body.mobile ? String(body.mobile) : null,
-        aadhaarToken: body.aadhaarToken ? String(body.aadhaarToken) : null,
+        mobile: mobileNorm,
+        aadhaarToken: aadhaarNorm,
       });
       const [row] = await db.select().from(farmers).where(eq(farmers.id, id));
       if (row) writeAuditLog(req, { module: "Market", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -203,9 +221,31 @@ export function registerMarketIomsRoutes(app: Express) {
       }
       const body = req.body;
       const updates: Record<string, unknown> = {};
-      ["name", "yardId", "krishiCardNo", "village", "taluk", "district", "mobile", "aadhaarToken"].forEach((k) => {
+      ["name", "yardId", "krishiCardNo", "village", "taluk", "district"].forEach((k) => {
         if (body[k] !== undefined) updates[k] = body[k] == null ? null : String(body[k]);
       });
+      if (body.mobile !== undefined) {
+        try {
+          updates.mobile = normalizeMobile10(
+            body.mobile == null || String(body.mobile).trim() === "" ? null : String(body.mobile),
+          );
+        } catch (e) {
+          if (sendHrRule(res, e)) return;
+          throw e;
+        }
+      }
+      if (body.aadhaarToken !== undefined) {
+        try {
+          updates.aadhaarToken = normalizeAadhaarMasked(
+            body.aadhaarToken == null || String(body.aadhaarToken).trim() === ""
+              ? null
+              : String(body.aadhaarToken),
+          );
+        } catch (e) {
+          if (sendHrRule(res, e)) return;
+          throw e;
+        }
+      }
       if (updates.yardId && scopedIds && scopedIds.length > 0 && !scopedIds.includes(updates.yardId as string)) {
         return sendApiError(res, 403, "IOMS_MARKET_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }

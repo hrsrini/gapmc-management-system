@@ -21,7 +21,12 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
 import { ArrowLeft, FileCheck, Loader2, AlertCircle } from "lucide-react";
-import { isValidEmailFormat, isStrictAadhaar12Digits, parseIndianMobile10Digits } from "@shared/india-validation";
+import {
+  isValidEmailFormat,
+  isStrictAadhaar12Digits,
+  parseIndianMobile10Digits,
+  sanitizeMobile10Input,
+} from "@shared/india-validation";
 
 const LICENCE_TYPES = ["Associated", "Functionary", "Hamali", "Weighman", "AssistantTrader"] as const;
 
@@ -82,7 +87,8 @@ export default function TraderLicenceForm() {
   const [mobile, setMobile] = useState("");
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
-  const [aadhaar, setAadhaar] = useState("");
+  /** New application: optional 12-digit Aadhaar. Edit: optional replacement only (empty = keep stored value). */
+  const [aadhaarInput, setAadhaarInput] = useState("");
   const [pan, setPan] = useState("");
   const [gstin, setGstin] = useState("");
   const [licenceType, setLicenceType] = useState<string>(LICENCE_TYPES[0]!);
@@ -104,10 +110,10 @@ export default function TraderLicenceForm() {
     setFirmType(licence.firmType ?? "");
     setYardId(licence.yardId ?? "");
     setContactName(licence.contactName ?? "");
-    setMobile(licence.mobile ?? "");
+    setMobile(sanitizeMobile10Input(licence.mobile ?? ""));
     setEmail(licence.email ?? "");
     setAddress(licence.address ?? "");
-    setAadhaar(licence.aadhaarToken ?? "");
+    setAadhaarInput("");
     setPan(licence.pan ?? "");
     setGstin(licence.gstin ?? "");
     setLicenceType(licence.licenceType || LICENCE_TYPES[0]!);
@@ -117,11 +123,12 @@ export default function TraderLicenceForm() {
     setNonGst(Boolean(licence.isNonGstEntity));
   }, [licence]);
 
-  const buildPayload = (status: "Draft" | "Pending") => {
+  const buildPayload = (status: "Draft" | "Pending"): Record<string, unknown> => {
     const mobileDigits = parseIndianMobile10Digits(mobile);
     const fee =
       feeAmount.trim() === "" ? null : Number(feeAmount);
-    return {
+    const aTrim = aadhaarInput.trim();
+    const base: Record<string, unknown> = {
       firmName: firmName.trim(),
       firmType: firmType.trim() || null,
       yardId,
@@ -129,7 +136,6 @@ export default function TraderLicenceForm() {
       mobile: mobileDigits,
       email: email.trim() ? email.trim().toLowerCase() : null,
       address: address.trim() || null,
-      aadhaarToken: aadhaar.trim() || null,
       pan: pan.trim() || null,
       gstin: gstin.trim() || null,
       licenceType,
@@ -139,6 +145,12 @@ export default function TraderLicenceForm() {
       status,
       isNonGstEntity: nonGst,
     };
+    if (isNew) {
+      base.aadhaarToken = aTrim || null;
+    } else if (aTrim) {
+      base.aadhaarToken = aTrim;
+    }
+    return base;
   };
 
   const validate = (): boolean => {
@@ -159,8 +171,13 @@ export default function TraderLicenceForm() {
       toast({ title: "Validation", description: "Enter a valid email or leave it blank.", variant: "destructive" });
       return false;
     }
-    if (aadhaar.trim() && !isStrictAadhaar12Digits(aadhaar.trim())) {
-      toast({ title: "Validation", description: "Aadhaar must be 12 digits when provided.", variant: "destructive" });
+    const aTrim = aadhaarInput.trim();
+    if (aTrim && !isStrictAadhaar12Digits(aTrim)) {
+      toast({
+        title: "Validation",
+        description: "Aadhaar must be exactly 12 digits when entered.",
+        variant: "destructive",
+      });
       return false;
     }
     return true;
@@ -342,7 +359,14 @@ export default function TraderLicenceForm() {
               </div>
               <div className="space-y-2">
                 <Label>Mobile *</Label>
-                <Input value={mobile} onChange={(e) => setMobile(e.target.value)} inputMode="numeric" maxLength={14} />
+                <Input
+                  value={mobile}
+                  onChange={(e) => setMobile(sanitizeMobile10Input(e.target.value))}
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder="10-digit mobile"
+                  autoComplete="tel-national"
+                />
               </div>
               <div className="space-y-2">
                 <Label>Email</Label>
@@ -352,9 +376,28 @@ export default function TraderLicenceForm() {
                 <Label>Address</Label>
                 <Textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={2} />
               </div>
-              <div className="space-y-2">
-                <Label>Aadhaar (12 digits)</Label>
-                <Input value={aadhaar} onChange={(e) => setAadhaar(e.target.value)} inputMode="numeric" maxLength={12} />
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Aadhaar</Label>
+                {!isNew && licence?.aadhaarToken ? (
+                  <p className="text-sm text-muted-foreground rounded-md border bg-muted/40 px-3 py-2">
+                    On file (masked):{" "}
+                    <span className="font-mono tabular-nums text-foreground">{licence.aadhaarToken}</span>
+                    . Leave the field below empty to keep it; enter 12 digits only to replace.
+                  </p>
+                ) : null}
+                <Input
+                  value={aadhaarInput}
+                  onChange={(e) => setAadhaarInput(e.target.value.replace(/\D/g, "").slice(0, 12))}
+                  inputMode="numeric"
+                  maxLength={12}
+                  placeholder={
+                    isNew
+                      ? "Optional — 12 digits"
+                      : licence?.aadhaarToken
+                        ? "Optional — 12 digits to replace stored Aadhaar"
+                        : "Optional — 12 digits"
+                  }
+                />
               </div>
               <div className="space-y-2">
                 <Label>PAN</Label>

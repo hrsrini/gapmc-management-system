@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
+import { sanitizeMobile10Input } from "@shared/india-validation";
 
 interface Yard {
   id: string;
@@ -81,7 +82,7 @@ export default function AdminLocations() {
     setCode(y.code);
     setType(y.type || "Yard");
     setPhone(y.phone ?? "");
-    setMobile(y.mobile ?? "");
+    setMobile(sanitizeMobile10Input(y.mobile ?? ""));
     setAddress(y.address ?? "");
     setIsActive(y.isActive);
     setOpen(true);
@@ -301,7 +302,15 @@ export default function AdminLocations() {
             </div>
             <div className="space-y-1">
               <Label htmlFor="loc-mobile">Mobile</Label>
-              <Input id="loc-mobile" value={mobile} onChange={(e) => setMobile(e.target.value)} />
+              <Input
+                id="loc-mobile"
+                value={mobile}
+                onChange={(e) => setMobile(sanitizeMobile10Input(e.target.value))}
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="10-digit mobile (optional)"
+                autoComplete="tel-national"
+              />
             </div>
             <div className="space-y-1">
               <Label htmlFor="loc-address">Address</Label>

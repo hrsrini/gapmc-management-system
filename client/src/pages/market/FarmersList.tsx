@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Users, AlertCircle, Plus, Pencil } from "lucide-react";
+import { isStrictAadhaar12Digits, parseIndianMobile10Digits, sanitizeMobile10Input } from "@shared/india-validation";
 
 interface Farmer {
   id: string;
@@ -22,6 +23,7 @@ interface Farmer {
   taluk?: string | null;
   district?: string | null;
   mobile?: string | null;
+  aadhaarToken?: string | null;
 }
 
 export default function FarmersList() {
@@ -39,6 +41,8 @@ export default function FarmersList() {
   const [taluk, setTaluk] = useState("");
   const [district, setDistrict] = useState("");
   const [mobile, setMobile] = useState("");
+  /** Optional capture; on edit, empty = keep stored Aadhaar. */
+  const [aadhaarInput, setAadhaarInput] = useState("");
 
   const { data: list, isLoading, isError } = useQuery<Farmer[]>({
     queryKey: ["/api/ioms/farmers"],
@@ -48,6 +52,7 @@ export default function FarmersList() {
   });
   const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y])), [yards]);
   const yardIds = useMemo(() => new Set(yards.map((y) => y.id)), [yards]);
+  const editingFarmer = useMemo(() => list?.find((f) => f.id === editId), [list, editId]);
   const formError = useMemo(() => {
     if (!name.trim()) return "Name is required.";
     if (!yardId.trim()) return "Yard ID is required.";
@@ -58,11 +63,28 @@ export default function FarmersList() {
   const createMutation = useMutation({
     mutationFn: async () => {
       if (formError) throw new Error(formError);
+      const mobileNorm = parseIndianMobile10Digits(mobile);
+      if (mobile.trim() && !mobileNorm) {
+        throw new Error("Mobile must be a valid 10-digit number (digits 0–9 only, starting with 6–9).");
+      }
+      const aTrim = aadhaarInput.trim();
+      if (aTrim && !isStrictAadhaar12Digits(aTrim)) {
+        throw new Error("Aadhaar must be exactly 12 digits when entered.");
+      }
+      const body: Record<string, unknown> = {
+        name,
+        yardId,
+        village,
+        taluk,
+        district,
+        mobile: mobileNorm ?? null,
+      };
+      if (aTrim) body.aadhaarToken = aTrim;
       const res = await fetch("/api/ioms/farmers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ name, yardId, village, taluk, district, mobile }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
@@ -72,7 +94,7 @@ export default function FarmersList() {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/farmers"] });
       toast({ title: "Farmer created" });
       setCreateOpen(false);
-      setName(""); setYardId(""); setVillage(""); setTaluk(""); setDistrict(""); setMobile("");
+      setName(""); setYardId(""); setVillage(""); setTaluk(""); setDistrict(""); setMobile(""); setAadhaarInput("");
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
@@ -80,11 +102,28 @@ export default function FarmersList() {
   const updateMutation = useMutation({
     mutationFn: async () => {
       if (formError) throw new Error(formError);
+      const mobileNorm = parseIndianMobile10Digits(mobile);
+      if (mobile.trim() && !mobileNorm) {
+        throw new Error("Mobile must be a valid 10-digit number (digits 0–9 only, starting with 6–9).");
+      }
+      const aTrim = aadhaarInput.trim();
+      if (aTrim && !isStrictAadhaar12Digits(aTrim)) {
+        throw new Error("Aadhaar must be exactly 12 digits when entered.");
+      }
+      const body: Record<string, unknown> = {
+        name,
+        yardId,
+        village,
+        taluk,
+        district,
+        mobile: mobileNorm ?? null,
+      };
+      if (aTrim) body.aadhaarToken = aTrim;
       const res = await fetch(`/api/ioms/farmers/${editId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ name, yardId, village, taluk, district, mobile }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
@@ -106,7 +145,8 @@ export default function FarmersList() {
     setVillage(f.village ?? "");
     setTaluk(f.taluk ?? "");
     setDistrict(f.district ?? "");
-    setMobile(f.mobile ?? "");
+    setMobile(sanitizeMobile10Input(f.mobile ?? ""));
+    setAadhaarInput("");
     setEditOpen(true);
   }, []);
 
@@ -118,6 +158,7 @@ export default function FarmersList() {
       { key: "taluk", header: "Taluk" },
       { key: "district", header: "District" },
       { key: "mobile", header: "Mobile" },
+      { key: "aadhaarToken", header: "Aadhaar (masked)" },
     ];
     if (canUpdate) base.push({ key: "_actions", header: "Actions" });
     return base;
@@ -133,6 +174,7 @@ export default function FarmersList() {
         taluk: f.taluk ?? "—",
         district: f.district ?? "—",
         mobile: f.mobile ?? "—",
+        aadhaarToken: f.aadhaarToken ?? "—",
       };
       if (canUpdate) {
         row._actions = (
@@ -198,7 +240,27 @@ export default function FarmersList() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1"><Label>District</Label><Input value={district} onChange={(e) => setDistrict(e.target.value)} /></div>
-                    <div className="space-y-1"><Label>Mobile</Label><Input value={mobile} onChange={(e) => setMobile(e.target.value)} /></div>
+                    <div className="space-y-1">
+                      <Label>Mobile</Label>
+                      <Input
+                        value={mobile}
+                        onChange={(e) => setMobile(sanitizeMobile10Input(e.target.value))}
+                        inputMode="numeric"
+                        maxLength={10}
+                        placeholder="10-digit mobile (optional)"
+                        autoComplete="tel-national"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Aadhaar</Label>
+                    <Input
+                      value={aadhaarInput}
+                      onChange={(e) => setAadhaarInput(e.target.value.replace(/\D/g, "").slice(0, 12))}
+                      placeholder="Optional — 12 digits"
+                      inputMode="numeric"
+                      maxLength={12}
+                    />
                   </div>
                   <div className="flex justify-end gap-2">
                     <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createMutation.isPending}>Cancel</Button>
@@ -218,7 +280,7 @@ export default function FarmersList() {
             <ClientDataGrid
               columns={columns}
               sourceRows={sourceRows}
-              searchKeys={["name", "yardName", "village", "taluk", "district", "mobile"]}
+              searchKeys={["name", "yardName", "village", "taluk", "district", "mobile", "aadhaarToken"]}
               searchPlaceholder="Search farmers…"
               defaultSortKey="name"
               defaultSortDir="asc"
@@ -232,6 +294,13 @@ export default function FarmersList() {
           <DialogHeader><DialogTitle>Edit farmer</DialogTitle></DialogHeader>
           <div className="space-y-3">
             {formError && <p className="text-sm text-destructive">{formError}</p>}
+            {editingFarmer?.aadhaarToken ? (
+              <p className="text-sm text-muted-foreground rounded-md border bg-muted/40 px-3 py-2">
+                Aadhaar on file (masked):{" "}
+                <span className="font-mono tabular-nums text-foreground">{editingFarmer.aadhaarToken}</span>. Leave the
+                field below empty to keep it; enter 12 digits only to replace.
+              </p>
+            ) : null}
             <div className="space-y-1"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
             <div className="space-y-1">
               <Label>Yard ID</Label>
@@ -252,7 +321,27 @@ export default function FarmersList() {
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1"><Label>District</Label><Input value={district} onChange={(e) => setDistrict(e.target.value)} /></div>
-              <div className="space-y-1"><Label>Mobile</Label><Input value={mobile} onChange={(e) => setMobile(e.target.value)} /></div>
+              <div className="space-y-1">
+                <Label>Mobile</Label>
+                <Input
+                  value={mobile}
+                  onChange={(e) => setMobile(sanitizeMobile10Input(e.target.value))}
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder="10-digit mobile (optional)"
+                  autoComplete="tel-national"
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label>Aadhaar</Label>
+              <Input
+                value={aadhaarInput}
+                onChange={(e) => setAadhaarInput(e.target.value.replace(/\D/g, "").slice(0, 12))}
+                placeholder="Optional — 12 digits to replace stored Aadhaar"
+                inputMode="numeric"
+                maxLength={12}
+              />
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setEditOpen(false)} disabled={updateMutation.isPending}>Cancel</Button>

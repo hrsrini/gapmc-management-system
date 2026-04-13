@@ -11,7 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { KeyRound, Loader2 } from "lucide-react";
 import { ADMIN_403_MESSAGE, fetchApiGet } from "@/lib/queryClient";
-import { isValidEmailFormat, parseIndianMobile10Digits } from "@shared/india-validation";
+import { isValidEmailFormat, parseIndianMobile10Digits, sanitizeMobile10Input } from "@shared/india-validation";
 
 interface UserRoleRef {
   id: string;
@@ -119,7 +119,7 @@ export function EmployeeLoginAccessSection({
       setEmail(linkedUser.email);
       setName(linkedUser.name);
       setUsername(linkedUser.username ?? "");
-      setPhone(linkedUser.phone ?? "");
+      setPhone(sanitizeMobile10Input(linkedUser.phone ?? ""));
       setIsActive(linkedUser.isActive);
       setPassword("");
       setConfirmPassword("");
@@ -411,8 +411,17 @@ export function EmployeeLoginAccessSection({
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="emp-access-phone">Phone (optional)</Label>
-                <Input id="emp-access-phone" value={phone} onChange={(ev) => setPhone(ev.target.value)} disabled={!canUpdate && isEditMode} />
+                <Label htmlFor="emp-access-phone">Mobile number (optional)</Label>
+                <Input
+                  id="emp-access-phone"
+                  value={phone}
+                  onChange={(ev) => setPhone(sanitizeMobile10Input(ev.target.value))}
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder="10-digit mobile"
+                  autoComplete="tel-national"
+                  disabled={!canUpdate && isEditMode}
+                />
               </div>
             </div>
 

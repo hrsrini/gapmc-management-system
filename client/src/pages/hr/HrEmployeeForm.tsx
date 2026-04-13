@@ -21,7 +21,12 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { UserCircle, ArrowLeft, User, Lock, Settings, Loader2, AlertCircle, KeyRound } from "lucide-react";
 import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
-import { isValidEmailFormat, isStrictAadhaar12Digits, parseIndianMobile10Digits } from "@shared/india-validation";
+import {
+  isValidEmailFormat,
+  isStrictAadhaar12Digits,
+  parseIndianMobile10Digits,
+  sanitizeMobile10Input,
+} from "@shared/india-validation";
 
 interface Yard {
   id: string;
@@ -80,7 +85,8 @@ export default function HrEmployeeForm() {
   const [employeeType, setEmployeeType] = useState("Regular");
   const [empId, setEmpId] = useState("");
 
-  const [aadhaarToken, setAadhaarToken] = useState("");
+  /** Create: optional 12-digit Aadhaar. Edit: replacement only (empty = leave stored masked value). */
+  const [aadhaarInput, setAadhaarInput] = useState("");
   const [pan, setPan] = useState("");
   const [dob, setDob] = useState("");
   const [mobile, setMobile] = useState("");
@@ -125,10 +131,10 @@ export default function HrEmployeeForm() {
       setYardId(employee.yardId ?? "");
       setEmployeeType(employee.employeeType ?? "Regular");
       setEmpId(employee.empId ?? "");
-      setAadhaarToken(employee.aadhaarToken ?? "");
+      setAadhaarInput("");
       setPan(employee.pan ?? "");
       setDob(employee.dob ?? "");
-      setMobile(employee.mobile ?? "");
+      setMobile(sanitizeMobile10Input(employee.mobile ?? ""));
       setWorkEmail(employee.workEmail ?? "");
       setPersonalEmail(employee.personalEmail ?? "");
       setJoiningDate(employee.joiningDate ?? "");
@@ -238,17 +244,14 @@ export default function HrEmployeeForm() {
       }
       mobileNorm = m;
     }
-    const aadhaarTrim = aadhaarToken.trim();
-    if (aadhaarTrim) {
-      const masked = /^XXXX-XXXX-\d{4}$/i.test(aadhaarTrim);
-      if (!masked && !isStrictAadhaar12Digits(aadhaarTrim)) {
-        toast({
-          title: "Invalid Aadhaar",
-          description: "Enter exactly 12 digits with no spaces, or the stored masked value.",
-          variant: "destructive",
-        });
-        return;
-      }
+    const aadhaarTrim = aadhaarInput.trim();
+    if (aadhaarTrim && !isStrictAadhaar12Digits(aadhaarTrim)) {
+      toast({
+        title: "Invalid Aadhaar",
+        description: "Enter exactly 12 digits with no spaces, or leave blank to keep the value on file.",
+        variant: "destructive",
+      });
+      return;
     }
 
     const payload: Record<string, unknown> = {
@@ -259,7 +262,6 @@ export default function HrEmployeeForm() {
       designation,
       yardId,
       employeeType,
-      aadhaarToken: aadhaarTrim || null,
       pan: pan || null,
       dob: dob || null,
       mobile: mobileNorm,
@@ -269,6 +271,11 @@ export default function HrEmployeeForm() {
       retirementDate: retirementDate || null,
       status,
     };
+    if (!isEdit) {
+      payload.aadhaarToken = aadhaarTrim || null;
+    } else if (aadhaarTrim) {
+      payload.aadhaarToken = aadhaarTrim;
+    }
 
     if (isEdit) {
       updateMutation.mutate(payload);
@@ -452,19 +459,43 @@ export default function HrEmployeeForm() {
               </TabsContent>
               <TabsContent value="personal" className="space-y-4 pt-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
+                  <div className="md:col-span-2">
                     <Label>Aadhaar number</Label>
+                    {isEdit && employee?.aadhaarToken ? (
+                      <p className="text-sm text-muted-foreground rounded-md border bg-muted/40 px-3 py-2 mb-2">
+                        On file (masked):{" "}
+                        <span className="font-mono tabular-nums text-foreground">{employee.aadhaarToken}</span>.
+                        Leave the field below empty to keep it; enter 12 digits only to replace.
+                      </p>
+                    ) : null}
                     <Input
-                      value={aadhaarToken}
-                      onChange={(e) => setAadhaarToken(e.target.value)}
-                      placeholder="12 digits, no spaces (stored masked)"
+                      value={aadhaarInput}
+                      onChange={(e) => setAadhaarInput(e.target.value.replace(/\D/g, "").slice(0, 12))}
+                      placeholder={
+                        isEdit
+                          ? employee?.aadhaarToken
+                            ? "Optional — 12 digits to replace"
+                            : "Optional — 12 digits"
+                          : "Optional — 12 digits"
+                      }
                       inputMode="numeric"
+                      maxLength={12}
                       autoComplete="off"
                     />
                   </div>
                   <div><Label>PAN</Label><Input value={pan} onChange={(e) => setPan(e.target.value)} /></div>
                   <div><Label>Date of birth</Label><Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} /></div>
-                  <div><Label>Mobile</Label><Input value={mobile} onChange={(e) => setMobile(e.target.value)} /></div>
+                  <div>
+                    <Label>Mobile</Label>
+                    <Input
+                      value={mobile}
+                      onChange={(e) => setMobile(sanitizeMobile10Input(e.target.value))}
+                      inputMode="numeric"
+                      maxLength={10}
+                      placeholder="10-digit mobile"
+                      autoComplete="tel-national"
+                    />
+                  </div>
                   <div><Label>Personal email</Label><Input type="email" value={personalEmail} onChange={(e) => setPersonalEmail(e.target.value)} placeholder="Must be unique among active / pending employees" /></div>
                   <div><Label>Work email</Label><Input type="email" value={workEmail} onChange={(e) => setWorkEmail(e.target.value)} /></div>
                 </div>

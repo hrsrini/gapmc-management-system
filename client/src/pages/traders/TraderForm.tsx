@@ -20,7 +20,12 @@ import { UserPlus, Save, X, Check } from 'lucide-react';
 import { COMMODITIES } from '@/data/yards';
 import { apiYardToLegacyYardId, legacyYardIdToApiYardId } from '@/lib/legacyYardMatch';
 import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
-import { isValidEmailFormat, isStrictAadhaar12Digits, parseIndianMobile10Digits } from '@shared/india-validation';
+import {
+  isValidEmailFormat,
+  isStrictAadhaar12Digits,
+  parseIndianMobile10Digits,
+  sanitizeMobile10Input,
+} from '@shared/india-validation';
 import { Badge } from '@/components/ui/badge';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Trader } from '@shared/schema';
@@ -41,10 +46,10 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
   const [firmName, setFirmName] = useState(initialData?.firmName ?? '');
   const [residentialAddress, setResidentialAddress] = useState(initialData?.residentialAddress ?? '');
   const [businessAddress, setBusinessAddress] = useState(initialData?.businessAddress ?? '');
-  const [mobile, setMobile] = useState(initialData?.mobile ?? '');
+  const [mobile, setMobile] = useState("");
   const [phone, setPhone] = useState(initialData?.phone ?? '');
   const [email, setEmail] = useState(initialData?.email ?? '');
-  const [aadhaar, setAadhaar] = useState(initialData?.aadhaar ?? '');
+  const [aadhaar, setAadhaar] = useState('');
   const [pan, setPan] = useState(initialData?.pan ?? '');
   const [gst, setGst] = useState(initialData?.gst ?? '');
   const [epic, setEpic] = useState(initialData?.epicVoterId ?? '');
@@ -70,6 +75,23 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
     const apiId = legacyYardIdToApiYardId(initialData.yardId, yardOptions);
     setYardId(apiId ?? '');
   }, [isEdit, initialData?.yardId, yardOptions]);
+
+  useEffect(() => {
+    if (!isEdit) {
+      setMobile("");
+      return;
+    }
+    if (!traderId || !initialData?.mobile) {
+      setMobile("");
+      return;
+    }
+    setMobile(sanitizeMobile10Input(String(initialData.mobile)));
+  }, [isEdit, traderId, initialData?.id]);
+
+  /** Do not pre-fill Aadhaar on edit (stored value may be masked or formatted); optional field replaces only when user types 12 digits. */
+  useEffect(() => {
+    if (isEdit) setAadhaar('');
+  }, [isEdit, traderId]);
 
   const selectedYard = yardOptions.find((y) => y.id === yardId);
 
@@ -115,7 +137,7 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
   };
 
   const handleSubmit = (isDraft: boolean) => {
-    if (!name || !mobile || !email || !aadhaar || !pan || !yardId) {
+    if (!name || !mobile || !email || (!isEdit && !aadhaar.trim()) || !pan || !yardId) {
       toast({
         title: 'Validation Error',
         description: 'Please fill in all required fields',
@@ -132,8 +154,13 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
       toast({ title: 'Validation Error', description: 'Mobile must be a valid 10-digit Indian number.', variant: 'destructive' });
       return;
     }
-    if (!isStrictAadhaar12Digits(aadhaar)) {
+    const aadhaarTrim = aadhaar.trim();
+    if (!isEdit && !isStrictAadhaar12Digits(aadhaarTrim)) {
       toast({ title: 'Validation Error', description: 'Please enter a valid Aadhaar number (12 digits, no spaces).', variant: 'destructive' });
+      return;
+    }
+    if (isEdit && aadhaarTrim && !isStrictAadhaar12Digits(aadhaarTrim)) {
+      toast({ title: 'Validation Error', description: 'Aadhaar must be 12 digits when changing it.', variant: 'destructive' });
       return;
     }
 
@@ -148,7 +175,7 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
       return;
     }
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       name,
       firmName: firmName || undefined,
       type: applicantType as 'Individual' | 'Firm' | 'Pvt Ltd' | 'Public Ltd',
@@ -157,7 +184,6 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
       email: email.trim().toLowerCase(),
       residentialAddress: residentialAddress || undefined,
       businessAddress: businessAddress || undefined,
-      aadhaar: aadhaar.trim(),
       pan,
       gst: gst || undefined,
       epicVoterId: epic || undefined,
@@ -175,6 +201,11 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
       rentAmount: initialData?.rentAmount ?? 5000,
       securityDeposit: initialData?.securityDeposit ?? 10000,
     };
+    if (!isEdit) {
+      payload.aadhaar = aadhaarTrim;
+    } else if (aadhaarTrim) {
+      payload.aadhaar = aadhaarTrim;
+    }
 
     if (isEdit && traderId) {
       updateMutation.mutate(payload, {
@@ -299,9 +330,11 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
                 <Input
                   id="mobile"
                   value={mobile}
-                  onChange={(e) => setMobile(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                  onChange={(e) => setMobile(sanitizeMobile10Input(e.target.value))}
                   placeholder="10-digit mobile"
                   inputMode="numeric"
+                  maxLength={10}
+                  autoComplete="tel-national"
                   data-testid="input-mobile"
                 />
               </div>
@@ -336,13 +369,19 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="aadhaar">Aadhaar Card Number *</Label>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="aadhaar">Aadhaar Card Number{isEdit ? '' : ' *'}</Label>
+                {isEdit && initialData?.aadhaar ? (
+                  <p className="text-sm text-muted-foreground rounded-md border bg-muted/40 px-3 py-2">
+                    On file: <span className="font-mono tabular-nums text-foreground">{initialData.aadhaar}</span>.
+                    Leave the field empty to keep it; enter 12 digits only to replace.
+                  </p>
+                ) : null}
                 <Input
                   id="aadhaar"
                   value={aadhaar}
                   onChange={(e) => setAadhaar(e.target.value.replace(/\D/g, "").slice(0, 12))}
-                  placeholder="12 digits, no spaces"
+                  placeholder={isEdit ? 'Optional — 12 digits to replace' : '12 digits, no spaces'}
                   inputMode="numeric"
                   data-testid="input-aadhaar"
                 />

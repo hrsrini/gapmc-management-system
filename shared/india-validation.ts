@@ -13,6 +13,14 @@ export function isValidEmailFormat(email: string): boolean {
   return e.length > 0 && STANDARD_EMAIL_RE.test(e);
 }
 
+/**
+ * Strip non-digits and cap length at 10 for mobile text fields (UI entry only).
+ * Use with `parseIndianMobile10Digits` / server `normalizeMobile10` for full validation on save.
+ */
+export function sanitizeMobile10Input(raw: string): string {
+  return String(raw).replace(/\D/g, "").slice(0, 10);
+}
+
 /** Digits-only mobile; empty input → null. Returns null if not exactly 10 valid digits. */
 export function parseIndianMobile10Digits(input: string | null | undefined): string | null {
   if (input == null || String(input).trim() === "") return null;
