@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Receipt, ArrowLeft, Loader2 } from "lucide-react";
+import { Receipt, ArrowLeft, Loader2, ExternalLink } from "lucide-react";
 
 interface Yard {
   id: string;
@@ -53,6 +53,10 @@ export default function VoucherCreate() {
   const { data: heads = [] } = useQuery<ExpenditureHead[]>({
     queryKey: ["/api/ioms/expenditure-heads"],
   });
+  const { data: systemConfig } = useQuery<Record<string, string>>({
+    queryKey: ["/api/system/config"],
+  });
+  const expenditureAuthorityUrl = (systemConfig?.expenditure_head_authority_url ?? "").trim();
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -152,6 +156,19 @@ export default function VoucherCreate() {
                   ))}
                 </SelectContent>
               </Select>
+              {expenditureAuthorityUrl.length > 0 && (
+                <p className="text-sm text-muted-foreground">
+                  <a
+                    href={expenditureAuthorityUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
+                  >
+                    Expenditure head authority (reference)
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Payee name *</Label>

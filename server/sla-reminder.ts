@@ -18,7 +18,7 @@ function cutoffIso(hours: number): string {
   return new Date(Date.now() - hours * 3600 * 1000).toISOString();
 }
 
-async function runSlaTick(): Promise<void> {
+export async function runSlaTick(): Promise<void> {
   const rules = await db.select().from(slaConfig);
   if (rules.length === 0) return;
 

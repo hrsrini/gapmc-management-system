@@ -7,11 +7,18 @@ import { nanoid } from "nanoid";
 import { db } from "./db";
 import { amcBills, amcContracts } from "@shared/db-schema";
 import { writeAuditLogSystem } from "./audit";
+import { getMergedSystemConfig } from "./system-config";
 
 export async function generateMonthlyAmcBillsIfMissing(reference: Date = new Date()): Promise<{
   created: number;
   skipped: number;
+  disabled?: boolean;
 }> {
+  const cfg = await getMergedSystemConfig();
+  if (String(cfg.amc_monthly_auto_generate ?? "").trim().toLowerCase() !== "true") {
+    return { created: 0, skipped: 0, disabled: true };
+  }
+
   const y = reference.getUTCFullYear();
   const m = String(reference.getUTCMonth() + 1).padStart(2, "0");
   const monthPrefix = `${y}-${m}`;

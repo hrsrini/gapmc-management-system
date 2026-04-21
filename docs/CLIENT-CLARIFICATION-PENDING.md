@@ -2,7 +2,11 @@
 
 **Purpose:** Items from the merged clarification list (`docs/CLARIFICATION-QUESTIONS-MERGED.md`) where the **answer was blank** or **only partly answered** in the latest client spreadsheet (IDs 14–53, 2026). Send this table back for written sign-off before build or policy freeze.
 
+**Engineering backlog (SRS v3 + Excel vs code):** [SRS-IMPLEMENTATION-BACKLOG.md](./SRS-IMPLEMENTATION-BACKLOG.md) — prioritized gaps and next actions.
+
 **Note:** Answered items and what was implemented in code are summarized in `docs/CLIENT-CLARIFICATION-RESPONSES-2026.md`.
+
+**Implementation (Q51 / Q53):** Payment gateway **`POST /api/ioms/receipts/payments/callback`** is public with optional **SHA256-HMAC** (`PAYMENT_WEBHOOK_HMAC_SECRET`, optional `PAYMENT_WEBHOOK_REQUIRE_HMAC`). Cron/webhook audit actor: **`AUDIT_SYSTEM_USER_ID`** or default **`system`** (`server/audit.ts`). UAT mock completion uses **`POST /api/ioms/receipts/:id/payments/dev-simulate-callback`** (see `.env.example`).
 
 **Follow-up (answered in principle, confirm for Phase 1):** Government **SSO / IdP** (beyond email, mobile OTP, and user ID + password) — required or deferred?
 
@@ -27,10 +31,10 @@
 | 46 | M-09 | Scanned attachments: project storage vs DMS standard? |
 | 48 | M-09 | Outward letters: who provides official print template / letterhead? |
 | 49 | Cross-cutting | Tally export: confirm CSV column order and path. |
-| 50 | Cross-cutting | Data retention / archival: years per record class. |
+| ~~50~~ | Cross-cutting | ~~Data retention / archival: years per record class.~~ **Interim in app:** configurable years in Admin → Config + `GET /api/admin/data-retention-summary` + `POST /api/cron/data-retention-audit` (read-only counts; no delete). |
 | 52 | M-05 / UX | Receipt PDF: mandatory server-generated branded PDF vs browser print-to-PDF? |
 
-**Row #50 (data retention)** may remain “to be decided by volume”; still capture a target policy when possible.
+**Row #50:** Interim **policy years** and **read-only counts** are in the app (see table); **physical archival / purge** still needs client process and sign-off.
 
 ---
 
@@ -40,8 +44,8 @@ These **do not replace** written answers; they are configurable defaults so UAT 
 
 | # | What was added |
 |---|----------------|
-| 29 | `PUBLIC_RECEIPT_VERIFY_ENABLED=false` disables public verify + QR API (auth middleware). |
+| 29 | `PUBLIC_RECEIPT_VERIFY_ENABLED=false` disables public verify regardless of DB; else `public_receipt_verify_enabled` in system_config (`server/auth.ts`). |
 | 42 | `CRON_AMC_MONTHLY_BILLS=true` + `POST /api/cron/amc-monthly-bills` creates **Monthly** AMC bills when missing for the current month; Quarterly/Annual stay manual until client confirms cadence. |
 | 45 | `dak_diary_sequence_scope` in Admin Config (`per_yard` \| `central`); blank diary no on create → auto `DAK/{LOC}/{FY}/{NNNNN}` via `gapmc.dak_diary_sequence`. |
-| 51 | Optional `PAYMENT_WEBHOOK_HMAC_SECRET` + `X-Payment-Signature` on payment callback (`server/payment-webhook-hmac.ts`). |
-| 53 | `getAuditSystemUserId()` + docs: literal `system` default or set `AUDIT_SYSTEM_USER_ID` to a real `users.id`. |
+| ~~51~~ | **Done in app:** public callback + HMAC (`payment-webhook-hmac.ts`, `payment-gateway-callback.ts`); staging may set `PAYMENT_DEV_CALLBACK_ENABLED` for session-based simulate. |
+| ~~53~~ | **Done in app:** `writeAuditLogSystem` / `getAuditSystemUserId()` (`server/audit.ts`); crons and payment webhook use system actor + optional IP on webhook. |

@@ -29,6 +29,7 @@ export default function DakOutward() {
 
   const columns = useMemo(
     (): ReportTableColumn[] => [
+      { key: "_open", header: "" },
       { key: "despatchNo", header: "Despatch No" },
       { key: "despatchDate", header: "Date" },
       { key: "toParty", header: "To" },
@@ -43,6 +44,11 @@ export default function DakOutward() {
   const sourceRows = useMemo((): Record<string, unknown>[] => {
     return (list ?? []).map((d) => ({
       id: d.id,
+      _open: (
+        <Button variant="ghost" size="sm" className="h-auto p-0 text-primary underline-offset-4 hover:underline" asChild>
+          <Link href={`/correspondence/outward/${d.id}`}>Open</Link>
+        </Button>
+      ),
       despatchNo: d.despatchNo ?? "—",
       despatchDate: d.despatchDate.slice(0, 10),
       toParty: d.toParty,

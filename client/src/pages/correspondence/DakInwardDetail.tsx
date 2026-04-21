@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -13,7 +13,18 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
-import { Mail, ArrowLeft, Pencil, ListChecks, Loader2, AlertCircle } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import {
+  Mail,
+  ArrowLeft,
+  Pencil,
+  ListChecks,
+  Loader2,
+  AlertCircle,
+  Paperclip,
+  Download,
+  Trash2,
+} from "lucide-react";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
 
 interface Inward {
@@ -30,6 +41,7 @@ interface Inward {
   assignedTo?: string | null;
   deadline?: string | null;
   fileRef?: string | null;
+  attachments?: string[] | null;
 }
 interface ActionLog {
   id: string;
@@ -48,15 +60,18 @@ export default function DakInwardDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const { user, can } = useAuth();
+  const { toast } = useToast();
   const queryClient = useQueryClient();
   const canUpdate = can("M-09", "Update");
   const canCreate = can("M-09", "Create");
   const [actionNote, setActionNote] = useState("");
   const [statusAfter, setStatusAfter] = useState("");
   const actionByDisplay = user?.name ?? user?.email ?? "Current User";
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const { data: inward, isLoading, isError } = useQuery<Inward>({
     queryKey: ["/api/ioms/dak/inward", id],
+    enabled: !!id,
   });
   const { data: actions = [], isLoading: actionsLoading } = useQuery<ActionLog[]>({
     queryKey: [`/api/ioms/dak/inward/${id}/actions`],
@@ -109,6 +124,55 @@ export default function DakInwardDetail() {
     },
   });
 
+  const attachmentMutation = useMutation({
+    mutationFn: async (files: FileList | null) => {
+      if (!id || !files?.length) throw new Error("Choose at least one file.");
+      const fd = new FormData();
+      for (let i = 0; i < files.length; i++) fd.append("files", files[i]);
+      const res = await fetch(`/api/ioms/dak/inward/${id}/attachments`, {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/dak/inward", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/dak/inward"] });
+      toast({ title: "Attachments uploaded" });
+      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+    },
+    onError: (e: Error) => {
+      toast({ title: "Upload failed", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const deleteAttachmentMutation = useMutation({
+    mutationFn: async (fileName: string) => {
+      const res = await fetch(`/api/ioms/dak/inward/${id}/files/${encodeURIComponent(fileName)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/dak/inward", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/dak/inward"] });
+      toast({ title: "Attachment removed" });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Remove failed", description: e.message, variant: "destructive" });
+    },
+  });
+
   const handleAddAction = (e: React.FormEvent) => {
     e.preventDefault();
     addActionMutation.mutate({
@@ -119,7 +183,7 @@ export default function DakInwardDetail() {
     });
   };
 
-  if (isLoading || inward === undefined) {
+  if (isLoading) {
     return (
       <AppShell breadcrumbs={[{ label: "Dak Inward", href: "/correspondence/inward" }, { label: "Detail" }]}>
         <Card>
@@ -181,6 +245,9 @@ export default function DakInwardDetail() {
           <Tabs defaultValue="actions">
             <TabsList>
               <TabsTrigger value="actions"><ListChecks className="h-4 w-4 mr-1" /> Action log ({actions.length})</TabsTrigger>
+              <TabsTrigger value="attachments">
+                <Paperclip className="h-4 w-4 mr-1" /> Attachments ({inward.attachments?.length ?? 0})
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="actions" className="pt-2 space-y-4">
               {canCreate && (
@@ -211,6 +278,66 @@ export default function DakInwardDetail() {
                   emptyMessage="No actions yet."
                   resetPageDependency={id}
                 />
+              )}
+            </TabsContent>
+            <TabsContent value="attachments" className="pt-2 space-y-3">
+              <p className="text-sm text-muted-foreground">
+                PDF or images up to 8 MB each; max 20 files. Upload and remove require M-09 Update.
+              </p>
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                className="hidden"
+                onChange={(e) => {
+                  const fl = e.target.files;
+                  if (fl?.length) attachmentMutation.mutate(fl);
+                }}
+              />
+              {canUpdate && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={attachmentMutation.isPending}
+                  onClick={() => attachmentInputRef.current?.click()}
+                >
+                  Upload files
+                </Button>
+              )}
+              {(inward.attachments?.length ?? 0) === 0 ? (
+                <p className="text-sm text-muted-foreground">No attachments.</p>
+              ) : (
+                <ul className="space-y-2 text-sm">
+                  {(inward.attachments ?? []).map((name) => (
+                    <li key={name} className="flex flex-wrap items-center gap-2 border rounded-md px-3 py-2">
+                      <span className="font-mono text-xs break-all flex-1 min-w-0">{name}</span>
+                      <Button variant="ghost" size="sm" asChild>
+                        <a
+                          href={`/api/ioms/dak/inward/${id}/files/${encodeURIComponent(name)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          download
+                        >
+                          <Download className="h-4 w-4" />
+                        </a>
+                      </Button>
+                      {canUpdate && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive"
+                          disabled={deleteAttachmentMutation.isPending}
+                          onClick={() => deleteAttachmentMutation.mutate(name)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
             </TabsContent>
           </Tabs>

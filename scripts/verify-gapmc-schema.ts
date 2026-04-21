@@ -24,6 +24,14 @@ const COLUMN_CHECKS: { table: string; columns: string[] }[] = [
     table: "purchase_transactions",
     columns: ["parent_transaction_id", "entry_kind"],
   },
+  {
+    table: "rent_invoices",
+    columns: ["tds_applicable", "tds_amount"],
+  },
+  {
+    table: "ioms_receipts",
+    columns: ["tds_amount"],
+  },
 ];
 
 const LAND_IMMUTABILITY_TRIGGERS = ["tr_land_records_no_update", "tr_land_records_no_delete"];

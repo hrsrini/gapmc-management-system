@@ -20,6 +20,9 @@
     "db:backup-full": "dotenv -e .env -- tsx scripts/build-backup-sql.ts",
     "db:verify-schema": "dotenv -e .env -- tsx scripts/verify-gapmc-schema.ts",
     "db:apply-land-immutable": "dotenv -e .env -- tsx scripts/apply-land-immutable.ts",
+    "db:apply-dak-attachments": "dotenv -e .env -- tsx scripts/apply-dak-attachments.ts",
+    "db:apply-rent-invoice-tds": "dotenv -e .env -- tsx scripts/apply-rent-invoice-tds.ts",
+    "db:apply-ioms-receipt-tds": "dotenv -e .env -- tsx scripts/apply-ioms-receipt-tds.ts",
     "test-plan:expand": "node scripts/expand-test-plan.mjs"
   },
   "dependencies": {

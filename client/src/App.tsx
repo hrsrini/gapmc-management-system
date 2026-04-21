@@ -84,6 +84,7 @@ import DakSubjectIndex from "@/pages/correspondence/DakSubjectIndex";
 import DakInwardForm from "@/pages/correspondence/DakInwardForm";
 import DakInwardDetail from "@/pages/correspondence/DakInwardDetail";
 import DakOutward from "@/pages/correspondence/DakOutward";
+import DakOutwardDetail from "@/pages/correspondence/DakOutwardDetail";
 import DakOutwardForm from "@/pages/correspondence/DakOutwardForm";
 import DakSlaReport from "@/pages/correspondence/DakSlaReport";
 import AccessDenied from "@/pages/AccessDenied";
@@ -272,11 +273,14 @@ function Router() {
       <Route path="/correspondence/inward/:id">
         <ProtectedRoute><DakInwardDetail /></ProtectedRoute>
       </Route>
-      <Route path="/correspondence/outward">
-        <ProtectedRoute><DakOutward /></ProtectedRoute>
-      </Route>
       <Route path="/correspondence/outward/new">
         <ProtectedRoute><RequirePermission module="M-09" action="Create"><DakOutwardForm /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/correspondence/outward/:id">
+        <ProtectedRoute><DakOutwardDetail /></ProtectedRoute>
+      </Route>
+      <Route path="/correspondence/outward">
+        <ProtectedRoute><DakOutward /></ProtectedRoute>
       </Route>
       <Route path="/receipts">
         <ProtectedRoute><ReceiptList /></ProtectedRoute>

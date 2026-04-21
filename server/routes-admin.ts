@@ -2,7 +2,8 @@
  * IOMS M-10: RBAC & System Administration API routes.
  * M-10 admin: yards, roles, permission matrix, config, audit. App logins are managed via HR only (/api/hr/employees/:id/login).
  */
-import type { Express } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
+import multer from "multer";
 import { eq, desc, and, sql } from "drizzle-orm";
 import { db } from "./db";
 import {
@@ -22,9 +23,41 @@ import {
 import { nanoid } from "nanoid";
 import { SYSTEM_CONFIG_KEYS } from "@shared/system-config-defaults";
 import { getMergedSystemConfig } from "./system-config";
+import { getDataRetentionSummary } from "./data-retention-audit";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
+import {
+  clearReceiptLogoFiles,
+  getUploadedReceiptLogoPath,
+  mimeForReceiptLogoPath,
+  readUploadedReceiptLogoBuffer,
+  writeReceiptLogoUpload,
+} from "./receipt-logo-storage";
 import { HrEmployeeRuleError, normalizeMobile10 } from "./hr-employee-rules";
+
+const receiptLogoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter(_req, file, cb) {
+    if (file.mimetype === "image/png" || file.mimetype === "image/jpeg") cb(null, true);
+    else cb(new Error("ADMIN_RECEIPT_LOGO_TYPE: Only PNG or JPEG images are allowed."));
+  },
+});
+
+function multerReceiptLogo(req: Request, res: Response, next: NextFunction): void {
+  receiptLogoUpload.single("logo")(req, res, (err: unknown) => {
+    if (!err) return next();
+    const msg = err instanceof Error ? err.message : "Upload failed";
+    if (msg.includes("ADMIN_RECEIPT_LOGO_TYPE")) {
+      return sendApiError(res, 400, "ADMIN_RECEIPT_LOGO_TYPE", "Only PNG or JPEG images are allowed.");
+    }
+    if (err && typeof err === "object" && (err as { code?: string }).code === "LIMIT_FILE_SIZE") {
+      return sendApiError(res, 400, "ADMIN_RECEIPT_LOGO_TOO_LARGE", "Logo must be 2 MB or smaller.");
+    }
+    console.error(err);
+    return sendApiError(res, 400, "ADMIN_RECEIPT_LOGO_UPLOAD_FAILED", msg);
+  });
+}
 
 export function registerAdminRoutes(app: Express) {
   const now = () => new Date().toISOString();
@@ -135,6 +168,81 @@ export function registerAdminRoutes(app: Express) {
       for (const key of SYSTEM_CONFIG_KEYS) {
         if (!(key in body)) continue;
         const value = String(body[key] ?? "");
+        if (key === "expenditure_head_authority_url") {
+          const u = value.trim();
+          if (u.length > 0) {
+            try {
+              const parsed = new URL(u);
+              if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                return sendApiError(
+                  res,
+                  400,
+                  "ADMIN_CONFIG_URL_INVALID",
+                  "expenditure_head_authority_url must be an http(s) URL",
+                );
+              }
+            } catch {
+              return sendApiError(res, 400, "ADMIN_CONFIG_URL_INVALID", "Invalid expenditure_head_authority_url");
+            }
+          }
+        }
+        if (key.startsWith("data_retention_") && key.endsWith("_years")) {
+          const n = parseFloat(value.trim());
+          if (!Number.isFinite(n) || n < 1 || n > 50) {
+            return sendApiError(res, 400, "ADMIN_CONFIG_RETENTION_YEARS", "Retention years must be a number from 1 to 50.");
+          }
+        }
+        if (key === "dak_diary_sequence_scope") {
+          const v = value.trim().toLowerCase();
+          if (v !== "per_yard") {
+            return sendApiError(
+              res,
+              400,
+              "ADMIN_CONFIG_DAK_SCOPE",
+              "Dak diary sequence scope must be per_yard (central HO-wide sequence is disabled per client policy).",
+            );
+          }
+        }
+        if (key === "rent_tds_annual_threshold_inr") {
+          const n = parseFloat(value.trim());
+          if (!Number.isFinite(n) || n < 0 || n > 5_00_00_000) {
+            return sendApiError(res, 400, "ADMIN_CONFIG_RENT_TDS_THRESHOLD", "rent_tds_annual_threshold_inr must be between 0 and 50000000.");
+          }
+        }
+        if (key === "rent_tds_rate_percent") {
+          const n = parseFloat(value.trim());
+          if (!Number.isFinite(n) || n < 0 || n > 40) {
+            return sendApiError(res, 400, "ADMIN_CONFIG_RENT_TDS_RATE", "rent_tds_rate_percent must be between 0 and 40.");
+          }
+        }
+        if (key === "amc_monthly_auto_generate") {
+          const v = value.trim().toLowerCase();
+          if (v !== "true" && v !== "false") {
+            return sendApiError(res, 400, "ADMIN_CONFIG_AMC_FLAG", "amc_monthly_auto_generate must be true or false.");
+          }
+        }
+        if (key === "tally_xml_export_enabled") {
+          const v = value.trim().toLowerCase();
+          if (v !== "true" && v !== "false") {
+            return sendApiError(res, 400, "ADMIN_CONFIG_TALLY_XML_FLAG", "tally_xml_export_enabled must be true or false.");
+          }
+        }
+        if (key === "rent_dishonour_bank_charge_hint") {
+          if (value.length > 500) {
+            return sendApiError(res, 400, "ADMIN_CONFIG_DISHONOUR_HINT", "rent_dishonour_bank_charge_hint must be at most 500 characters.");
+          }
+        }
+        if (key === "rent_dishonour_bank_charge_inr") {
+          const n = parseFloat(value.trim());
+          if (!Number.isFinite(n) || n < 0 || n > 5_00_000) {
+            return sendApiError(
+              res,
+              400,
+              "ADMIN_CONFIG_DISHONOUR_BANK_INR",
+              "rent_dishonour_bank_charge_inr must be between 0 and 500000.",
+            );
+          }
+        }
         await db
           .insert(systemConfig)
           .values({
@@ -160,6 +268,80 @@ export function registerAdminRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update config");
+    }
+  });
+
+  /** Read-only: record counts at or past configured retention ages (no deletes). */
+  app.get("/api/admin/data-retention-summary", async (_req, res) => {
+    try {
+      const summary = await getDataRetentionSummary();
+      res.json(summary);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to build data retention summary");
+    }
+  });
+
+  // ----- Receipt PDF logo (uploads/branding; overrides env RECEIPT_PDF_LOGO_* for PDF generation) -----
+  app.get("/api/admin/branding/receipt-logo/status", async (_req, res) => {
+    try {
+      const p = getUploadedReceiptLogoPath();
+      res.json({ hasLogo: Boolean(p) });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read logo status");
+    }
+  });
+
+  app.get("/api/admin/branding/receipt-logo/image", async (_req, res) => {
+    try {
+      const p = getUploadedReceiptLogoPath();
+      if (!p) return sendApiError(res, 404, "ADMIN_RECEIPT_LOGO_NOT_FOUND", "No logo uploaded yet.");
+      const buf = readUploadedReceiptLogoBuffer();
+      if (!buf) return sendApiError(res, 404, "ADMIN_RECEIPT_LOGO_NOT_FOUND", "No logo uploaded yet.");
+      res.setHeader("Content-Type", mimeForReceiptLogoPath(p));
+      res.setHeader("Cache-Control", "no-store");
+      res.send(buf);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read logo");
+    }
+  });
+
+  app.post("/api/admin/branding/receipt-logo", multerReceiptLogo, async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file?.buffer?.length) {
+        return sendApiError(res, 400, "ADMIN_RECEIPT_LOGO_REQUIRED", "Choose a PNG or JPEG file (field name: logo).");
+      }
+      writeReceiptLogoUpload(file.buffer, file.mimetype);
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "UploadReceiptPdfLogo",
+        recordId: "branding/receipt-logo",
+        afterValue: { mime: file.mimetype, size: file.size },
+      }).catch((e) => console.error("Audit log failed:", e));
+      res.status(201).json({ ok: true, hasLogo: true });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to save logo");
+    }
+  });
+
+  app.delete("/api/admin/branding/receipt-logo", async (req, res) => {
+    try {
+      const hadFile = Boolean(getUploadedReceiptLogoPath());
+      clearReceiptLogoFiles();
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "DeleteReceiptPdfLogo",
+        recordId: "branding/receipt-logo",
+        beforeValue: { hadFile },
+      }).catch((e) => console.error("Audit log failed:", e));
+      res.json({ ok: true, hasLogo: false });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to remove logo");
     }
   });
 

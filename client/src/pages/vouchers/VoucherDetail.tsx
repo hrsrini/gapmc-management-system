@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -24,7 +24,19 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Receipt, ArrowLeft, ShieldCheck, CheckCircle, XCircle, Banknote, AlertCircle, SendHorizontal } from "lucide-react";
+import {
+  Receipt,
+  ArrowLeft,
+  ShieldCheck,
+  CheckCircle,
+  XCircle,
+  Banknote,
+  AlertCircle,
+  SendHorizontal,
+  Paperclip,
+  Trash2,
+  Download,
+} from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { formatApiDateOrDateTime } from "@/lib/dateFormat";
 
@@ -47,6 +59,7 @@ interface Voucher {
   rejectionRemarks?: string | null;
   workflowRevisionCount?: number | null;
   dvReturnRemarks?: string | null;
+  supportingDocs?: string[] | null;
 }
 interface YardRef {
   id: string;
@@ -70,6 +83,10 @@ export default function VoucherDetail() {
     queryKey: ["/api/ioms/vouchers", id],
     enabled: !!id,
   });
+  const canManageAttachments =
+    canUpdate &&
+    (roles.includes("DO") || roles.includes("ADMIN")) &&
+    Boolean(voucher?.status === "Draft" || voucher?.status === "Submitted");
   const { data: yards = [] } = useQuery<YardRef[]>({
     queryKey: ["/api/yards"],
   });
@@ -80,6 +97,7 @@ export default function VoucherDetail() {
   const [rejectRemarks, setRejectRemarks] = useState("");
   const [returnDraftOpen, setReturnDraftOpen] = useState(false);
   const [returnDraftRemarks, setReturnDraftRemarks] = useState("");
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   const statusMutation = useMutation({
     mutationFn: async (payload: { status: string } & Record<string, unknown>) => {
@@ -108,6 +126,55 @@ export default function VoucherDetail() {
     },
     onError: (e: Error) => {
       toast({ title: "Update failed", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const attachmentMutation = useMutation({
+    mutationFn: async (files: FileList | null) => {
+      if (!id || !files?.length) throw new Error("Choose at least one file.");
+      const fd = new FormData();
+      for (let i = 0; i < files.length; i++) fd.append("files", files[i]);
+      const res = await fetch(`/api/ioms/vouchers/${id}/attachments`, {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/vouchers", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/vouchers"] });
+      toast({ title: "Attachments uploaded" });
+      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+    },
+    onError: (e: Error) => {
+      toast({ title: "Upload failed", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const deleteAttachmentMutation = useMutation({
+    mutationFn: async (fileName: string) => {
+      const res = await fetch(`/api/ioms/vouchers/${id}/files/${encodeURIComponent(fileName)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/vouchers", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/vouchers"] });
+      toast({ title: "Attachment removed" });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Remove failed", description: e.message, variant: "destructive" });
     },
   });
 
@@ -211,6 +278,77 @@ export default function VoucherDetail() {
             </CardContent>
           </Card>
         ) : null}
+
+        {voucher && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Paperclip className="h-4 w-4" />
+                Supporting documents
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                PDF or images up to 8 MB each; max 20 files per voucher. Add or remove while status is Draft or Submitted (DO / Admin).
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <input
+                ref={attachmentInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                className="hidden"
+                onChange={(e) => {
+                  const fl = e.target.files;
+                  if (fl?.length) attachmentMutation.mutate(fl);
+                }}
+              />
+              {canManageAttachments && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={attachmentMutation.isPending}
+                  onClick={() => attachmentInputRef.current?.click()}
+                >
+                  Upload files
+                </Button>
+              )}
+              {(voucher.supportingDocs?.length ?? 0) === 0 ? (
+                <p className="text-sm text-muted-foreground">No supporting documents attached.</p>
+              ) : (
+                <ul className="space-y-2 text-sm">
+                  {(voucher.supportingDocs ?? []).map((name) => (
+                    <li key={name} className="flex flex-wrap items-center gap-2 border rounded-md px-3 py-2">
+                      <span className="font-mono text-xs break-all flex-1 min-w-0">{name}</span>
+                      <Button variant="ghost" size="sm" asChild>
+                        <a
+                          href={`/api/ioms/vouchers/${id}/files/${encodeURIComponent(name)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          download
+                        >
+                          <Download className="h-4 w-4" />
+                        </a>
+                      </Button>
+                      {canManageAttachments && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive"
+                          disabled={deleteAttachmentMutation.isPending}
+                          onClick={() => deleteAttachmentMutation.mutate(name)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
           <DialogContent className="sm:max-w-md">

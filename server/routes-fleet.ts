@@ -4,14 +4,15 @@
  * Yard-scoped: list/get/create/update vehicles; trips/fuel/maintenance scoped via vehicle's yard.
  */
 import type { Express } from "express";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { eq, desc, asc, and, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { vehicles, vehicleTripLog, vehicleFuelRegister, vehicleMaintenance } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
+import { routeParamString } from "./route-params";
 import { assertRecordDoDvDaSeparation } from "./workflow";
-import { computeFleetRenewalAlerts } from "./operational-alerts";
+import { computeFleetRenewalAlerts, listFleetMaintenanceDueEnriched } from "./operational-alerts";
 
 function vehicleInScope(req: Express.Request, yardId: string): boolean {
   const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
@@ -35,6 +36,39 @@ export function registerFleetRoutes(app: Express) {
     }
   });
 
+  /** Upcoming or overdue `next_service_date` on maintenance rows (calendar-style SLA aid). */
+  app.get("/api/ioms/fleet/maintenance-due", async (req, res) => {
+    try {
+      const withinDays = Math.min(366, Math.max(1, Number(req.query.withinDays ?? 60)));
+      const yardId = req.query.yardId as string | undefined;
+      const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+      const vCond = [];
+      if (scopedIds && scopedIds.length > 0) vCond.push(inArray(vehicles.yardId, scopedIds));
+      if (yardId) vCond.push(eq(vehicles.yardId, yardId));
+      const vBase = db.select().from(vehicles);
+      const vehiclesList = vCond.length > 0 ? await vBase.where(and(...vCond)) : await vBase;
+      const ids = vehiclesList.map((v) => v.id);
+      if (ids.length === 0) return res.json({ withinDays, items: [] as unknown[] });
+
+      const maint = await db
+        .select()
+        .from(vehicleMaintenance)
+        .where(inArray(vehicleMaintenance.vehicleId, ids))
+        .orderBy(asc(vehicleMaintenance.nextServiceDate));
+
+      const today = new Date();
+      const limit = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + withinDays));
+      const limitIso = limit.toISOString().slice(0, 10);
+      const todayIso = today.toISOString().slice(0, 10);
+
+      const items = listFleetMaintenanceDueEnriched(vehiclesList, maint, withinDays);
+      res.json({ withinDays, today: todayIso, limitDate: limitIso, items });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch maintenance due list");
+    }
+  });
+
   app.get("/api/ioms/fleet/vehicles", async (req, res) => {
     try {
       const yardId = req.query.yardId as string | undefined;
@@ -53,7 +87,7 @@ export function registerFleetRoutes(app: Express) {
 
   app.get("/api/ioms/fleet/vehicles/:id", async (req, res) => {
     try {
-      const [row] = await db.select().from(vehicles).where(eq(vehicles.id, req.params.id)).limit(1);
+      const [row] = await db.select().from(vehicles).where(eq(vehicles.id, routeParamString(req.params.id))).limit(1);
       if (!row) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       if (!vehicleInScope(req, row.yardId)) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       res.json(row);
@@ -95,7 +129,7 @@ export function registerFleetRoutes(app: Express) {
 
   app.put("/api/ioms/fleet/vehicles/:id", async (req, res) => {
     try {
-      const id = req.params.id;
+      const id = routeParamString(req.params.id);
       const [existing] = await db.select().from(vehicles).where(eq(vehicles.id, id));
       if (!existing) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       if (!vehicleInScope(req, existing.yardId)) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
@@ -128,10 +162,11 @@ export function registerFleetRoutes(app: Express) {
 
   app.get("/api/ioms/fleet/vehicles/:vehicleId/trips", async (req, res) => {
     try {
-      const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, req.params.vehicleId)).limit(1);
+      const vid = routeParamString(req.params.vehicleId);
+      const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, vid)).limit(1);
       if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       if (!vehicleInScope(req, vehicle.yardId)) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
-      const list = await db.select().from(vehicleTripLog).where(eq(vehicleTripLog.vehicleId, req.params.vehicleId)).orderBy(desc(vehicleTripLog.tripDate));
+      const list = await db.select().from(vehicleTripLog).where(eq(vehicleTripLog.vehicleId, vid)).orderBy(desc(vehicleTripLog.tripDate));
       res.json(list);
     } catch (e) {
       console.error(e);
@@ -172,10 +207,11 @@ export function registerFleetRoutes(app: Express) {
 
   app.get("/api/ioms/fleet/vehicles/:vehicleId/fuel", async (req, res) => {
     try {
-      const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, req.params.vehicleId)).limit(1);
+      const vid = routeParamString(req.params.vehicleId);
+      const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, vid)).limit(1);
       if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       if (!vehicleInScope(req, vehicle.yardId)) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
-      const list = await db.select().from(vehicleFuelRegister).where(eq(vehicleFuelRegister.vehicleId, req.params.vehicleId)).orderBy(desc(vehicleFuelRegister.fuelDate));
+      const list = await db.select().from(vehicleFuelRegister).where(eq(vehicleFuelRegister.vehicleId, vid)).orderBy(desc(vehicleFuelRegister.fuelDate));
       res.json(list);
     } catch (e) {
       console.error(e);
@@ -213,10 +249,11 @@ export function registerFleetRoutes(app: Express) {
 
   app.get("/api/ioms/fleet/vehicles/:vehicleId/maintenance", async (req, res) => {
     try {
-      const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, req.params.vehicleId)).limit(1);
+      const vid = routeParamString(req.params.vehicleId);
+      const [vehicle] = await db.select().from(vehicles).where(eq(vehicles.id, vid)).limit(1);
       if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       if (!vehicleInScope(req, vehicle.yardId)) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
-      const list = await db.select().from(vehicleMaintenance).where(eq(vehicleMaintenance.vehicleId, req.params.vehicleId)).orderBy(desc(vehicleMaintenance.serviceDate));
+      const list = await db.select().from(vehicleMaintenance).where(eq(vehicleMaintenance.vehicleId, vid)).orderBy(desc(vehicleMaintenance.serviceDate));
       res.json(list);
     } catch (e) {
       console.error(e);

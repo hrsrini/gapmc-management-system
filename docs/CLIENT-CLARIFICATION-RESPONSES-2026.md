@@ -1,7 +1,8 @@
 # GAPLMB IOMS — client clarification responses applied (2026)
 
 **Sources:** Client Q&A spreadsheet (open questions 1–53) reconciled with `docs/CLARIFICATION-QUESTIONS-MERGED.md`.  
-**Pending rows** are listed in `docs/CLIENT-CLARIFICATION-PENDING.md`.
+**Pending rows** are listed in `docs/CLIENT-CLARIFICATION-PENDING.md`.  
+**Prioritized build gaps (SRS v3 + clarifications Excel vs code):** [SRS-IMPLEMENTATION-BACKLOG.md](./SRS-IMPLEMENTATION-BACKLOG.md).
 
 ## Decisions and implementation notes
 
@@ -21,7 +22,7 @@
 | 12 | **GSTIN not mandatory**; use when present on tax invoices. | Schema optional `gstin`; no validation change required. |
 | 13 | Stock opening balance per trader with effective date. | Table `trader_stock_openings`; API under `/api/ioms/traders/licences/:id/stock-openings`; UI on **Trader licence detail** (M-02 Update). |
 | 14 | Trader portal: **online licence application** | **Phase 2** — counter/back-office only in Phase 1. |
-| 15–17 | TDS, interest, GSTR-1 scope | **Pending** |
+| 15–17 | TDS, interest, GSTR-1 scope | **Policy** in SRS v3 / client sheet; **interest hint** on cheque dishonour for M-03 rent receipts: `rent_arrears_interest_percent_per_annum` in Admin Config + `server/rent-interest.ts` (due = end of invoice `period_month` when `YYYY-MM`). |
 | 18–19 | Govt / non-GST / pre-receipt wording | **Registration:** trader/non-trader indicates **Non-GST** via `trader_licences.is_non_gst_entity` + licence detail UI; `tenantLicenceIsGstExempt` treats non-GST like exempt for tax helpers. Govt list: `govtGstExemptCategoryId`. **Residual:** authoritative allottee/sub-units list — see pending doc. Pre-receipt titles **pending** client wording. |
 | 20 | Rent deposit migration cut-off **31-Mar-2026**. | `system_config` key `rent_deposit_migration_cutoff` (default `2026-03-31`) in `SYSTEM_CONFIG_DEFAULTS` / Admin Config; migration job TBD when finance provides extract. Existing DBs: update key in Admin or re-seed. |
 | 21 | Weighbridge: **manual weight** only. | No device integration. |
@@ -33,7 +34,7 @@
 | 27 | Payment gateway **pending**; Phase 1 **cash and cheque**. | `createIomsReceipt` / POST receipts: **Cash, Cheque, DD** only unless `RECEIPT_ALLOW_ANY_PAYMENT_MODE=true`. `POST .../payments/initiate` disabled unless `PAYMENT_GATEWAY_INIT_ENABLED=true`. `.env.example` + `payment-gateway.ts`. |
 | 28, 30 | Receipt head codes, legacy **~64** → six heads | **Pending** (client sign-off). |
 | 29 | Public verify / QR without login | **`PUBLIC_RECEIPT_VERIFY_ENABLED=false`** turns off public verify + QR API until policy is confirmed. |
-| 31 | Cheque dishonour: reverse receipt, recompute rent, apply interest (formula from GAPMB). | `PATCH /api/ioms/receipts/:id` with `status: "Reversed"` for **Paid/Reconciled** **Cheque** or **DD** receipts; optional `dishonourReason`; audit action `ChequeDishonour`. **Rent re-run and interest** remain TBD when GAPMB supplies the formula. |
+| 31 | Cheque dishonour: reverse receipt, recompute rent, apply interest (formula from GAPMB). | `PATCH /api/ioms/receipts/:id` with `status: "Reversed"` for **Paid/Reconciled** **Cheque** or **DD** receipts; optional `dishonourReason`; audit action `ChequeDishonour`. Response includes **`rentRecomputationNote`**: SRS-style **simple daily** interest hint for **Rent + M-03** (configurable % via **`rent_arrears_interest_percent_per_annum`**); **ledger posting** still manual per finance. |
 | 32, 33, 35 | Salary split, doc storage, expenditure head source | **Pending** |
 | 34 | Advance recovery from payroll | **Out of scope** — no automated recovery in Staff/Payroll (M-06). |
 | 36 | Budget / limits per head per yard per year | **Pending** (client cell blank in latest sheet). |
@@ -48,11 +49,11 @@
 | 46 | Scanned attachments: project vs DMS | **Pending** |
 | 47 | Escalation to **assigned supervisor** (assignee). | `server/sla-reminder.ts` sets `dak_escalations.escalated_to` from `dak_inward.assigned_to` when set. |
 | 48 | Outward letter template | **Pending** |
-| 49 | Tally CSV column headings from client. | Export remains configurable when headings received. |
+| 49 | Tally CSV column headings from client. | **`GET /api/ioms/reports/tally-export?format=csv&columns=srs`** — SRS column order; legacy export unchanged. **IOMS Reports** → two download buttons. |
 | 50 | Data retention | **Pending** / TBD by volume. |
-| 51 | Payment gateway webhook security | Optional **`PAYMENT_WEBHOOK_HMAC_SECRET`** — `X-Payment-Signature` = hex SHA256-HMAC of raw JSON on `POST /api/ioms/receipts/payments/callback` (`server/payment-webhook-hmac.ts`). |
-| 52 | Receipt PDF (server vs print) | **Pending** |
-| 53 | Cron `audit_log` user id | **`getAuditSystemUserId()`** / `AUDIT_SYSTEM_USER_ID` — default literal **`system`**; set to a real `users.id` if compliance requires it. |
+| 51 | Payment gateway webhook security | Public **`POST /api/ioms/receipts/payments/callback`** (no session). Optional **`PAYMENT_WEBHOOK_HMAC_SECRET`**: `X-Payment-Signature` or `X-Signature-Hmac-Sha256` = hex SHA256-HMAC of **raw** JSON (`server/payment-webhook-hmac.ts`). Optional **`PAYMENT_WEBHOOK_REQUIRE_HMAC=true`** fails closed if secret missing. Shared apply logic: `server/payment-gateway-callback.ts`. UAT UI uses **`POST /api/ioms/receipts/:id/payments/dev-simulate-callback`** (auth); production staging may set **`PAYMENT_DEV_CALLBACK_ENABLED=true`**. |
+| 52 | Receipt PDF (server vs print) | **`GET /api/ioms/receipts/:id/pdf`** — server PDF (pdfkit): optional logo (`RECEIPT_PDF_LOGO_PATH` or `RECEIPT_PDF_LOGO_URL`), GAPLMB header, payer/amounts, embedded verify QR. **IOMS receipt detail** → **PDF** button. |
+| 53 | Cron `audit_log` user id | **`getAuditSystemUserId()`** / `AUDIT_SYSTEM_USER_ID` — default literal **`system`**; set to a real `users.id` if compliance requires it. **`writeAuditLogSystem`** used from crons and payment webhook audit; optional **`{ ip }`** for webhook client IP (`server/audit.ts`). |
 
 ## Database follow-up
 

@@ -2,10 +2,11 @@
  * M-07 / M-08: insurance, fitness, and AMC contract end dates within 60 days (or overdue).
  */
 import type { InferSelectModel } from "drizzle-orm";
-import { vehicles, amcContracts } from "@shared/db-schema";
+import { vehicles, amcContracts, vehicleMaintenance } from "@shared/db-schema";
 
 type VehicleRow = InferSelectModel<typeof vehicles>;
 type AmcRow = InferSelectModel<typeof amcContracts>;
+type MaintRow = InferSelectModel<typeof vehicleMaintenance>;
 
 export function isoDatePart(s: string | null | undefined): string | null {
   if (s == null || String(s).trim() === "") return null;
@@ -85,5 +86,38 @@ export function computeAmcRenewalAlerts(rows: AmcRow[]): AmcRenewalAlert[] {
     });
   }
   out.sort((a, b) => a.daysRemaining - b.daysRemaining);
+  return out;
+}
+
+/** Rows with `next_service_date` within `withinDays` of today (UTC), joined to vehicle registration / yard. */
+export function listFleetMaintenanceDueEnriched(
+  vehiclesList: VehicleRow[],
+  maintRows: MaintRow[],
+  withinDays: number,
+): Array<MaintRow & { registrationNo: string; yardId: string; overdue: boolean }> {
+  const byId = Object.fromEntries(vehiclesList.map((v) => [v.id, v]));
+  const ids = new Set(vehiclesList.map((v) => v.id));
+
+  const today = new Date();
+  const limit = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + withinDays));
+  const limitIso = limit.toISOString().slice(0, 10);
+  const todayIso = today.toISOString().slice(0, 10);
+
+  const out: Array<MaintRow & { registrationNo: string; yardId: string; overdue: boolean }> = [];
+  for (const m of maintRows) {
+    if (!ids.has(m.vehicleId)) continue;
+    const nd = m.nextServiceDate?.trim().slice(0, 10);
+    if (!nd || nd > limitIso) continue;
+    const v = byId[m.vehicleId];
+    if (!v) continue;
+    const overdue = nd < todayIso;
+    out.push({
+      ...m,
+      registrationNo: v.registrationNo,
+      yardId: v.yardId,
+      overdue,
+    });
+  }
+  out.sort((a, b) => String(a.nextServiceDate ?? "").localeCompare(String(b.nextServiceDate ?? "")));
   return out;
 }

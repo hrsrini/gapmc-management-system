@@ -212,23 +212,27 @@ export default function IomsReports() {
 
   const previewColumns = useMemo(() => columnsForKind(previewKind), [previewKind]);
 
-  const downloadTallyExportCsv = async () => {
+  const downloadTallyExportCsv = async (layout: "legacy" | "srs") => {
     try {
       const params = new URLSearchParams({ format: "csv" });
       if (from) params.set("from", from);
       if (to) params.set("to", to);
+      if (layout === "srs") params.set("columns", "srs");
       const res = await fetch(`/api/ioms/reports/tally-export?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "tally-export.csv";
+      a.download = layout === "srs" ? "tally-export-srs.csv" : "tally-export.csv";
       a.click();
       URL.revokeObjectURL(url);
       toast({
         title: "Download started",
-        description: "tally-export.csv (receipts + vouchers with ledger names).",
+        description:
+          layout === "srs"
+            ? "SRS column order (Date, Voucher Type, Receipt No., Party Name, Ledger Head, Tally Group, Dr, Cr, Narration)."
+            : "Legacy developer columns (kind, docNo, yardId, amounts, ledger id/name).",
       });
     } catch (e) {
       toast({
@@ -514,12 +518,17 @@ export default function IomsReports() {
               </CardTitle>
               <CardDescription>
                 Receipts and payment vouchers with mapped Tally ledger names; optional date range and yard filter above.
+                Use <strong>SRS layout</strong> for the agreed Tally CSV column order (Dr/Cr convention: receipts as Dr, payments as Cr).
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <Button onClick={downloadTallyExportCsv} variant="outline" className="w-full">
+            <CardContent className="flex flex-col gap-2">
+              <Button onClick={() => downloadTallyExportCsv("legacy")} variant="outline" className="w-full">
                 <Download className="h-4 w-4 mr-2" />
-                Download tally-export.csv
+                Download (legacy columns)
+              </Button>
+              <Button onClick={() => downloadTallyExportCsv("srs")} variant="outline" className="w-full">
+                <Download className="h-4 w-4 mr-2" />
+                Download (SRS column order)
               </Button>
             </CardContent>
           </Card>

@@ -33,6 +33,8 @@ interface RentInvoice {
   cgst: number;
   sgst: number;
   totalAmount: number;
+  tdsApplicable?: boolean | null;
+  tdsAmount?: number | null;
   isGovtEntity?: boolean;
   status: string;
   doUser?: string | null;
@@ -185,6 +187,18 @@ export default function IomsRentInvoiceDetail() {
             <div><span className="text-muted-foreground">Rent</span><br />₹{invoice.rentAmount.toLocaleString()}</div>
             <div><span className="text-muted-foreground">CGST / SGST</span><br />₹{invoice.cgst.toLocaleString()} / ₹{invoice.sgst.toLocaleString()}</div>
             <div><span className="text-muted-foreground">Total</span><br />₹{invoice.totalAmount.toLocaleString()}</div>
+            {invoice.tdsApplicable ? (
+              <div>
+                <span className="text-muted-foreground">TDS (194-I style, on rent)</span>
+                <br />₹{Number(invoice.tdsAmount ?? 0).toLocaleString()}
+              </div>
+            ) : (
+              <div>
+                <span className="text-muted-foreground">TDS</span>
+                <br />
+                Not applicable
+              </div>
+            )}
             {invoice.isGovtEntity && <div><span className="text-muted-foreground">Govt entity</span><br />Yes</div>}
             {invoice.generatedAt && (
               <div>

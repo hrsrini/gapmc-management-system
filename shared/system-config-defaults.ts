@@ -11,6 +11,48 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   rent_deposit_migration_cutoff: "2026-03-31",
   /** M-09: `per_yard` (default) or `central` (single HO-wide diary sequence). */
   dak_diary_sequence_scope: "per_yard",
+  /** M-03: simple daily arrears interest after due (e.g. cheque dishonour hint); SRS default 18% p.a. */
+  rent_arrears_interest_percent_per_annum: "18",
+  /** M-03: annual rent (monthly × 12) above this INR threshold triggers TDS when PAN is valid on licence (194-I style). */
+  rent_tds_annual_threshold_inr: "240000",
+  /** M-03: TDS % applied to monthly rent (pre-GST) when threshold exceeded and PAN valid. */
+  rent_tds_rate_percent: "10",
+  /** M-08: when `true`, cron / HTTP AMC monthly bill job may create rows; Excel default is manual (`false`). */
+  amc_monthly_auto_generate: "false",
+  /** M-05: allow unauthenticated receipt verify + public QR (`true` / `false`). Overridden if env `PUBLIC_RECEIPT_VERIFY_ENABLED=false`. */
+  public_receipt_verify_enabled: "true",
+  /** M-06: optional URL to GFR/treasury authority for expenditure heads (shown on voucher forms). */
+  expenditure_head_authority_url: "",
+  /** M-10 / reports: allow `format=xml` on `/api/ioms/reports/tally-export` (interchange v1). */
+  tally_xml_export_enabled: "true",
+  /** Cross-cutting (Q50): policy age in years for read-only retention counts — IOMS receipts (M-05). */
+  data_retention_ioms_receipts_years: "10",
+  /** Policy age in years for payment vouchers (M-06). */
+  data_retention_payment_vouchers_years: "7",
+  /** Policy age in years for Dak inward (M-09). */
+  data_retention_dak_inward_years: "7",
+  /** Policy age in years for Dak outward (M-09). */
+  data_retention_dak_outward_years: "7",
+  /** Policy age in years for `audit_log` rows (created_at). */
+  data_retention_audit_log_years: "7",
+  /** Policy age in years for HR `employees` rows (created_at date when present). */
+  data_retention_employees_years: "10",
+  /** Policy age in years for M-03 rent invoices (by period_month YYYY-MM vs cutoff month). */
+  data_retention_rent_invoices_years: "8",
+  /** Policy age in years for M-10 `land_records` (created_at). */
+  data_retention_land_records_years: "15",
+  /** Policy age in years for bug tickets (created_at). */
+  data_retention_bug_tickets_years: "3",
+  /** Policy age in years for M-04 purchase_transactions (transaction_date). */
+  data_retention_purchase_transactions_years: "7",
+  /** Policy age in years for M-04 check_post_inward (entry_date). */
+  data_retention_check_post_inward_years: "7",
+  /** Optional text appended to rent dishonour / reversal audit hints (e.g. typical bank charge note). */
+  rent_dishonour_bank_charge_hint: "",
+  /** Optional numeric reference for typical bank charge on dishonour (INR; shown in hints only, not posted). */
+  rent_dishonour_bank_charge_inr: "0",
+  /** Retention policy (years) for M-10 `users` rows (created_at date when present). */
+  data_retention_users_years: "7",
 } as const;
 
 export type SystemConfigKey = keyof typeof SYSTEM_CONFIG_DEFAULTS;
@@ -23,6 +65,27 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "licence_fee",
   "rent_deposit_migration_cutoff",
   "dak_diary_sequence_scope",
+  "rent_arrears_interest_percent_per_annum",
+  "rent_tds_annual_threshold_inr",
+  "rent_tds_rate_percent",
+  "amc_monthly_auto_generate",
+  "public_receipt_verify_enabled",
+  "expenditure_head_authority_url",
+  "tally_xml_export_enabled",
+  "data_retention_ioms_receipts_years",
+  "data_retention_payment_vouchers_years",
+  "data_retention_dak_inward_years",
+  "data_retention_dak_outward_years",
+  "data_retention_audit_log_years",
+  "data_retention_employees_years",
+  "data_retention_rent_invoices_years",
+  "data_retention_land_records_years",
+  "data_retention_bug_tickets_years",
+  "data_retention_purchase_transactions_years",
+  "data_retention_check_post_inward_years",
+  "rent_dishonour_bank_charge_hint",
+  "rent_dishonour_bank_charge_inr",
+  "data_retention_users_years",
 ];
 
 export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
@@ -31,5 +94,26 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   admin_charges: "Admin Charges",
   licence_fee: "Licence Fee",
   rent_deposit_migration_cutoff: "Rent deposit migration cut-off (ISO date)",
-  dak_diary_sequence_scope: "Dak diary numbering: per_yard | central",
+  dak_diary_sequence_scope: "Dak diary numbering (per_yard only; central disabled per policy)",
+  rent_arrears_interest_percent_per_annum: "Rent arrears interest % p.a. (simple daily; dishonour hint)",
+  rent_tds_annual_threshold_inr: "Rent TDS: annual threshold (INR; monthly rent × 12 vs this)",
+  rent_tds_rate_percent: "Rent TDS: % on monthly rent when above threshold + valid PAN",
+  amc_monthly_auto_generate: "AMC: allow auto monthly bill cron (true|false)",
+  public_receipt_verify_enabled: "Public receipt verification (true|false)",
+  expenditure_head_authority_url: "Expenditure head authority URL (optional)",
+  tally_xml_export_enabled: "Tally export: allow XML interchange (true|false)",
+  data_retention_ioms_receipts_years: "Retention policy (years) — IOMS receipts count snapshot",
+  data_retention_payment_vouchers_years: "Retention policy (years) — payment vouchers count snapshot",
+  data_retention_dak_inward_years: "Retention policy (years) — Dak inward count snapshot",
+  data_retention_dak_outward_years: "Retention policy (years) — Dak outward count snapshot",
+  data_retention_audit_log_years: "Retention policy (years) — audit_log count snapshot",
+  data_retention_employees_years: "Retention policy (years) — employees count snapshot",
+  data_retention_rent_invoices_years: "Retention policy (years) — rent invoices (by period_month) snapshot",
+  data_retention_land_records_years: "Retention policy (years) — land_records count snapshot",
+  data_retention_bug_tickets_years: "Retention policy (years) — bug_tickets count snapshot",
+  data_retention_purchase_transactions_years: "Retention policy (years) — M-04 purchase_transactions snapshot",
+  data_retention_check_post_inward_years: "Retention policy (years) — check_post_inward snapshot",
+  rent_dishonour_bank_charge_hint: "Rent dishonour: optional bank charge / re-present note (shown in hints)",
+  rent_dishonour_bank_charge_inr: "Rent dishonour: optional reference bank charge (INR; hints only)",
+  data_retention_users_years: "Retention policy (years) — users (created_at) count snapshot",
 };

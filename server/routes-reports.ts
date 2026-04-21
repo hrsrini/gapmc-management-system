@@ -17,6 +17,8 @@ import {
   RECEIPT_REPORT_SORT_ALLOW,
   STAFF_REPORT_SORT_ALLOW,
 } from "./report-order";
+import { getMergedSystemConfig } from "./system-config";
+import { buildGapmcTallyInterchangeXmlV1, type TallyExportFlatRow } from "./tally-export-xml";
 import {
   rentInvoices,
   paymentVouchers,
@@ -504,7 +506,9 @@ export function registerReportsRoutes(app: Express) {
 
   /**
    * Tally-oriented export: IOMS receipts + payment vouchers with mapped ledger names.
-   * Query: from, to (ISO date on createdAt), format=csv (default json).
+   * Query: from, to (ISO date on createdAt), format=csv | xml (default json).
+   * CSV: `columns=srs` uses agreed column order (Date, Voucher Type, Receipt No., Party Name, Ledger Head, Tally Group, Amount (Dr), Amount (Cr), Narration); omit for legacy columns.
+   * XML: interchange v1 (`gapmcTallyExport`); gated by `tally_xml_export_enabled` in system_config.
    */
   app.get("/api/ioms/reports/tally-export", async (req, res) => {
     try {
@@ -525,12 +529,14 @@ export function registerReportsRoutes(app: Express) {
           date: iomsReceipts.createdAt,
           yardId: iomsReceipts.yardId,
           revenueHead: iomsReceipts.revenueHead,
+          payerName: iomsReceipts.payerName,
           amount: iomsReceipts.amount,
           cgst: iomsReceipts.cgst,
           sgst: iomsReceipts.sgst,
           totalAmount: iomsReceipts.totalAmount,
           tallyLedgerName: tallyLedgers.ledgerName,
           tallyLedgerId: tallyLedgers.id,
+          tallyGroup: tallyLedgers.primaryGroup,
         })
         .from(iomsReceipts)
         .leftJoin(iomsRevenueHeadLedgerMap, eq(iomsReceipts.revenueHead, iomsRevenueHeadLedgerMap.revenueHead))
@@ -552,12 +558,15 @@ export function registerReportsRoutes(app: Express) {
           date: paymentVouchers.createdAt,
           yardId: paymentVouchers.yardId,
           revenueHead: expenditureHeads.description,
+          payeeName: paymentVouchers.payeeName,
+          voucherType: paymentVouchers.voucherType,
           amount: paymentVouchers.amount,
           cgst: sql<number>`0`,
           sgst: sql<number>`0`,
           totalAmount: paymentVouchers.amount,
           tallyLedgerName: tallyLedgers.ledgerName,
           tallyLedgerId: tallyLedgers.id,
+          tallyGroup: tallyLedgers.primaryGroup,
         })
         .from(paymentVouchers)
         .innerJoin(expenditureHeads, eq(paymentVouchers.expenditureHeadId, expenditureHeads.id))
@@ -569,7 +578,86 @@ export function registerReportsRoutes(app: Express) {
 
       const rows = [...receiptRows, ...voucherRows].sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
+      const columnsParam = String(req.query.columns ?? req.query.tallyColumns ?? "").toLowerCase();
+      const useSrsColumns = columnsParam === "srs";
+
+      if (format === "xml") {
+        const cfg = await getMergedSystemConfig();
+        if (String(cfg.tally_xml_export_enabled ?? "true").trim().toLowerCase() !== "true") {
+          return sendApiError(
+            res,
+            403,
+            "TALLY_XML_DISABLED",
+            "Tally interchange XML is disabled in Admin → Config (tally_xml_export_enabled).",
+          );
+        }
+        const flat: TallyExportFlatRow[] = rows.map((r) => ({
+          kind: r.kind,
+          docNo: r.docNo,
+          date: r.date,
+          yardId: r.yardId,
+          revenueHead: r.revenueHead,
+          payerName: (r as { payerName?: string | null }).payerName,
+          payeeName: (r as { payeeName?: string | null }).payeeName,
+          voucherType: (r as { voucherType?: string | null }).voucherType,
+          amount: r.amount,
+          cgst: r.cgst,
+          sgst: r.sgst,
+          totalAmount: r.totalAmount,
+          tallyLedgerName: r.tallyLedgerName,
+          tallyLedgerId: r.tallyLedgerId,
+          tallyGroup: r.tallyGroup,
+        }));
+        const xml = buildGapmcTallyInterchangeXmlV1({
+          rows: flat,
+          from,
+          to,
+          generatedAt: new Date().toISOString(),
+        });
+        res.setHeader("Content-Type", "application/xml; charset=utf-8");
+        res.setHeader("Content-Disposition", "attachment; filename=tally-export-gapmc-v1.xml");
+        return res.send(xml);
+      }
+
       if (format === "csv") {
+        if (useSrsColumns) {
+          const srsHeaders = [
+            "Date",
+            "Voucher Type",
+            "Receipt No.",
+            "Party Name",
+            "Ledger Head",
+            "Tally Group",
+            "Amount (Dr)",
+            "Amount (Cr)",
+            "Narration",
+          ];
+          const csv = [
+            srsHeaders.join(","),
+            ...rows.map((r) => {
+              const dateOnly = String(r.date ?? "").slice(0, 10);
+              const isReceipt = r.kind === "receipt";
+              const voucherType = isReceipt ? "Receipt" : "Payment";
+              const party = isReceipt
+                ? String((r as { payerName?: string | null }).payerName ?? "")
+                : String((r as { payeeName?: string | null }).payeeName ?? "");
+              const ledger = r.tallyLedgerName ?? "";
+              const group = r.tallyGroup ?? "";
+              const total = Number(r.totalAmount ?? 0);
+              const dr = isReceipt ? String(total) : "";
+              const cr = isReceipt ? "" : String(total);
+              const vt = (r as { voucherType?: string | null }).voucherType;
+              const narration = isReceipt
+                ? `IOMS receipt ${r.docNo} ${r.revenueHead ?? ""}`.trim()
+                : `IOMS payment ${r.docNo} ${[r.revenueHead, vt].filter(Boolean).join(" · ")}`.trim();
+              return toCsvRow([dateOnly, voucherType, r.docNo, party, ledger, group, dr, cr, narration]);
+            }),
+          ].join("\r\n");
+          res.setHeader("Content-Type", "text/csv; charset=utf-8");
+          res.setHeader("Content-Disposition", "attachment; filename=tally-export-srs.csv");
+          return res.send("\uFEFF" + csv);
+        }
+
         const headers = ["kind", "docNo", "date", "yardId", "head", "amount", "cgst", "sgst", "totalAmount", "tallyLedgerId", "tallyLedgerName"];
         const csv = [
           headers.join(","),
@@ -594,7 +682,14 @@ export function registerReportsRoutes(app: Express) {
         return res.send("\uFEFF" + csv);
       }
 
-      res.json({ count: rows.length, rows });
+      res.json({
+        count: rows.length,
+        rows,
+        tallyCsvLayouts: ["legacy", "srs"],
+        tallyFormats: ["csv", "xml"],
+        tallyXmlNote:
+          "format=xml emits gapmcTallyExport v1 interchange XML (map to Tally Prime in UAT). Disabled when tally_xml_export_enabled=false.",
+      });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate Tally export");

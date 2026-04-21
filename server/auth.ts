@@ -8,6 +8,7 @@ import { eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { users, employees, userRoles, roles, userYards, rolePermissions, permissions } from "@shared/db-schema";
 import { ensureEmployeeRecordForUser } from "./ensure-user-employee";
+import { getMergedSystemConfig } from "./system-config";
 
 export interface AuthUser {
   id: string;
@@ -38,19 +39,51 @@ declare module "express-session" {
   }
 }
 
-/** M-05: public receipt verification page + QR image (no login). */
-export function isPublicReceiptVerificationPath(path: string, method: string): boolean {
-  if (process.env.PUBLIC_RECEIPT_VERIFY_ENABLED === "false") return false;
+/** Route shape for M-05 public receipt verify + QR (no login when enabled). */
+export function matchesPublicReceiptVerificationRoute(path: string, method: string): boolean {
   if (method !== "GET") return false;
   if (path.startsWith("/api/ioms/receipts/verify/")) return true;
   if (path === "/api/ioms/receipts/public/qr") return true;
   return false;
 }
 
-function isPublicApi(path: string, method: string): boolean {
+let receiptVerifyEnabledCache: { at: number; value: boolean } | null = null;
+const RECEIPT_VERIFY_CACHE_MS = 5000;
+
+/** Env `PUBLIC_RECEIPT_VERIFY_ENABLED=false` disables regardless of DB. Otherwise uses `public_receipt_verify_enabled` in system_config. */
+export async function isReceiptPublicVerifyEnabled(): Promise<boolean> {
+  if (process.env.PUBLIC_RECEIPT_VERIFY_ENABLED === "false") return false;
+  const now = Date.now();
+  if (receiptVerifyEnabledCache && now - receiptVerifyEnabledCache.at < RECEIPT_VERIFY_CACHE_MS) {
+    return receiptVerifyEnabledCache.value;
+  }
+  try {
+    const cfg = await getMergedSystemConfig();
+    const raw = String(cfg.public_receipt_verify_enabled ?? "true").trim().toLowerCase();
+    const value = !(raw === "false" || raw === "0" || raw === "no" || raw === "off");
+    receiptVerifyEnabledCache = { at: now, value };
+    return value;
+  } catch (e) {
+    console.error(e);
+    return false;
+  }
+}
+
+export async function isPublicReceiptVerificationPath(path: string, method: string): Promise<boolean> {
+  if (!matchesPublicReceiptVerificationRoute(path, method)) return false;
+  return isReceiptPublicVerifyEnabled();
+}
+
+/** M-05: payment gateway callback (no session); secured by optional HMAC on raw body (`PAYMENT_WEBHOOK_HMAC_SECRET`). */
+export function isPublicPaymentWebhookCallbackPath(path: string, method: string): boolean {
+  return method === "POST" && path === "/api/ioms/receipts/payments/callback";
+}
+
+async function isPublicApiAsync(path: string, method: string): Promise<boolean> {
   if (path === "/api/health" && method === "GET") return true;
   if (path === "/api/auth/login" && method === "POST") return true;
-  if (isPublicReceiptVerificationPath(path, method)) return true;
+  if (await isPublicReceiptVerificationPath(path, method)) return true;
+  if (isPublicPaymentWebhookCallbackPath(path, method)) return true;
   return false;
 }
 
@@ -119,7 +152,7 @@ export async function requireAuthApi(req: Request, res: Response, next: NextFunc
     next();
     return;
   }
-  if (isPublicApi(req.path, req.method)) {
+  if (await isPublicApiAsync(req.path, req.method)) {
     next();
     return;
   }
@@ -240,11 +273,12 @@ export function getModuleForPath(path: string): string | null {
 }
 
 /** Use after requireAuthApi. For all /api (except auth, health, admin), requires module permission by path and method. ADMIN full access; READ_ONLY only Read. */
-export function requireModulePermissionByPath(req: Request, res: Response, next: NextFunction): void {
+export async function requireModulePermissionByPath(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (!req.path.startsWith("/api")) return next();
   if (req.path.startsWith("/api/auth") || req.path.startsWith("/api/health")) return next();
   if (req.path.startsWith("/api/admin")) return next();
-  if (isPublicReceiptVerificationPath(req.path, req.method)) return next();
+  if (await isPublicReceiptVerificationPath(req.path, req.method)) return next();
+  if (isPublicPaymentWebhookCallbackPath(req.path, req.method)) return next();
   const module = getModuleForPath(req.path);
   if (!module) return next();
   if (!req.user) {

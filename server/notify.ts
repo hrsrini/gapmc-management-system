@@ -25,6 +25,8 @@ export type OperationalDigestPayload = {
   kind: "operational_digest";
   fleetAlertCount: number;
   amcAlertCount: number;
+  /** M-07: vehicle rows with next_service_date within digest window (default 60 days). */
+  maintenanceDueCount?: number;
 };
 
 export type NotificationPayload = SlaReminderPayload | RetirementReminderPayload | OperationalDigestPayload;
@@ -42,9 +44,11 @@ function payloadSummary(payload: NotificationPayload): { subject: string; text: 
       text: `Employee ${payload.name} (${payload.employeeId}) retires on ${payload.retirementDate} (${payload.daysUntil} days, band ${payload.band}).`,
     };
   }
+  const op = payload;
+  const maint = op.maintenanceDueCount ?? 0;
   return {
     subject: "[GAPMC Ops] Fleet / AMC digest",
-    text: `Fleet renewal alerts: ${payload.fleetAlertCount}\nAMC renewal alerts: ${payload.amcAlertCount}`,
+    text: `Fleet renewal alerts: ${op.fleetAlertCount}\nAMC renewal alerts: ${op.amcAlertCount}\nFleet maintenance due (60d): ${maint}`,
   };
 }
 

@@ -108,6 +108,17 @@ app.use((req, res, next) => {
 (async () => {
   await registerRoutes(httpServer, app);
 
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.PAYMENT_GATEWAY_INIT_ENABLED === "true" &&
+    !process.env.PAYMENT_WEBHOOK_HMAC_SECRET?.trim() &&
+    process.env.PAYMENT_WEBHOOK_REQUIRE_HMAC !== "true"
+  ) {
+    log(
+      "[security] Gateway init enabled without PAYMENT_WEBHOOK_HMAC_SECRET — configure HMAC for POST /api/ioms/receipts/payments/callback or set PAYMENT_WEBHOOK_REQUIRE_HMAC=true once the secret is in place.",
+    );
+  }
+
   if (process.env.SLA_REMINDER !== "false") {
     const { startSlaReminderLoop } = await import("./sla-reminder");
     startSlaReminderLoop();
@@ -162,7 +173,7 @@ app.use((req, res, next) => {
     cron.default.schedule("25 7 * * *", async () => {
       try {
         const r = await runOperationalRemindersDigest();
-        log(`Cron M-07/M-08: operational digest fleet=${r.fleetAlerts} amc=${r.amcAlerts}`);
+        log(`Cron M-07/M-08: operational digest fleet=${r.fleetAlerts} amc=${r.amcAlerts} maint=${r.maintenanceDue}`);
       } catch (e) {
         console.error("Cron operational digest failed:", e);
       }
@@ -190,12 +201,27 @@ app.use((req, res, next) => {
     cron.default.schedule("20 2 * * *", async () => {
       try {
         const r = await generateMonthlyAmcBillsIfMissing();
+        if (r.disabled) return;
         log(`Cron M-08: AMC monthly bills created=${r.created} skipped=${r.skipped}`);
       } catch (e) {
         console.error("Cron AMC monthly bills failed:", e);
       }
     });
     log("Cron M-08 AMC monthly bill generation scheduled (daily 02:20 UTC; Monthly contracts only)");
+  }
+
+  if (process.env.CRON_DATA_RETENTION_AUDIT === "true") {
+    const cron = await import("node-cron");
+    const { runDataRetentionAuditJob } = await import("./data-retention-audit");
+    cron.default.schedule("0 4 * * 0", async () => {
+      try {
+        const s = await runDataRetentionAuditJob();
+        log(`Cron data retention audit: ${JSON.stringify(s.countsPastRetention)}`);
+      } catch (e) {
+        console.error("Cron data retention audit failed:", e);
+      }
+    });
+    log("Cron data retention audit scheduled (Sundays 04:00 UTC; read-only counts + audit_log)");
   }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

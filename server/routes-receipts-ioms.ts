@@ -6,12 +6,71 @@ import type { Express, Request } from "express";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import QRCode from "qrcode";
 import { db } from "./db";
-import { yards, receiptSequence, iomsReceipts, paymentGatewayLog } from "@shared/db-schema";
+import { yards, receiptSequence, iomsReceipts, paymentGatewayLog, rentInvoices } from "@shared/db-schema";
+import { buildIomsReceiptPdf } from "./receipt-pdf";
+import {
+  recordChequeDishonourLedgerForM03Receipt,
+  recordRentCollectionForM03Receipt,
+} from "./rent-deposit-ledger-from-receipt";
 import { nanoid } from "nanoid";
-import { writeAuditLog } from "./audit";
+import { getRequestClientIp, writeAuditLog, writeAuditLogSystem } from "./audit";
 import { sendApiError } from "./api-errors";
 import { tenantLicenceIsGstExempt } from "./gst-exempt";
-import { verifyPaymentWebhookHmac } from "./payment-webhook-hmac";
+import { applyPaymentGatewayCallback } from "./payment-gateway-callback";
+import { isPaymentWebhookHmacMandatory, verifyPaymentWebhookHmac } from "./payment-webhook-hmac";
+import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
+import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-interest";
+import { getM03RentReceiptArrearsDisclosure } from "./rent-receipt-arrears";
+
+async function dishonourRecomputationHint(
+  existing: typeof iomsReceipts.$inferSelect,
+): Promise<string> {
+  const today = new Date().toISOString().slice(0, 10);
+  const cfg = await getMergedSystemConfig();
+  const rate = parseSystemConfigNumber(cfg, "rent_arrears_interest_percent_per_annum");
+  const bankHint = String(cfg.rent_dishonour_bank_charge_hint ?? "").trim();
+  const bankChargeInr = parseSystemConfigNumber(cfg, "rent_dishonour_bank_charge_inr");
+
+  if (existing.revenueHead === "Rent" && existing.sourceModule === "M-03" && existing.sourceRecordId) {
+    const [inv] = await db
+      .select()
+      .from(rentInvoices)
+      .where(eq(rentInvoices.id, existing.sourceRecordId))
+      .limit(1);
+    if (!inv) {
+      return `Rent receipt reversed; linked invoice ${existing.sourceRecordId} not found. Adjust ledger per finance.`;
+    }
+    const due = rentPeriodMonthEndIso(inv.periodMonth);
+    const principal =
+      Number(inv.rentAmount ?? 0) ||
+      Number(inv.totalAmount ?? 0) ||
+      Number(existing.totalAmount ?? 0);
+    if (!due) {
+      return `Rent receipt reversed; invoice periodMonth "${inv.periodMonth}" is not YYYY-MM — set due date manually. Principal reference ₹${principal.toFixed(2)}. Adjust deposit / re-bill per finance.`;
+    }
+    const { days, interest } = computeRentArrearsSimpleInterest({
+      principal,
+      percentPerAnnum: rate,
+      dueDateIso: due,
+      asOfDateIso: today,
+    });
+    let msg = `Rent dishonour: simple interest from invoice period end (${due}) to ${today}: ${days} day(s) at ${rate}% p.a. on ₹${principal.toFixed(2)} (rent base) → approx ₹${interest.toFixed(2)} (not posted; re-issue receipt / deposit ledger per finance).`;
+    if (bankChargeInr > 0) msg += ` Reference bank charge (config): ₹${bankChargeInr.toFixed(2)} (not posted).`;
+    if (bankHint) msg += ` ${bankHint}`;
+    return msg;
+  }
+
+  if (existing.sourceModule === "M-04" && existing.sourceRecordId) {
+    return `Receipt reversed; source M-04 record ${existing.sourceRecordId}. Review market fee / arrival and re-bill per yard rules.`;
+  }
+
+  return "Receipt reversed; review linked source module records and ledgers per finance.";
+}
+
+function allowAuthenticatedPaymentCallbackSimulate(): boolean {
+  if (process.env.NODE_ENV !== "production") return true;
+  return process.env.PAYMENT_DEV_CALLBACK_ENABLED === "true";
+}
 
 /** Phase 1 (client): in-app cash / cheque (+ DD); electronic gateway later. */
 const PHASE1_PAYMENT_MODES = new Set(["Cash", "Cheque", "DD"]);
@@ -94,6 +153,8 @@ export async function createIomsReceipt(params: {
   amount: number;
   cgst?: number;
   sgst?: number;
+  /** M-03 rent: TDS on rent component (194-I), copied from `rent_invoices.tds_amount` when applicable. */
+  tdsAmount?: number;
   paymentMode: string;
   sourceModule?: string;
   sourceRecordId?: string;
@@ -117,6 +178,7 @@ export async function createIomsReceipt(params: {
     cgst: params.cgst ?? 0,
     sgst: params.sgst ?? 0,
     totalAmount,
+    tdsAmount: Number(params.tdsAmount ?? 0) || 0,
     paymentMode: params.paymentMode,
     sourceModule: params.sourceModule ?? null,
     sourceRecordId: params.sourceRecordId ?? null,
@@ -214,6 +276,36 @@ export function registerReceiptsIomsRoutes(app: Express) {
     }
   });
 
+  // Server-generated receipt PDF (auth) — before /:id so "pdf" is not parsed as id
+  app.get("/api/ioms/receipts/:id/pdf", async (req, res) => {
+    try {
+      const [row] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, req.params.id));
+      if (!row) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(row.yardId)) {
+        return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
+      }
+      const [yard] = await db.select({ name: yards.name }).from(yards).where(eq(yards.id, row.yardId)).limit(1);
+      const verifyBase =
+        (process.env.PUBLIC_APP_URL && process.env.PUBLIC_APP_URL.replace(/\/$/, "")) ||
+        `${req.protocol}://${req.get("host") || "localhost"}`;
+      const arrearsDisclosure = await getM03RentReceiptArrearsDisclosure(row);
+      const pdf = await buildIomsReceiptPdf({
+        receipt: row,
+        yardName: yard?.name ?? null,
+        verifyBaseUrl: verifyBase,
+        arrearsDisclosure,
+      });
+      const safeName = row.receiptNo.replace(/[^\w.-]+/g, "_");
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="receipt-${safeName}.pdf"`);
+      res.send(pdf);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate receipt PDF");
+    }
+  });
+
   // Reconciliation: gateway log vs receipts (scoped to user's yards) — MUST be before /:id so "reconciliation" is not captured as an id
   app.get("/api/ioms/receipts/reconciliation", async (req, res) => {
     try {
@@ -257,7 +349,8 @@ export function registerReceiptsIomsRoutes(app: Express) {
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(row.yardId)) {
         return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       }
-      res.json(row);
+      const rentArrearsDisclosure = await getM03RentReceiptArrearsDisclosure(row);
+      res.json(rentArrearsDisclosure ? { ...row, rentArrearsDisclosure } : row);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipt");
@@ -367,12 +460,30 @@ export function registerReceiptsIomsRoutes(app: Express) {
         .where(eq(iomsReceipts.id, id));
       const [row] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, id));
       if (!row) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
+
+      let rentDepositLedgerNotice: string | undefined;
+      if (
+        (status === "Paid" || status === "Reconciled") &&
+        existing.status !== "Paid" &&
+        existing.status !== "Reconciled"
+      ) {
+        const coll = await recordRentCollectionForM03Receipt(row);
+        rentDepositLedgerNotice = coll.message;
+      }
+
+      let rentRecomputationNote: string | undefined;
+      if (status === "Reversed") {
+        const ledgerRes = await recordChequeDishonourLedgerForM03Receipt(existing);
+        const hint = await dishonourRecomputationHint(existing);
+        rentRecomputationNote = [hint, ledgerRes.message].filter(Boolean).join(" ");
+      }
+
       const afterForAudit =
         status === "Reversed"
           ? {
               ...row,
               ...(dishonourReason ? { dishonourReason } : {}),
-              rentRecomputationNote: "Pending GAPMB interest formula and rent re-run.",
+              ...(rentRecomputationNote ? { rentRecomputationNote } : {}),
             }
           : row;
       writeAuditLog(req, {
@@ -382,6 +493,16 @@ export function registerReceiptsIomsRoutes(app: Express) {
         beforeValue: existing,
         afterValue: afterForAudit,
       }).catch((e) => console.error("Audit log failed:", e));
+      if (status === "Reversed" && rentRecomputationNote) {
+        return res.json({
+          ...row,
+          dishonourReason: dishonourReason ?? null,
+          rentRecomputationNote,
+        });
+      }
+      if (rentDepositLedgerNotice) {
+        return res.json({ ...row, rentDepositLedgerNotice });
+      }
       res.json(row);
     } catch (e) {
       console.error(e);
@@ -438,8 +559,76 @@ export function registerReceiptsIomsRoutes(app: Express) {
     }
   });
 
+  /** UAT: complete mock payment without HMAC (session auth). Production only if PAYMENT_DEV_CALLBACK_ENABLED=true. */
+  app.post("/api/ioms/receipts/:id/payments/dev-simulate-callback", async (req, res) => {
+    try {
+      if (process.env.PAYMENT_GATEWAY_INIT_ENABLED !== "true") {
+        return sendApiError(
+          res,
+          403,
+          "RECEIPT_GATEWAY_DISABLED",
+          "Phase 1: electronic payment initiation is disabled until the gateway is enabled (set PAYMENT_GATEWAY_INIT_ENABLED=true).",
+        );
+      }
+      if (!allowAuthenticatedPaymentCallbackSimulate()) {
+        return sendApiError(
+          res,
+          403,
+          "PAYMENT_DEV_CALLBACK_DISABLED",
+          "Authenticated payment simulate is not allowed in production unless PAYMENT_DEV_CALLBACK_ENABLED=true.",
+        );
+      }
+      const receiptId = req.params.id;
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const gatewayTxnId = body.gatewayTxnId != null ? String(body.gatewayTxnId) : "";
+      const status = body.status != null ? String(body.status) : "";
+      const gatewayRef = body.gatewayRef != null ? String(body.gatewayRef) : undefined;
+      if (!gatewayTxnId || !status) {
+        return sendApiError(res, 400, "RECEIPT_CALLBACK_FIELDS_REQUIRED", "gatewayTxnId and status are required");
+      }
+
+      const result = await applyPaymentGatewayCallback({
+        gatewayTxnId,
+        status,
+        gatewayRef,
+        rawBody: body,
+        scopedLocationIds: req.scopedLocationIds,
+        expectedReceiptId: receiptId,
+      });
+      if (!result.ok) {
+        return sendApiError(res, result.httpStatus, result.code, result.message);
+      }
+
+      writeAuditLog(req, {
+        module: "Receipts",
+        action: "PaymentCallbackSimulated",
+        recordId: result.receiptId,
+        beforeValue: { receipt: result.receiptBefore, paymentGatewayLog: result.logBefore },
+        afterValue: {
+          receipt: result.receiptAfter,
+          paymentGatewayLog: result.logAfter,
+          gatewayTxnId: result.gatewayTxnId,
+          status: result.status,
+        },
+      }).catch((e) => console.error("Audit log failed:", e));
+
+      res.json(result.receiptAfter);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to simulate payment callback");
+    }
+  });
+
   app.post("/api/ioms/receipts/payments/callback", async (req, res) => {
     try {
+      if (isPaymentWebhookHmacMandatory() && !process.env.PAYMENT_WEBHOOK_HMAC_SECRET?.trim()) {
+        return sendApiError(
+          res,
+          503,
+          "PAYMENT_WEBHOOK_HMAC_NOT_CONFIGURED",
+          "PAYMENT_WEBHOOK_REQUIRE_HMAC is true but PAYMENT_WEBHOOK_HMAC_SECRET is not set.",
+        );
+      }
       const hmac = verifyPaymentWebhookHmac(req as Request & { rawBody?: Buffer });
       if (!hmac.ok) {
         return sendApiError(res, 401, "PAYMENT_WEBHOOK_HMAC_INVALID", hmac.reason);
@@ -452,49 +641,36 @@ export function registerReceiptsIomsRoutes(app: Express) {
       if (!gatewayTxnId || !status) {
         return sendApiError(res, 400, "RECEIPT_CALLBACK_FIELDS_REQUIRED", "gatewayTxnId and status are required");
       }
-      if (!["Paid", "Failed", "Reconciled"].includes(status)) {
-        return sendApiError(res, 400, "RECEIPT_STATUS_INVALID", "status must be Paid, Failed, or Reconciled");
+
+      const result = await applyPaymentGatewayCallback({
+        gatewayTxnId,
+        status,
+        gatewayRef,
+        rawBody: body,
+        scopedLocationIds: req.scopedLocationIds,
+      });
+      if (!result.ok) {
+        return sendApiError(res, result.httpStatus, result.code, result.message);
       }
 
-      const [log] = await db.select().from(paymentGatewayLog).where(eq(paymentGatewayLog.gatewayTxnId, gatewayTxnId)).limit(1);
-      if (!log) return sendApiError(res, 404, "PAYMENT_LOG_NOT_FOUND", "Payment log not found");
+      writeAuditLogSystem(
+        {
+          module: "Receipts",
+          action: "PaymentCallback",
+          recordId: result.receiptId,
+          beforeValue: { receipt: result.receiptBefore, paymentGatewayLog: result.logBefore },
+          afterValue: {
+            receipt: result.receiptAfter,
+            paymentGatewayLog: result.logAfter,
+            actor: "payment_webhook",
+            gatewayTxnId: result.gatewayTxnId,
+            status: result.status,
+          },
+        },
+        { ip: getRequestClientIp(req) },
+      ).catch((e) => console.error("Audit log failed:", e));
 
-      const [receipt] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, log.receiptId)).limit(1);
-      if (!receipt) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
-      const scopedIds = req.scopedLocationIds;
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(receipt.yardId)) {
-        return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
-      }
-
-      await db
-        .update(paymentGatewayLog)
-        .set({
-          status,
-          gatewayResponse: body.gatewayResponse ?? body,
-        })
-        .where(eq(paymentGatewayLog.id, log.id));
-
-      await db
-        .update(iomsReceipts)
-        .set({
-          status,
-          ...(gatewayRef != null && { gatewayRef }),
-        })
-        .where(eq(iomsReceipts.id, receipt.id));
-
-      const [updatedLog] = await db.select().from(paymentGatewayLog).where(eq(paymentGatewayLog.id, log.id)).limit(1);
-      const [updatedReceipt] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, receipt.id)).limit(1);
-      if (!updatedReceipt) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
-
-      writeAuditLog(req, {
-        module: "Receipts",
-        action: "PaymentCallback",
-        recordId: receipt.id,
-        beforeValue: { receipt, paymentGatewayLog: log },
-        afterValue: { receipt: updatedReceipt, paymentGatewayLog: updatedLog ?? null },
-      }).catch((e) => console.error("Audit log failed:", e));
-
-      res.json(updatedReceipt);
+      res.json(result.receiptAfter);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to process callback");

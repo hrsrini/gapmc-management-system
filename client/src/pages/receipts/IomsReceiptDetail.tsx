@@ -86,7 +86,7 @@ export default function IomsReceiptDetail() {
   const callbackPaidMutation = useMutation({
     mutationFn: async () => {
       if (!gatewayTxnId) throw new Error("No gatewayTxnId to callback");
-      const res = await fetch(`/api/ioms/receipts/payments/callback`, {
+      const res = await fetch(`/api/ioms/receipts/${id}/payments/dev-simulate-callback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -137,6 +137,31 @@ export default function IomsReceiptDetail() {
     a.click();
   };
 
+  const downloadServerPdf = async () => {
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/ioms/receipts/${id}/pdf`, { credentials: "include" });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t || res.statusText);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `receipt-${(receipt?.receiptNo ?? id).replace(/[^\w.-]+/g, "_")}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "PDF downloaded", description: "Server-generated receipt PDF." });
+    } catch (e: unknown) {
+      toast({
+        title: "PDF failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
   useEffect(() => {
     if (!id) setLocation("/receipts/ioms");
   }, [id, setLocation]);
@@ -183,6 +208,9 @@ export default function IomsReceiptDetail() {
               <a href={`/verify/${encodeURIComponent(receipt.receiptNo)}`} target="_blank" rel="noopener noreferrer">
                 Public verify <ExternalLink className="h-4 w-4 ml-1" />
               </a>
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => downloadServerPdf()}>
+              <Download className="h-4 w-4 mr-1" /> PDF
             </Button>
           </div>
         </CardHeader>

@@ -3,6 +3,11 @@ import type { Request } from "express";
 
 type ReqWithRaw = Request & { rawBody?: Buffer };
 
+/** When true, `PAYMENT_WEBHOOK_HMAC_SECRET` must be set or the callback returns 503 (production hardening). */
+export function isPaymentWebhookHmacMandatory(): boolean {
+  return process.env.PAYMENT_WEBHOOK_REQUIRE_HMAC === "true";
+}
+
 /**
  * When `PAYMENT_WEBHOOK_HMAC_SECRET` is set, callbacks must send `X-Payment-Signature`
  * (or `X-Signature-Hmac-Sha256`) equal to lowercase hex SHA256-HMAC of the **raw** JSON body.

@@ -56,10 +56,10 @@ export default function DakOutwardForm() {
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (row: { id: string }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/dak/outward"] });
       toast({ title: "Outward created" });
-      setLocation("/correspondence/outward");
+      setLocation(`/correspondence/outward/${row.id}`);
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });

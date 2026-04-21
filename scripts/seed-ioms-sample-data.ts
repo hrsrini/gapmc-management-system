@@ -578,15 +578,49 @@ async function seed() {
     const d1 = nanoid();
     const d2 = nanoid();
     await db.insert(dakInward).values([
-      { id: d1, yardId, diaryNo: "DAK-IN-2025-001", receivedDate: "2025-02-01", fromParty: "Dept of Agriculture", subject: "Circular on MSP", modeOfReceipt: "Post", status: "Pending", assignedTo: "Clerk", deadline: "2025-02-28", createdAt: now },
-      { id: d2, yardId: yardIds[1] ?? yardId, receivedDate: "2025-02-10", fromParty: "APMC HQ", subject: "Meeting notice", modeOfReceipt: "Email", status: "InProgress", createdAt: now },
+      {
+        id: d1,
+        yardId,
+        diaryNo: "DAK-IN-2025-001",
+        receivedDate: "2025-02-01",
+        fromParty: "Dept of Agriculture",
+        subject: "Circular on MSP",
+        modeOfReceipt: "Post",
+        status: "Pending",
+        assignedTo: "Clerk",
+        deadline: "2025-02-28",
+        attachments: null,
+        createdAt: now,
+      },
+      {
+        id: d2,
+        yardId: yardIds[1] ?? yardId,
+        receivedDate: "2025-02-10",
+        fromParty: "APMC HQ",
+        subject: "Meeting notice",
+        modeOfReceipt: "Email",
+        status: "InProgress",
+        attachments: null,
+        createdAt: now,
+      },
     ]);
     inwardId1 = d1;
     await db.insert(dakActionLog).values([
       { id: nanoid(), inwardId: d1, actionBy: userId, actionDate: now, actionNote: "Received and filed", statusAfter: "Pending" },
     ]);
     await db.insert(dakOutward).values([
-      { id: nanoid(), yardId, despatchNo: "DAK-OUT-2025-001", despatchDate: "2025-02-05", toParty: "Dept of Agriculture", subject: "Reply to circular", modeOfDespatch: "Post", inwardRefId: d1, createdAt: now },
+      {
+        id: nanoid(),
+        yardId,
+        despatchNo: "DAK-OUT-2025-001",
+        despatchDate: "2025-02-05",
+        toParty: "Dept of Agriculture",
+        subject: "Reply to circular",
+        modeOfDespatch: "Post",
+        inwardRefId: d1,
+        attachments: null,
+        createdAt: now,
+      },
     ]);
     console.log("Seeded dak inward, outward, action log");
   }

@@ -19,7 +19,8 @@ function serializeAuditField(value: unknown): unknown {
   return value != null ? JSON.parse(JSON.stringify(value)) : null;
 }
 
-function getClientIp(req: Request): string | null {
+/** Client IP for audit rows (honours `trust proxy` when set). */
+export function getRequestClientIp(req: Request): string | null {
   const forwarded = req.headers["x-forwarded-for"];
   if (forwarded) {
     const first = typeof forwarded === "string" ? forwarded.split(",")[0] : forwarded[0];
@@ -32,7 +33,7 @@ export async function writeAuditLog(req: Request, entry: AuditEntry): Promise<vo
   const userId = req.user?.id;
   if (!userId) return;
 
-  const ip = getClientIp(req);
+  const ip = getRequestClientIp(req);
   const now = new Date().toISOString();
   await db.insert(auditLog).values({
     id: nanoid(),
@@ -55,8 +56,11 @@ export function getAuditSystemUserId(): string {
   return process.env.AUDIT_SYSTEM_USER_ID?.trim() || "system";
 }
 
-/** For cron/batch jobs with no authenticated user. */
-export async function writeAuditLogSystem(entry: AuditEntry): Promise<void> {
+/** For cron/batch jobs (and server-to-server webhooks) with no authenticated user. */
+export async function writeAuditLogSystem(
+  entry: AuditEntry,
+  opts?: { ip?: string | null },
+): Promise<void> {
   const userId = getAuditSystemUserId();
   const now = new Date().toISOString();
   await db.insert(auditLog).values({
@@ -67,7 +71,7 @@ export async function writeAuditLogSystem(entry: AuditEntry): Promise<void> {
     recordId: entry.recordId ?? null,
     beforeValue: serializeAuditField(entry.beforeValue) as Record<string, unknown> | null,
     afterValue: serializeAuditField(entry.afterValue) as Record<string, unknown> | null,
-    ip: null,
+    ip: opts?.ip ?? null,
     createdAt: now,
   });
 }

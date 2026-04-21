@@ -180,9 +180,48 @@ export async function registerRoutes(
     try {
       const { generateMonthlyAmcBillsIfMissing } = await import("./cron-amc-bills");
       const result = await generateMonthlyAmcBillsIfMissing();
+      if (result.disabled) {
+        return res.json({
+          ok: true,
+          ...result,
+          message: "AMC auto-generation is off: set amc_monthly_auto_generate to true in Admin → Config.",
+        });
+      }
       return res.json({ ok: true, ...result });
     } catch (e) {
       console.error("Cron AMC monthly bills failed:", e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
+    }
+  });
+
+  app.post("/api/cron/data-retention-audit", async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers["x-cron-secret"] !== secret) {
+      return sendApiError(res, 401, "CRON_UNAUTHORIZED", "Unauthorized");
+    }
+    try {
+      const { runDataRetentionAuditJob } = await import("./data-retention-audit");
+      const { getRequestClientIp } = await import("./audit");
+      const summary = await runDataRetentionAuditJob({ ip: getRequestClientIp(req) });
+      return res.json({ ok: true, ...summary });
+    } catch (e) {
+      console.error("Cron data retention audit failed:", e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
+    }
+  });
+
+  /** One-shot SLA tick (same logic as hourly in-process loop). Secured by CRON_SECRET when set. */
+  app.post("/api/cron/sla-reminder-tick", async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers["x-cron-secret"] !== secret) {
+      return sendApiError(res, 401, "CRON_UNAUTHORIZED", "Unauthorized");
+    }
+    try {
+      const { runSlaTick } = await import("./sla-reminder");
+      await runSlaTick();
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error("Cron SLA reminder tick failed:", e);
       return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
     }
   });

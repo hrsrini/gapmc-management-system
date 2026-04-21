@@ -341,6 +341,8 @@ export const iomsReceipts = gapmc.table("ioms_receipts", {
   cgst: doublePrecision("cgst").default(0),
   sgst: doublePrecision("sgst").default(0),
   totalAmount: doublePrecision("total_amount").notNull(),
+  /** Rent TDS u/s 194-I (INR) when receipt is linked to M-03 rent invoice; shown on PDF. */
+  tdsAmount: doublePrecision("tds_amount").default(0),
   paymentMode: text("payment_mode").notNull(), // Online | Cash | Cheque | DD
   gatewayRef: text("gateway_ref"),
   chequeNo: text("cheque_no"),
@@ -591,6 +593,10 @@ export const rentInvoices = gapmc.table("rent_invoices", {
   cgst: doublePrecision("cgst").notNull(),
   sgst: doublePrecision("sgst").notNull(),
   totalAmount: doublePrecision("total_amount").notNull(),
+  /** Section 194-I style: when annualized rent exceeds threshold and PAN is valid on the tenant licence. */
+  tdsApplicable: boolean("tds_applicable").default(false),
+  /** TDS on rent component for this period (INR); excludes GST components. */
+  tdsAmount: doublePrecision("tds_amount").default(0),
   isGovtEntity: boolean("is_govt_entity").default(false),
   status: text("status").notNull(), // Draft | Verified | Approved | Paid | Cancelled
   doUser: text("do_user"),
@@ -607,7 +613,7 @@ export const rentDepositLedger = gapmc.table("rent_deposit_ledger", {
   tenantLicenceId: text("tenant_licence_id").notNull(),
   assetId: text("asset_id").notNull(),
   entryDate: text("entry_date").notNull(),
-  entryType: text("entry_type").notNull(), // OpeningBalance | Rent | Interest | CGST | SGST | Collection
+  entryType: text("entry_type").notNull(), // OpeningBalance | Rent | Interest | CGST | SGST | Collection | ChequeDishonour
   debit: doublePrecision("debit").default(0),
   credit: doublePrecision("credit").default(0),
   balance: doublePrecision("balance").notNull(),
@@ -962,6 +968,8 @@ export const dakInward = gapmc.table("dak_inward", {
   assignedTo: text("assigned_to"),
   deadline: text("deadline"),
   fileRef: text("file_ref"),
+  /** Stored scan/file names under uploads/dak/inward/{id}/ (see dak attachment routes). */
+  attachments: jsonb("attachments").$type<string[]>(),
   status: text("status").notNull(), // Pending | InProgress | Closed
   createdAt: text("created_at"),
 });
@@ -977,6 +985,8 @@ export const dakOutward = gapmc.table("dak_outward", {
   modeOfDespatch: text("mode_of_despatch").notNull(),
   inwardRefId: text("inward_ref_id"),
   fileRef: text("file_ref"),
+  /** Stored scan/file names under uploads/dak/outward/{id}/ (see dak attachment routes). */
+  attachments: jsonb("attachments").$type<string[]>(),
   despatchedBy: text("despatched_by"),
   createdAt: text("created_at"),
 });

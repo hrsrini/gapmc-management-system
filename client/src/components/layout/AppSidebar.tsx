@@ -200,7 +200,7 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
     items: [
       { title: 'Roles', icon: Shield, href: '/admin/roles' },
       { title: 'Locations', icon: MapPin, href: '/admin/locations' },
-      { title: 'Config', icon: Settings, href: '/admin/config' },
+      { title: 'Config & PDF logo', icon: Settings, href: '/admin/config' },
       { title: 'Audit Log', icon: ScrollText, href: '/admin/audit' },
       { title: 'Permission matrix', icon: Grid3X3, href: '/admin/permissions' },
       { title: 'SLA config', icon: Clock, href: '/admin/sla-config' },

@@ -4,7 +4,9 @@
  * Workflow: DO creates Draft; DV verifies (→Verified); DA approves (→Approved/Rejected) and pays (→Paid).
  * Scoped by user yards.
  */
-import type { Express } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
+import multer from "multer";
+import fs from "fs";
 import { eq, desc, and, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { expenditureHeads, paymentVouchers, advanceRequests } from "@shared/db-schema";
@@ -19,6 +21,41 @@ import {
 import { validateDaRejection, validateDvReturnToDraft } from "@shared/workflow-rejection";
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
+import { routeParamString } from "./route-params";
+import {
+  contentTypeForVoucherAttachment,
+  ensureVoucherAttachmentsDir,
+  extFromVoucherAttachmentMime,
+  isAllowedVoucherAttachmentFileName,
+  unlinkVoucherAttachmentIfExists,
+  voucherAttachmentFilePath,
+} from "./voucher-attachment-storage";
+
+const MAX_VOUCHER_ATTACHMENTS = 20;
+
+const voucherAttachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 5 },
+  fileFilter(_req, file, cb) {
+    if (extFromVoucherAttachmentMime(file.mimetype)) return cb(null, true);
+    cb(new Error("VOUCHER_ATTACHMENT_MIME"));
+  },
+});
+
+function multerVoucherAttachments(req: Request, res: Response, next: NextFunction): void {
+  voucherAttachmentUpload.array("files", 5)(req, res, (err: unknown) => {
+    if (!err) return next();
+    const msg = err instanceof Error ? err.message : "Upload failed";
+    if (msg === "VOUCHER_ATTACHMENT_MIME") {
+      return sendApiError(res, 400, "VOUCHER_ATTACHMENT_MIME", "Only PDF, PNG, or JPEG files are allowed.");
+    }
+    if (err && typeof err === "object" && (err as { code?: string }).code === "LIMIT_FILE_SIZE") {
+      return sendApiError(res, 400, "VOUCHER_ATTACHMENT_TOO_LARGE", "Each file must be 8 MB or smaller.");
+    }
+    console.error(err);
+    return sendApiError(res, 400, "VOUCHER_ATTACHMENT_UPLOAD_FAILED", msg);
+  });
+}
 
 function formatIsoDateToDDMMYYYY(isoYmd: string): string {
   const part = String(isoYmd).trim().slice(0, 10);
@@ -75,7 +112,7 @@ export function registerVoucherRoutes(app: Express) {
 
   app.put("/api/ioms/expenditure-heads/:id", async (req, res) => {
     try {
-      const id = req.params.id;
+      const id = routeParamString(req.params.id);
       const [before] = await db.select().from(expenditureHeads).where(eq(expenditureHeads.id, id)).limit(1);
       if (!before) return sendApiError(res, 404, "EXPENDITURE_HEAD_NOT_FOUND", "Not found");
       const body = req.body;
@@ -275,7 +312,8 @@ export function registerVoucherRoutes(app: Express) {
 
   app.get("/api/ioms/vouchers/:id", async (req, res) => {
     try {
-      const [row] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, req.params.id)).limit(1);
+      const voucherId = routeParamString(req.params.id);
+      const [row] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, voucherId)).limit(1);
       if (!row) return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Voucher not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(row.yardId)) {
@@ -285,6 +323,149 @@ export function registerVoucherRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch voucher");
+    }
+  });
+
+  /** M-06: upload supporting documents (Draft / Submitted only; DO / Admin). */
+  app.post("/api/ioms/vouchers/:id/attachments", multerVoucherAttachments, async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const [existing] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Voucher not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(existing.yardId)) {
+        return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Voucher not found");
+      }
+      if (existing.status !== "Draft" && existing.status !== "Submitted") {
+        return sendApiError(
+          res,
+          403,
+          "VOUCHER_ATTACHMENT_STATUS",
+          "Supporting documents can only be added while the voucher is Draft or Submitted.",
+        );
+      }
+      if (!canEditDraftVoucher(req.user)) {
+        return sendApiError(res, 403, "VOUCHER_ATTACHMENT_DENIED", "Only Data Originator or Admin can upload attachments.");
+      }
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      if (!files.length) {
+        return sendApiError(res, 400, "VOUCHER_ATTACHMENT_REQUIRED", "Choose one or more files (field name: files).");
+      }
+      const prev = Array.isArray(existing.supportingDocs) ? [...existing.supportingDocs] : [];
+      if (prev.length >= MAX_VOUCHER_ATTACHMENTS) {
+        return sendApiError(
+          res,
+          400,
+          "VOUCHER_ATTACHMENT_LIMIT",
+          `At most ${MAX_VOUCHER_ATTACHMENTS} supporting files per voucher.`,
+        );
+      }
+      const room = MAX_VOUCHER_ATTACHMENTS - prev.length;
+      const take = files.slice(0, room);
+      const added: string[] = [];
+      ensureVoucherAttachmentsDir(id);
+      for (const file of take) {
+        const ext = extFromVoucherAttachmentMime(file.mimetype);
+        if (!ext) continue;
+        const stored = `${nanoid(16)}${ext}`;
+        const dest = voucherAttachmentFilePath(id, stored);
+        fs.writeFileSync(dest, file.buffer);
+        added.push(stored);
+      }
+      if (!added.length) {
+        return sendApiError(res, 400, "VOUCHER_ATTACHMENT_REQUIRED", "No valid files were saved.");
+      }
+      const nextDocs = [...prev, ...added];
+      await db.update(paymentVouchers).set({ supportingDocs: nextDocs }).where(eq(paymentVouchers.id, id));
+      const [row] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, id));
+      writeAuditLog(req, {
+        module: "Vouchers",
+        action: "UploadAttachments",
+        recordId: id,
+        beforeValue: { supportingDocs: prev },
+        afterValue: { supportingDocs: nextDocs },
+      }).catch((e) => console.error("Audit log failed:", e));
+      res.status(201).json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to upload voucher attachments");
+    }
+  });
+
+  app.get("/api/ioms/vouchers/:id/files/:fileName", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const fileName = routeParamString(req.params.fileName);
+      if (!isAllowedVoucherAttachmentFileName(fileName)) {
+        return sendApiError(res, 400, "VOUCHER_ATTACHMENT_NAME_INVALID", "Invalid file name");
+      }
+      const [existing] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Voucher not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(existing.yardId)) {
+        return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Voucher not found");
+      }
+      const docs = Array.isArray(existing.supportingDocs) ? existing.supportingDocs : [];
+      if (!docs.includes(fileName)) {
+        return sendApiError(res, 404, "VOUCHER_ATTACHMENT_NOT_FOUND", "File not found for this voucher");
+      }
+      const abs = voucherAttachmentFilePath(id, fileName);
+      if (!fs.existsSync(abs)) {
+        return sendApiError(res, 404, "VOUCHER_ATTACHMENT_NOT_FOUND", "File missing on server");
+      }
+      const buf = fs.readFileSync(abs);
+      res.setHeader("Content-Type", contentTypeForVoucherAttachment(fileName));
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.send(buf);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read attachment");
+    }
+  });
+
+  app.delete("/api/ioms/vouchers/:id/files/:fileName", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const fileName = routeParamString(req.params.fileName);
+      if (!isAllowedVoucherAttachmentFileName(fileName)) {
+        return sendApiError(res, 400, "VOUCHER_ATTACHMENT_NAME_INVALID", "Invalid file name");
+      }
+      const [existing] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Voucher not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(existing.yardId)) {
+        return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Voucher not found");
+      }
+      if (existing.status !== "Draft" && existing.status !== "Submitted") {
+        return sendApiError(
+          res,
+          403,
+          "VOUCHER_ATTACHMENT_STATUS",
+          "Attachments can only be removed while the voucher is Draft or Submitted.",
+        );
+      }
+      if (!canEditDraftVoucher(req.user)) {
+        return sendApiError(res, 403, "VOUCHER_ATTACHMENT_DENIED", "Only Data Originator or Admin can remove attachments.");
+      }
+      const prev = Array.isArray(existing.supportingDocs) ? [...existing.supportingDocs] : [];
+      if (!prev.includes(fileName)) {
+        return sendApiError(res, 404, "VOUCHER_ATTACHMENT_NOT_FOUND", "File not found for this voucher");
+      }
+      const nextDocs = prev.filter((n) => n !== fileName);
+      unlinkVoucherAttachmentIfExists(id, fileName);
+      await db.update(paymentVouchers).set({ supportingDocs: nextDocs.length ? nextDocs : null }).where(eq(paymentVouchers.id, id));
+      const [row] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, id));
+      writeAuditLog(req, {
+        module: "Vouchers",
+        action: "DeleteAttachment",
+        recordId: id,
+        beforeValue: { supportingDocs: prev },
+        afterValue: { supportingDocs: row?.supportingDocs ?? null },
+      }).catch((e) => console.error("Audit log failed:", e));
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete attachment");
     }
   });
 
@@ -338,7 +519,7 @@ export function registerVoucherRoutes(app: Express) {
 
   app.put("/api/ioms/vouchers/:id", async (req, res) => {
     try {
-      const id = req.params.id;
+      const id = routeParamString(req.params.id);
       const [existing] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, id)).limit(1);
       if (!existing) {
         return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Voucher not found");
@@ -447,13 +628,14 @@ export function registerVoucherRoutes(app: Express) {
 
   app.get("/api/ioms/vouchers/:voucherId/advances", async (req, res) => {
     try {
-      const [voucher] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, req.params.voucherId)).limit(1);
+      const vid = routeParamString(req.params.voucherId);
+      const [voucher] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, vid)).limit(1);
       if (!voucher) return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Voucher not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(voucher.yardId)) {
         return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Voucher not found");
       }
-      const list = await db.select().from(advanceRequests).where(eq(advanceRequests.voucherId, req.params.voucherId));
+      const list = await db.select().from(advanceRequests).where(eq(advanceRequests.voucherId, vid));
       res.json(list);
     } catch (e) {
       console.error(e);
