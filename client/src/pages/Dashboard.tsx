@@ -28,13 +28,21 @@ interface Stats {
   todaysCollection: number;
 }
 
-const quickActions = [
+const quickActions: {
+  title: string;
+  description: string;
+  href: string;
+  icon: typeof FileText;
+  color: string;
+  module: string;
+}[] = [
   {
     title: 'Rent/Tax Module',
     description: 'Manage rent invoices and GST',
     href: '/rent',
     icon: FileText,
     color: 'text-primary',
+    module: 'M-03',
   },
   {
     title: 'Trader Profiles',
@@ -42,6 +50,7 @@ const quickActions = [
     href: '/traders',
     icon: UserPlus,
     color: 'text-accent',
+    module: 'M-02',
   },
   {
     title: 'Market Fee',
@@ -49,6 +58,7 @@ const quickActions = [
     href: '/market-fee',
     icon: Wallet,
     color: 'text-amber-600',
+    module: 'M-04',
   },
   {
     title: 'Receipts',
@@ -56,6 +66,7 @@ const quickActions = [
     href: '/receipts',
     icon: Receipt,
     color: 'text-slate-600',
+    module: 'M-05',
   },
 ];
 
@@ -63,6 +74,8 @@ export default function Dashboard() {
   const { user, can } = useAuth();
   const displayName = user?.name?.trim() || user?.email || 'there';
   const canHrRead = can('M-01', 'Read');
+  const canM05Read = can('M-05', 'Read');
+  const visibleQuickActions = useMemo(() => quickActions.filter((a) => can(a.module, 'Read')), [can]);
 
   const { data: stats, isLoading: statsLoading } = useQuery<Stats>({
     queryKey: ['/api/stats'],
@@ -197,7 +210,7 @@ export default function Dashboard() {
         <div>
           <h2 className="text-lg font-semibold mb-4">Quick Actions</h2>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            {quickActions.map((action) => (
+            {visibleQuickActions.map((action) => (
               <Link key={action.title} href={action.href}>
                 <Card className="h-full hover-elevate cursor-pointer group" data-testid={`card-action-${action.title.toLowerCase().replace(/\s+/g, '-')}`}>
                   <CardContent className="p-6">
@@ -224,11 +237,13 @@ export default function Dashboard() {
               <CardTitle>Recent Activity</CardTitle>
               <CardDescription>Latest actions in the system</CardDescription>
             </div>
-            <Button variant="outline" size="sm" asChild>
-              <Link href="/receipts" data-testid="button-view-all-activity">
-                View All
-              </Link>
-            </Button>
+            {canM05Read && (
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/receipts" data-testid="button-view-all-activity">
+                  View All
+                </Link>
+              </Button>
+            )}
           </CardHeader>
           <CardContent>
             {logsLoading ? (

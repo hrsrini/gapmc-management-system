@@ -328,8 +328,32 @@ export function registerReportsRoutes(app: Express) {
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
 
       if (format === "csv") {
-        const headers = ["id", "receiptNo", "yardId", "revenueHead", "payerName", "amount", "totalAmount", "paymentMode", "status", "createdAt"];
-        const rows = list.map((r) => [r.id, r.receiptNo, r.yardId, r.revenueHead, r.payerName, r.amount, r.totalAmount, r.paymentMode, r.status, r.createdAt]);
+        const headers = [
+          "id",
+          "receiptNo",
+          "yardId",
+          "revenueHead",
+          "payerName",
+          "unifiedEntityId",
+          "amount",
+          "totalAmount",
+          "paymentMode",
+          "status",
+          "createdAt",
+        ];
+        const rows = list.map((r) => [
+          r.id,
+          r.receiptNo,
+          r.yardId,
+          r.revenueHead,
+          r.payerName,
+          r.unifiedEntityId,
+          r.amount,
+          r.totalAmount,
+          r.paymentMode,
+          r.status,
+          r.createdAt,
+        ]);
         const csv = [headers.join(","), ...rows.map(toCsvRow)].join("\r\n");
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", "attachment; filename=receipt-register.csv");
@@ -350,6 +374,7 @@ export function registerReportsRoutes(app: Express) {
               ilike(iomsReceipts.paymentMode, pattern),
               ilike(iomsReceipts.status, pattern),
               ilike(iomsReceipts.id, pattern),
+              ilike(iomsReceipts.unifiedEntityId, pattern),
               sql`cast(${iomsReceipts.amount} as text) ilike ${pattern}`,
               sql`cast(${iomsReceipts.totalAmount} as text) ilike ${pattern}`,
             )!,
@@ -530,6 +555,7 @@ export function registerReportsRoutes(app: Express) {
           yardId: iomsReceipts.yardId,
           revenueHead: iomsReceipts.revenueHead,
           payerName: iomsReceipts.payerName,
+          unifiedEntityId: iomsReceipts.unifiedEntityId,
           amount: iomsReceipts.amount,
           cgst: iomsReceipts.cgst,
           sgst: iomsReceipts.sgst,
@@ -600,6 +626,7 @@ export function registerReportsRoutes(app: Express) {
           payerName: (r as { payerName?: string | null }).payerName,
           payeeName: (r as { payeeName?: string | null }).payeeName,
           voucherType: (r as { voucherType?: string | null }).voucherType,
+          unifiedEntityId: (r as { unifiedEntityId?: string | null }).unifiedEntityId,
           amount: r.amount,
           cgst: r.cgst,
           sgst: r.sgst,
@@ -647,9 +674,12 @@ export function registerReportsRoutes(app: Express) {
               const dr = isReceipt ? String(total) : "";
               const cr = isReceipt ? "" : String(total);
               const vt = (r as { voucherType?: string | null }).voucherType;
-              const narration = isReceipt
-                ? `IOMS receipt ${r.docNo} ${r.revenueHead ?? ""}`.trim()
-                : `IOMS payment ${r.docNo} ${[r.revenueHead, vt].filter(Boolean).join(" · ")}`.trim();
+              const uid = String((r as { unifiedEntityId?: string | null }).unifiedEntityId ?? "").trim();
+              const narration = (
+                isReceipt
+                  ? `IOMS receipt ${r.docNo} ${r.revenueHead ?? ""}`.trim()
+                  : `IOMS payment ${r.docNo} ${[r.revenueHead, vt].filter(Boolean).join(" · ")}`.trim()
+              ).concat(uid ? ` · ${uid}` : "");
               return toCsvRow([dateOnly, voucherType, r.docNo, party, ledger, group, dr, cr, narration]);
             }),
           ].join("\r\n");
@@ -658,7 +688,20 @@ export function registerReportsRoutes(app: Express) {
           return res.send("\uFEFF" + csv);
         }
 
-        const headers = ["kind", "docNo", "date", "yardId", "head", "amount", "cgst", "sgst", "totalAmount", "tallyLedgerId", "tallyLedgerName"];
+        const headers = [
+          "kind",
+          "docNo",
+          "date",
+          "yardId",
+          "head",
+          "unifiedEntityId",
+          "amount",
+          "cgst",
+          "sgst",
+          "totalAmount",
+          "tallyLedgerId",
+          "tallyLedgerName",
+        ];
         const csv = [
           headers.join(","),
           ...rows.map((r) =>
@@ -668,6 +711,7 @@ export function registerReportsRoutes(app: Express) {
               r.date,
               r.yardId,
               r.revenueHead,
+              (r as { unifiedEntityId?: string | null }).unifiedEntityId ?? "",
               r.amount,
               r.cgst,
               r.sgst,

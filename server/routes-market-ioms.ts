@@ -33,7 +33,13 @@ import { sendApiError } from "./api-errors";
 import { HrEmployeeRuleError, normalizeAadhaarMasked, normalizeMobile10 } from "./hr-employee-rules";
 import { validateDvReturnToDraft } from "@shared/workflow-rejection";
 import { createIomsReceipt } from "./routes-receipts-ioms";
+import { unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
+import {
+  assertIsoTransactionDate,
+  marketFeePercentMatchesResolved,
+  resolveMarketFeePercentForPurchase,
+} from "./market-fee-resolve";
 
 function sendHrRule(res: Response, e: unknown): boolean {
   if (e instanceof HrEmployeeRuleError) {
@@ -124,6 +130,42 @@ export function registerMarketIomsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch fee rates");
+    }
+  });
+
+  /** Resolved market fee % for a yard + commodity + transaction date (matrix, else system_config market_fee_percent). */
+  app.get("/api/ioms/market/fee-preview", async (req, res) => {
+    try {
+      const yardId = String(req.query.yardId ?? "").trim();
+      const commodityId = String(req.query.commodityId ?? "").trim();
+      const transactionDate = String(req.query.transactionDate ?? "").trim();
+      if (!yardId || !commodityId || !transactionDate) {
+        return sendApiError(
+          res,
+          400,
+          "IOMS_MARKET_FEE_PREVIEW_FIELDS",
+          "yardId, commodityId and transactionDate query parameters are required",
+        );
+      }
+      let td: string;
+      try {
+        td = assertIsoTransactionDate(transactionDate);
+      } catch {
+        return sendApiError(res, 400, "IOMS_MARKET_FEE_PREVIEW_DATE", "transactionDate must be YYYY-MM-DD");
+      }
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
+        return sendApiError(res, 403, "IOMS_MARKET_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
+      const resolved = await resolveMarketFeePercentForPurchase({ yardId, commodityId, transactionDate: td });
+      res.json({
+        marketFeePercent: resolved.feePercent,
+        source: resolved.source,
+        rateId: resolved.rateId,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to resolve market fee");
     }
   });
 
@@ -374,21 +416,24 @@ export function registerMarketIomsRoutes(app: Express) {
       const traderLicenceId = String(body.traderLicenceId ?? "");
       const quantity = Number(body.quantity ?? 0);
       const declaredValue = Number(body.declaredValue ?? 0);
-      const marketFeePercent = Number(body.marketFeePercent ?? 0);
-      const computedMarketFeeAmount = Number(((declaredValue * marketFeePercent) / 100).toFixed(2));
-      const marketFeeAmount = body.marketFeeAmount != null ? Number(body.marketFeeAmount) : computedMarketFeeAmount;
-      const transactionDate = String(body.transactionDate ?? "");
+      const transactionDateRaw = String(body.transactionDate ?? "");
       const unit = String(body.unit ?? "");
       const purchaseType = String(body.purchaseType ?? "");
       const weight = body.weight != null ? Number(body.weight) : null;
 
-      if (!yardId || !commodityId || !traderLicenceId || !transactionDate || !unit || !purchaseType) {
+      if (!yardId || !commodityId || !traderLicenceId || !transactionDateRaw || !unit || !purchaseType) {
         return sendApiError(
           res,
           400,
           "PURCHASE_TX_FIELDS_REQUIRED",
           "yardId, commodityId, traderLicenceId, transactionDate, unit and purchaseType are required",
         );
+      }
+      let transactionDate: string;
+      try {
+        transactionDate = assertIsoTransactionDate(transactionDateRaw);
+      } catch {
+        return sendApiError(res, 400, "PURCHASE_TX_TRANSACTION_DATE_INVALID", "transactionDate must be YYYY-MM-DD");
       }
       if (Number.isNaN(quantity) || quantity <= 0) {
         return sendApiError(res, 400, "PURCHASE_TX_QUANTITY_INVALID", "quantity must be greater than 0");
@@ -399,22 +444,6 @@ export function registerMarketIomsRoutes(app: Express) {
           400,
           "PURCHASE_TX_DECLARED_VALUE_INVALID",
           "declaredValue must be a non-negative number",
-        );
-      }
-      if (Number.isNaN(marketFeePercent) || marketFeePercent < 0 || marketFeePercent > 100) {
-        return sendApiError(
-          res,
-          400,
-          "PURCHASE_TX_MARKET_FEE_PERCENT_INVALID",
-          "marketFeePercent must be between 0 and 100",
-        );
-      }
-      if (Number.isNaN(marketFeeAmount) || marketFeeAmount < 0) {
-        return sendApiError(
-          res,
-          400,
-          "PURCHASE_TX_MARKET_FEE_AMOUNT_INVALID",
-          "marketFeeAmount must be a non-negative number",
         );
       }
       if (weight != null && (Number.isNaN(weight) || weight < 0)) {
@@ -428,7 +457,14 @@ export function registerMarketIomsRoutes(app: Express) {
       const [commodity] = await db.select({ id: commodities.id }).from(commodities).where(eq(commodities.id, commodityId)).limit(1);
       if (!commodity) return sendApiError(res, 404, "PURCHASE_TX_COMMODITY_NOT_FOUND", "Commodity not found");
       const [licence] = await db
-        .select({ id: traderLicences.id, yardId: traderLicences.yardId, status: traderLicences.status })
+        .select({
+          id: traderLicences.id,
+          yardId: traderLicences.yardId,
+          status: traderLicences.status,
+          isBlocked: traderLicences.isBlocked,
+          validFrom: traderLicences.validFrom,
+          validTo: traderLicences.validTo,
+        })
         .from(traderLicences)
         .where(eq(traderLicences.id, traderLicenceId))
         .limit(1);
@@ -439,6 +475,81 @@ export function registerMarketIomsRoutes(app: Express) {
           400,
           "PURCHASE_TX_LICENCE_YARD_MISMATCH",
           "Trader licence belongs to a different yard",
+        );
+      }
+      if (licence.status !== "Active") {
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_TRADER_NOT_ACTIVE",
+          `Trader licence must be Active for purchases (current status: ${licence.status}).`,
+        );
+      }
+      if (licence.isBlocked) {
+        return sendApiError(res, 400, "PURCHASE_TX_TRADER_BLOCKED", "Trader licence is blocked.");
+      }
+      const vf = licence.validFrom?.trim() ?? "";
+      const vt = licence.validTo?.trim() ?? "";
+      const iso = /^\d{4}-\d{2}-\d{2}$/;
+      if (vf && iso.test(vf) && vt && iso.test(vt)) {
+        if (transactionDate < vf || transactionDate > vt) {
+          return sendApiError(
+            res,
+            400,
+            "PURCHASE_TX_TRADER_OUTSIDE_VALIDITY",
+            "Transaction date is outside the trader licence valid period.",
+          );
+        }
+      }
+
+      const resolved = await resolveMarketFeePercentForPurchase({ yardId, commodityId, transactionDate });
+      const marketFeePercent = resolved.feePercent;
+      const bodyHasPercent =
+        body.marketFeePercent !== undefined && body.marketFeePercent !== null && String(body.marketFeePercent).trim() !== "";
+      if (bodyHasPercent) {
+        const bodyPercent = Number(body.marketFeePercent);
+        if (Number.isNaN(bodyPercent) || bodyPercent < 0 || bodyPercent > 100) {
+          return sendApiError(
+            res,
+            400,
+            "PURCHASE_TX_MARKET_FEE_PERCENT_INVALID",
+            "marketFeePercent must be between 0 and 100",
+          );
+        }
+        if (!marketFeePercentMatchesResolved(bodyPercent, marketFeePercent)) {
+          return sendApiError(
+            res,
+            400,
+            "PURCHASE_TX_MARKET_FEE_PERCENT_MISMATCH",
+            `marketFeePercent must match the effective rate for this commodity, yard, and date (${marketFeePercent}%). Omit marketFeePercent to accept the server rate.`,
+          );
+        }
+      }
+
+      const computedMarketFeeAmount = Number(((declaredValue * marketFeePercent) / 100).toFixed(2));
+      const marketFeeAmount = body.marketFeeAmount != null ? Number(body.marketFeeAmount) : computedMarketFeeAmount;
+      if (Number.isNaN(marketFeePercent) || marketFeePercent < 0 || marketFeePercent > 100) {
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_MARKET_FEE_PERCENT_INVALID",
+          "Resolved marketFeePercent must be between 0 and 100",
+        );
+      }
+      if (Number.isNaN(marketFeeAmount) || marketFeeAmount < 0) {
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_MARKET_FEE_AMOUNT_INVALID",
+          "marketFeeAmount must be a non-negative number",
+        );
+      }
+      if (Math.abs(marketFeeAmount - computedMarketFeeAmount) > 0.02) {
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_MARKET_FEE_AMOUNT_MISMATCH",
+          `marketFeeAmount must equal declaredValue × resolved fee % (${computedMarketFeeAmount.toFixed(2)}). Omit marketFeeAmount to accept the computed amount.`,
         );
       }
 
@@ -568,6 +679,51 @@ export function registerMarketIomsRoutes(app: Express) {
       if (updates.weight != null && (Number.isNaN(Number(updates.weight)) || Number(updates.weight) < 0)) {
         return sendApiError(res, 400, "PURCHASE_TX_WEIGHT_INVALID", "weight must be a non-negative number");
       }
+
+      const isDraftOriginal = existing.status === "Draft" && existing.entryKind === "Original";
+      if (isDraftOriginal && (updates.marketFeePercent != null || updates.marketFeeAmount != null)) {
+        const mergedYard = updates.yardId != null ? String(updates.yardId) : String(existing.yardId ?? "");
+        const mergedCommodity = updates.commodityId != null ? String(updates.commodityId) : String(existing.commodityId ?? "");
+        const mergedDateRaw =
+          updates.transactionDate != null ? String(updates.transactionDate) : String(existing.transactionDate ?? "");
+        let td: string;
+        try {
+          td = assertIsoTransactionDate(mergedDateRaw);
+        } catch {
+          return sendApiError(res, 400, "PURCHASE_TX_TRANSACTION_DATE_INVALID", "transactionDate must be YYYY-MM-DD");
+        }
+        const mergedDeclared =
+          updates.declaredValue != null ? Number(updates.declaredValue) : Number(existing.declaredValue ?? 0);
+        const resolved = await resolveMarketFeePercentForPurchase({
+          yardId: mergedYard,
+          commodityId: mergedCommodity,
+          transactionDate: td,
+        });
+        if (updates.marketFeePercent != null) {
+          if (!marketFeePercentMatchesResolved(Number(updates.marketFeePercent), resolved.feePercent)) {
+            return sendApiError(
+              res,
+              400,
+              "PURCHASE_TX_MARKET_FEE_PERCENT_MISMATCH",
+              `marketFeePercent must match the effective rate for this commodity, yard, and date (${resolved.feePercent}%).`,
+            );
+          }
+        }
+        const effectivePct =
+          updates.marketFeePercent != null ? Number(updates.marketFeePercent) : resolved.feePercent;
+        const computedAmt = Number(((mergedDeclared * effectivePct) / 100).toFixed(2));
+        if (updates.marketFeeAmount != null) {
+          if (Math.abs(Number(updates.marketFeeAmount) - computedAmt) > 0.02) {
+            return sendApiError(
+              res,
+              400,
+              "PURCHASE_TX_MARKET_FEE_AMOUNT_MISMATCH",
+              `marketFeeAmount must equal declaredValue × fee % (${computedAmt.toFixed(2)}).`,
+            );
+          }
+        }
+      }
+
       if (transition?.setDvUser) updates.dvUser = req.user?.id ?? null;
       if (transition?.setDaUser) updates.daUser = req.user?.id ?? null;
       if (dvReturnRemarks !== null) {
@@ -614,6 +770,7 @@ export function registerMarketIomsRoutes(app: Express) {
               paymentMode: "Cash",
               sourceModule: "M-04",
               sourceRecordId: responseRow.id,
+              unifiedEntityId: unifiedEntityIdFromTrackA(responseRow.traderLicenceId),
               createdBy,
             });
 

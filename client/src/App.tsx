@@ -42,6 +42,14 @@ import HrEmployeeDetail from "@/pages/hr/HrEmployeeDetail";
 import HrEmployeeForm from "@/pages/hr/HrEmployeeForm";
 import LeaveRequests from "@/pages/hr/LeaveRequests";
 import HrClaims from "@/pages/hr/HrClaims";
+import HrLeaveBalances from "@/pages/hr/HrLeaveBalances";
+import Entities from "@/pages/traders/Entities";
+import EntityDetail from "@/pages/traders/EntityDetail";
+import PreReceipts from "@/pages/traders/PreReceipts";
+import PreReceiptDetail from "@/pages/traders/PreReceiptDetail";
+import OutstandingDues from "@/pages/traders/OutstandingDues";
+import UnifiedEntities from "@/pages/traders/UnifiedEntities";
+import FunctionaryRegistrations from "@/pages/traders/FunctionaryRegistrations";
 import TraderLicences from "@/pages/traders/TraderLicences";
 import TraderLicenceForm from "@/pages/traders/TraderLicenceForm";
 import TraderLicenceDetail from "@/pages/traders/TraderLicenceDetail";
@@ -54,6 +62,7 @@ import IomsRentInvoiceDetail from "@/pages/rent/IomsRentInvoiceDetail";
 import IomsRentInvoiceForm from "@/pages/rent/IomsRentInvoiceForm";
 import IomsCreditNotes from "@/pages/rent/IomsCreditNotes";
 import RentLedger from "@/pages/rent/RentLedger";
+import RentRevisions from "@/pages/rent/RentRevisions";
 import CommoditiesList from "@/pages/market/CommoditiesList";
 import MarketTransactions from "@/pages/market/MarketTransactions";
 import FeeRatesList from "@/pages/market/FeeRatesList";
@@ -136,10 +145,13 @@ function Router() {
         <ProtectedRoute><IomsRentInvoiceDetail /></ProtectedRoute>
       </Route>
       <Route path="/rent/ioms/ledger">
-        <ProtectedRoute><RentLedger /></ProtectedRoute>
+        <ProtectedRoute><RequirePermission module="M-03" action="Read"><RentLedger /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/rent/ioms/revisions">
+        <ProtectedRoute><RequirePermission module="M-03" action="Read"><RentRevisions /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/rent/ioms/credit-notes">
-        <ProtectedRoute><IomsCreditNotes /></ProtectedRoute>
+        <ProtectedRoute><RequirePermission module="M-03" action="Read"><IomsCreditNotes /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/traders">
         <ProtectedRoute><TraderList /></ProtectedRoute>
@@ -349,6 +361,13 @@ function Router() {
       <Route path="/hr/leaves">
         <ProtectedRoute><LeaveRequests /></ProtectedRoute>
       </Route>
+      <Route path="/hr/leave-balances">
+        <ProtectedRoute>
+          <RequirePermission module="M-01" action="Read">
+            <HrLeaveBalances />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
       <Route path="/hr/claims">
         <ProtectedRoute><HrClaims /></ProtectedRoute>
       </Route>
@@ -371,6 +390,27 @@ function Router() {
       </Route>
       <Route path="/traders/licences">
         <ProtectedRoute><TraderLicences /></ProtectedRoute>
+      </Route>
+      <Route path="/traders/entities/:id">
+        <ProtectedRoute><RequirePermission module="M-02" action="Read"><EntityDetail /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/traders/entities">
+        <ProtectedRoute><RequirePermission module="M-02" action="Read"><Entities /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/traders/pre-receipts/:id">
+        <ProtectedRoute><RequirePermission module="M-02" action="Read"><PreReceiptDetail /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/traders/pre-receipts">
+        <ProtectedRoute><RequirePermission module="M-02" action="Read"><PreReceipts /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/traders/dues">
+        <ProtectedRoute><RequirePermission module="M-02" action="Read"><OutstandingDues /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/traders/unified-entities">
+        <ProtectedRoute><RequirePermission module="M-02" action="Read"><UnifiedEntities /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/traders/functionaries">
+        <ProtectedRoute><RequirePermission module="M-02" action="Read"><FunctionaryRegistrations /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/traders/blocking-log">
         <ProtectedRoute><TraderBlockingLog /></ProtectedRoute>

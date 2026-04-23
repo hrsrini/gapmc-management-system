@@ -20,7 +20,12 @@ import {
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import { assertRoleIdsNoDvDaConflict } from "./role-constraints";
-import { assertPersonalEmailFormat, HrEmployeeRuleError, normalizeMobile10 } from "./hr-employee-rules";
+import {
+  assertPasswordComplexityBrUsr10,
+  assertPersonalEmailFormat,
+  HrEmployeeRuleError,
+  normalizeMobile10,
+} from "./hr-employee-rules";
 
 function userSnapshotForAudit(u: Record<string, unknown> | undefined) {
   if (!u) return undefined;
@@ -295,9 +300,15 @@ export async function handleCreateEmployeeLogin(req: Request, res: Response, emp
       return;
     }
     const passwordStr = password != null ? String(password) : "";
-    if (passwordStr.length < 8) {
-      sendApiError(res, 400, "HR_LOGIN_PASSWORD_REQUIRED", "password required (min 8 characters)");
+    if (passwordStr.length === 0) {
+      sendApiError(res, 400, "HR_LOGIN_PASSWORD_REQUIRED", "password is required");
       return;
+    }
+    try {
+      assertPasswordComplexityBrUsr10(passwordStr);
+    } catch (e) {
+      if (sendHrRule(res, e)) return;
+      throw e;
     }
     if (Array.isArray(roleIds) && roleIds.length > 0) {
       const ridList = roleIds.map((r) => String(r));
@@ -407,9 +418,11 @@ export async function handleUpdateEmployeeLogin(req: Request, res: Response, emp
     let passwordUpdate: { passwordHash: string } | Record<string, never> = {};
     if (password !== undefined && password !== null && String(password) !== "") {
       const passwordStr = String(password);
-      if (passwordStr.length < 8) {
-        sendApiError(res, 400, "HR_LOGIN_PASSWORD_TOO_SHORT", "password must be at least 8 characters");
-        return;
+      try {
+        assertPasswordComplexityBrUsr10(passwordStr);
+      } catch (e) {
+        if (sendHrRule(res, e)) return;
+        throw e;
       }
       passwordUpdate = { passwordHash: await hash(passwordStr, 10) };
     }

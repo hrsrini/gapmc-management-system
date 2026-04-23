@@ -17,6 +17,8 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   rent_tds_annual_threshold_inr: "240000",
   /** M-03: TDS % applied to monthly rent (pre-GST) when threshold exceeded and PAN valid. */
   rent_tds_rate_percent: "10",
+  /** M-03 Sr.17: optional default % for “Adjust vs baseline” on rent revisions UI (0 = leave field empty). */
+  rent_revision_suggested_percent: "0",
   /** M-08: when `true`, cron / HTTP AMC monthly bill job may create rows; Excel default is manual (`false`). */
   amc_monthly_auto_generate: "false",
   /** M-05: allow unauthenticated receipt verify + public QR (`true` / `false`). Overridden if env `PUBLIC_RECEIPT_VERIFY_ENABLED=false`. */
@@ -53,6 +55,27 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   rent_dishonour_bank_charge_inr: "0",
   /** Retention policy (years) for M-10 `users` rows (created_at date when present). */
   data_retention_users_years: "7",
+  /**
+   * Policy age in years for `public.session` (connect-pg-simple): rows with expire ≤ cutoff unix.
+   * Count is 0 when the table does not exist (dev / memory session store).
+   */
+  data_retention_login_session_rows_years: "2",
+  /** M-02 trader_licences.created_at (when present). */
+  data_retention_trader_licences_years: "10",
+  /** M-02 pre_receipts: coalesce(issued_at, updated_at) date. */
+  data_retention_pre_receipts_years: "7",
+  /** M-03 rent_deposit_ledger.entry_date. */
+  data_retention_rent_deposit_ledger_years: "10",
+  /** M-01 leave_requests.from_date (application window start). */
+  data_retention_leave_requests_years: "10",
+  /** M-02 trader_blocking_log.actioned_at. */
+  data_retention_trader_blocking_log_years: "7",
+  /**
+   * M-01 TA/DA: JSON array of entitlement rows (pay level band, train class, DA A/B city INR/day, hotel ceilings).
+   * Default matches workbook "TADA Entitlement Matrix" (rates admin-editable).
+   */
+  ta_da_entitlement_json:
+    '[{"payLevel":"1-5","trainClass":"Sleeper / 3AC","daA":500,"daB":300,"hotelA":1000,"hotelB":800},{"payLevel":"6-8","trainClass":"AC 3 Tier","daA":800,"daB":500,"hotelA":2250,"hotelB":1500},{"payLevel":"9-11","trainClass":"AC 2 Tier","daA":1200,"daB":800,"hotelA":4500,"hotelB":3000},{"payLevel":"12-13","trainClass":"AC 1st Class","daA":1500,"daB":1000,"hotelA":7500,"hotelB":4500},{"payLevel":"14+","trainClass":"AC 1st / Air (Economy)","daA":2000,"daB":1200,"hotelA":10000,"hotelB":6000}]',
 } as const;
 
 export type SystemConfigKey = keyof typeof SYSTEM_CONFIG_DEFAULTS;
@@ -68,6 +91,7 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "rent_arrears_interest_percent_per_annum",
   "rent_tds_annual_threshold_inr",
   "rent_tds_rate_percent",
+  "rent_revision_suggested_percent",
   "amc_monthly_auto_generate",
   "public_receipt_verify_enabled",
   "expenditure_head_authority_url",
@@ -86,6 +110,13 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "rent_dishonour_bank_charge_hint",
   "rent_dishonour_bank_charge_inr",
   "data_retention_users_years",
+  "data_retention_login_session_rows_years",
+  "data_retention_trader_licences_years",
+  "data_retention_pre_receipts_years",
+  "data_retention_rent_deposit_ledger_years",
+  "data_retention_leave_requests_years",
+  "data_retention_trader_blocking_log_years",
+  "ta_da_entitlement_json",
 ];
 
 export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
@@ -98,6 +129,8 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   rent_arrears_interest_percent_per_annum: "Rent arrears interest % p.a. (simple daily; dishonour hint)",
   rent_tds_annual_threshold_inr: "Rent TDS: annual threshold (INR; monthly rent × 12 vs this)",
   rent_tds_rate_percent: "Rent TDS: % on monthly rent when above threshold + valid PAN",
+  rent_revision_suggested_percent:
+    "Rent revision UI: default % vs baseline (0 = empty; pre-fills Adjust field on /rent/ioms/revisions)",
   amc_monthly_auto_generate: "AMC: allow auto monthly bill cron (true|false)",
   public_receipt_verify_enabled: "Public receipt verification (true|false)",
   expenditure_head_authority_url: "Expenditure head authority URL (optional)",
@@ -116,4 +149,12 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   rent_dishonour_bank_charge_hint: "Rent dishonour: optional bank charge / re-present note (shown in hints)",
   rent_dishonour_bank_charge_inr: "Rent dishonour: optional reference bank charge (INR; hints only)",
   data_retention_users_years: "Retention policy (years) — users (created_at) count snapshot",
+  data_retention_login_session_rows_years:
+    "Retention policy (years) — express-session public.session rows (expire ≤ cutoff; absent in dev/memory store)",
+  data_retention_trader_licences_years: "Retention policy (years) — trader_licences.created_at snapshot",
+  data_retention_pre_receipts_years: "Retention policy (years) — pre_receipts (issued_at, else updated_at) snapshot",
+  data_retention_rent_deposit_ledger_years: "Retention policy (years) — rent_deposit_ledger.entry_date snapshot",
+  data_retention_leave_requests_years: "Retention policy (years) — leave_requests.from_date snapshot",
+  data_retention_trader_blocking_log_years: "Retention policy (years) — trader_blocking_log.actioned_at snapshot",
+  ta_da_entitlement_json: "M-01 TA/DA: entitlement matrix JSON (payLevel, trainClass, daA, daB, hotelA, hotelB in INR)",
 };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -27,12 +27,15 @@ import {
   parseIndianMobile10Digits,
   sanitizeMobile10Input,
 } from "@shared/india-validation";
+import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
 
 const LICENCE_TYPES = ["Associated", "Functionary", "Hamali", "Weighman", "AssistantTrader"] as const;
 
 interface LicenceRow {
   id: string;
   licenceNo?: string | null;
+  parentLicenceId?: string | null;
+  applicationKind?: string | null;
   firmName: string;
   firmType?: string | null;
   yardId: string;
@@ -51,6 +54,15 @@ interface LicenceRow {
   isNonGstEntity?: boolean | null;
   dvReturnRemarks?: string | null;
   workflowRevisionCount?: number | null;
+  fatherSpouseName?: string | null;
+  dateOfBirth?: string | null;
+  emergencyContactMobile?: string | null;
+  characterCertIssuer?: string | null;
+  characterCertDate?: string | null;
+  bmFormDocUrl?: string | null;
+  bmFormDocFile?: string | null;
+  parentLicenceFeeSnapshot?: number | null;
+  renewalNoArrearsDeclared?: boolean | null;
 }
 
 async function readApiError(res: Response): Promise<string> {
@@ -60,6 +72,21 @@ async function readApiError(res: Response): Promise<string> {
     return j.message || j.error || t || res.statusText;
   } catch {
     return t || res.statusText;
+  }
+}
+
+function parseOptionalHttpUrlClient(v: string): { ok: true; value: string | null } | { ok: false; message: string } {
+  const t = v.trim();
+  if (!t) return { ok: true, value: null };
+  if (t.length > 4000) return { ok: false, message: "URL must be at most 4000 characters." };
+  try {
+    const u = new URL(t);
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      return { ok: false, message: "URL must start with http:// or https://." };
+    }
+    return { ok: true, value: t };
+  } catch {
+    return { ok: false, message: "Enter a valid URL or leave blank." };
   }
 }
 
@@ -96,6 +123,16 @@ export default function TraderLicenceForm() {
   const [validFrom, setValidFrom] = useState("");
   const [validTo, setValidTo] = useState("");
   const [nonGst, setNonGst] = useState(false);
+  const [applicationKind, setApplicationKind] = useState<"New" | "Renewal">("New");
+  const [parentLicenceId, setParentLicenceId] = useState<string>("");
+  const [fatherSpouseName, setFatherSpouseName] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
+  const [emergencyContactMobile, setEmergencyContactMobile] = useState("");
+  const [characterCertIssuer, setCharacterCertIssuer] = useState("");
+  const [characterCertDate, setCharacterCertDate] = useState("");
+  const [bmFormDocUrl, setBmFormDocUrl] = useState("");
+  const bmFileInputRef = useRef<HTMLInputElement>(null);
+  const [renewalNoArrearsDeclared, setRenewalNoArrearsDeclared] = useState(false);
 
   const { data: licence, isLoading: licenceLoading } = useQuery<LicenceRow>({
     queryKey: ["/api/ioms/traders/licences", editId],
@@ -103,6 +140,15 @@ export default function TraderLicenceForm() {
   });
 
   const issued = Boolean(licence?.licenceNo && String(licence.licenceNo).trim());
+
+  useEffect(() => {
+    if (!isNew) return;
+    const sp = new URLSearchParams(window.location.search);
+    const lt = sp.get("licenceType");
+    if (lt && LICENCE_TYPES.includes(lt as (typeof LICENCE_TYPES)[number])) {
+      setLicenceType(lt);
+    }
+  }, [isNew]);
 
   useEffect(() => {
     if (!licence) return;
@@ -121,6 +167,15 @@ export default function TraderLicenceForm() {
     setValidFrom(licence.validFrom?.slice(0, 10) ?? "");
     setValidTo(licence.validTo?.slice(0, 10) ?? "");
     setNonGst(Boolean(licence.isNonGstEntity));
+    setApplicationKind((licence.applicationKind === "Renewal" ? "Renewal" : "New") as "New" | "Renewal");
+    setParentLicenceId(licence.parentLicenceId ?? "");
+    setFatherSpouseName(licence.fatherSpouseName ?? "");
+    setDateOfBirth(licence.dateOfBirth?.slice(0, 10) ?? "");
+    setEmergencyContactMobile(sanitizeMobile10Input(licence.emergencyContactMobile ?? ""));
+    setCharacterCertIssuer(licence.characterCertIssuer ?? "");
+    setCharacterCertDate(licence.characterCertDate?.slice(0, 10) ?? "");
+    setBmFormDocUrl(licence.bmFormDocUrl ?? "");
+    setRenewalNoArrearsDeclared(Boolean(licence.renewalNoArrearsDeclared));
   }, [licence]);
 
   const buildPayload = (status: "Draft" | "Pending"): Record<string, unknown> => {
@@ -128,6 +183,7 @@ export default function TraderLicenceForm() {
     const fee =
       feeAmount.trim() === "" ? null : Number(feeAmount);
     const aTrim = aadhaarInput.trim();
+    const bmParsed = parseOptionalHttpUrlClient(bmFormDocUrl);
     const base: Record<string, unknown> = {
       firmName: firmName.trim(),
       firmType: firmType.trim() || null,
@@ -144,6 +200,15 @@ export default function TraderLicenceForm() {
       validTo: validTo.trim() || null,
       status,
       isNonGstEntity: nonGst,
+      applicationKind,
+      parentLicenceId: parentLicenceId.trim() || null,
+      fatherSpouseName: fatherSpouseName.trim() || null,
+      dateOfBirth: dateOfBirth.trim() || null,
+      emergencyContactMobile: parseIndianMobile10Digits(emergencyContactMobile) || null,
+      characterCertIssuer: characterCertIssuer.trim() || null,
+      characterCertDate: characterCertDate.trim() || null,
+      bmFormDocUrl: bmParsed.ok ? bmParsed.value : null,
+      renewalNoArrearsDeclared,
     };
     if (isNew) {
       base.aadhaarToken = aTrim || null;
@@ -153,7 +218,7 @@ export default function TraderLicenceForm() {
     return base;
   };
 
-  const validate = (): boolean => {
+  const validate = (status: "Draft" | "Pending"): boolean => {
     if (!firmName.trim()) {
       toast({ title: "Validation", description: "Firm / trader name is required.", variant: "destructive" });
       return false;
@@ -179,6 +244,64 @@ export default function TraderLicenceForm() {
         variant: "destructive",
       });
       return false;
+    }
+    const bmUrlCheck = parseOptionalHttpUrlClient(bmFormDocUrl);
+    if (!bmUrlCheck.ok) {
+      toast({ title: "BM supporting document", description: bmUrlCheck.message, variant: "destructive" });
+      return false;
+    }
+    if (status === "Pending") {
+      if (applicationKind === "Renewal" && !renewalNoArrearsDeclared) {
+        toast({
+          title: "BK declaration",
+          description: "Confirm no outstanding market / licence arrears on the previous licence before submitting.",
+          variant: "destructive",
+        });
+        return false;
+      }
+      if (traderLicenceUsesBmSupplement(licenceType)) {
+        if (!fatherSpouseName.trim()) {
+          toast({
+            title: "Form BM",
+            description: "Father / spouse name is required for this licence type.",
+            variant: "destructive",
+          });
+          return false;
+        }
+        if (!dateOfBirth.trim()) {
+          toast({ title: "Form BM", description: "Date of birth is required.", variant: "destructive" });
+          return false;
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth.trim())) {
+          toast({ title: "Form BM", description: "Date of birth must be YYYY-MM-DD.", variant: "destructive" });
+          return false;
+        }
+        const em = parseIndianMobile10Digits(emergencyContactMobile);
+        if (!em) {
+          toast({
+            title: "Form BM",
+            description: "Emergency contact mobile (10 digits) is required.",
+            variant: "destructive",
+          });
+          return false;
+        }
+        if (!characterCertIssuer.trim()) {
+          toast({
+            title: "Form BM",
+            description: "Character certificate issuing authority is required.",
+            variant: "destructive",
+          });
+          return false;
+        }
+        if (characterCertDate.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(characterCertDate.trim())) {
+          toast({
+            title: "Form BM",
+            description: "Character certificate date must be YYYY-MM-DD or left blank.",
+            variant: "destructive",
+          });
+          return false;
+        }
+      }
     }
     return true;
   };
@@ -218,6 +341,42 @@ export default function TraderLicenceForm() {
     onError: (e: Error) => {
       toast({ title: "Save failed", description: e.message, variant: "destructive" });
     },
+  });
+
+  const uploadBmMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/ioms/traders/licences/${encodeURIComponent(editId!)}/bm-form-document`, {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      if (!res.ok) throw new Error(await readApiError(res));
+      return (await res.json()) as LicenceRow;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/traders/licences", editId] });
+      if (bmFileInputRef.current) bmFileInputRef.current.value = "";
+      toast({ title: "Uploaded", description: "BM supporting document file saved." });
+    },
+    onError: (e: Error) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteBmMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/ioms/traders/licences/${encodeURIComponent(editId!)}/bm-form-document`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await readApiError(res));
+      return (await res.json()) as LicenceRow;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/traders/licences", editId] });
+      toast({ title: "Removed", description: "Uploaded BM file removed." });
+    },
+    onError: (e: Error) => toast({ title: "Remove failed", description: e.message, variant: "destructive" }),
   });
 
   if (!isNew && !canUpdate) {
@@ -274,7 +433,7 @@ export default function TraderLicenceForm() {
 
   const saving = saveMutation.isPending;
   const onSave = (status: "Draft" | "Pending") => {
-    if (!validate()) return;
+    if (!validate(status)) return;
     saveMutation.mutate({ status });
   };
 
@@ -311,6 +470,50 @@ export default function TraderLicenceForm() {
                 <AlertTitle>Returned for correction</AlertTitle>
                 <AlertDescription className="whitespace-pre-wrap">{licence.dvReturnRemarks}</AlertDescription>
               </Alert>
+            ) : null}
+
+            {!isNew ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label>Application kind</Label>
+                  <Input value={applicationKind} readOnly />
+                </div>
+                <div className="space-y-1">
+                  <Label>Parent licence (for renewals)</Label>
+                  {parentLicenceId ? (
+                    <Button variant="outline" size="sm" asChild className="w-fit">
+                      <Link href={`/traders/licences/${encodeURIComponent(parentLicenceId)}`}>
+                        View parent
+                      </Link>
+                    </Button>
+                  ) : (
+                    <p className="text-sm text-muted-foreground py-2">—</p>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            {applicationKind === "Renewal" ? (
+              <div className="rounded-md border bg-muted/30 p-4 space-y-3">
+                <p className="text-sm font-medium">Form BK — Section 54 renewal</p>
+                {licence?.parentLicenceFeeSnapshot != null && Number.isFinite(Number(licence.parentLicenceFeeSnapshot)) ? (
+                  <p className="text-sm text-muted-foreground">
+                    Parent licence fee on file at renewal:{" "}
+                    <span className="font-medium text-foreground">₹{Number(licence.parentLicenceFeeSnapshot).toLocaleString()}</span>
+                  </p>
+                ) : null}
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    id="bk-no-arrears"
+                    checked={renewalNoArrearsDeclared}
+                    onCheckedChange={(c) => setRenewalNoArrearsDeclared(c === true)}
+                  />
+                  <Label htmlFor="bk-no-arrears" className="font-normal cursor-pointer leading-snug">
+                    I declare there are no outstanding market-fee or licence-fee arrears against the previous licence
+                    (required to submit this renewal for review).
+                  </Label>
+                </div>
+              </div>
             ) : null}
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -357,6 +560,102 @@ export default function TraderLicenceForm() {
                   </SelectContent>
                 </Select>
               </div>
+              {traderLicenceUsesBmSupplement(licenceType) ? (
+                <div className="space-y-4 sm:col-span-2 rounded-md border p-4">
+                  <p className="text-sm font-medium">Form BM — Market functionary</p>
+                  <p className="text-xs text-muted-foreground">
+                    Go-live may still require the full SRS functionary checklist, role-specific approvals, and photo
+                    capture beyond the fields below.
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>Father / spouse name *</Label>
+                      <Input value={fatherSpouseName} onChange={(e) => setFatherSpouseName(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Date of birth *</Label>
+                      <Input type="date" value={dateOfBirth} onChange={(e) => setDateOfBirth(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Emergency contact mobile *</Label>
+                      <Input
+                        value={emergencyContactMobile}
+                        onChange={(e) => setEmergencyContactMobile(sanitizeMobile10Input(e.target.value))}
+                        inputMode="numeric"
+                        maxLength={10}
+                        placeholder="10-digit mobile"
+                      />
+                    </div>
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label>Character certificate — issuing authority *</Label>
+                      <Input value={characterCertIssuer} onChange={(e) => setCharacterCertIssuer(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Character certificate — date</Label>
+                      <Input type="date" value={characterCertDate} onChange={(e) => setCharacterCertDate(e.target.value)} />
+                    </div>
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label>Supporting document — URL (optional)</Label>
+                      <Input
+                        value={bmFormDocUrl}
+                        onChange={(e) => setBmFormDocUrl(e.target.value)}
+                        placeholder="https://… (scan or hosted file)"
+                        autoComplete="off"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Paste a public https link to the supporting document if available; must start with http:// or https://.
+                      </p>
+                    </div>
+                    {isNew ? (
+                      <p className="text-xs text-muted-foreground sm:col-span-2">
+                        Save the application once as a draft, then reopen this screen to upload a BM scan (PDF or image), or keep using a URL only.
+                      </p>
+                    ) : !issued && (canCreate || canUpdate) ? (
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label>Supporting document — file (optional)</Label>
+                        <p className="text-xs text-muted-foreground">
+                          PDF, PNG, or JPEG, max 10 MB. Stored in the application blob store. Replaces any previous upload.
+                        </p>
+                        {licence?.bmFormDocFile ? (
+                          <div className="flex flex-wrap items-center gap-2 text-sm">
+                            <a
+                              href={`/api/ioms/traders/licences/${encodeURIComponent(editId!)}/bm-form-document`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary font-medium hover:underline"
+                            >
+                              View uploaded file
+                            </a>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={deleteBmMutation.isPending}
+                              onClick={() => deleteBmMutation.mutate()}
+                            >
+                              Remove file
+                            </Button>
+                          </div>
+                        ) : null}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Input
+                            ref={bmFileInputRef}
+                            type="file"
+                            accept=".pdf,.png,.jpeg,.jpg,application/pdf,image/png,image/jpeg"
+                            className="max-w-xs cursor-pointer"
+                            disabled={uploadBmMutation.isPending}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) uploadBmMutation.mutate(f);
+                            }}
+                          />
+                          {uploadBmMutation.isPending ? <span className="text-sm text-muted-foreground">Uploading…</span> : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
               <div className="space-y-2">
                 <Label>Mobile *</Label>
                 <Input

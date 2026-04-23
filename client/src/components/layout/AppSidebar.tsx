@@ -94,41 +94,47 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
   {
     group: 'Rent & Tax',
     items: [
-      { title: 'Invoices', icon: FileText, href: '/rent' },
-      { title: 'Reports', icon: BarChart3, href: '/rent/reports' },
-      { title: 'IOMS Rent (M-03)', icon: FileText, href: '/rent/ioms' },
-      { title: 'Credit Notes (M-03)', icon: StickyNote, href: '/rent/ioms/credit-notes' },
-      { title: 'Rent deposit ledger', icon: BookOpen, href: '/rent/ioms/ledger' },
+      { title: 'Invoices', icon: FileText, href: '/rent', requirePermission: { module: 'M-03', action: 'Read' } },
+      { title: 'Reports', icon: BarChart3, href: '/rent/reports', requirePermission: { module: 'M-03', action: 'Read' } },
+      { title: 'IOMS Rent (M-03)', icon: FileText, href: '/rent/ioms', requirePermission: { module: 'M-03', action: 'Read' } },
+      { title: 'Credit Notes (M-03)', icon: StickyNote, href: '/rent/ioms/credit-notes', requirePermission: { module: 'M-03', action: 'Read' } },
+      { title: 'Rent deposit ledger', icon: BookOpen, href: '/rent/ioms/ledger', requirePermission: { module: 'M-03', action: 'Read' } },
+      { title: 'Rent revisions', icon: CalendarDays, href: '/rent/ioms/revisions', requirePermission: { module: 'M-03', action: 'Read' } },
     ]
   },
   {
     group: 'Traders',
     items: [
-      { title: 'Trader Directory', icon: Users, href: '/traders' },
-      { title: 'Agreements', icon: FileSignature, href: '/traders/agreements' },
-      { title: 'Licences (IOMS M-02)', icon: FileCheck, href: '/traders/licences' },
-      { title: 'Blocking log', icon: ShieldAlert, href: '/traders/blocking-log' },
+      { title: 'Trader Directory', icon: Users, href: '/traders', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Agreements', icon: FileSignature, href: '/traders/agreements', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Licences (IOMS M-02)', icon: FileCheck, href: '/traders/licences', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Functionary registrations (BM)', icon: FileCheck, href: '/traders/functionaries', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Entities (Track B)', icon: Building2, href: '/traders/entities', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Unified entities', icon: Building2, href: '/traders/unified-entities', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Pre-receipts (Govt)', icon: FileText, href: '/traders/pre-receipts', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Outstanding dues', icon: Wallet, href: '/traders/dues', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Blocking log', icon: ShieldAlert, href: '/traders/blocking-log', requirePermission: { module: 'M-02', action: 'Read' } },
     ]
   },
   {
     group: 'Assets (IOMS M-02)',
     items: [
-      { title: 'Asset Register', icon: Building2, href: '/assets' },
-      { title: 'Shop Allotments', icon: KeyRound, href: '/assets/allotments' },
-      { title: 'Shop Vacant', icon: Store, href: '/assets/vacant' },
+      { title: 'Asset Register', icon: Building2, href: '/assets', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Shop Allotments', icon: KeyRound, href: '/assets/allotments', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Shop Vacant', icon: Store, href: '/assets/vacant', requirePermission: { module: 'M-02', action: 'Read' } },
     ]
   },
   {
     group: 'Market Fee',
     items: [
-      { title: 'Fee Collection', icon: Wallet, href: '/market-fee' },
-      { title: 'Import/Export', icon: ArrowLeftRight, href: '/market-fee/entry' },
-      { title: 'Returns', icon: ClipboardList, href: '/market-fee/returns' },
+      { title: 'Fee Collection', icon: Wallet, href: '/market-fee', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Import/Export', icon: ArrowLeftRight, href: '/market-fee/entry', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Returns', icon: ClipboardList, href: '/market-fee/returns', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Commodities (M-04)', icon: Package, href: '/market/commodities', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Fee rates (M-04)', icon: Percent, href: '/market/fee-rates', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Farmers (M-04)', icon: Users, href: '/market/farmers', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Transactions (M-04)', icon: ArrowRightLeft, href: '/market/transactions', requirePermission: { module: 'M-04', action: 'Read' } },
-      { title: 'MSP settings (M-02)', icon: Percent, href: '/market/msp' },
+      { title: 'MSP settings (M-02)', icon: Percent, href: '/market/msp', requirePermission: { module: 'M-02', action: 'Read' } },
     ]
   },
   {
@@ -143,36 +149,36 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
   {
     group: 'Receipts',
     items: [
-      { title: 'All Receipts', icon: Receipt, href: '/receipts' },
+      { title: 'All Receipts', icon: Receipt, href: '/receipts', requirePermission: { module: 'M-05', action: 'Read' } },
       { title: 'Create Receipt', icon: PlusCircle, href: '/receipts/new', requirePermission: { module: 'M-05', action: 'Create' } },
-      { title: 'Ledger Reports', icon: BookOpen, href: '/receipts/ledger' },
-      { title: 'IOMS Receipts (M-05)', icon: Receipt, href: '/receipts/ioms' },
+      { title: 'Ledger Reports', icon: BookOpen, href: '/receipts/ledger', requirePermission: { module: 'M-05', action: 'Read' } },
+      { title: 'IOMS Receipts (M-05)', icon: Receipt, href: '/receipts/ioms', requirePermission: { module: 'M-05', action: 'Read' } },
       { title: 'Receipt reconciliation', icon: FileSignature, href: '/receipts/ioms/reconciliation', requirePermission: { module: 'M-05', action: 'Read' } },
-      { title: 'IOMS Reports & Export', icon: BarChart3, href: '/reports/ioms' },
+      { title: 'IOMS Reports & Export', icon: BarChart3, href: '/reports/ioms', requirePermission: { module: 'M-05', action: 'Read' } },
     ]
   },
   {
     group: 'Vouchers (IOMS M-06)',
     items: [
-      { title: 'Payment Vouchers', icon: Banknote, href: '/vouchers' },
-      { title: 'Monthly statement', icon: CalendarDays, href: '/vouchers/monthly-statement' },
+      { title: 'Payment Vouchers', icon: Banknote, href: '/vouchers', requirePermission: { module: 'M-06', action: 'Read' } },
+      { title: 'Monthly statement', icon: CalendarDays, href: '/vouchers/monthly-statement', requirePermission: { module: 'M-06', action: 'Read' } },
       { title: 'Create voucher', icon: PlusCircle, href: '/vouchers/create', requirePermission: { module: 'M-06', action: 'Create' } },
-      { title: 'Advance requests', icon: Wallet, href: '/vouchers/advances' },
+      { title: 'Advance requests', icon: Wallet, href: '/vouchers/advances', requirePermission: { module: 'M-06', action: 'Read' } },
     ]
   },
   {
     group: 'Fleet (IOMS M-07)',
     items: [
-      { title: 'Vehicles', icon: Truck, href: '/fleet' },
+      { title: 'Vehicles', icon: Truck, href: '/fleet', requirePermission: { module: 'M-07', action: 'Read' } },
     ]
   },
   {
     group: 'Construction (IOMS M-08)',
     items: [
-      { title: 'Works', icon: HardHat, href: '/construction' },
-      { title: 'AMC contracts', icon: FileCheck, href: '/construction/amc' },
-      { title: 'Land records', icon: MapPin, href: '/construction/land' },
-      { title: 'Fixed assets', icon: Building2, href: '/construction/fixed-assets' },
+      { title: 'Works', icon: HardHat, href: '/construction', requirePermission: { module: 'M-08', action: 'Read' } },
+      { title: 'AMC contracts', icon: FileCheck, href: '/construction/amc', requirePermission: { module: 'M-08', action: 'Read' } },
+      { title: 'Land records', icon: MapPin, href: '/construction/land', requirePermission: { module: 'M-08', action: 'Read' } },
+      { title: 'Fixed assets', icon: Building2, href: '/construction/fixed-assets', requirePermission: { module: 'M-08', action: 'Read' } },
     ]
   },
   {
@@ -189,9 +195,10 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
   {
     group: 'HR (IOMS M-01)',
     items: [
-      { title: 'Employees', icon: UserCircle, href: '/hr/employees' },
-      { title: 'Leave requests (M-01)', icon: Calendar, href: '/hr/leaves' },
-      { title: 'Claims (LTC / TA-DA)', icon: Wallet, href: '/hr/claims' },
+      { title: 'Employees', icon: UserCircle, href: '/hr/employees', requirePermission: { module: 'M-01', action: 'Read' } },
+      { title: 'Leave requests (M-01)', icon: Calendar, href: '/hr/leaves', requirePermission: { module: 'M-01', action: 'Read' } },
+      { title: 'Leave opening balances', icon: CalendarDays, href: '/hr/leave-balances', requirePermission: { module: 'M-01', action: 'Read' } },
+      { title: 'Claims (LTC / TA-DA)', icon: Wallet, href: '/hr/claims', requirePermission: { module: 'M-01', action: 'Read' } },
     ]
   },
   {

@@ -12,6 +12,8 @@ export type TallyExportFlatRow = {
   payerName?: string | null;
   payeeName?: string | null;
   voucherType?: string | null;
+  /** M-02 unified entity id on IOMS receipts (`TA:|TB:|AH:`); empty for payment vouchers. */
+  unifiedEntityId?: string | null;
   amount: number | null;
   cgst: number | null;
   sgst: number | null;
@@ -48,6 +50,7 @@ export function buildGapmcTallyInterchangeXmlV1(params: {
         `revenueHead="${esc(String(r.revenueHead ?? ""))}"`,
         `partyName="${esc(String(party))}"`,
         `voucherType="${esc(String(r.voucherType ?? ""))}"`,
+        `unifiedEntityId="${esc(String(r.unifiedEntityId ?? ""))}"`,
         `amount="${Number(r.amount ?? 0)}"`,
         `cgst="${Number(r.cgst ?? 0)}"`,
         `sgst="${Number(r.sgst ?? 0)}"`,

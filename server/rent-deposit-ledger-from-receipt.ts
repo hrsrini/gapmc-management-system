@@ -10,6 +10,7 @@ import { nanoid } from "nanoid";
 import { db } from "./db";
 import { writeAuditLogSystem } from "./audit";
 import { iomsReceipts, rentDepositLedger, rentInvoices } from "@shared/db-schema";
+import { unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
 type LedgerRow = InferSelectModel<typeof rentDepositLedger>;
@@ -60,6 +61,7 @@ export async function recordRentCollectionForM03Receipt(r: ReceiptRow): Promise<
   await db.insert(rentDepositLedger).values({
     id,
     tenantLicenceId: inv.tenantLicenceId,
+    unifiedEntityId: unifiedEntityIdFromTrackA(inv.tenantLicenceId),
     assetId: inv.assetId,
     entryDate,
     entryType: "Collection",
@@ -129,6 +131,7 @@ export async function recordChequeDishonourLedgerForM03Receipt(r: ReceiptRow): P
   await db.insert(rentDepositLedger).values({
     id,
     tenantLicenceId: inv.tenantLicenceId,
+    unifiedEntityId: unifiedEntityIdFromTrackA(inv.tenantLicenceId),
     assetId: inv.assetId,
     entryDate,
     entryType: "ChequeDishonour",

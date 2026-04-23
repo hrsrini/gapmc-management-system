@@ -4,12 +4,12 @@
  * Also seeds employee users with different roles (DO, DV, DA, READ_ONLY) for role-wise login testing.
  * Run after db:push and seed-ioms-m10. Usage: npm run db:seed-ioms-sample
  *
- * Role-wise logins (password for all: User@1234):
+ * Role-wise logins (password for all: GapmcUsers@2026!):
  *   do@gapmc.local      → Data Originator (DO)
  *   dv@gapmc.local      → Data Verifier (DV)
  *   da@gapmc.local      → Data Approver (DA)
  *   readonly@gapmc.local → Read Only
- *   admin@gapmc.local    → System Admin (from seed-ioms-m10; password: Apmc@2026)
+ *   admin@gapmc.local    → System Admin (from seed-ioms-m10; password: GapmcAdmin@2026!)
  */
 import "dotenv/config";
 import { hash } from "bcryptjs";
@@ -64,7 +64,7 @@ import {
 import { eq, asc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
-const EMPLOYEE_USER_PASSWORD = "User@1234";
+const EMPLOYEE_USER_PASSWORD = "GapmcUsers@2026!";
 
 async function seed() {
   const now = new Date().toISOString();
@@ -381,7 +381,7 @@ async function seed() {
   }
   const empIdForClaims = employeeId1 ?? (await db.select({ id: employees.id }).from(employees).limit(1))[0]?.id;
 
-  // ----- Employee users (role-wise login): DO, DV, DA, READ_ONLY; password User@1234 -----
+  // ----- Employee users (role-wise login): DO, DV, DA, READ_ONLY; password GapmcUsers@2026! -----
   const roleTiers = ["DO", "DV", "DA", "READ_ONLY"] as const;
   const employeeUserSpecs: {
     email: string;
@@ -795,8 +795,28 @@ async function seed() {
   const ledgerCount = await db.select().from(rentDepositLedger).limit(2);
   if (ledgerCount.length === 0) {
     await db.insert(rentDepositLedger).values([
-      { id: nanoid(), tenantLicenceId: "LIC-1", assetId: "ASSET-1", entryDate: "2025-01-01", entryType: "OpeningBalance", debit: 0, credit: 0, balance: 10000 },
-      { id: nanoid(), tenantLicenceId: "LIC-1", assetId: "ASSET-1", entryDate: "2025-02-01", entryType: "Rent", debit: 5900, credit: 0, balance: 15900 },
+      {
+        id: nanoid(),
+        tenantLicenceId: "LIC-1",
+        unifiedEntityId: "TA:LIC-1",
+        assetId: "ASSET-1",
+        entryDate: "2025-01-01",
+        entryType: "OpeningBalance",
+        debit: 0,
+        credit: 0,
+        balance: 10000,
+      },
+      {
+        id: nanoid(),
+        tenantLicenceId: "LIC-1",
+        unifiedEntityId: "TA:LIC-1",
+        assetId: "ASSET-1",
+        entryDate: "2025-02-01",
+        entryType: "Rent",
+        debit: 5900,
+        credit: 0,
+        balance: 15900,
+      },
     ]);
     console.log("Seeded rent deposit ledger");
   }

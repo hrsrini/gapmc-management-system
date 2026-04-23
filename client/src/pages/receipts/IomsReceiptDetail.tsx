@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useLocation } from "wouter";
+import { useParams, useLocation, Link } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +11,17 @@ import QRCode from "qrcode";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { formatDisplayDateTime } from "@/lib/dateFormat";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+
+interface RentArrearsDisclosure {
+  approxInterestInr: number;
+  overdueDays: number;
+  dueDateIso: string;
+  asOfIso: string;
+  principalInr: number;
+  ratePercentPerAnnum: number;
+  note: string;
+}
 
 interface IomsReceipt {
   id: string;
@@ -31,11 +42,13 @@ interface IomsReceipt {
   chequeDate?: string | null;
   sourceModule?: string | null;
   sourceRecordId?: string | null;
+  unifiedEntityId?: string | null;
   qrCodeUrl?: string | null;
   pdfUrl?: string | null;
   status: string;
   createdBy: string;
   createdAt: string;
+  rentArrearsDisclosure?: RentArrearsDisclosure | null;
 }
 interface YardRef {
   id: string;
@@ -215,6 +228,38 @@ export default function IomsReceiptDetail() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {receipt.rentArrearsDisclosure && receipt.sourceModule === "M-03" && receipt.sourceRecordId ? (
+            <Alert className="border-amber-500/40 bg-amber-500/5">
+              <AlertTitle className="text-amber-950 dark:text-amber-100">Rent arrears after prior dishonour</AlertTitle>
+              <AlertDescription className="text-foreground space-y-2 text-sm">
+                <p>
+                  A previous receipt for this rent invoice was reversed (cheque/DD dishonour). Simple interest from
+                  period end ({receipt.rentArrearsDisclosure.dueDateIso}) to this receipt date (
+                  {receipt.rentArrearsDisclosure.asOfIso}) is indicative only: about{" "}
+                  <strong>₹{receipt.rentArrearsDisclosure.approxInterestInr.toFixed(2)}</strong> over{" "}
+                  {receipt.rentArrearsDisclosure.overdueDays} day(s) at {receipt.rentArrearsDisclosure.ratePercentPerAnnum}
+                  % p.a. on principal ₹{receipt.rentArrearsDisclosure.principalInr.toFixed(2)}. It is{" "}
+                  <strong>not included</strong> in the receipt total above — confirm posting with finance.
+                </p>
+                <p className="flex flex-wrap gap-x-4 gap-y-1">
+                  <Link
+                    className="text-primary font-medium hover:underline"
+                    href={`/rent/ioms/invoices/${encodeURIComponent(receipt.sourceRecordId)}`}
+                  >
+                    Open rent invoice
+                  </Link>
+                  {receipt.unifiedEntityId ? (
+                    <Link
+                      className="text-primary font-medium hover:underline"
+                      href={`/rent/ioms/ledger?unifiedEntityId=${encodeURIComponent(receipt.unifiedEntityId)}`}
+                    >
+                      Rent deposit ledger
+                    </Link>
+                  ) : null}
+                </p>
+              </AlertDescription>
+            </Alert>
+          ) : null}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[receipt.yardId] ?? receipt.yardId}</div>
             <div><span className="text-muted-foreground">Revenue head</span><br />{receipt.revenueHead}</div>
@@ -227,6 +272,13 @@ export default function IomsReceiptDetail() {
             {receipt.gatewayRef && <div><span className="text-muted-foreground">Gateway ref</span><br />{receipt.gatewayRef}</div>}
             {receipt.chequeNo && <div><span className="text-muted-foreground">Cheque no</span><br />{receipt.chequeNo} {receipt.bankName ? `(${receipt.bankName})` : ""}</div>}
             {receipt.sourceModule && <div><span className="text-muted-foreground">Source</span><br />{receipt.sourceModule} {receipt.sourceRecordId ?? ""}</div>}
+            {receipt.unifiedEntityId ? (
+              <div className="md:col-span-2">
+                <span className="text-muted-foreground">Unified entity</span>
+                <br />
+                <span className="font-mono text-xs">{receipt.unifiedEntityId}</span>
+              </div>
+            ) : null}
             <div><span className="text-muted-foreground">Created</span><br />{formatDisplayDateTime(receipt.createdAt)} by {receipt.createdBy}</div>
             {canMockPay && receipt.status === "Pending" && (
               <div className="md:col-span-2">

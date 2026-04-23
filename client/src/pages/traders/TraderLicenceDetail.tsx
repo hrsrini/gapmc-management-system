@@ -9,7 +9,7 @@ import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert, Loader2, Trash2, Package, Pencil, MessageSquareWarning } from "lucide-react";
+import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert, Loader2, Trash2, Package, Pencil, MessageSquareWarning, Wallet, BookOpen } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -32,10 +32,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
 
 interface Licence {
   id: string;
   licenceNo?: string | null;
+  parentLicenceId?: string | null;
+  applicationKind?: string | null;
   firmName: string;
   firmType?: string | null;
   yardId: string;
@@ -61,6 +64,15 @@ interface Licence {
   daUser?: string | null;
   govtGstExemptCategoryId?: string | null;
   isNonGstEntity?: boolean | null;
+  fatherSpouseName?: string | null;
+  dateOfBirth?: string | null;
+  emergencyContactMobile?: string | null;
+  characterCertIssuer?: string | null;
+  characterCertDate?: string | null;
+  bmFormDocUrl?: string | null;
+  bmFormDocFile?: string | null;
+  parentLicenceFeeSnapshot?: number | null;
+  renewalNoArrearsDeclared?: boolean | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -103,6 +115,21 @@ interface ReceiptRef {
   receiptNo: string;
 }
 
+interface AssetRef {
+  id: string;
+  assetId: string;
+}
+interface AssetAllotmentRow {
+  id: string;
+  assetId: string;
+  traderLicenceId: string;
+  allotteeName: string;
+  fromDate: string;
+  toDate: string;
+  status: string;
+  securityDeposit?: number | null;
+}
+
 const stockColumns: ReportTableColumn[] = [
   { key: "commodityName", header: "Commodity" },
   { key: "quantity", header: "Qty", sortField: "quantity" },
@@ -117,6 +144,25 @@ const blockingColumns: ReportTableColumn[] = [
   { key: "actionedBy", header: "Actioned by" },
   { key: "actionedAt", header: "Actioned at" },
 ];
+
+const allotmentColumns: ReportTableColumn[] = [
+  { key: "assetDisplay", header: "Premises / Asset" },
+  { key: "allotteeName", header: "Allottee" },
+  { key: "fromDate", header: "From" },
+  { key: "toDate", header: "To" },
+  { key: "_status", header: "Status", sortField: "status" },
+  { key: "securityDeposit", header: "Security deposit" },
+];
+
+interface RenewPreview {
+  canRenew: boolean;
+  parentLicenceNo: string | null;
+  parentFeeAmount: number | null;
+  systemLicenceFee: number;
+  defaultRenewalFee: number;
+  resolutionSource: string;
+  resolutionNote: string;
+}
 
 export default function TraderLicenceDetail() {
   const { id } = useParams<{ id: string }>();
@@ -134,11 +180,40 @@ export default function TraderLicenceDetail() {
   const [stockRemarks, setStockRemarks] = useState("");
   const [queryDialogOpen, setQueryDialogOpen] = useState(false);
   const [queryRemarksDraft, setQueryRemarksDraft] = useState("");
+  const [renewDialogOpen, setRenewDialogOpen] = useState(false);
+  const [renewFeeDraft, setRenewFeeDraft] = useState("");
+  const [renewValidFrom, setRenewValidFrom] = useState("");
+  const [renewValidTo, setRenewValidTo] = useState("");
 
   const { data: licence, isLoading, isError } = useQuery<Licence>({
     queryKey: ["/api/ioms/traders/licences", id],
     enabled: !!id,
   });
+  const licenceIssued = Boolean(licence?.licenceNo && String(licence.licenceNo).trim());
+  const renewPreviewEnabled = Boolean(
+    renewDialogOpen && id && licence && licenceIssued && !licence.isBlocked && canUpdateLicence,
+  );
+  const { data: renewPreview, isLoading: renewPreviewLoading } = useQuery<RenewPreview>({
+    queryKey: ["licence-renew-preview", id],
+    enabled: renewPreviewEnabled,
+    queryFn: async (): Promise<RenewPreview> => {
+      const res = await fetch(`/api/ioms/traders/licences/${encodeURIComponent(id!)}/renew-preview`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t || res.statusText);
+      }
+      return (await res.json()) as RenewPreview;
+    },
+  });
+
+  useEffect(() => {
+    if (!renewDialogOpen || !renewPreview) return;
+    setRenewFeeDraft(String(renewPreview.defaultRenewalFee));
+    setRenewValidFrom("");
+    setRenewValidTo("");
+  }, [renewDialogOpen, renewPreview]);
   const { data: blockingLog = [] } = useQuery<BlockingLogEntry[]>({
     queryKey: [id ? `/api/ioms/traders/blocking-log?traderLicenceId=${encodeURIComponent(id)}` : ""],
     enabled: !!id,
@@ -160,6 +235,20 @@ export default function TraderLicenceDetail() {
   const { data: commodities = [] } = useQuery<CommodityRef[]>({
     queryKey: ["/api/ioms/commodities"],
   });
+  const { data: assets = [] } = useQuery<AssetRef[]>({
+    queryKey: ["/api/ioms/assets"],
+  });
+  const { data: allotments = [] } = useQuery<AssetAllotmentRow[]>({
+    queryKey: [id ? `/api/ioms/asset-allotments?traderLicenceId=${encodeURIComponent(id)}` : ""],
+    enabled: !!id,
+    queryFn: async () => {
+      const res = await fetch(`/api/ioms/asset-allotments?traderLicenceId=${encodeURIComponent(id!)}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to load allotments");
+      return res.json();
+    },
+  });
   const { data: stockOpenings = [], isLoading: stockLoading } = useQuery<StockOpeningRow[]>({
     queryKey: ["/api/ioms/traders/licences", id, "stock-openings"],
     enabled: !!id,
@@ -173,6 +262,7 @@ export default function TraderLicenceDetail() {
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
   const receiptById = Object.fromEntries(receipts.map((r) => [r.id, r.receiptNo]));
+  const assetDisplayById = useMemo(() => Object.fromEntries(assets.map((a) => [a.id, a.assetId])), [assets]);
   const exemptCategoryName =
     licence?.govtGstExemptCategoryId != null
       ? gstCategories.find((c) => c.id === licence.govtGstExemptCategoryId)?.name
@@ -195,6 +285,19 @@ export default function TraderLicenceDetail() {
       ),
     }));
   }, [blockingLog]);
+
+  const allotmentRows = useMemo((): Record<string, unknown>[] => {
+    return (allotments ?? []).map((a) => ({
+      id: a.id,
+      assetDisplay: assetDisplayById[a.assetId] ?? a.assetId,
+      allotteeName: a.allotteeName,
+      fromDate: a.fromDate,
+      toDate: a.toDate,
+      status: a.status,
+      securityDeposit: a.securityDeposit != null ? `₹${Number(a.securityDeposit).toLocaleString()}` : "—",
+      _status: <Badge variant={a.status === "Active" ? "default" : "secondary"}>{a.status}</Badge>,
+    }));
+  }, [allotments, assetDisplayById]);
 
   useEffect(() => {
     if (!id) setLocation("/traders/licences");
@@ -341,7 +444,32 @@ export default function TraderLicenceDetail() {
       toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
 
-  const licenceIssued = Boolean(licence?.licenceNo && String(licence.licenceNo).trim());
+  const renewMutation = useMutation({
+    mutationFn: async (args: { feeAmount?: number; validFrom?: string; validTo?: string }) => {
+      const body: Record<string, unknown> = {};
+      if (args.validFrom?.trim()) body.validFrom = args.validFrom.trim();
+      if (args.validTo?.trim()) body.validTo = args.validTo.trim();
+      if (args.feeAmount != null && Number.isFinite(args.feeAmount)) body.feeAmount = args.feeAmount;
+      const res = await fetch(`/api/ioms/traders/licences/${encodeURIComponent(id!)}/renew`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { message?: string; error?: string }).message ?? (data as { error?: string }).error ?? res.statusText);
+      return data as Licence;
+    },
+    onSuccess: (row) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/traders/licences"] });
+      setRenewDialogOpen(false);
+      toast({ title: "Renewal created", description: "Draft renewal application created. Please review and submit." });
+      setLocation(`/traders/licences/${row.id}/edit`);
+    },
+    onError: (e: Error) => toast({ title: "Renewal failed", description: e.message, variant: "destructive" }),
+  });
+
+  const canRenew = Boolean(canUpdateLicence && licenceIssued && licence && !licence.isBlocked);
   const canEditApplication =
     Boolean(canUpdateLicence && licence && !licenceIssued && !licence.isBlocked && licence.status !== "Rejected");
   const canReturnForQuery =
@@ -391,6 +519,23 @@ export default function TraderLicenceDetail() {
               {licence.licenceNo ?? licence.id} — {licence.firmName}
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" asChild>
+                <Link href={`/traders/dues?unifiedId=${encodeURIComponent(`TA:${licence.id}`)}`}>
+                  <Wallet className="h-4 w-4 mr-1" />
+                  Outstanding dues
+                </Link>
+              </Button>
+              <Button variant="outline" size="sm" asChild>
+                <Link href={`/rent/ioms/ledger?unifiedEntityId=${encodeURIComponent(`TA:${licence.id}`)}`}>
+                  <BookOpen className="h-4 w-4 mr-1" />
+                  Ledger
+                </Link>
+              </Button>
+              {canRenew ? (
+                <Button variant="outline" size="sm" onClick={() => setRenewDialogOpen(true)} disabled={renewMutation.isPending}>
+                  Renew
+                </Button>
+              ) : null}
               {canEditApplication ? (
                 <Button variant="outline" size="sm" asChild>
                   <Link href={`/traders/licences/${licence.id}/edit`}>
@@ -411,6 +556,20 @@ export default function TraderLicenceDetail() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="text-sm">
+              <span className="text-muted-foreground">Application kind</span>
+              <br />
+              {licence.applicationKind ?? "New"}
+              {licence.parentLicenceId ? (
+                <>
+                  {" "}
+                  —{" "}
+                  <Link href={`/traders/licences/${encodeURIComponent(licence.parentLicenceId)}`} className="text-primary hover:underline">
+                    View parent
+                  </Link>
+                </>
+              ) : null}
+            </div>
             {licence.status === "Query" && licence.dvReturnRemarks ? (
               <Alert variant="destructive" className="border-amber-600/50 bg-amber-500/10">
                 <MessageSquareWarning className="h-4 w-4" />
@@ -436,6 +595,61 @@ export default function TraderLicenceDetail() {
               <div><span className="text-muted-foreground">Address</span><br />{licence.address ?? "—"}</div>
               <div><span className="text-muted-foreground">PAN</span><br />{licence.pan ?? "—"}</div>
               <div><span className="text-muted-foreground">GSTIN</span><br />{licence.gstin ?? "—"}</div>
+              {traderLicenceUsesBmSupplement(licence.licenceType) ? (
+                <>
+                  <div><span className="text-muted-foreground">Father / spouse (BM)</span><br />{licence.fatherSpouseName ?? "—"}</div>
+                  <div><span className="text-muted-foreground">Date of birth (BM)</span><br />{formatYmdToDisplay(licence.dateOfBirth ?? "")}</div>
+                  <div><span className="text-muted-foreground">Emergency mobile (BM)</span><br />{licence.emergencyContactMobile ?? "—"}</div>
+                  <div><span className="text-muted-foreground">Character cert. issuer</span><br />{licence.characterCertIssuer ?? "—"}</div>
+                  <div><span className="text-muted-foreground">Character cert. date</span><br />{formatYmdToDisplay(licence.characterCertDate ?? "")}</div>
+                  <div className="sm:col-span-2">
+                    <span className="text-muted-foreground">Supporting document (BM)</span>
+                    <br />
+                    {licence.bmFormDocUrl?.trim() ? (
+                      <a
+                        href={licence.bmFormDocUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline break-all"
+                      >
+                        {licence.bmFormDocUrl}
+                      </a>
+                    ) : (
+                      "—"
+                    )}
+                  </div>
+                  {licence.bmFormDocFile?.trim() ? (
+                    <div className="sm:col-span-2">
+                      <span className="text-muted-foreground">BM uploaded file</span>
+                      <br />
+                      <a
+                        href={`/api/ioms/traders/licences/${encodeURIComponent(licence.id)}/bm-form-document`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline break-all"
+                      >
+                        Open supporting document
+                      </a>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+              {licence.applicationKind === "Renewal" ? (
+                <>
+                  <div>
+                    <span className="text-muted-foreground">BK — no-arrears declared</span>
+                    <br />
+                    {licence.renewalNoArrearsDeclared ? "Yes" : "No"}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Parent fee snapshot (BK)</span>
+                    <br />
+                    {licence.parentLicenceFeeSnapshot != null && Number.isFinite(Number(licence.parentLicenceFeeSnapshot))
+                      ? `₹${Number(licence.parentLicenceFeeSnapshot).toLocaleString()}`
+                      : "—"}
+                  </div>
+                </>
+              ) : null}
               <div><span className="text-muted-foreground">Aadhaar (masked)</span><br />{licence.aadhaarToken ?? "—"}</div>
               <div><span className="text-muted-foreground">Valid from</span><br />{formatYmdToDisplay(licence.validFrom ?? "")}</div>
               <div><span className="text-muted-foreground">Valid to</span><br />{formatYmdToDisplay(licence.validTo ?? "")}</div>
@@ -613,6 +827,40 @@ export default function TraderLicenceDetail() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
+              <FileCheck className="h-5 w-5" />
+              Premises allocations ({allotments.length})
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Premises (assets) allotted to this licence (equivalent to the Premises Allocation List in SRS).
+            </p>
+          </CardHeader>
+          <CardContent>
+            {allotments.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">
+                No allotments found for this licence. You can add one from{" "}
+                <Link href="/assets/allotments" className="text-primary hover:underline">
+                  Shop Allotments
+                </Link>
+                .
+              </p>
+            ) : (
+              <ClientDataGrid
+                columns={allotmentColumns}
+                sourceRows={allotmentRows}
+                searchKeys={["assetDisplay", "allotteeName", "fromDate", "toDate", "status"]}
+                searchPlaceholder="Search allotments…"
+                defaultSortKey="fromDate"
+                defaultSortDir="desc"
+                resetPageDependency={id}
+                emptyMessage="No allotments."
+              />
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
               <ShieldAlert className="h-5 w-5" />
               Blocking log ({blockingLog.length})
             </CardTitle>
@@ -635,6 +883,111 @@ export default function TraderLicenceDetail() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog
+          open={renewDialogOpen}
+          onOpenChange={(o) => {
+            setRenewDialogOpen(o);
+            if (!o) {
+              setRenewFeeDraft("");
+              setRenewValidFrom("");
+              setRenewValidTo("");
+            }
+          }}
+        >
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Renew licence (Form BK)</DialogTitle>
+            </DialogHeader>
+            {renewPreviewLoading ? (
+              <div className="py-6 text-sm text-muted-foreground">Loading fee preview…</div>
+            ) : renewPreview ? (
+              <div className="space-y-4 text-sm">
+                <Alert>
+                  <AlertTitle className="text-base">Draft renewal fee</AlertTitle>
+                  <AlertDescription className="text-foreground space-y-2">
+                    <p>
+                      Default for the new Draft:{" "}
+                      <span className="font-semibold tabular-nums">₹{Number(renewPreview.defaultRenewalFee).toLocaleString()}</span>
+                      {renewPreview.resolutionSource === "parent_licence_fee" ? (
+                        <> (from this licence&apos;s current fee)</>
+                      ) : (
+                        <> (from system <span className="font-mono">licence_fee</span> — parent had no fee)</>
+                      )}
+                    </p>
+                    <p className="text-muted-foreground text-xs">
+                      Parent fee:{" "}
+                      {renewPreview.parentFeeAmount != null
+                        ? `₹${Number(renewPreview.parentFeeAmount).toLocaleString()}`
+                        : "—"}
+                      {" · "}
+                      Config <span className="font-mono">licence_fee</span>: ₹
+                      {Number(renewPreview.systemLicenceFee).toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground">{renewPreview.resolutionNote}</p>
+                    <p className="text-xs text-muted-foreground">
+                      After fee is collected at the counter, record it in M-05 and link the receipt to this renewal when
+                      submitting.{" "}
+                      <Link href="/receipts/ioms" className="text-primary font-medium hover:underline">
+                        IOMS receipts register
+                      </Link>
+                      .
+                    </p>
+                  </AlertDescription>
+                </Alert>
+                <div className="space-y-1">
+                  <Label>Renewal fee (₹) for Draft</Label>
+                  <Input
+                    value={renewFeeDraft}
+                    onChange={(e) => setRenewFeeDraft(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="Adjust if needed"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label>Valid from (optional)</Label>
+                    <Input type="date" value={renewValidFrom} onChange={(e) => setRenewValidFrom(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Valid to (optional)</Label>
+                    <Input type="date" value={renewValidTo} onChange={(e) => setRenewValidTo(e.target.value)} />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-destructive">Could not load preview.</p>
+            )}
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button type="button" variant="outline" onClick={() => setRenewDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={renewMutation.isPending || renewPreviewLoading || !renewPreview}
+                onClick={() => {
+                  const feeRaw = renewFeeDraft.trim();
+                  let feeAmount: number | undefined;
+                  if (feeRaw !== "") {
+                    const n = Number(feeRaw);
+                    if (!Number.isFinite(n) || n < 0) {
+                      toast({ title: "Invalid fee", description: "Enter a non-negative number or leave blank for server default.", variant: "destructive" });
+                      return;
+                    }
+                    feeAmount = n;
+                  }
+                  renewMutation.mutate({
+                    feeAmount,
+                    validFrom: renewValidFrom,
+                    validTo: renewValidTo,
+                  });
+                }}
+              >
+                {renewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create Draft renewal"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <Dialog open={queryDialogOpen} onOpenChange={setQueryDialogOpen}>
           <DialogContent className="sm:max-w-lg">

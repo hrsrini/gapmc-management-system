@@ -5,6 +5,7 @@ import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { employees } from "@shared/db-schema";
 import { INDIAN_MOBILE_10_RE, isStrictAadhaar12Digits } from "@shared/india-validation";
+import { getPasswordPolicyBrUsr10FirstViolation } from "@shared/password-policy-br-usr-10";
 
 const EMP_ID_RE = /^EMP-(\d{3})$/i;
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -72,6 +73,12 @@ export function assertWorkEmailFormat(email: string | null | undefined): void {
   if (!EMAIL_RE.test(e)) {
     throw new HrEmployeeRuleError("HR_EMP_WORK_EMAIL_FORMAT", "Work email must be a valid email address.");
   }
+}
+
+/** M-10 BR-USR-10: local password policy for IOMS user accounts (create / password change). */
+export function assertPasswordComplexityBrUsr10(password: string): void {
+  const v = getPasswordPolicyBrUsr10FirstViolation(password);
+  if (v) throw new HrEmployeeRuleError("HR_LOGIN_PASSWORD_COMPLEXITY", v);
 }
 
 /** Normalizes to 10 digits; null if empty; throws if present but invalid. */

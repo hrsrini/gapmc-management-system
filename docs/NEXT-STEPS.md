@@ -71,7 +71,7 @@ After sample data and current implementation, suggested next steps:
 
 18. **IOMS Rent / Receipts / HR / Ledger:** **Rent invoice detail** (`/rent/ioms/invoices/:id`) with Verify/Approve/Reject; **Receipt detail** (`/receipts/ioms/:id`); **Rent deposit ledger** (`/rent/ioms/ledger`); **HR Claims** (LTC + TA-DA) at `/hr/claims`; **Attendance** (`/hr/attendance`), **Timesheets** (`/hr/timesheets`).
 
-19. **Sample data:** `npm run db:seed-ioms-sample` seeds data for **all sidebar menu items** and **employee users for role-wise login** (password: `User@1234`): `do@gapmc.local` (DO), `dv@gapmc.local` (DV), `da@gapmc.local` (DA), `readonly@gapmc.local` (Read Only). Admin remains `admin@gapmc.local` (password: `Apmc@2026`). Seeds: trader licences, blocking log, assets, asset allotments, credit notes (M-03), advance requests (M-06), recruitment, leave requests; plus employees, market fee rates, fleet (vehicles + trips/fuel/maintenance), construction (works, bills, AMC, land, fixed assets), dak (inward, outward, action log), check post (inward, outward, exit permits, bank deposits), attendances, timesheets, LTC/TA-DA claims, rent invoices, rent ledger, IOMS receipts, MSP settings, SLA config. Run after `db:push` and `db:seed-ioms-m10`.
+19. **Sample data:** `npm run db:seed-ioms-sample` seeds data for **all sidebar menu items** and **employee users for role-wise login** (password: `GapmcUsers@2026!`): `do@gapmc.local` (DO), `dv@gapmc.local` (DV), `da@gapmc.local` (DA), `readonly@gapmc.local` (Read Only). Admin remains `admin@gapmc.local` (password: `GapmcAdmin@2026!`). Seeds: trader licences, blocking log, assets, asset allotments, credit notes (M-03), advance requests (M-06), recruitment, leave requests; plus employees, market fee rates, fleet (vehicles + trips/fuel/maintenance), construction (works, bills, AMC, land, fixed assets), dak (inward, outward, action log), check post (inward, outward, exit permits, bank deposits), attendances, timesheets, LTC/TA-DA claims, rent invoices, rent ledger, IOMS receipts, MSP settings, SLA config. Run after `db:push` and `db:seed-ioms-m10`.
 
 20. **Work detail – Add bill:** Construction Work detail Bills tab has **Add bill** dialog (bill no, date, amount, cumulative paid, status); calls `POST /api/ioms/works/bills`.
 
@@ -109,13 +109,22 @@ For **Users**, **Roles**, and **Permission matrix** to work:
 
 1. **Run the M-10 seed** so that the admin user and roles exist:  
    `npm run db:push` then `npm run db:seed-ioms-m10`
-2. **Log in as administrator**: **admin@gapmc.local** / **Apmc@2026**
+2. **Log in as administrator**: **admin@gapmc.local** / **GapmcAdmin@2026!**
 3. **Use the same origin for API and UI** so the session cookie is sent: start the app with `npm run dev` (single server on port 5000 that serves both API and client). If you use a separate Vite dev server, ensure the proxy forwards cookies to the backend.
 4. **Access is permission-based**: Admin API access is controlled by the **Permission matrix** (M-10). **ADMIN** tier always has full access. **READ_ONLY** role is seeded with all "Read" permissions (so they can open Admin and view Users, Roles, Permission matrix but not create/edit/delete). Other roles get only what is assigned in the matrix.
 
 **How to test (READ_ONLY across all menus):**
-- **Full access:** Log in as **admin@gapmc.local** / **Apmc@2026** (ADMIN) — full access to all menus and actions.
-- **Read-only access:** Run `npm run db:seed-ioms-m10` (assigns all "Read" permissions to READ_ONLY role), then log in as **readonly@gapmc.local** / **User@1234**. This user can open **all** sidebar menus and **view** lists and details (GET allowed). Any **create / edit / delete** (POST, PUT, PATCH, DELETE) returns **403**. So: Dashboard, Rent, Traders, Assets, Market Fee, Check Post, Receipts, Vouchers, Fleet, Construction, Correspondence, HR, and Admin (Users, Roles, Permission matrix) are all viewable; Add/Edit/Delete buttons or form submits will fail with 403.
+- **Full access:** Log in as **admin@gapmc.local** / **GapmcAdmin@2026!** (ADMIN) — full access to all menus and actions.
+- **Read-only access:** Run `npm run db:seed-ioms-m10` (assigns all "Read" permissions to READ_ONLY role), then log in as **readonly@gapmc.local** / **GapmcUsers@2026!**. This user can open **all** sidebar menus and **view** lists and details (GET allowed). Any **create / edit / delete** (POST, PUT, PATCH, DELETE) returns **403**. So: Dashboard, Rent, Traders, Assets, Market Fee, Check Post, Receipts, Vouchers, Fleet, Construction, Correspondence, HR, and Admin (Users, Roles, Permission matrix) are all viewable; Add/Edit/Delete buttons or form submits will fail with 403.
+
+---
+
+### Automated tests (Playwright)
+
+- **Install browser once:** `npm run test:pw:install` (Chromium).
+- **API tests** (`tests/api/` — health, login, session + yards): `npm run test:pw:api`
+- **Browser E2E** (`tests/e2e/`): `npm run test:pw:e2e`
+- **All:** `npm run test:pw` — starts `npm run dev` automatically unless **`PW_NO_WEBSERVER=1`** (then use an already-running server). Set **`PLAYWRIGHT_BASE_URL`** if not on port 5000 (see `.env.example`). Optional **`PW_ADMIN_EMAIL`** / **`PW_ADMIN_PASSWORD`** if your admin password is not the seeded default.
 
 ---
 

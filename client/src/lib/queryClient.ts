@@ -38,7 +38,7 @@ async function throwIfResNotOk(res: Response) {
 
 /** Message shown when admin API returns 403 (user not ADMIN). */
 export const ADMIN_403_MESSAGE =
-  "Access denied. Log in as administrator (admin@gapmc.local / Apmc@2026) for Roles, Locations, Permission matrix, and other admin tools. App accounts are managed under HR → Employees (Login & roles). Run npm run db:seed-ioms-m10 if the admin user does not exist.";
+  "Access denied. Log in as administrator (admin@gapmc.local / GapmcAdmin@2026!) for Roles, Locations, Permission matrix, and other admin tools. App accounts are managed under HR → Employees (Login & roles). Run npm run db:seed-ioms-m10 if the admin user does not exist.";
 
 /** GET /api/... with the same 401/403 handling as the default queryFn (for custom query keys). */
 export async function fetchApiGet<T>(url: string): Promise<T> {

@@ -6,6 +6,9 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { pool } from "./db";
+import { ensureLocalUploadsRoot } from "./object-storage";
+
+ensureLocalUploadsRoot();
 
 // Suppress known PostCSS plugin warning (same as in script/build.ts)
 const postcssFromWarning = "A PostCSS plugin did not pass the `from` option to `postcss.parse`";

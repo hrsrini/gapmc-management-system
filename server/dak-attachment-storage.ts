@@ -1,25 +1,40 @@
-import fs from "fs";
 import path from "path";
+import { getUploadBlobStore } from "./object-storage";
+import { contentTypeForVoucherAttachment } from "./voucher-attachment-storage";
 
 export type DakAttachmentKind = "inward" | "outward";
 
-export function dakAttachmentsDir(kind: DakAttachmentKind, recordId: string): string {
-  return path.join(process.cwd(), "uploads", "dak", kind, recordId);
+export function dakBlobKey(kind: DakAttachmentKind, recordId: string, storedFileName: string): string {
+  return `dak/${kind}/${recordId}/${path.basename(storedFileName)}`;
 }
 
+/** Legacy absolute path under `uploads/` (local layout matches blob key). */
 export function dakAttachmentFilePath(kind: DakAttachmentKind, recordId: string, storedFileName: string): string {
-  return path.join(dakAttachmentsDir(kind, recordId), path.basename(storedFileName));
+  return path.join(process.cwd(), "uploads", dakBlobKey(kind, recordId, storedFileName));
 }
 
-export function ensureDakAttachmentsDir(kind: DakAttachmentKind, recordId: string): void {
-  fs.mkdirSync(dakAttachmentsDir(kind, recordId), { recursive: true });
+export async function writeDakAttachmentBuffer(
+  kind: DakAttachmentKind,
+  recordId: string,
+  storedFileName: string,
+  buffer: Buffer,
+): Promise<void> {
+  const key = dakBlobKey(kind, recordId, storedFileName);
+  await getUploadBlobStore().put(key, buffer, contentTypeForVoucherAttachment(storedFileName));
 }
 
-export function unlinkDakAttachmentIfExists(kind: DakAttachmentKind, recordId: string, storedFileName: string): void {
-  const p = dakAttachmentFilePath(kind, recordId, storedFileName);
-  try {
-    if (fs.existsSync(p)) fs.unlinkSync(p);
-  } catch {
-    /* ignore */
-  }
+export async function readDakAttachmentBuffer(
+  kind: DakAttachmentKind,
+  recordId: string,
+  storedFileName: string,
+): Promise<Buffer | null> {
+  return getUploadBlobStore().get(dakBlobKey(kind, recordId, storedFileName));
+}
+
+export async function unlinkDakAttachmentIfExists(
+  kind: DakAttachmentKind,
+  recordId: string,
+  storedFileName: string,
+): Promise<void> {
+  await getUploadBlobStore().del(dakBlobKey(kind, recordId, storedFileName));
 }

@@ -5,6 +5,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -27,6 +28,7 @@ import {
   parseIndianMobile10Digits,
   sanitizeMobile10Input,
 } from "@shared/india-validation";
+import { getPasswordPolicyBrUsr10FirstViolation, passwordPolicyBrUsr10Hint } from "@shared/password-policy-br-usr-10";
 
 interface Yard {
   id: string;
@@ -51,6 +53,14 @@ interface Employee {
   mobile?: string | null;
   workEmail?: string | null;
   personalEmail?: string | null;
+  gender?: string | null;
+  maritalStatus?: string | null;
+  bloodGroup?: string | null;
+  permanentAddress?: string | null;
+  correspondenceAddress?: string | null;
+  emergencyContactName?: string | null;
+  emergencyContactMobile?: string | null;
+  reportingOfficerEmployeeId?: string | null;
   status: string;
   userId?: string | null;
 }
@@ -63,6 +73,8 @@ interface Role {
 
 const EMPLOYEE_TYPES = ["Regular", "Contract", "Daily Wage", "Temporary"];
 const STATUS_OPTIONS = ["Draft", "Submitted", "Active", "Inactive", "Suspended", "Retired", "Resigned"];
+const GENDER_OPTIONS = ["", "Male", "Female", "Other", "Prefer not to say"];
+const MARITAL_OPTIONS = ["", "Single", "Married", "Widowed", "Divorced"];
 
 export default function HrEmployeeForm() {
   const { id } = useParams<{ id: string }>();
@@ -96,6 +108,14 @@ export default function HrEmployeeForm() {
   const [joiningDate, setJoiningDate] = useState("");
   const [retirementDate, setRetirementDate] = useState("");
   const [status, setStatus] = useState("Draft");
+  const [gender, setGender] = useState("");
+  const [maritalStatus, setMaritalStatus] = useState("");
+  const [bloodGroup, setBloodGroup] = useState("");
+  const [permanentAddress, setPermanentAddress] = useState("");
+  const [correspondenceAddress, setCorrespondenceAddress] = useState("");
+  const [emergencyContactName, setEmergencyContactName] = useState("");
+  const [emergencyContactMobile, setEmergencyContactMobile] = useState("");
+  const [reportingOfficerEmployeeId, setReportingOfficerEmployeeId] = useState("");
 
   const [enableLoginOnCreate, setEnableLoginOnCreate] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
@@ -106,6 +126,7 @@ export default function HrEmployeeForm() {
   const [createYardIds, setCreateYardIds] = useState<Set<string>>(new Set());
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  const { data: allEmployees = [] } = useQuery<Employee[]>({ queryKey: ["/api/hr/employees"] });
   const { data: employee, isLoading, isError } = useQuery<Employee>({
     queryKey: ["/api/hr/employees", id],
     enabled: isEdit,
@@ -140,6 +161,14 @@ export default function HrEmployeeForm() {
       setJoiningDate(employee.joiningDate ?? "");
       setRetirementDate(employee.retirementDate ?? "");
       setStatus(employee.status ?? "Active");
+      setGender(employee.gender ?? "");
+      setMaritalStatus(employee.maritalStatus ?? "");
+      setBloodGroup(employee.bloodGroup ?? "");
+      setPermanentAddress(employee.permanentAddress ?? "");
+      setCorrespondenceAddress(employee.correspondenceAddress ?? "");
+      setEmergencyContactName(employee.emergencyContactName ?? "");
+      setEmergencyContactMobile(sanitizeMobile10Input(employee.emergencyContactMobile ?? ""));
+      setReportingOfficerEmployeeId(employee.reportingOfficerEmployeeId ?? "");
     }
   }, [employee]);
 
@@ -254,6 +283,18 @@ export default function HrEmployeeForm() {
       return;
     }
 
+    const emMobile =
+      emergencyContactMobile.trim() === ""
+        ? null
+        : (() => {
+            const m = parseIndianMobile10Digits(emergencyContactMobile);
+            return m;
+          })();
+    if (emergencyContactMobile.trim() && !emMobile) {
+      toast({ title: "Invalid emergency mobile", description: "Use a valid 10-digit Indian mobile or leave blank.", variant: "destructive" });
+      return;
+    }
+
     const payload: Record<string, unknown> = {
       firstName,
       middleName: middleName || null,
@@ -270,6 +311,14 @@ export default function HrEmployeeForm() {
       joiningDate,
       retirementDate: retirementDate || null,
       status,
+      gender: gender || null,
+      maritalStatus: maritalStatus || null,
+      bloodGroup: bloodGroup || null,
+      permanentAddress: permanentAddress.trim() || null,
+      correspondenceAddress: correspondenceAddress.trim() || null,
+      emergencyContactName: emergencyContactName.trim() || null,
+      emergencyContactMobile: emMobile,
+      reportingOfficerEmployeeId: reportingOfficerEmployeeId.trim() || null,
     };
     if (!isEdit) {
       payload.aadhaarToken = aadhaarTrim || null;
@@ -314,10 +363,13 @@ export default function HrEmployeeForm() {
           setLocation(`/hr/employees/${emp.id}`);
           return;
         }
-        if (loginPassword.length < 8 || loginPassword !== loginConfirm) {
+        const lpErr = getPasswordPolicyBrUsr10FirstViolation(loginPassword);
+        if (lpErr || loginPassword !== loginConfirm) {
           toast({
             title: "Employee created",
-            description: "Password must be at least 8 characters and match confirmation. Finish login on the employee page.",
+            description: lpErr
+              ? `${lpErr} Finish login on the employee page.`
+              : `Passwords must match. ${passwordPolicyBrUsr10Hint()} Finish login on the employee page.`,
           });
           setLocation(`/hr/employees/${emp.id}`);
           return;
@@ -498,10 +550,73 @@ export default function HrEmployeeForm() {
                   </div>
                   <div><Label>Personal email</Label><Input type="email" value={personalEmail} onChange={(e) => setPersonalEmail(e.target.value)} placeholder="Must be unique among active / pending employees" /></div>
                   <div><Label>Work email</Label><Input type="email" value={workEmail} onChange={(e) => setWorkEmail(e.target.value)} /></div>
+                  <div>
+                    <Label>Gender</Label>
+                    <Select value={gender || "__none__"} onValueChange={(v) => setGender(v === "__none__" ? "" : v)}>
+                      <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent>
+                        {GENDER_OPTIONS.filter((g) => g !== "").map((g) => (
+                          <SelectItem key={g} value={g}>{g}</SelectItem>
+                        ))}
+                        <SelectItem value="__none__">Not specified</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Marital status</Label>
+                    <Select value={maritalStatus || "__none__"} onValueChange={(v) => setMaritalStatus(v === "__none__" ? "" : v)}>
+                      <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent>
+                        {MARITAL_OPTIONS.filter((g) => g !== "").map((g) => (
+                          <SelectItem key={g} value={g}>{g}</SelectItem>
+                        ))}
+                        <SelectItem value="__none__">Not specified</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div><Label>Blood group</Label><Input value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)} placeholder="e.g. O+" /></div>
+                  <div className="md:col-span-2">
+                    <Label>Permanent address</Label>
+                    <Textarea value={permanentAddress} onChange={(e) => setPermanentAddress(e.target.value)} rows={2} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label>Correspondence address</Label>
+                    <Textarea value={correspondenceAddress} onChange={(e) => setCorrespondenceAddress(e.target.value)} rows={2} />
+                  </div>
+                  <div><Label>Emergency contact name</Label><Input value={emergencyContactName} onChange={(e) => setEmergencyContactName(e.target.value)} /></div>
+                  <div>
+                    <Label>Emergency contact mobile</Label>
+                    <Input
+                      value={emergencyContactMobile}
+                      onChange={(e) => setEmergencyContactMobile(sanitizeMobile10Input(e.target.value))}
+                      inputMode="numeric"
+                      maxLength={10}
+                      placeholder="10-digit mobile"
+                    />
+                  </div>
                 </div>
               </TabsContent>
               <TabsContent value="hr" className="space-y-4 pt-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <Label>Reporting officer</Label>
+                    <Select
+                      value={reportingOfficerEmployeeId || "__none__"}
+                      onValueChange={(v) => setReportingOfficerEmployeeId(v === "__none__" ? "" : v)}
+                    >
+                      <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">None</SelectItem>
+                        {allEmployees
+                          .filter((e) => !isEdit || e.id !== id)
+                          .map((e) => (
+                            <SelectItem key={e.id} value={e.id}>
+                              {(e.empId ?? e.id) + " — " + e.firstName + " " + e.surname}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div><Label>Joining date *</Label><Input type="date" value={joiningDate} onChange={(e) => setJoiningDate(e.target.value)} required /></div>
                   <div><Label>Retirement date</Label><Input type="date" value={retirementDate} onChange={(e) => setRetirementDate(e.target.value)} /></div>
                   <div><Label>Status</Label>
@@ -550,7 +665,7 @@ export default function HrEmployeeForm() {
                             </div>
                             <div>
                               <Label>Password *</Label>
-                              <Input type="password" autoComplete="new-password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} minLength={8} />
+                              <Input type="password" autoComplete="new-password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} minLength={12} />
                             </div>
                             <div>
                               <Label>Confirm password *</Label>

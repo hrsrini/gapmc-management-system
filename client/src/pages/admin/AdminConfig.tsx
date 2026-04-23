@@ -3,6 +3,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Settings, AlertCircle, ImageIcon, Trash2, Upload } from "lucide-react";
@@ -79,6 +80,7 @@ export default function AdminConfig() {
   const retentionSnapshotMutation = useMutation({
     mutationFn: () =>
       fetchApiGet<{
+        loginSessionTablePresent?: boolean;
         countsPastRetention: Record<string, number>;
       }>("/api/admin/data-retention-summary"),
     onSuccess: (s) => {
@@ -86,9 +88,15 @@ export default function AdminConfig() {
       const desc = Object.entries(c)
         .map(([k, v]) => `${k}=${v}`)
         .join(", ");
+      const sess =
+        s.loginSessionTablePresent === true
+          ? " Postgres session store."
+          : s.loginSessionTablePresent === false
+            ? " No public.session (memory store / dev)."
+            : "";
       toast({
         title: "Retention snapshot (read-only)",
-        description: `Past policy ages (counts): ${desc}`,
+        description: `Past policy ages (counts): ${desc}.${sess}`,
       });
     },
     onError: (e: Error) => {
@@ -152,17 +160,27 @@ export default function AdminConfig() {
           ) : (
             <>
               {CONFIG_FIELDS.map(({ key, label }) => (
-                <div key={key} className="grid grid-cols-1 md:grid-cols-3 gap-2 items-center">
-                  <Label className="md:col-span-1" htmlFor={`cfg-${key}`}>
+                <div key={key} className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start">
+                  <Label className="md:col-span-1 pt-2" htmlFor={`cfg-${key}`}>
                     {label}
                   </Label>
-                  <Input
-                    id={`cfg-${key}`}
-                    className="md:col-span-2"
-                    inputMode="decimal"
-                    value={values[key] ?? ""}
-                    onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
-                  />
+                  {key === "ta_da_entitlement_json" ? (
+                    <Textarea
+                      id={`cfg-${key}`}
+                      className="md:col-span-2 font-mono text-sm min-h-[140px]"
+                      value={values[key] ?? ""}
+                      onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
+                      spellCheck={false}
+                    />
+                  ) : (
+                    <Input
+                      id={`cfg-${key}`}
+                      className="md:col-span-2"
+                      inputMode="decimal"
+                      value={values[key] ?? ""}
+                      onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
+                    />
+                  )}
                 </div>
               ))}
               <div className="flex flex-wrap gap-2">

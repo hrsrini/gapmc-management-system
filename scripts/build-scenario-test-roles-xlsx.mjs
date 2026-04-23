@@ -101,7 +101,7 @@ const scenarios = [
     "Password too short",
     "Active employee, no login",
     "Password 7 chars",
-    "400 HR_LOGIN_PASSWORD_REQUIRED — password required (min 8 characters).",
+    "400 HR_LOGIN_PASSWORD_REQUIRED — password is required.",
   ],
   [
     "B — Employee login create (POST …/login)",
@@ -173,7 +173,7 @@ const scenarios = [
     "New password too short",
     "Login exists",
     "PUT with password 7 chars",
-    "400 HR_LOGIN_PASSWORD_TOO_SHORT.",
+    "400 HR_LOGIN_PASSWORD_COMPLEXITY — BR-USR-10 (min 12 chars, upper, lower, digit, special).",
   ],
   [
     "C — Employee login update (PUT …/login)",

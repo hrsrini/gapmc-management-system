@@ -4,6 +4,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,7 +25,7 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Wallet, Plane, Car, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal } from "lucide-react";
+import { Wallet, Plane, Car, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal, Plus } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
@@ -36,6 +37,13 @@ interface LtcClaim {
   amount: number;
   period?: string | null;
   status: string;
+  doUser?: string | null;
+  dvUser?: string | null;
+  approvedBy?: string | null;
+  rejectionReasonCode?: string | null;
+  rejectionRemarks?: string | null;
+  workflowRevisionCount?: number | null;
+  dvReturnRemarks?: string | null;
 }
 interface TaDaClaim {
   id: string;
@@ -59,14 +67,6 @@ interface Employee {
   surname: string;
 }
 
-const ltcColumns: ReportTableColumn[] = [
-  { key: "employeeLabel", header: "Employee" },
-  { key: "claimDate", header: "Claim date" },
-  { key: "period", header: "Period" },
-  { key: "amount", header: "Amount", sortField: "amountNum" },
-  { key: "_status", header: "Status", sortField: "status" },
-];
-
 export default function HrClaims() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -74,6 +74,23 @@ export default function HrClaims() {
   const roles = user?.roles?.map((r) => r.tier) ?? [];
   const canVerify = roles.includes("DV") || roles.includes("ADMIN");
   const canApprove = roles.includes("DA") || roles.includes("ADMIN");
+  const canSubmitNew = roles.includes("DO") || roles.includes("ADMIN");
+  const [ltcPendingOnly, setLtcPendingOnly] = useState(false);
+  const [ltcRejectId, setLtcRejectId] = useState<string | null>(null);
+  const [ltcRejectCode, setLtcRejectCode] = useState<string>(REJECTION_REASON_CODES[0]);
+  const [ltcRejectRemarks, setLtcRejectRemarks] = useState("");
+  const [ltcReturnId, setLtcReturnId] = useState<string | null>(null);
+  const [ltcReturnRemarks, setLtcReturnRemarks] = useState("");
+  const [tadaNewOpen, setTadaNewOpen] = useState(false);
+  const [ltcNewOpen, setLtcNewOpen] = useState(false);
+  const [tadaNewEmployeeId, setTadaNewEmployeeId] = useState("");
+  const [tadaNewTravel, setTadaNewTravel] = useState("");
+  const [tadaNewPurpose, setTadaNewPurpose] = useState("");
+  const [tadaNewAmount, setTadaNewAmount] = useState("");
+  const [ltcNewEmployeeId, setLtcNewEmployeeId] = useState("");
+  const [ltcNewDate, setLtcNewDate] = useState("");
+  const [ltcNewAmount, setLtcNewAmount] = useState("");
+  const [ltcNewPeriod, setLtcNewPeriod] = useState("");
   const [tadaPendingOnly, setTadaPendingOnly] = useState(false);
   const [tadaRejectId, setTadaRejectId] = useState<string | null>(null);
   const [tadaRejectCode, setTadaRejectCode] = useState<string>(REJECTION_REASON_CODES[0]);
@@ -82,9 +99,23 @@ export default function HrClaims() {
   const [tadaReturnRemarks, setTadaReturnRemarks] = useState("");
 
   const tadaListUrl = tadaPendingOnly ? "/api/hr/claims/tada?pendingMyAction=1" : "/api/hr/claims/tada";
+  const ltcListUrl = ltcPendingOnly ? "/api/hr/claims/ltc?pendingMyAction=1" : "/api/hr/claims/ltc";
+
+  const { data: sysConfig } = useQuery<Record<string, string>>({
+    queryKey: ["/api/system/config"],
+  });
+  const entitlementRows = useMemo(() => {
+    const raw = sysConfig?.ta_da_entitlement_json ?? "";
+    try {
+      const v = JSON.parse(raw) as unknown;
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  }, [sysConfig?.ta_da_entitlement_json]);
 
   const { data: ltcList = [], isLoading: ltcLoading, isError: ltcError } = useQuery<LtcClaim[]>({
-    queryKey: ["/api/hr/claims/ltc"],
+    queryKey: [ltcListUrl],
   });
   const { data: tadaList = [], isLoading: tadaLoading, isError: tadaError } = useQuery<TaDaClaim[]>({
     queryKey: [tadaListUrl],
@@ -95,6 +126,81 @@ export default function HrClaims() {
   const employeeLabelById = Object.fromEntries(
     employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
   );
+
+  const createTadaMutation = useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await fetch("/api/hr/claims/tada", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/claims/tada"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/claims/tada?pendingMyAction=1"] });
+      toast({ title: "TA/DA claim created", description: "Pending DV verification." });
+      setTadaNewOpen(false);
+    },
+    onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
+  });
+
+  const createLtcMutation = useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await fetch("/api/hr/claims/ltc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/claims/ltc"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/claims/ltc?pendingMyAction=1"] });
+      toast({ title: "LTC claim created", description: "Pending DV verification." });
+      setLtcNewOpen(false);
+    },
+    onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
+  });
+
+  const ltcStatusMutation = useMutation({
+    mutationFn: async (vars: { id: string; status: string } & Record<string, unknown>) => {
+      const { id, ...body } = vars;
+      const res = await fetch(`/api/hr/claims/ltc/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: (_, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/claims/ltc"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/claims/ltc?pendingMyAction=1"] });
+      toast({ title: "LTC updated", description: `Claim set to ${vars.status}.` });
+      setLtcRejectId(null);
+      setLtcRejectRemarks("");
+      setLtcReturnId(null);
+      setLtcReturnRemarks("");
+    },
+    onError: (e: Error) => {
+      toast({ title: "Update failed", description: e.message, variant: "destructive" });
+    },
+  });
 
   const tadaStatusMutation = useMutation({
     mutationFn: async (vars: { id: string; status: string } & Record<string, unknown>) => {
@@ -127,6 +233,19 @@ export default function HrClaims() {
 
   const isError = ltcError || tadaError;
   const showTadaActions = canVerify || canApprove;
+  const showLtcActions = canVerify || canApprove;
+
+  const ltcColumns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "employeeLabel", header: "Employee" },
+      { key: "claimDate", header: "Claim date" },
+      { key: "period", header: "Period" },
+      { key: "amount", header: "Amount", sortField: "amountNum" },
+      { key: "_statusBlock", header: "Status", sortField: "status" },
+    ];
+    if (showLtcActions) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [showLtcActions]);
 
   const tadaColumns = useMemo((): ReportTableColumn[] => {
     const base: ReportTableColumn[] = [
@@ -149,9 +268,83 @@ export default function HrClaims() {
       amount: `₹${c.amount.toLocaleString()}`,
       amountNum: c.amount,
       status: c.status,
-      _status: <Badge variant="secondary">{c.status}</Badge>,
+      rejectionSnippet:
+        c.status === "Rejected" && c.rejectionRemarks
+          ? `${c.rejectionReasonCode ?? ""}: ${c.rejectionRemarks}`
+          : "",
+      dvReturnSnippet: c.dvReturnRemarks ? `DV return: ${c.dvReturnRemarks}` : "",
+      _statusBlock: (
+        <div className="flex flex-col gap-1">
+          <Badge variant="secondary">{c.status}</Badge>
+          {c.status === "Rejected" && c.rejectionRemarks && (
+            <span className="text-xs text-muted-foreground line-clamp-2" title={c.rejectionRemarks}>
+              {c.rejectionReasonCode}: {c.rejectionRemarks}
+            </span>
+          )}
+          {c.dvReturnRemarks && (
+            <span className="text-xs text-muted-foreground line-clamp-2" title={c.dvReturnRemarks}>
+              DV return: {c.dvReturnRemarks}
+            </span>
+          )}
+        </div>
+      ),
+      _actions: showLtcActions ? (
+        <div className="flex flex-wrap gap-1">
+          {canVerify && c.status === "Pending" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => ltcStatusMutation.mutate({ id: c.id, status: "Verified" })}
+              disabled={ltcStatusMutation.isPending}
+            >
+              <ShieldCheck className="h-3.5 w-3.5 mr-1" />
+              Verify
+            </Button>
+          )}
+          {canVerify && c.status === "Verified" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setLtcReturnId(c.id);
+                setLtcReturnRemarks("");
+              }}
+              disabled={ltcStatusMutation.isPending}
+            >
+              <SendHorizontal className="h-3.5 w-3.5 mr-1" />
+              Send back
+            </Button>
+          )}
+          {canApprove && c.status === "Verified" && (
+            <>
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => ltcStatusMutation.mutate({ id: c.id, status: "Approved" })}
+                disabled={ltcStatusMutation.isPending}
+              >
+                <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => {
+                  setLtcRejectId(c.id);
+                  setLtcRejectCode(REJECTION_REASON_CODES[0]);
+                  setLtcRejectRemarks("");
+                }}
+                disabled={ltcStatusMutation.isPending}
+              >
+                <XCircle className="h-3.5 w-3.5 mr-1" />
+                Reject
+              </Button>
+            </>
+          )}
+        </div>
+      ) : null,
     }));
-  }, [ltcList, employeeLabelById]);
+  }, [ltcList, employeeLabelById, showLtcActions, canVerify, canApprove, ltcStatusMutation.isPending]);
 
   const tadaRows = useMemo((): Record<string, unknown>[] => {
     return tadaList.map((c) => ({
@@ -269,30 +462,108 @@ export default function HrClaims() {
           <p className="text-sm text-muted-foreground">Leave Travel Concession and Travel / Daily Allowance claims.</p>
         </CardHeader>
         <CardContent className="space-y-6">
+          {entitlementRows.length > 0 && (
+            <div className="rounded-md border bg-muted/30 p-3 text-sm">
+              <p className="font-medium mb-2">TA/DA entitlement matrix (reference, from Admin → Config)</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-1 pr-2">Pay level</th>
+                      <th className="text-left py-1 pr-2">Train</th>
+                      <th className="text-right py-1 pr-2">DA A</th>
+                      <th className="text-right py-1 pr-2">DA B</th>
+                      <th className="text-right py-1 pr-2">Hotel A</th>
+                      <th className="text-right py-1">Hotel B</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {entitlementRows.map((row: Record<string, unknown>, i: number) => (
+                      <tr key={i} className="border-b border-muted">
+                        <td className="py-1 pr-2">{String(row.payLevel ?? "")}</td>
+                        <td className="py-1 pr-2">{String(row.trainClass ?? "")}</td>
+                        <td className="text-right py-1 pr-2">{String(row.daA ?? "")}</td>
+                        <td className="text-right py-1 pr-2">{String(row.daB ?? "")}</td>
+                        <td className="text-right py-1 pr-2">{String(row.hotelA ?? "")}</td>
+                        <td className="text-right py-1">{String(row.hotelB ?? "")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
           <div>
-            <h3 className="font-medium flex items-center gap-2 mb-2">
-              <Plane className="h-4 w-4" />
-              LTC claims
-            </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+              <h3 className="font-medium flex items-center gap-2">
+                <Plane className="h-4 w-4" />
+                LTC claims
+              </h3>
+              {canSubmitNew && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setLtcNewEmployeeId(user?.employeeId ?? "");
+                    setLtcNewOpen(true);
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  New LTC
+                </Button>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground mb-2">
+              Workflow: Pending (DO) → Verified (DV) → Approved or Rejected (DA). DV may return Verified → Pending with
+              remarks.
+            </p>
+            <div className="flex items-center gap-2 mb-3">
+              <Checkbox
+                id="ltc-pending-me"
+                checked={ltcPendingOnly}
+                onCheckedChange={(c) => setLtcPendingOnly(c === true)}
+              />
+              <Label htmlFor="ltc-pending-me" className="text-sm font-normal cursor-pointer">
+                Pending my action (DV/DA queue)
+              </Label>
+            </div>
             {ltcLoading ? (
               <Skeleton className="h-32 w-full" />
             ) : (
               <ClientDataGrid
                 columns={ltcColumns}
                 sourceRows={ltcRows}
-                searchKeys={["employeeLabel", "claimDate", "period", "status"]}
+                searchKeys={["employeeLabel", "claimDate", "period", "status", "rejectionSnippet", "dvReturnSnippet"]}
                 searchPlaceholder="Search LTC claims…"
                 defaultSortKey="claimDate"
                 defaultSortDir="desc"
+                resetPageDependency={ltcListUrl}
                 emptyMessage="No LTC claims."
               />
             )}
           </div>
           <div>
-            <h3 className="font-medium flex items-center gap-2 mb-2">
-              <Car className="h-4 w-4" />
-              TA/DA claims
-            </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+              <h3 className="font-medium flex items-center gap-2">
+                <Car className="h-4 w-4" />
+                TA/DA claims
+              </h3>
+              {canSubmitNew && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setTadaNewEmployeeId(user?.employeeId ?? "");
+                    setTadaNewOpen(true);
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  New TA/DA
+                </Button>
+              )}
+            </div>
             <p className="text-sm text-muted-foreground mb-2">
               Workflow: Pending (DO) → Verified (DV) → Approved or Rejected (DA). DV may return Verified → Pending with
               remarks.
@@ -422,6 +693,244 @@ export default function HrClaims() {
               }}
             >
               Send back to Pending
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={ltcRejectId != null} onOpenChange={(o) => !o && setLtcRejectId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reject LTC claim</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Reason code</Label>
+              <Select value={ltcRejectCode} onValueChange={setLtcRejectCode}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {REJECTION_REASON_CODES.map((code) => (
+                    <SelectItem key={code} value={code}>
+                      {code.replace(/_/g, " ")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="ltc-reject-remarks">Remarks (min {MIN_WORKFLOW_REMARKS_LENGTH} characters)</Label>
+              <Textarea
+                id="ltc-reject-remarks"
+                value={ltcRejectRemarks}
+                onChange={(e) => setLtcRejectRemarks(e.target.value)}
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setLtcRejectId(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={
+                ltcRejectId == null ||
+                ltcRejectRemarks.trim().length < MIN_WORKFLOW_REMARKS_LENGTH ||
+                ltcStatusMutation.isPending
+              }
+              onClick={() => {
+                if (!ltcRejectId) return;
+                ltcStatusMutation.mutate({
+                  id: ltcRejectId,
+                  status: "Rejected",
+                  rejectionReasonCode: ltcRejectCode,
+                  rejectionRemarks: ltcRejectRemarks.trim(),
+                });
+              }}
+            >
+              Reject
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={ltcReturnId != null} onOpenChange={(o) => !o && setLtcReturnId(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Return LTC claim to Pending</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Remarks are required (min {MIN_WORKFLOW_REMARKS_LENGTH} characters).
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="ltc-return-remarks">Return remarks</Label>
+            <Textarea
+              id="ltc-return-remarks"
+              value={ltcReturnRemarks}
+              onChange={(e) => setLtcReturnRemarks(e.target.value)}
+              rows={4}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setLtcReturnId(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                ltcReturnId == null ||
+                ltcReturnRemarks.trim().length < MIN_WORKFLOW_REMARKS_LENGTH ||
+                ltcStatusMutation.isPending
+              }
+              onClick={() => {
+                if (!ltcReturnId) return;
+                ltcStatusMutation.mutate({
+                  id: ltcReturnId,
+                  status: "Pending",
+                  returnRemarks: ltcReturnRemarks.trim(),
+                });
+              }}
+            >
+              Send back to Pending
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={tadaNewOpen} onOpenChange={(o) => !o && setTadaNewOpen(false)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>New TA/DA claim</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {roles.includes("ADMIN") && (
+              <div className="space-y-1">
+                <Label>Employee</Label>
+                <Select value={tadaNewEmployeeId} onValueChange={setTadaNewEmployeeId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Employee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {employees.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {(e.empId ?? e.id) + " — " + e.firstName + " " + e.surname}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label>Travel date</Label>
+              <Input type="date" value={tadaNewTravel} onChange={(e) => setTadaNewTravel(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Purpose</Label>
+              <Input value={tadaNewPurpose} onChange={(e) => setTadaNewPurpose(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Amount (INR)</Label>
+              <Input type="number" min={0} step={1} value={tadaNewAmount} onChange={(e) => setTadaNewAmount(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setTadaNewOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={createTadaMutation.isPending}
+              onClick={() => {
+                const employeeId = roles.includes("ADMIN") ? tadaNewEmployeeId : user?.employeeId ?? "";
+                const amt = Number(tadaNewAmount);
+                if (!employeeId || !tadaNewTravel || !tadaNewPurpose.trim() || !Number.isFinite(amt)) {
+                  toast({
+                    title: "Missing fields",
+                    description: "Employee, travel date, purpose, and amount are required.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                createTadaMutation.mutate({
+                  employeeId,
+                  travelDate: tadaNewTravel,
+                  purpose: tadaNewPurpose.trim(),
+                  amount: amt,
+                });
+              }}
+            >
+              Submit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={ltcNewOpen} onOpenChange={(o) => !o && setLtcNewOpen(false)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>New LTC claim</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {roles.includes("ADMIN") && (
+              <div className="space-y-1">
+                <Label>Employee</Label>
+                <Select value={ltcNewEmployeeId} onValueChange={setLtcNewEmployeeId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Employee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {employees.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {(e.empId ?? e.id) + " — " + e.firstName + " " + e.surname}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label>Claim date</Label>
+              <Input type="date" value={ltcNewDate} onChange={(e) => setLtcNewDate(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Period (optional)</Label>
+              <Input value={ltcNewPeriod} onChange={(e) => setLtcNewPeriod(e.target.value)} placeholder="e.g. FY 2025-26" />
+            </div>
+            <div className="space-y-1">
+              <Label>Amount (INR)</Label>
+              <Input type="number" min={0} step={1} value={ltcNewAmount} onChange={(e) => setLtcNewAmount(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setLtcNewOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={createLtcMutation.isPending}
+              onClick={() => {
+                const employeeId = roles.includes("ADMIN") ? ltcNewEmployeeId : user?.employeeId ?? "";
+                const amt = Number(ltcNewAmount);
+                if (!employeeId || !ltcNewDate || !Number.isFinite(amt)) {
+                  toast({
+                    title: "Missing fields",
+                    description: "Employee, claim date, and amount are required.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                createLtcMutation.mutate({
+                  employeeId,
+                  claimDate: ltcNewDate,
+                  amount: amt,
+                  period: ltcNewPeriod.trim() || null,
+                });
+              }}
+            >
+              Submit
             </Button>
           </DialogFooter>
         </DialogContent>

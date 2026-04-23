@@ -350,6 +350,8 @@ export const iomsReceipts = gapmc.table("ioms_receipts", {
   chequeDate: text("cheque_date"),
   sourceModule: text("source_module"), // M-02 | M-03 | M-04 | M-06 | M-08
   sourceRecordId: text("source_record_id"),
+  /** M-02 unified entity id: TA:|TB:|AH: (optional; populated when known). */
+  unifiedEntityId: text("unified_entity_id"),
   qrCodeUrl: text("qr_code_url"),
   pdfUrl: text("pdf_url"),
   status: text("status").notNull(), // Pending | Paid | Failed | Reconciled | Reversed (cheque/DD dishonour)
@@ -377,6 +379,16 @@ export const employees = gapmc.table("employees", {
   workEmail: text("work_email"),
   /** BR-EMP-03: personal email; unique among Active | Draft | Submitted (see server rules). */
   personalEmail: text("personal_email"),
+  /** SRS §4.1.1 — demographic / contact extensions (SCR-EMP-02). */
+  gender: text("gender"),
+  maritalStatus: text("marital_status"),
+  bloodGroup: text("blood_group"),
+  permanentAddress: text("permanent_address"),
+  correspondenceAddress: text("correspondence_address"),
+  emergencyContactName: text("emergency_contact_name"),
+  emergencyContactMobile: text("emergency_contact_mobile"),
+  /** Optional link to another employee record (reporting officer). */
+  reportingOfficerEmployeeId: text("reporting_officer_employee_id"),
   status: text("status").notNull(), // Draft | Submitted | Active | Inactive | Suspended | Retired | Resigned
   userId: text("user_id"),
   createdAt: text("created_at"),
@@ -440,6 +452,8 @@ export const leaveRequests = gapmc.table("leave_requests", {
   fromDate: text("from_date").notNull(),
   toDate: text("to_date").notNull(),
   status: text("status").notNull(), // Pending | Verified | Approved | Rejected
+  reason: text("reason"),
+  supportingDocumentUrl: text("supporting_document_url"),
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   approvedBy: text("approved_by"),
@@ -449,13 +463,29 @@ export const leaveRequests = gapmc.table("leave_requests", {
   dvReturnRemarks: text("dv_return_remarks"),
 });
 
+/** M-01: per-employee leave-type balance (opening set at go-live; debited on DA approval when row exists). */
+export const employeeLeaveBalances = gapmc.table("employee_leave_balances", {
+  id: text("id").primaryKey(),
+  employeeId: text("employee_id").notNull(),
+  leaveType: text("leave_type").notNull(),
+  balanceDays: doublePrecision("balance_days").notNull().default(0),
+  updatedAt: text("updated_at"),
+});
+
 export const ltcClaims = gapmc.table("ltc_claims", {
   id: text("id").primaryKey(),
   employeeId: text("employee_id").notNull(),
   claimDate: text("claim_date").notNull(),
   amount: doublePrecision("amount").notNull(),
   period: text("period"),
-  status: text("status").notNull(),
+  status: text("status").notNull(), // Pending | Verified | Approved | Rejected
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  approvedBy: text("approved_by"),
+  rejectionReasonCode: text("rejection_reason_code"),
+  rejectionRemarks: text("rejection_remarks"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
+  dvReturnRemarks: text("dv_return_remarks"),
 });
 
 export const taDaClaims = gapmc.table("ta_da_claims", {
@@ -478,6 +508,8 @@ export const taDaClaims = gapmc.table("ta_da_claims", {
 export const traderLicences = gapmc.table("trader_licences", {
   id: text("id").primaryKey(),
   licenceNo: text("licence_no").unique(),
+  parentLicenceId: text("parent_licence_id"),
+  applicationKind: text("application_kind"), // New | Renewal
   firmName: text("firm_name").notNull(),
   firmType: text("firm_type"),
   yardId: text("yard_id").notNull(),
@@ -506,6 +538,23 @@ export const traderLicences = gapmc.table("trader_licences", {
   govtGstExemptCategoryId: text("govt_gst_exempt_category_id"),
   /** Declared non-GST trader (commercial / unregistered); treat like zero GST on linked receipts where applicable (client M-03). */
   isNonGstEntity: boolean("is_non_gst_entity").default(false),
+  /** Form BM: father / husband name (functionary types). */
+  fatherSpouseName: text("father_spouse_name"),
+  /** Form BM: date of birth (YYYY-MM-DD). */
+  dateOfBirth: text("date_of_birth"),
+  /** Form BM: emergency contact mobile (10 digits, normalized). */
+  emergencyContactMobile: text("emergency_contact_mobile"),
+  /** Form BM: character certificate issuing authority. */
+  characterCertIssuer: text("character_cert_issuer"),
+  characterCertDate: text("character_cert_date"),
+  /** Form BM: optional supporting document URL (https; scan hosted or object-store public URL). */
+  bmFormDocUrl: text("bm_form_doc_url"),
+  /** Form BM: optional uploaded file (stored name under trader-licences/…/bm-form/ in blob store). */
+  bmFormDocFile: text("bm_form_doc_file"),
+  /** Form BK: parent licence fee at renewal application creation (audit). */
+  parentLicenceFeeSnapshot: doublePrecision("parent_licence_fee_snapshot"),
+  /** Form BK: applicant declares no outstanding market / licence arrears on previous licence. */
+  renewalNoArrearsDeclared: boolean("renewal_no_arrears_declared").default(false).notNull(),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
@@ -562,6 +611,73 @@ export const assetAllotments = gapmc.table("asset_allotments", {
   daUser: text("da_user"),
 });
 
+/** M-02 Track B entity master (non-trader / govt / ad-hoc). */
+export const entities = gapmc.table("entities", {
+  id: text("id").primaryKey(),
+  entityCode: text("entity_code").unique(),
+  track: text("track").notNull(), // TrackA | TrackB
+  subType: text("sub_type"),
+  name: text("name").notNull(),
+  yardId: text("yard_id").notNull(),
+  pan: text("pan"),
+  gstin: text("gstin"),
+  mobile: text("mobile"),
+  email: text("email"),
+  address: text("address"),
+  status: text("status").notNull(), // Draft | Active | Inactive | Blocked
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+/** M-02 Ad-hoc occupants / entities (for unified entity master). */
+export const adHocEntities = gapmc.table("ad_hoc_entities", {
+  id: text("id").primaryKey(),
+  entityCode: text("entity_code").unique(),
+  name: text("name").notNull(),
+  yardId: text("yard_id").notNull(),
+  pan: text("pan"),
+  gstin: text("gstin"),
+  mobile: text("mobile"),
+  email: text("email"),
+  address: text("address"),
+  status: text("status").notNull(),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+/** M-02 Track B premises allocation per entity (separate from trader licence allotments). */
+export const entityAllotments = gapmc.table("entity_allotments", {
+  id: text("id").primaryKey(),
+  assetId: text("asset_id").notNull(),
+  entityId: text("entity_id").notNull(),
+  allotteeName: text("allottee_name").notNull(),
+  fromDate: text("from_date").notNull(),
+  toDate: text("to_date").notNull(),
+  status: text("status").notNull(), // Active | Vacated
+  securityDeposit: doublePrecision("security_deposit"),
+  doUser: text("do_user"),
+  daUser: text("da_user"),
+});
+
+/** M-02 Track B: Pre-receipts for govt entities (issued/dispatched/acknowledged/settled). */
+export const preReceipts = gapmc.table("pre_receipts", {
+  id: text("id").primaryKey(),
+  preReceiptNo: text("pre_receipt_no").unique(),
+  entityId: text("entity_id").notNull(),
+  yardId: text("yard_id").notNull(),
+  purpose: text("purpose"),
+  amount: doublePrecision("amount").notNull().default(0),
+  status: text("status").notNull(), // Issued | Dispatched | Acknowledged | Settled | Cancelled
+  issuedAt: text("issued_at"),
+  dispatchedAt: text("dispatched_at"),
+  acknowledgedAt: text("acknowledged_at"),
+  settledAt: text("settled_at"),
+  settledReceiptId: text("settled_receipt_id"),
+  remarks: text("remarks"),
+  createdBy: text("created_by"),
+  updatedAt: text("updated_at"),
+});
+
 export const traderBlockingLog = gapmc.table("trader_blocking_log", {
   id: text("id").primaryKey(),
   traderLicenceId: text("trader_licence_id").notNull(),
@@ -611,6 +727,8 @@ export const rentInvoices = gapmc.table("rent_invoices", {
 export const rentDepositLedger = gapmc.table("rent_deposit_ledger", {
   id: text("id").primaryKey(),
   tenantLicenceId: text("tenant_licence_id").notNull(),
+  /** Denormalized Track A unified id (`TA:<tenant_licence_id>`); rent ledger is tenant-licence scoped. */
+  unifiedEntityId: text("unified_entity_id"),
   assetId: text("asset_id").notNull(),
   entryDate: text("entry_date").notNull(),
   entryType: text("entry_type").notNull(), // OpeningBalance | Rent | Interest | CGST | SGST | Collection | ChequeDishonour
@@ -619,6 +737,28 @@ export const rentDepositLedger = gapmc.table("rent_deposit_ledger", {
   balance: doublePrecision("balance").notNull(),
   invoiceId: text("invoice_id"),
   receiptId: text("receipt_id"),
+});
+
+/** M-03 Rent revision overrides: effective-dated rent amount per allotment. */
+export const rentRevisionOverrides = gapmc.table("rent_revision_overrides", {
+  id: text("id").primaryKey(),
+  allotmentId: text("allotment_id").notNull(),
+  effectiveMonth: text("effective_month").notNull(), // YYYY-MM
+  rentAmount: doublePrecision("rent_amount").notNull().default(0),
+  /** FixedMonthlyRent | OtherDocumented — metadata; Approved rent_amount still drives invoices until rule engine lands. */
+  revisionBasis: text("revision_basis").default("FixedMonthlyRent").notNull(),
+  remarks: text("remarks"),
+  /** Draft | Verified | Approved — only Approved affects monthly invoice generation. */
+  status: text("status").notNull().default("Draft"),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  verifiedAt: text("verified_at"),
+  approvedAt: text("approved_at"),
+  workflowRevisionCount: integer("workflow_revision_count").notNull().default(0),
+  dvReturnRemarks: text("dv_return_remarks"),
+  createdAt: text("created_at"),
+  createdBy: text("created_by"),
 });
 
 export const creditNotes = gapmc.table("credit_notes", {

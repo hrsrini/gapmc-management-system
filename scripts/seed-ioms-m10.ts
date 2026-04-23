@@ -20,7 +20,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { SYSTEM_CONFIG_DEFAULTS } from "../shared/system-config-defaults";
 
-const DEFAULT_ADMIN_PASSWORD = "Apmc@2026";
+/** BR-USR-10 compliant (≥12 chars, mixed case, digit, special) — change in production. */
+const DEFAULT_ADMIN_PASSWORD = "GapmcAdmin@2026!";
 
 const LOCATIONS = [
   { name: "Canacona", code: "CANC", type: "Yard" },

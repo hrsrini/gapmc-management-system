@@ -21,6 +21,7 @@ import { isPaymentWebhookHmacMandatory, verifyPaymentWebhookHmac } from "./payme
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-interest";
 import { getM03RentReceiptArrearsDisclosure } from "./rent-receipt-arrears";
+import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 
 async function dishonourRecomputationHint(
   existing: typeof iomsReceipts.$inferSelect,
@@ -80,6 +81,21 @@ class ReceiptPaymentModeError extends Error {
     super(message);
     this.name = "ReceiptPaymentModeError";
   }
+}
+
+class ReceiptUnifiedEntityIdError extends Error {
+  constructor() {
+    super("unifiedEntityId must be TA:<id> | TB:<id> | AH:<id>");
+    this.name = "ReceiptUnifiedEntityIdError";
+  }
+}
+
+function normalizeReceiptUnifiedEntityId(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const t = String(raw).trim();
+  if (!t) return null;
+  if (!parseUnifiedEntityId(t)) throw new ReceiptUnifiedEntityIdError();
+  return t;
 }
 
 function assertPhase1PaymentMode(mode: string): void {
@@ -158,6 +174,8 @@ export async function createIomsReceipt(params: {
   paymentMode: string;
   sourceModule?: string;
   sourceRecordId?: string;
+  /** When set, must be `TA:|TB:|AH:` (M-02 unified entity register). */
+  unifiedEntityId?: string | null;
   createdBy: string;
 }): Promise<{ id: string; receiptNo: string }> {
   assertPhase1PaymentMode(params.paymentMode);
@@ -165,6 +183,7 @@ export async function createIomsReceipt(params: {
   const receiptNo = await generateNextReceiptNo(params.yardId, params.revenueHead);
   const id = nanoid();
   const now = new Date().toISOString();
+  const unifiedEntityId = normalizeReceiptUnifiedEntityId(params.unifiedEntityId);
 
   await db.insert(iomsReceipts).values({
     id,
@@ -182,6 +201,7 @@ export async function createIomsReceipt(params: {
     paymentMode: params.paymentMode,
     sourceModule: params.sourceModule ?? null,
     sourceRecordId: params.sourceRecordId ?? null,
+    unifiedEntityId,
     qrCodeUrl: `/api/ioms/receipts/public/qr?receiptNo=${encodeURIComponent(receiptNo)}`,
     pdfUrl: null,
     status: "Pending",
@@ -381,6 +401,14 @@ export function registerReceiptsIomsRoutes(app: Express) {
         cgst = 0;
         sgst = 0;
       }
+      let unifiedEntityId: string | null | undefined;
+      if (body.unifiedEntityId !== undefined && body.unifiedEntityId !== null && String(body.unifiedEntityId).trim()) {
+        const t = String(body.unifiedEntityId).trim();
+        if (!parseUnifiedEntityId(t)) {
+          return sendApiError(res, 400, "RECEIPT_UNIFIED_ENTITY_ID_INVALID", "unifiedEntityId must be TA:<id> | TB:<id> | AH:<id>");
+        }
+        unifiedEntityId = t;
+      }
       const result = await createIomsReceipt({
         yardId,
         revenueHead,
@@ -393,6 +421,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
         paymentMode: (body.paymentMode as string) ?? "Cash",
         sourceModule: body.sourceModule as string | undefined,
         sourceRecordId: body.sourceRecordId as string | undefined,
+        unifiedEntityId,
         createdBy,
       });
       const [row] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, result.id));
@@ -401,6 +430,9 @@ export function registerReceiptsIomsRoutes(app: Express) {
     } catch (e: unknown) {
       if (e instanceof ReceiptPaymentModeError) {
         return sendApiError(res, 400, "RECEIPT_PAYMENT_MODE_INVALID", e.message);
+      }
+      if (e instanceof ReceiptUnifiedEntityIdError) {
+        return sendApiError(res, 400, "RECEIPT_UNIFIED_ENTITY_ID_INVALID", e.message);
       }
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create receipt");
@@ -494,10 +526,33 @@ export function registerReceiptsIomsRoutes(app: Express) {
         afterValue: afterForAudit,
       }).catch((e) => console.error("Audit log failed:", e));
       if (status === "Reversed" && rentRecomputationNote) {
+        const cfg = await getMergedSystemConfig();
+        const bankChargeInr = parseSystemConfigNumber(cfg, "rent_dishonour_bank_charge_inr");
+        const bankHint = String(cfg.rent_dishonour_bank_charge_hint ?? "").trim();
+        const voucherCreateQuery =
+          existing.revenueHead === "Rent" &&
+          existing.sourceModule === "M-03" &&
+          bankChargeInr > 0 &&
+          row.yardId
+            ? new URLSearchParams({
+                yardId: row.yardId,
+                amount: String(bankChargeInr),
+                voucherType: "OperationalExpense",
+                description: `Bank charge reference after rent receipt dishonour (${row.receiptNo ?? id}); post per finance.`,
+              }).toString()
+            : "";
         return res.json({
           ...row,
           dishonourReason: dishonourReason ?? null,
           rentRecomputationNote,
+          rentDishonourScaffold:
+            existing.revenueHead === "Rent" && existing.sourceModule === "M-03"
+              ? {
+                  bankChargeInr: bankChargeInr > 0 ? bankChargeInr : null,
+                  bankChargeHint: bankHint || null,
+                  voucherCreateHref: voucherCreateQuery ? `/vouchers/create?${voucherCreateQuery}` : null,
+                }
+              : undefined,
         });
       }
       if (rentDepositLedgerNotice) {

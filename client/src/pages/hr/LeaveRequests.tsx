@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -24,7 +25,7 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Calendar, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal } from "lucide-react";
+import { Calendar, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal, Plus } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
@@ -36,6 +37,8 @@ interface LeaveRequest {
   fromDate: string;
   toDate: string;
   status: string;
+  reason?: string | null;
+  supportingDocumentUrl?: string | null;
   doUser?: string | null;
   dvUser?: string | null;
   approvedBy?: string | null;
@@ -58,7 +61,15 @@ export default function LeaveRequests() {
   const roles = user?.roles?.map((r) => r.tier) ?? [];
   const canVerify = roles.includes("DV") || roles.includes("ADMIN");
   const canApprove = roles.includes("DA") || roles.includes("ADMIN");
+  const canSubmitNew = roles.includes("DO") || roles.includes("ADMIN");
   const [pendingOnly, setPendingOnly] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
+  const [newEmployeeId, setNewEmployeeId] = useState("");
+  const [newLeaveType, setNewLeaveType] = useState("EL");
+  const [newFrom, setNewFrom] = useState("");
+  const [newTo, setNewTo] = useState("");
+  const [newReason, setNewReason] = useState("");
+  const [newDocUrl, setNewDocUrl] = useState("");
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectCode, setRejectCode] = useState<string>(REJECTION_REASON_CODES[0]);
   const [rejectRemarks, setRejectRemarks] = useState("");
@@ -75,6 +86,31 @@ export default function LeaveRequests() {
   const employeeLabelById = Object.fromEntries(
     employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
   );
+  const createMutation = useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await fetch("/api/hr/leaves", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/leaves"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/leaves?pendingMyAction=1"] });
+      toast({ title: "Leave submitted", description: "Request is Pending for DV verification." });
+      setNewOpen(false);
+      setNewReason("");
+      setNewDocUrl("");
+    },
+    onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
+  });
+
   const statusMutation = useMutation({
     mutationFn: async (vars: { id: string; status: string } & Record<string, unknown>) => {
       const { id, ...body } = vars;
@@ -112,6 +148,7 @@ export default function LeaveRequests() {
       { key: "leaveType", header: "Leave type" },
       { key: "fromDate", header: "From" },
       { key: "toDate", header: "To" },
+      { key: "_reason", header: "Reason / attachment", sortField: "reason" },
       { key: "_statusBlock", header: "Status", sortField: "status" },
     ];
     if (showActions) base.push({ key: "_actions", header: "Actions" });
@@ -125,6 +162,22 @@ export default function LeaveRequests() {
       leaveType: r.leaveType,
       fromDate: r.fromDate,
       toDate: r.toDate,
+      reason: r.reason ?? "",
+      _reason: (
+        <div className="flex flex-col gap-0.5 text-xs">
+          {r.reason ? <span className="line-clamp-2">{r.reason}</span> : <span className="text-muted-foreground">—</span>}
+          {r.supportingDocumentUrl ? (
+            <a
+              className="text-primary underline truncate max-w-[220px]"
+              href={r.supportingDocumentUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Attachment
+            </a>
+          ) : null}
+        </div>
+      ),
       status: r.status,
       rejectionSnippet:
         r.status === "Rejected" && r.rejectionRemarks
@@ -221,14 +274,31 @@ export default function LeaveRequests() {
     <AppShell breadcrumbs={[{ label: "HR", href: "/hr/employees" }, { label: "Leave requests (M-01)" }]}>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Calendar className="h-5 w-5" />
-            Leave requests (IOMS M-01)
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Workflow: Pending (DO) → Verified (DV) → Approved or Rejected (DA). DV may return Verified → Pending with
-            remarks.
-          </p>
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Calendar className="h-5 w-5" />
+                Leave requests (IOMS M-01)
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Workflow: Pending (DO) → Verified (DV) → Approved or Rejected (DA). DV may return Verified → Pending with
+                remarks.
+              </p>
+            </div>
+            {canSubmitNew && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  setNewEmployeeId(user?.employeeId ?? "");
+                  setNewOpen(true);
+                }}
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                New leave
+              </Button>
+            )}
+          </div>
           <div className="flex items-center gap-2 pt-2">
             <Checkbox
               id="leave-pending-me"
@@ -252,6 +322,7 @@ export default function LeaveRequests() {
                 "leaveType",
                 "fromDate",
                 "toDate",
+                "reason",
                 "status",
                 "rejectionSnippet",
                 "dvReturnSnippet",
@@ -265,6 +336,86 @@ export default function LeaveRequests() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={newOpen}
+        onOpenChange={(o) => {
+          if (!o) setNewOpen(false);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>New leave application</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {roles.includes("ADMIN") && (
+              <div className="space-y-1">
+                <Label>Employee</Label>
+                <Select value={newEmployeeId} onValueChange={setNewEmployeeId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select employee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {employees.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {(e.empId ?? e.id) + " — " + e.firstName + " " + e.surname}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label>Leave type</Label>
+              <Input value={newLeaveType} onChange={(e) => setNewLeaveType(e.target.value)} placeholder="EL, CL, ML…" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label>From</Label>
+                <Input type="date" value={newFrom} onChange={(e) => setNewFrom(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>To</Label>
+                <Input type="date" value={newTo} onChange={(e) => setNewTo(e.target.value)} />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label>Reason</Label>
+              <Textarea value={newReason} onChange={(e) => setNewReason(e.target.value)} rows={3} />
+            </div>
+            <div className="space-y-1">
+              <Label>Supporting document URL (optional)</Label>
+              <Input value={newDocUrl} onChange={(e) => setNewDocUrl(e.target.value)} placeholder="https://…" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setNewOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={createMutation.isPending}
+              onClick={() => {
+                const employeeId = roles.includes("ADMIN") ? newEmployeeId : user?.employeeId ?? "";
+                if (!employeeId || !newFrom || !newTo) {
+                  toast({ title: "Missing fields", description: "Employee, from and to dates are required.", variant: "destructive" });
+                  return;
+                }
+                createMutation.mutate({
+                  employeeId,
+                  leaveType: newLeaveType.trim() || "EL",
+                  fromDate: newFrom,
+                  toDate: newTo,
+                  reason: newReason.trim() || null,
+                  supportingDocumentUrl: newDocUrl.trim() || null,
+                });
+              }}
+            >
+              Submit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={rejectId != null} onOpenChange={(o) => !o && setRejectId(null)}>
         <DialogContent className="sm:max-w-md">

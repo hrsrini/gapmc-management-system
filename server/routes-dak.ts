@@ -5,7 +5,6 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import multer from "multer";
-import fs from "fs";
 import { eq, desc, and, inArray, or, isNull, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { dakInward, dakOutward, dakActionLog, dakEscalations } from "@shared/db-schema";
@@ -19,11 +18,7 @@ import {
   extFromVoucherAttachmentMime,
   isAllowedVoucherAttachmentFileName,
 } from "./voucher-attachment-storage";
-import {
-  dakAttachmentFilePath,
-  ensureDakAttachmentsDir,
-  unlinkDakAttachmentIfExists,
-} from "./dak-attachment-storage";
+import { readDakAttachmentBuffer, unlinkDakAttachmentIfExists, writeDakAttachmentBuffer } from "./dak-attachment-storage";
 
 const MAX_DAK_ATTACHMENTS = 20;
 
@@ -179,12 +174,11 @@ export function registerDakRoutes(app: Express) {
       const room = MAX_DAK_ATTACHMENTS - prev.length;
       const take = files.slice(0, room);
       const added: string[] = [];
-      ensureDakAttachmentsDir("inward", id);
       for (const file of take) {
         const ext = extFromVoucherAttachmentMime(file.mimetype);
         if (!ext) continue;
         const stored = `${nanoid(16)}${ext}`;
-        fs.writeFileSync(dakAttachmentFilePath("inward", id, stored), file.buffer);
+        await writeDakAttachmentBuffer("inward", id, stored, file.buffer);
         added.push(stored);
       }
       if (!added.length) {
@@ -221,11 +215,11 @@ export function registerDakRoutes(app: Express) {
       if (!docs.includes(fileName)) {
         return sendApiError(res, 404, "DAK_ATTACHMENT_NOT_FOUND", "File not found for this inward");
       }
-      const abs = dakAttachmentFilePath("inward", id, fileName);
-      if (!fs.existsSync(abs)) return sendApiError(res, 404, "DAK_ATTACHMENT_NOT_FOUND", "File missing on server");
+      const buf = await readDakAttachmentBuffer("inward", id, fileName);
+      if (!buf?.length) return sendApiError(res, 404, "DAK_ATTACHMENT_NOT_FOUND", "File missing on server");
       res.setHeader("Content-Type", contentTypeForVoucherAttachment(fileName));
       res.setHeader("Cache-Control", "private, max-age=3600");
-      res.send(fs.readFileSync(abs));
+      res.send(buf);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read dak inward attachment");
@@ -247,7 +241,7 @@ export function registerDakRoutes(app: Express) {
         return sendApiError(res, 404, "DAK_ATTACHMENT_NOT_FOUND", "File not found for this inward");
       }
       const nextDocs = prev.filter((n) => n !== fileName);
-      unlinkDakAttachmentIfExists("inward", id, fileName);
+      await unlinkDakAttachmentIfExists("inward", id, fileName);
       await db.update(dakInward).set({ attachments: nextDocs.length ? nextDocs : null }).where(eq(dakInward.id, id));
       const [row] = await db.select().from(dakInward).where(eq(dakInward.id, id));
       writeAuditLog(req, {
@@ -470,12 +464,11 @@ export function registerDakRoutes(app: Express) {
       const room = MAX_DAK_ATTACHMENTS - prev.length;
       const take = files.slice(0, room);
       const added: string[] = [];
-      ensureDakAttachmentsDir("outward", id);
       for (const file of take) {
         const ext = extFromVoucherAttachmentMime(file.mimetype);
         if (!ext) continue;
         const stored = `${nanoid(16)}${ext}`;
-        fs.writeFileSync(dakAttachmentFilePath("outward", id, stored), file.buffer);
+        await writeDakAttachmentBuffer("outward", id, stored, file.buffer);
         added.push(stored);
       }
       if (!added.length) {
@@ -512,11 +505,11 @@ export function registerDakRoutes(app: Express) {
       if (!docs.includes(fileName)) {
         return sendApiError(res, 404, "DAK_ATTACHMENT_NOT_FOUND", "File not found for this outward");
       }
-      const abs = dakAttachmentFilePath("outward", id, fileName);
-      if (!fs.existsSync(abs)) return sendApiError(res, 404, "DAK_ATTACHMENT_NOT_FOUND", "File missing on server");
+      const buf = await readDakAttachmentBuffer("outward", id, fileName);
+      if (!buf?.length) return sendApiError(res, 404, "DAK_ATTACHMENT_NOT_FOUND", "File missing on server");
       res.setHeader("Content-Type", contentTypeForVoucherAttachment(fileName));
       res.setHeader("Cache-Control", "private, max-age=3600");
-      res.send(fs.readFileSync(abs));
+      res.send(buf);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read dak outward attachment");
@@ -538,7 +531,7 @@ export function registerDakRoutes(app: Express) {
         return sendApiError(res, 404, "DAK_ATTACHMENT_NOT_FOUND", "File not found for this outward");
       }
       const nextDocs = prev.filter((n) => n !== fileName);
-      unlinkDakAttachmentIfExists("outward", id, fileName);
+      await unlinkDakAttachmentIfExists("outward", id, fileName);
       await db.update(dakOutward).set({ attachments: nextDocs.length ? nextDocs : null }).where(eq(dakOutward.id, id));
       const [row] = await db.select().from(dakOutward).where(eq(dakOutward.id, id));
       writeAuditLog(req, {

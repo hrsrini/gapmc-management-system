@@ -15,6 +15,7 @@ import {
   timesheets,
   serviceBookEntries,
   leaveRequests,
+  employeeLeaveBalances,
   ltcClaims,
   taDaClaims,
 } from "@shared/db-schema";
@@ -27,6 +28,9 @@ import {
   canCreateTaDaClaim,
   canTransitionTaDaClaim,
   taDaClaimAwaitingMyAction,
+  canCreateLtcClaim,
+  canTransitionLtcClaim,
+  ltcClaimAwaitingMyAction,
 } from "./workflow";
 import { validateDaRejection, validateDvReturnToDraft } from "@shared/workflow-rejection";
 import { sendApiError } from "./api-errors";
@@ -50,6 +54,7 @@ import {
   allocateNextEmpId,
   isDraftOrSubmitted,
 } from "./hr-employee-rules";
+import { inclusiveCalendarDays } from "./hr-leave-utils";
 
 function sendHrEmployeeRuleError(res: Response, e: unknown): boolean {
   if (e instanceof HrEmployeeRuleError) {
@@ -220,6 +225,20 @@ export function registerHrRoutes(app: Express) {
         throw e;
       }
 
+      const roId =
+        body.reportingOfficerEmployeeId != null && String(body.reportingOfficerEmployeeId).trim() !== ""
+          ? String(body.reportingOfficerEmployeeId).trim()
+          : null;
+      if (roId === id) {
+        return sendApiError(res, 400, "HR_EMP_REPORTING_SELF", "Reporting officer cannot be the same as the employee being created.");
+      }
+      if (roId) {
+        const [roEmp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, roId)).limit(1);
+        if (!roEmp) {
+          return sendApiError(res, 400, "HR_EMP_REPORTING_NOT_FOUND", "Reporting officer employee id was not found.");
+        }
+      }
+
       const payload = {
         id,
         empId: null as string | null,
@@ -239,6 +258,24 @@ export function registerHrRoutes(app: Express) {
         mobile: mobileNorm,
         workEmail: workEmailNorm,
         personalEmail: personalEmailNorm,
+        gender: body.gender != null && String(body.gender).trim() !== "" ? String(body.gender).trim() : null,
+        maritalStatus:
+          body.maritalStatus != null && String(body.maritalStatus).trim() !== "" ? String(body.maritalStatus).trim() : null,
+        bloodGroup: body.bloodGroup != null && String(body.bloodGroup).trim() !== "" ? String(body.bloodGroup).trim() : null,
+        permanentAddress:
+          body.permanentAddress != null && String(body.permanentAddress).trim() !== ""
+            ? String(body.permanentAddress).trim()
+            : null,
+        correspondenceAddress:
+          body.correspondenceAddress != null && String(body.correspondenceAddress).trim() !== ""
+            ? String(body.correspondenceAddress).trim()
+            : null,
+        emergencyContactName:
+          body.emergencyContactName != null && String(body.emergencyContactName).trim() !== ""
+            ? String(body.emergencyContactName).trim()
+            : null,
+        emergencyContactMobile: normalizeMobile10(body.emergencyContactMobile ?? null),
+        reportingOfficerEmployeeId: roId,
         userId: null,
         createdAt: now(),
         updatedAt: now(),
@@ -346,6 +383,14 @@ export function registerHrRoutes(app: Express) {
         "workEmail",
         "personalEmail",
         "status",
+        "gender",
+        "maritalStatus",
+        "bloodGroup",
+        "permanentAddress",
+        "correspondenceAddress",
+        "emergencyContactName",
+        "emergencyContactMobile",
+        "reportingOfficerEmployeeId",
       ];
       for (const key of allowed) {
         if (body[key] === undefined) continue;
@@ -356,7 +401,38 @@ export function registerHrRoutes(app: Express) {
               : String(body.personalEmail).trim().toLowerCase();
           continue;
         }
+        if (key === "emergencyContactMobile") {
+          updates.emergencyContactMobile =
+            body.emergencyContactMobile === null || String(body.emergencyContactMobile).trim() === ""
+              ? null
+              : normalizeMobile10(body.emergencyContactMobile);
+          continue;
+        }
+        if (key === "reportingOfficerEmployeeId") {
+          updates.reportingOfficerEmployeeId =
+            body.reportingOfficerEmployeeId === null || String(body.reportingOfficerEmployeeId).trim() === ""
+              ? null
+              : String(body.reportingOfficerEmployeeId).trim();
+          continue;
+        }
         updates[key] = body[key] === null ? null : String(body[key]);
+      }
+      if (
+        updates.reportingOfficerEmployeeId !== undefined &&
+        updates.reportingOfficerEmployeeId &&
+        String(updates.reportingOfficerEmployeeId) === id
+      ) {
+        return sendApiError(res, 400, "HR_EMP_REPORTING_SELF", "Reporting officer cannot be the same employee.");
+      }
+      const roUpd =
+        updates.reportingOfficerEmployeeId !== undefined
+          ? (updates.reportingOfficerEmployeeId as string | null)
+          : undefined;
+      if (roUpd) {
+        const [roEmp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, roUpd)).limit(1);
+        if (!roEmp) {
+          return sendApiError(res, 400, "HR_EMP_REPORTING_NOT_FOUND", "Reporting officer employee id was not found.");
+        }
       }
 
       const merged: typeof beforeEmp = { ...beforeEmp };
@@ -379,6 +455,7 @@ export function registerHrRoutes(app: Express) {
       let personalEmailNorm: string | null;
       let workEmailNorm: string | null;
       let mobileNorm: string | null;
+      let emergencyMobileNorm: string | null;
       try {
         personalEmailNorm =
           merged.personalEmail != null && String(merged.personalEmail).trim() !== ""
@@ -391,6 +468,7 @@ export function registerHrRoutes(app: Express) {
             : null;
         assertWorkEmailFormat(workEmailNorm);
         mobileNorm = normalizeMobile10(merged.mobile);
+        emergencyMobileNorm = normalizeMobile10((merged as { emergencyContactMobile?: string | null }).emergencyContactMobile);
         panNorm = normalizePan(merged.pan);
         aadhaarMasked = normalizeAadhaarMasked(merged.aadhaarToken);
         assertJoiningAndDob(merged.joiningDate, merged.dob);
@@ -412,6 +490,7 @@ export function registerHrRoutes(app: Express) {
         personalEmail: personalEmailNorm,
         workEmail: workEmailNorm,
         mobile: mobileNorm,
+        emergencyContactMobile: emergencyMobileNorm,
       } as Record<string, string | null>;
 
       const terminalStatuses = ["Inactive", "Retired", "Suspended", "Resigned"];
@@ -639,6 +718,74 @@ export function registerHrRoutes(app: Express) {
     }
   });
 
+  // ----- Leave balances (opening / running per leave type) -----
+  app.get("/api/hr/leave-balances", async (_req, res) => {
+    try {
+      const rows = await db.select().from(employeeLeaveBalances).orderBy(desc(employeeLeaveBalances.updatedAt));
+      res.json(rows);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch leave balances");
+    }
+  });
+
+  app.put("/api/hr/leave-balances", async (req, res) => {
+    try {
+      if (!req.user || !hasPermission(req.user, "M-01", "Update")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-01 Update required to edit leave balances", {
+          required: "M-01:Update",
+        });
+      }
+      const body = req.body as { rows?: unknown };
+      const rows = Array.isArray(body.rows) ? body.rows : [];
+      const normalized: { employeeId: string; leaveType: string; balanceDays: number }[] = [];
+      for (const r of rows) {
+        if (!r || typeof r !== "object") continue;
+        const o = r as Record<string, unknown>;
+        const employeeId = String(o.employeeId ?? "").trim();
+        const leaveType = String(o.leaveType ?? "").trim();
+        const balanceDays = Number(o.balanceDays);
+        if (!employeeId || !leaveType || !Number.isFinite(balanceDays) || balanceDays < 0) {
+          return sendApiError(res, 400, "HR_LEAVE_BALANCE_ROW_INVALID", "Each row needs employeeId, leaveType, and balanceDays >= 0.");
+        }
+        normalized.push({ employeeId, leaveType, balanceDays });
+      }
+      for (const r of normalized) {
+        const [emp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, r.employeeId)).limit(1);
+        if (!emp) {
+          return sendApiError(res, 400, "HR_LEAVE_BALANCE_EMP_NOT_FOUND", `Unknown employeeId ${r.employeeId}`);
+        }
+        const [existing] = await db
+          .select()
+          .from(employeeLeaveBalances)
+          .where(and(eq(employeeLeaveBalances.employeeId, r.employeeId), eq(employeeLeaveBalances.leaveType, r.leaveType)))
+          .limit(1);
+        if (existing) {
+          await db
+            .update(employeeLeaveBalances)
+            .set({ balanceDays: r.balanceDays, updatedAt: now() })
+            .where(eq(employeeLeaveBalances.id, existing.id));
+        } else {
+          await db.insert(employeeLeaveBalances).values({
+            id: nanoid(),
+            employeeId: r.employeeId,
+            leaveType: r.leaveType,
+            balanceDays: r.balanceDays,
+            updatedAt: now(),
+          });
+        }
+      }
+      const list = await db.select().from(employeeLeaveBalances).orderBy(desc(employeeLeaveBalances.updatedAt));
+      writeAuditLog(req, { module: "HR", action: "Update", recordId: "leave_balances", afterValue: { count: normalized.length } }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to save leave balances");
+    }
+  });
+
   // ----- Leave requests -----
   app.get("/api/hr/leaves", async (req, res) => {
     try {
@@ -669,14 +816,32 @@ export function registerHrRoutes(app: Express) {
         );
       }
       const body = req.body;
+      const leaveType = String(body.leaveType ?? "").trim();
+      const supportingDocumentUrl =
+        body.supportingDocumentUrl != null && String(body.supportingDocumentUrl).trim() !== ""
+          ? String(body.supportingDocumentUrl).trim()
+          : null;
+      // SRS checklist: supporting docs required for certain leave types (ML/CCL).
+      if (["ML", "CCL"].includes(leaveType.toUpperCase()) && !supportingDocumentUrl) {
+        return sendApiError(
+          res,
+          400,
+          "LEAVE_SUPPORTING_DOC_REQUIRED",
+          "Supporting document is required for this leave type.",
+          { leaveType },
+        );
+      }
       const id = nanoid();
       await db.insert(leaveRequests).values({
         id,
         employeeId: String(body.employeeId ?? ""),
-        leaveType: String(body.leaveType ?? ""),
+        leaveType,
         fromDate: String(body.fromDate ?? ""),
         toDate: String(body.toDate ?? ""),
         status: "Pending",
+        reason: body.reason != null && String(body.reason).trim() !== "" ? String(body.reason).trim() : null,
+        supportingDocumentUrl:
+          supportingDocumentUrl,
         doUser: req.user?.id ?? null,
         dvUser: null,
         approvedBy: null,
@@ -779,10 +944,62 @@ export function registerHrRoutes(app: Express) {
         updates.rejectionReasonCode = null;
         updates.rejectionRemarks = null;
       }
-      ["leaveType", "fromDate", "toDate"].forEach((k) => {
-        if (body[k] !== undefined) updates[k] = body[k];
+      ["leaveType", "fromDate", "toDate", "reason", "supportingDocumentUrl"].forEach((k) => {
+        if (body[k] !== undefined) {
+          updates[k] = body[k] === null || body[k] === "" ? null : String(body[k]);
+        }
       });
-      await db.update(leaveRequests).set(updates as Record<string, string | number | null>).where(eq(leaveRequests.id, id));
+      const effectiveLeaveType = String((updates.leaveType as string | undefined) ?? existing.leaveType ?? "").trim();
+      const effectiveDocUrl =
+        updates.supportingDocumentUrl !== undefined
+          ? (updates.supportingDocumentUrl as string | null)
+          : (existing.supportingDocumentUrl as string | null);
+      if (["ML", "CCL"].includes(effectiveLeaveType.toUpperCase()) && !effectiveDocUrl) {
+        return sendApiError(
+          res,
+          400,
+          "LEAVE_SUPPORTING_DOC_REQUIRED",
+          "Supporting document is required for this leave type.",
+          { leaveType: effectiveLeaveType },
+        );
+      }
+      try {
+        await db.transaction(async (tx) => {
+          if (statusChange && newStatus === "Approved" && existing.status === "Verified") {
+            const days = inclusiveCalendarDays(existing.fromDate, existing.toDate);
+            const [bal] = await tx
+              .select()
+              .from(employeeLeaveBalances)
+              .where(
+                and(
+                  eq(employeeLeaveBalances.employeeId, existing.employeeId),
+                  eq(employeeLeaveBalances.leaveType, existing.leaveType),
+                ),
+              )
+              .limit(1);
+            if (bal) {
+              if (bal.balanceDays + 1e-9 < days) {
+                throw new Error("LEAVE_INSUFFICIENT_BALANCE");
+              }
+              await tx
+                .update(employeeLeaveBalances)
+                .set({ balanceDays: bal.balanceDays - days, updatedAt: now() })
+                .where(eq(employeeLeaveBalances.id, bal.id));
+            }
+          }
+          await tx.update(leaveRequests).set(updates as Record<string, string | number | null>).where(eq(leaveRequests.id, id));
+        });
+      } catch (e) {
+        if (e instanceof Error && e.message === "LEAVE_INSUFFICIENT_BALANCE") {
+          return sendApiError(
+            res,
+            400,
+            "LEAVE_INSUFFICIENT_BALANCE",
+            "Insufficient leave balance for this leave type (calendar days exceed configured balance).",
+          );
+        }
+        throw e;
+      }
       const [row] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id));
       if (!row) return sendApiError(res, 404, "LEAVE_REQUEST_NOT_FOUND", "Not found");
       writeAuditLog(req, { module: "HR", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -797,9 +1014,14 @@ export function registerHrRoutes(app: Express) {
   app.get("/api/hr/claims/ltc", async (req, res) => {
     try {
       const employeeId = req.query.employeeId as string | undefined;
-      const list = employeeId
+      const pendingMyAction =
+        req.query.pendingMyAction === "1" || String(req.query.pendingMyAction ?? "").toLowerCase() === "true";
+      let list = employeeId
         ? await db.select().from(ltcClaims).where(eq(ltcClaims.employeeId, employeeId)).orderBy(desc(ltcClaims.claimDate))
         : await db.select().from(ltcClaims).orderBy(desc(ltcClaims.claimDate));
+      if (pendingMyAction) {
+        list = list.filter((row) => ltcClaimAwaitingMyAction(req.user, row));
+      }
       res.json(list);
     } catch (e) {
       console.error(e);
@@ -809,6 +1031,9 @@ export function registerHrRoutes(app: Express) {
 
   app.post("/api/hr/claims/ltc", async (req, res) => {
     try {
+      if (!canCreateLtcClaim(req.user)) {
+        return sendApiError(res, 403, "LTC_CREATE_DENIED", "Only Data Originator or Admin can create LTC claims");
+      }
       const body = req.body;
       const id = nanoid();
       await db.insert(ltcClaims).values({
@@ -817,7 +1042,14 @@ export function registerHrRoutes(app: Express) {
         claimDate: String(body.claimDate ?? ""),
         amount: Number(body.amount ?? 0),
         period: body.period ? String(body.period) : null,
-        status: String(body.status ?? "Pending"),
+        status: "Pending",
+        doUser: req.user?.id ?? null,
+        dvUser: null,
+        approvedBy: null,
+        rejectionReasonCode: null,
+        rejectionRemarks: null,
+        workflowRevisionCount: 0,
+        dvReturnRemarks: null,
       });
       const [row] = await db.select().from(ltcClaims).where(eq(ltcClaims.id, id));
       if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -825,6 +1057,111 @@ export function registerHrRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create LTC claim");
+    }
+  });
+
+  app.put("/api/hr/claims/ltc/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const [existing] = await db.select().from(ltcClaims).where(eq(ltcClaims.id, id));
+      if (!existing) {
+        return sendApiError(res, 404, "LTC_CLAIM_NOT_FOUND", "LTC claim not found");
+      }
+      const body = req.body;
+      const newStatus = body.status !== undefined ? String(body.status) : existing.status;
+      const statusChange = newStatus !== existing.status;
+      const transition = statusChange ? canTransitionLtcClaim(req.user, existing.status, newStatus) : null;
+
+      let claimRejection: { code: string; remarks: string } | null = null;
+      let dvReturnRemarks: string | null = null;
+      if (statusChange) {
+        if (!transition?.allowed) {
+          return sendApiError(
+            res,
+            403,
+            "LTC_STATUS_TRANSITION_DENIED",
+            `You cannot change status from ${existing.status} to ${newStatus}. DV verifies; DA approves or rejects.`,
+          );
+        }
+        const segRec = {
+          doUser: existing.doUser,
+          dvUser: existing.dvUser,
+          daUser: null as string | null,
+        };
+        if (transition.setDvUser) {
+          const seg = assertSegregationDoDvDa(req.user, segRec, { setDvUser: true });
+          if (!seg.ok) return sendApiError(res, 403, "LTC_DO_DV_DA_SEGREGATION", seg.error);
+        }
+        if (transition.setApprovedBy) {
+          const seg = assertSegregationDoDvDa(req.user, segRec, { setDaUser: true });
+          if (!seg.ok) return sendApiError(res, 403, "LTC_DO_DV_DA_SEGREGATION", seg.error);
+        }
+        if (transition.setApprovedBy && req.user?.id) {
+          const [emp] = await db.select().from(employees).where(eq(employees.id, existing.employeeId)).limit(1);
+          if (emp?.userId === req.user.id) {
+            return sendApiError(
+              res,
+              403,
+              "LTC_SELF_APPROVE_REJECT_DENIED",
+              "You cannot approve or reject your own LTC claim.",
+            );
+          }
+        }
+        if (newStatus === "Rejected") {
+          const rej = validateDaRejection(body as Record<string, unknown>);
+          if (!rej.ok) return sendApiError(res, 400, "LTC_DA_REJECTION_INVALID", rej.error);
+          claimRejection = { code: rej.code, remarks: rej.remarks };
+        }
+        if (existing.status === "Verified" && newStatus === "Pending") {
+          const ret = validateDvReturnToDraft(body as Record<string, unknown>);
+          if (!ret.ok) return sendApiError(res, 400, "LTC_DV_RETURN_INVALID", ret.error);
+          dvReturnRemarks = ret.remarks;
+        }
+      } else {
+        if (["Approved", "Rejected"].includes(existing.status)) {
+          return sendApiError(res, 403, "LTC_TERMINAL_NO_EDIT", "Approved or rejected LTC claims cannot be edited");
+        }
+        if (existing.status !== "Pending") {
+          return sendApiError(res, 403, "LTC_EDIT_DENIED", "Only pending LTC claims can be edited");
+        }
+        if (!canCreateLtcClaim(req.user)) {
+          return sendApiError(res, 403, "LTC_EDIT_DENIED", "Only Data Originator or Admin can edit a pending LTC claim");
+        }
+      }
+
+      const updates: Record<string, unknown> = {};
+      if (body.status !== undefined) updates.status = body.status;
+      if (transition?.setDvUser) updates.dvUser = req.user?.id ?? null;
+      if (transition?.setApprovedBy) updates.approvedBy = req.user?.id ?? null;
+      if (dvReturnRemarks !== null) {
+        updates.dvReturnRemarks = dvReturnRemarks;
+        updates.workflowRevisionCount = Number(existing.workflowRevisionCount ?? 0) + 1;
+        updates.dvUser = null;
+        updates.approvedBy = null;
+      }
+      if (claimRejection) {
+        updates.rejectionReasonCode = claimRejection.code;
+        updates.rejectionRemarks = claimRejection.remarks;
+      }
+      if (statusChange && newStatus === "Approved") {
+        updates.rejectionReasonCode = null;
+        updates.rejectionRemarks = null;
+      }
+      ["claimDate", "amount", "period"].forEach((k) => {
+        if (body[k] !== undefined) {
+          updates[k] = k === "amount" ? Number(body[k]) : body[k] === null ? null : String(body[k]);
+        }
+      });
+      await db.update(ltcClaims).set(updates as Record<string, string | number | null>).where(eq(ltcClaims.id, id));
+      const [row] = await db.select().from(ltcClaims).where(eq(ltcClaims.id, id));
+      if (!row) return sendApiError(res, 404, "LTC_CLAIM_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "HR", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update LTC claim");
     }
   });
 

@@ -109,6 +109,55 @@ export function canEditDraftRentInvoice(user: AuthUser | undefined): boolean {
   return hasAnyRole(user, [DO, ADMIN]);
 }
 
+/** Rent revision override status flow (M-03 Sr.17): Draft → Verified → Approved */
+const RENT_REVISION_FLOW = {
+  Draft: ["Verified"],
+  Verified: ["Approved", "Draft"],
+  Approved: [],
+} as const;
+
+export type RentRevisionStatus = keyof typeof RENT_REVISION_FLOW;
+
+export function canCreateRentRevision(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, ADMIN]);
+}
+
+export function canEditDraftRentRevision(user: AuthUser | undefined, record: { status: string; doUser?: string | null }): boolean {
+  if (!user) return false;
+  if (hasRole(user, ADMIN)) return true;
+  if (record.status !== "Draft") return false;
+  if (!hasAnyRole(user, [DO])) return false;
+  return record.doUser === user.id;
+}
+
+export function canTransitionRentRevision(
+  user: AuthUser | undefined,
+  currentStatus: string,
+  newStatus: string
+): { allowed: boolean; setDvUser?: boolean; setDaUser?: boolean } {
+  if (!user) return { allowed: false };
+  if (hasRole(user, ADMIN)) {
+    return {
+      allowed: true,
+      setDvUser: newStatus === "Verified",
+      setDaUser: newStatus === "Approved",
+    };
+  }
+  const allowed = RENT_REVISION_FLOW[currentStatus as RentRevisionStatus];
+  if (!allowed || !allowed.includes(newStatus as never)) return { allowed: false };
+
+  if (currentStatus === "Draft" && newStatus === "Verified") {
+    return hasRole(user, DV) ? { allowed: true, setDvUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Approved") {
+    return hasRole(user, DA) ? { allowed: true, setDaUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Draft") {
+    return hasRole(user, DV) ? { allowed: true } : { allowed: false };
+  }
+  return { allowed: false };
+}
+
 /** Payment voucher status flow: Draft/Submitted → Verified → Approved → Paid | Rejected */
 const VOUCHER_FLOW: Record<string, string[]> = {
   Draft: ["Submitted", "Verified"],
@@ -306,6 +355,67 @@ export function taDaClaimAwaitingMyAction(
 }
 
 export function canCreateTaDaClaim(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, ADMIN]);
+}
+
+// ----- M-01: LTC claims (Pending → Verified → Approved | Rejected; DV may return Verified → Pending) -----
+const LTC_CLAIM_FLOW: Record<string, string[]> = {
+  Pending: ["Verified"],
+  Verified: ["Approved", "Rejected", "Pending"],
+  Approved: [],
+  Rejected: [],
+};
+
+export function canTransitionLtcClaim(
+  user: AuthUser | undefined,
+  currentStatus: string,
+  newStatus: string
+): { allowed: boolean; setDvUser?: boolean; setApprovedBy?: boolean } {
+  if (!user) return { allowed: false };
+  if (hasRole(user, ADMIN)) {
+    return {
+      allowed: true,
+      setDvUser: newStatus === "Verified",
+      setApprovedBy: newStatus === "Approved" || newStatus === "Rejected",
+    };
+  }
+  const allowed = LTC_CLAIM_FLOW[currentStatus];
+  if (!allowed || !allowed.includes(newStatus)) return { allowed: false };
+  if (currentStatus === "Pending" && newStatus === "Verified") {
+    return hasRole(user, DV) ? { allowed: true, setDvUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && (newStatus === "Approved" || newStatus === "Rejected")) {
+    return hasRole(user, DA) ? { allowed: true, setApprovedBy: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Pending") {
+    return hasRole(user, DV) ? { allowed: true } : { allowed: false };
+  }
+  return { allowed: false };
+}
+
+export function ltcClaimAwaitingMyAction(
+  user: AuthUser | undefined,
+  row: { status: string; doUser?: string | null; dvUser?: string | null },
+): boolean {
+  if (!user?.id) return false;
+  const uid = user.id;
+  const st = row.status;
+  if (hasRole(user, ADMIN)) {
+    return st === "Pending" || st === "Verified";
+  }
+  if (hasRole(user, DV) && st === "Pending") {
+    if (row.doUser && row.doUser === uid) return false;
+    return true;
+  }
+  if (hasRole(user, DA) && st === "Verified") {
+    if (row.doUser && row.doUser === uid) return false;
+    if (row.dvUser && row.dvUser === uid) return false;
+    return true;
+  }
+  return false;
+}
+
+export function canCreateLtcClaim(user: AuthUser | undefined): boolean {
   return hasAnyRole(user, [DO, ADMIN]);
 }
 

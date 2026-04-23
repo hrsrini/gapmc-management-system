@@ -39,7 +39,7 @@
 | **B2** | Inactive employee | Employee status ≠ Active | Attempt create login | `400` `HR_LOGIN_EMPLOYEE_INVALID` — *Employee not found or not Active*. |
 | **B3** | Duplicate employee link | Employee already has login | Attempt second `POST` for same employee | `400` `HR_LOGIN_EMPLOYEE_ALREADY_LINKED`. |
 | **B4** | Missing email or name | Active employee, no login | `POST` without `email` or `name` | `400` `HR_LOGIN_FIELDS_REQUIRED` — *email, name required*. |
-| **B5** | Password too short | Active employee, no login | Password 7 chars | `400` `HR_LOGIN_PASSWORD_REQUIRED` — *password required (min 8 characters)*. |
+| **B5** | Password fails BR-USR-10 | Active employee, no login | Password too short or missing complexity | `400` `HR_LOGIN_PASSWORD_COMPLEXITY` or `HR_LOGIN_PASSWORD_REQUIRED` — see server message (min 12 chars, upper, lower, digit, special). |
 | **B6** | DV + DA conflict | Two roles: one tier DV, one tier DA | Assign both on create | `400` `HR_ROLE_DV_DA_CONFLICT` — *A user cannot hold both Data Verifier (DV) and Data Approver (DA) roles.* |
 | **B7** | DO + DV allowed | One DO-tier role, one DV-tier role | Assign both on create | `201`; no DV/DA conflict error. |
 | **B8** | Invalid email | — | Email `not-an-email` | `400` `HR_EMP_EMAIL_FORMAT` — *Personal email must be a valid email address.* |
@@ -55,7 +55,7 @@
 |----|--------|---------------|-------|----------|
 | **C1** | Happy path — patch fields | Login exists | Update name, email, roles, yards, active | `200` / success; changes visible after refresh. |
 | **C2** | No login | Employee without linked user | `PUT` | `404` `HR_LOGIN_NOT_FOUND` — *No app login for this employee*. |
-| **C3** | New password too short | Login exists | `PUT` with `password` 7 chars | `400` `HR_LOGIN_PASSWORD_TOO_SHORT`. |
+| **C3** | New password fails BR-USR-10 | Login exists | `PUT` with weak `password` | `400` `HR_LOGIN_PASSWORD_COMPLEXITY`. |
 | **C4** | Skip password | Login exists | `PUT` without `password` field or empty password | Password unchanged; other fields may update. |
 | **C5** | DV + DA on update | Login exists; body sets `roleIds` with DV+DA | `PUT` | `400` `HR_ROLE_DV_DA_CONFLICT` (same message as B6). |
 | **C6** | Deactivate account | Login exists | Set **Account active** off / `isActive: false` | User cannot sign in (or session invalidated per app policy). |

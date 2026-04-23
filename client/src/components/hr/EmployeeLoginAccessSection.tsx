@@ -12,6 +12,7 @@ import { useAuth } from "@/context/AuthContext";
 import { KeyRound, Loader2 } from "lucide-react";
 import { ADMIN_403_MESSAGE, fetchApiGet } from "@/lib/queryClient";
 import { isValidEmailFormat, parseIndianMobile10Digits, sanitizeMobile10Input } from "@shared/india-validation";
+import { getPasswordPolicyBrUsr10FirstViolation, passwordPolicyBrUsr10Hint } from "@shared/password-policy-br-usr-10";
 
 interface UserRoleRef {
   id: string;
@@ -228,8 +229,9 @@ export function EmployeeLoginAccessSection({
     e.preventDefault();
     if (isEditMode && linkedUser) {
       if (password !== "" || confirmPassword !== "") {
-        if (password.length < 8) {
-          toast({ title: "Password too short", description: "Use at least 8 characters or leave both blank.", variant: "destructive" });
+        const pwdErr = getPasswordPolicyBrUsr10FirstViolation(password);
+        if (pwdErr) {
+          toast({ title: "Password does not meet policy", description: pwdErr, variant: "destructive" });
           return;
         }
         if (password !== confirmPassword) {
@@ -269,7 +271,7 @@ export function EmployeeLoginAccessSection({
         roleIds: Array.from(selectedRoleIds),
         yardIds: Array.from(selectedYardIds),
       };
-      if (password.length >= 8) body.password = password;
+      if (!getPasswordPolicyBrUsr10FirstViolation(password)) body.password = password;
       updateMutation.mutate(body);
       return;
     }
@@ -282,8 +284,9 @@ export function EmployeeLoginAccessSection({
       });
       return;
     }
-    if (password.length < 8) {
-      toast({ title: "Password too short", description: "Use at least 8 characters.", variant: "destructive" });
+    const pwdErrCreate = getPasswordPolicyBrUsr10FirstViolation(password);
+    if (pwdErrCreate) {
+      toast({ title: "Password does not meet policy", description: pwdErrCreate, variant: "destructive" });
       return;
     }
     if (password !== confirmPassword) {
@@ -446,7 +449,7 @@ export function EmployeeLoginAccessSection({
                     value={password}
                     onChange={(ev) => setPassword(ev.target.value)}
                     required={!isEditMode}
-                    minLength={isEditMode ? 0 : 8}
+                    minLength={isEditMode ? 0 : 12}
                     placeholder={isEditMode ? "Leave blank to keep" : undefined}
                   />
                 </div>
@@ -459,7 +462,7 @@ export function EmployeeLoginAccessSection({
                     value={confirmPassword}
                     onChange={(ev) => setConfirmPassword(ev.target.value)}
                     required={!isEditMode}
-                    minLength={isEditMode ? 0 : 8}
+                    minLength={isEditMode ? 0 : 12}
                     placeholder={isEditMode ? "—" : undefined}
                   />
                 </div>
@@ -519,8 +522,8 @@ export function EmployeeLoginAccessSection({
 
             <p className="text-xs text-muted-foreground">
               {isEditMode
-                ? "Change password only if needed; both fields must match and be at least 8 characters."
-                : "Minimum 8 characters. User signs in with email or username plus this password."}
+                ? `Change password only if needed; both fields must match. ${passwordPolicyBrUsr10Hint()}`
+                : `${passwordPolicyBrUsr10Hint()} User signs in with email or username plus this password.`}
             </p>
 
             {((!isEditMode && canCreate) || (isEditMode && canUpdate)) && (

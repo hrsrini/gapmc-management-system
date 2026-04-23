@@ -6,7 +6,6 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import multer from "multer";
-import fs from "fs";
 import { eq, desc, and, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { expenditureHeads, paymentVouchers, advanceRequests } from "@shared/db-schema";
@@ -24,11 +23,11 @@ import { writeAuditLog } from "./audit";
 import { routeParamString } from "./route-params";
 import {
   contentTypeForVoucherAttachment,
-  ensureVoucherAttachmentsDir,
   extFromVoucherAttachmentMime,
   isAllowedVoucherAttachmentFileName,
+  readVoucherAttachmentBuffer,
   unlinkVoucherAttachmentIfExists,
-  voucherAttachmentFilePath,
+  writeVoucherAttachmentBuffer,
 } from "./voucher-attachment-storage";
 
 const MAX_VOUCHER_ATTACHMENTS = 20;
@@ -363,13 +362,11 @@ export function registerVoucherRoutes(app: Express) {
       const room = MAX_VOUCHER_ATTACHMENTS - prev.length;
       const take = files.slice(0, room);
       const added: string[] = [];
-      ensureVoucherAttachmentsDir(id);
       for (const file of take) {
         const ext = extFromVoucherAttachmentMime(file.mimetype);
         if (!ext) continue;
         const stored = `${nanoid(16)}${ext}`;
-        const dest = voucherAttachmentFilePath(id, stored);
-        fs.writeFileSync(dest, file.buffer);
+        await writeVoucherAttachmentBuffer(id, stored, file.buffer);
         added.push(stored);
       }
       if (!added.length) {
@@ -409,11 +406,10 @@ export function registerVoucherRoutes(app: Express) {
       if (!docs.includes(fileName)) {
         return sendApiError(res, 404, "VOUCHER_ATTACHMENT_NOT_FOUND", "File not found for this voucher");
       }
-      const abs = voucherAttachmentFilePath(id, fileName);
-      if (!fs.existsSync(abs)) {
+      const buf = await readVoucherAttachmentBuffer(id, fileName);
+      if (!buf?.length) {
         return sendApiError(res, 404, "VOUCHER_ATTACHMENT_NOT_FOUND", "File missing on server");
       }
-      const buf = fs.readFileSync(abs);
       res.setHeader("Content-Type", contentTypeForVoucherAttachment(fileName));
       res.setHeader("Cache-Control", "private, max-age=3600");
       res.send(buf);
@@ -452,7 +448,7 @@ export function registerVoucherRoutes(app: Express) {
         return sendApiError(res, 404, "VOUCHER_ATTACHMENT_NOT_FOUND", "File not found for this voucher");
       }
       const nextDocs = prev.filter((n) => n !== fileName);
-      unlinkVoucherAttachmentIfExists(id, fileName);
+      await unlinkVoucherAttachmentIfExists(id, fileName);
       await db.update(paymentVouchers).set({ supportingDocs: nextDocs.length ? nextDocs : null }).where(eq(paymentVouchers.id, id));
       const [row] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, id));
       writeAuditLog(req, {

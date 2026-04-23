@@ -31,8 +31,44 @@ export function gstr1ExportWarnings(gstinFromEnv: string | null): string[] {
     w.push("GSTIN env value does not match the usual 15-character structural pattern; verify before filing.");
   }
   w.push(
-    "Response includes `supplies` (internal) plus `gstnDraftMapping` (GSTN-oriented draft — not filed JSON); complete ctin, POS, and invoice date formats in your filing tool.",
+    "Response includes `supplies` (internal) plus `gstnDraftMapping` (GSTN-oriented draft — not filed JSON); verify POS and final field names in your filing tool.",
   );
+  return w;
+}
+
+/** First day of `YYYY-MM` as DD-MM-YYYY (invoice date hint for rent period month). */
+export function rentPeriodMonthToInvoiceDdMmYyyy(ym: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(ym ?? "").trim().slice(0, 7));
+  if (!m) return String(ym ?? "").trim().slice(0, 10);
+  return `01-${m[2]}-${m[1]}`;
+}
+
+export function normalizedCounterpartyGstin(g: string | null | undefined): string | null {
+  const t = String(g ?? "").trim().toUpperCase();
+  if (!t) return null;
+  return isPlausibleGstin(t) ? t : null;
+}
+
+export function gstr1CounterpartyGstinIssues(
+  lines: {
+    invoiceNo: string;
+    tenantLicenceId: string;
+    counterpartyGstin: string | null;
+    isNonGstEntity?: boolean | null;
+  }[],
+): string[] {
+  const w: string[] = [];
+  for (const l of lines) {
+    if (l.isNonGstEntity) continue;
+    const raw = (l.counterpartyGstin ?? "").trim();
+    if (!raw) {
+      w.push(
+        `Invoice ${l.invoiceNo}: tenant licence ${l.tenantLicenceId} has no GSTIN; set trader_licences.gstin for B2B ctin.`,
+      );
+    } else if (!isPlausibleGstin(raw)) {
+      w.push(`Invoice ${l.invoiceNo}: GSTIN "${raw}" failed basic structural validation.`);
+    }
+  }
   return w;
 }
 
@@ -49,6 +85,11 @@ export function filingPeriodMMYYYYFromYearMonth(ym: string): string {
 export type RentGstr1SupplyForDraft = {
   invoiceNo: string;
   periodMonth: string;
+  tenantLicenceId: string;
+  /** Trader licence GSTIN when present (B2B counterparty). */
+  counterpartyGstin: string | null;
+  /** Declared unregistered / non-GST tenant — ctin omitted in draft mapping. */
+  isNonGstEntity?: boolean | null;
   customerRef: string | null;
   assetId: string | null;
   yardId: string;
@@ -72,21 +113,27 @@ export function buildRentGstr1DraftGstnMapping(params: {
   const fp = filingPeriodMMYYYYFromYearMonth(params.filingPeriodMonth);
   return {
     schemaNote:
-      "Draft GSTR-1 alignment aid only — not GSTN JSON. Fill ctin (counterparty GSTIN), POS, and idt (DD-MM-YYYY) per your filing software.",
+      "Draft GSTR-1 alignment aid only — not GSTN JSON. `ctin` is set from tenant `trader_licences.gstin` when structurally valid (omitted for `isNonGstEntity`). Verify POS and your filing tool’s field names.",
     gstin: params.gstin,
     fp: fp || null,
-    b2bPlaceholderInvoices: params.supplies.map((s) => ({
-      inum: s.invoiceNo,
-      idtIso: `${s.periodMonth}-01`,
-      ctin: null,
-      posSuggested: "37",
-      txval: Number(s.taxableValue ?? 0),
-      camt: Number(s.cgst ?? 0),
-      samt: Number(s.sgst ?? 0),
-      csamt: 0,
-      tds194I: s.tdsApplicable
-        ? { applicable: true, amt: Number(s.tdsAmount ?? 0) }
-        : { applicable: false, amt: 0 },
-    })),
+    b2bPlaceholderInvoices: params.supplies.map((s) => {
+      const ctin =
+        s.isNonGstEntity ? null : normalizedCounterpartyGstin(s.counterpartyGstin ?? null);
+      const idtDdMmYyyy = rentPeriodMonthToInvoiceDdMmYyyy(s.periodMonth);
+      return {
+        inum: s.invoiceNo,
+        idtIso: `${s.periodMonth}-01`,
+        idtDdMmYyyy,
+        ctin,
+        posSuggested: "37",
+        txval: Number(s.taxableValue ?? 0),
+        camt: Number(s.cgst ?? 0),
+        samt: Number(s.sgst ?? 0),
+        csamt: 0,
+        tds194I: s.tdsApplicable
+          ? { applicable: true, amt: Number(s.tdsAmount ?? 0) }
+          : { applicable: false, amt: 0 },
+      };
+    }),
   };
 }

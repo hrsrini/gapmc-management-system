@@ -6,6 +6,7 @@
 import { eq, and, desc, gte, lte } from "drizzle-orm";
 import { db } from "./db";
 import { assetAllotments, assets, rentInvoices } from "@shared/db-schema";
+import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
 import { nanoid } from "nanoid";
 import { writeAuditLogSystem } from "./audit";
 
@@ -62,7 +63,7 @@ export async function generateRentInvoicesForCurrentMonth(): Promise<{ created: 
       .orderBy(desc(rentInvoices.periodMonth))
       .limit(1);
 
-    const rentAmount = lastInvoice?.rentAmount ?? 0;
+    const { rentAmount } = await resolveRentForAllotmentPeriodMonth(allotment.id, periodMonth);
     const cgst = lastInvoice?.cgst ?? 0;
     const sgst = lastInvoice?.sgst ?? 0;
     const totalAmount = lastInvoice?.totalAmount ?? rentAmount + cgst + sgst;

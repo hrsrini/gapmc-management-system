@@ -28,8 +28,9 @@ import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import {
   clearReceiptLogoFiles,
-  getUploadedReceiptLogoPath,
-  mimeForReceiptLogoPath,
+  getActiveReceiptLogoKey,
+  hasUploadedReceiptLogo,
+  mimeForReceiptLogoKey,
   readUploadedReceiptLogoBuffer,
   writeReceiptLogoUpload,
 } from "./receipt-logo-storage";
@@ -285,8 +286,7 @@ export function registerAdminRoutes(app: Express) {
   // ----- Receipt PDF logo (uploads/branding; overrides env RECEIPT_PDF_LOGO_* for PDF generation) -----
   app.get("/api/admin/branding/receipt-logo/status", async (_req, res) => {
     try {
-      const p = getUploadedReceiptLogoPath();
-      res.json({ hasLogo: Boolean(p) });
+      res.json({ hasLogo: await hasUploadedReceiptLogo() });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read logo status");
@@ -295,11 +295,11 @@ export function registerAdminRoutes(app: Express) {
 
   app.get("/api/admin/branding/receipt-logo/image", async (_req, res) => {
     try {
-      const p = getUploadedReceiptLogoPath();
-      if (!p) return sendApiError(res, 404, "ADMIN_RECEIPT_LOGO_NOT_FOUND", "No logo uploaded yet.");
-      const buf = readUploadedReceiptLogoBuffer();
+      const key = await getActiveReceiptLogoKey();
+      if (!key) return sendApiError(res, 404, "ADMIN_RECEIPT_LOGO_NOT_FOUND", "No logo uploaded yet.");
+      const buf = await readUploadedReceiptLogoBuffer();
       if (!buf) return sendApiError(res, 404, "ADMIN_RECEIPT_LOGO_NOT_FOUND", "No logo uploaded yet.");
-      res.setHeader("Content-Type", mimeForReceiptLogoPath(p));
+      res.setHeader("Content-Type", mimeForReceiptLogoKey(key));
       res.setHeader("Cache-Control", "no-store");
       res.send(buf);
     } catch (e) {
@@ -314,7 +314,7 @@ export function registerAdminRoutes(app: Express) {
       if (!file?.buffer?.length) {
         return sendApiError(res, 400, "ADMIN_RECEIPT_LOGO_REQUIRED", "Choose a PNG or JPEG file (field name: logo).");
       }
-      writeReceiptLogoUpload(file.buffer, file.mimetype);
+      await writeReceiptLogoUpload(file.buffer, file.mimetype);
       writeAuditLog(req, {
         module: "M-10",
         action: "UploadReceiptPdfLogo",
@@ -330,8 +330,8 @@ export function registerAdminRoutes(app: Express) {
 
   app.delete("/api/admin/branding/receipt-logo", async (req, res) => {
     try {
-      const hadFile = Boolean(getUploadedReceiptLogoPath());
-      clearReceiptLogoFiles();
+      const hadFile = await hasUploadedReceiptLogo();
+      await clearReceiptLogoFiles();
       writeAuditLog(req, {
         module: "M-10",
         action: "DeleteReceiptPdfLogo",

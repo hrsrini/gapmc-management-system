@@ -6,3 +6,9 @@ vite.config.ts.*
 *.tar.gz
 .env
 uploads/
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

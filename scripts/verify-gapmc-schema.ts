@@ -8,6 +8,7 @@ const { Client } = pg;
 
 const REQUIRED_TABLES = [
   "leave_requests",
+  "employee_leave_balances",
   "purchase_transactions",
   "dak_escalations",
   "land_records",
@@ -18,7 +19,7 @@ const REQUIRED_TABLES = [
 const COLUMN_CHECKS: { table: string; columns: string[] }[] = [
   {
     table: "leave_requests",
-    columns: ["do_user", "dv_user", "workflow_revision_count", "dv_return_remarks"],
+    columns: ["do_user", "dv_user", "workflow_revision_count", "dv_return_remarks", "reason", "supporting_document_url"],
   },
   {
     table: "purchase_transactions",
@@ -31,6 +32,14 @@ const COLUMN_CHECKS: { table: string; columns: string[] }[] = [
   {
     table: "ioms_receipts",
     columns: ["tds_amount"],
+  },
+  {
+    table: "ltc_claims",
+    columns: ["do_user", "dv_user", "approved_by", "rejection_reason_code", "workflow_revision_count", "dv_return_remarks"],
+  },
+  {
+    table: "employees",
+    columns: ["gender", "reporting_officer_employee_id"],
   },
 ];
 

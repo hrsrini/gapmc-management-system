@@ -52,7 +52,6 @@ export default function MarketTransactions() {
   const [quantity, setQuantity] = useState("");
   const [unit, setUnit] = useState("Quintal");
   const [declaredValue, setDeclaredValue] = useState("");
-  const [marketFeePercent, setMarketFeePercent] = useState("1");
   const [purchaseType, setPurchaseType] = useState("TraderPurchase");
   const [transactionDate, setTransactionDate] = useState(() => new Date().toISOString().slice(0, 10));
 
@@ -87,11 +86,39 @@ export default function MarketTransactions() {
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
   const licenceById = useMemo(() => new Map(licences.map((l) => [l.id, l])), [licences]);
 
+  const feePreviewParamsReady =
+    Boolean(yardId.trim() && commodityId.trim()) && /^\d{4}-\d{2}-\d{2}$/.test(transactionDate.trim());
+
+  const {
+    data: feePreview,
+    isPending: feePreviewPending,
+    isError: feePreviewIsError,
+    error: feePreviewError,
+  } = useQuery<{ marketFeePercent: number; source: string; rateId: string | null }>({
+    queryKey: ["/api/ioms/market/fee-preview", yardId.trim(), commodityId.trim(), transactionDate.trim()],
+    queryFn: async ({ queryKey }) => {
+      const [, y, c, d] = queryKey as [string, string, string, string];
+      const u = new URL("/api/ioms/market/fee-preview", window.location.origin);
+      u.searchParams.set("yardId", y);
+      u.searchParams.set("commodityId", c);
+      u.searchParams.set("transactionDate", d);
+      const r = await fetch(u.toString(), { credentials: "include" });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? r.statusText);
+      }
+      return r.json();
+    },
+    enabled: feePreviewParamsReady,
+  });
+
+  const resolvedFeePercent = feePreview?.marketFeePercent ?? null;
+
   const marketFeeAmount = useMemo(() => {
     const dv = Number(declaredValue) || 0;
-    const mfp = Number(marketFeePercent) || 0;
+    const mfp = resolvedFeePercent ?? 0;
     return Number(((dv * mfp) / 100).toFixed(2));
-  }, [declaredValue, marketFeePercent]);
+  }, [declaredValue, resolvedFeePercent]);
   const createValidationError = useMemo(() => {
     if (!yardId.trim()) return "Yard ID is required.";
     if (!commodityId.trim()) return "Commodity ID is required.";
@@ -106,8 +133,13 @@ export default function MarketTransactions() {
     if (Number.isNaN(q) || q <= 0) return "Quantity must be greater than 0.";
     const dv = Number(declaredValue);
     if (Number.isNaN(dv) || dv < 0) return "Declared value must be a non-negative number.";
-    const mfp = Number(marketFeePercent);
-    if (Number.isNaN(mfp) || mfp < 0 || mfp > 100) return "Market fee % must be between 0 and 100.";
+    if (feePreviewParamsReady) {
+      if (feePreviewPending) return "Resolving market fee rate…";
+      if (feePreviewIsError) {
+        return feePreviewError instanceof Error ? feePreviewError.message : "Could not resolve market fee rate.";
+      }
+      if (resolvedFeePercent == null || Number.isNaN(resolvedFeePercent)) return "Could not resolve market fee rate.";
+    }
     return null;
   }, [
     yardId,
@@ -121,7 +153,11 @@ export default function MarketTransactions() {
     licenceById,
     quantity,
     declaredValue,
-    marketFeePercent,
+    feePreviewParamsReady,
+    feePreviewPending,
+    feePreviewIsError,
+    feePreviewError,
+    resolvedFeePercent,
   ]);
 
   const createMutation = useMutation({
@@ -136,7 +172,7 @@ export default function MarketTransactions() {
         quantity: Number(quantity || 0),
         unit: unit.trim(),
         declaredValue: Number(declaredValue || 0),
-        marketFeePercent: Number(marketFeePercent || 0),
+        marketFeePercent: resolvedFeePercent ?? 0,
         marketFeeAmount: Number(marketFeeAmount || 0),
         purchaseType: purchaseType.trim(),
         transactionDate: transactionDate.trim(),
@@ -163,7 +199,6 @@ export default function MarketTransactions() {
       setQuantity("");
       setUnit("Quintal");
       setDeclaredValue("");
-      setMarketFeePercent("1");
       setPurchaseType("TraderPurchase");
       setTransactionDate(new Date().toISOString().slice(0, 10));
     },
@@ -444,7 +479,22 @@ export default function MarketTransactions() {
                     </div>
                     <div className="space-y-1">
                       <Label>Market fee %</Label>
-                      <Input type="number" value={marketFeePercent} onChange={(e) => setMarketFeePercent(e.target.value)} />
+                      <Input
+                        readOnly
+                        className="bg-muted font-mono"
+                        value={
+                          feePreviewPending && feePreviewParamsReady
+                            ? "…"
+                            : resolvedFeePercent != null && !Number.isNaN(resolvedFeePercent)
+                              ? String(resolvedFeePercent)
+                              : "—"
+                        }
+                      />
+                      {feePreview?.source ? (
+                        <p className="text-xs text-muted-foreground">
+                          From {feePreview.source === "matrix_yard" ? "yard matrix" : feePreview.source === "matrix_global" ? "global matrix" : "system default"}.
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                   <div className="space-y-1">

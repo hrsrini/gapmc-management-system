@@ -18,7 +18,7 @@ A complete internal government management system for the Goa Agricultural Market
 ## Authentication
 - **Hardcoded Credentials**: 
   - Username: `admin`
-  - Password: `Apmc@2026`
+  - Password: `GapmcAdmin@2026!`
 - Auth state stored in localStorage (`gapmc_auth`)
 - Protected routes redirect to login if not authenticated
 

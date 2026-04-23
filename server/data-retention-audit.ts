@@ -3,7 +3,7 @@
  * Does not delete or archive data — for compliance visibility and external archival planning (client Q50).
  */
 import { and, isNotNull, sql, lte } from "drizzle-orm";
-import { db } from "./db";
+import { db, pool } from "./db";
 import {
   auditLog,
   bugTickets,
@@ -13,9 +13,14 @@ import {
   employees,
   iomsReceipts,
   landRecords,
+  leaveRequests,
   paymentVouchers,
+  preReceipts,
   purchaseTransactions,
+  rentDepositLedger,
   rentInvoices,
+  traderBlockingLog,
+  traderLicences,
   users,
 } from "@shared/db-schema";
 import type { SystemConfigKey } from "@shared/system-config-defaults";
@@ -34,6 +39,12 @@ const BUGS_Y: SystemConfigKey = "data_retention_bug_tickets_years";
 const PURCHASE_Y: SystemConfigKey = "data_retention_purchase_transactions_years";
 const CHECKPOST_Y: SystemConfigKey = "data_retention_check_post_inward_years";
 const USERS_Y: SystemConfigKey = "data_retention_users_years";
+const LOGIN_SESSION_Y: SystemConfigKey = "data_retention_login_session_rows_years";
+const TRADER_LIC_Y: SystemConfigKey = "data_retention_trader_licences_years";
+const PRE_RECEIPTS_Y: SystemConfigKey = "data_retention_pre_receipts_years";
+const RENT_LEDGER_Y: SystemConfigKey = "data_retention_rent_deposit_ledger_years";
+const LEAVE_REQ_Y: SystemConfigKey = "data_retention_leave_requests_years";
+const TRADER_BLOCK_Y: SystemConfigKey = "data_retention_trader_blocking_log_years";
 
 function clampYears(n: number): number {
   if (!Number.isFinite(n) || n < 1) return 1;
@@ -57,9 +68,35 @@ function cutoffYearMonthForYears(years: number): string {
   return d.toISOString().slice(0, 7);
 }
 
+/** UTC midnight N years ago as Unix seconds (for connect-pg-simple `expire` bigint). */
+function cutoffUnixSecondsForYears(years: number): number {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCFullYear(d.getUTCFullYear() - clampYears(years));
+  return Math.floor(d.getTime() / 1000);
+}
+
+async function countLoginSessionRowsPastRetention(cutoffUnix: number): Promise<{ tablePresent: boolean; count: number }> {
+  const existsRes = await pool.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name = 'session'
+     ) AS exists`,
+  );
+  const tablePresent = Boolean(existsRes.rows[0]?.exists);
+  if (!tablePresent) return { tablePresent: false, count: 0 };
+  const countRes = await pool.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM public.session WHERE expire IS NOT NULL AND expire <= $1`,
+    [cutoffUnix],
+  );
+  return { tablePresent: true, count: parseInt(countRes.rows[0]?.n ?? "0", 10) };
+}
+
 export type DataRetentionSummary = {
   asOf: string;
   note: string;
+  /** When false, express-session uses in-memory store (typical dev); `expressLoginSessions` count is always 0. */
+  loginSessionTablePresent: boolean;
   policyYears: Record<string, number>;
   cutoffDates: Record<string, string>;
   countsPastRetention: Record<string, number>;
@@ -79,6 +116,12 @@ export async function getDataRetentionSummary(): Promise<DataRetentionSummary> {
   const yPurch = clampYears(parseSystemConfigNumber(cfg, PURCHASE_Y));
   const yCp = clampYears(parseSystemConfigNumber(cfg, CHECKPOST_Y));
   const yUsers = clampYears(parseSystemConfigNumber(cfg, USERS_Y));
+  const yLoginSess = clampYears(parseSystemConfigNumber(cfg, LOGIN_SESSION_Y));
+  const yTraderLic = clampYears(parseSystemConfigNumber(cfg, TRADER_LIC_Y));
+  const yPreRcpt = clampYears(parseSystemConfigNumber(cfg, PRE_RECEIPTS_Y));
+  const yRentLed = clampYears(parseSystemConfigNumber(cfg, RENT_LEDGER_Y));
+  const yLeaveReq = clampYears(parseSystemConfigNumber(cfg, LEAVE_REQ_Y));
+  const yTraderBlock = clampYears(parseSystemConfigNumber(cfg, TRADER_BLOCK_Y));
 
   const cutR = cutoffYmdForYears(yReceipts);
   const cutV = cutoffYmdForYears(yVouchers);
@@ -92,6 +135,13 @@ export async function getDataRetentionSummary(): Promise<DataRetentionSummary> {
   const cutPurch = cutoffYmdForYears(yPurch);
   const cutCp = cutoffYmdForYears(yCp);
   const cutUsers = cutoffYmdForYears(yUsers);
+  const cutLoginSessUnix = cutoffUnixSecondsForYears(yLoginSess);
+  const cutLoginSessYmd = new Date(cutLoginSessUnix * 1000).toISOString().slice(0, 10);
+  const cutTraderLic = cutoffYmdForYears(yTraderLic);
+  const cutPreRcpt = cutoffYmdForYears(yPreRcpt);
+  const cutRentLed = cutoffYmdForYears(yRentLed);
+  const cutLeaveReq = cutoffYmdForYears(yLeaveReq);
+  const cutTraderBlock = cutoffYmdForYears(yTraderBlock);
 
   const [rR] = await db
     .select({ c: sql<number>`count(*)::int` })
@@ -142,11 +192,39 @@ export async function getDataRetentionSummary(): Promise<DataRetentionSummary> {
     .from(users)
     .where(and(isNotNull(users.createdAt), sql`left(${users.createdAt}, 10) <= ${cutUsers}`));
 
+  const [rTraderLic] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(traderLicences)
+    .where(and(isNotNull(traderLicences.createdAt), sql`left(${traderLicences.createdAt}, 10) <= ${cutTraderLic}`));
+  const [rPreRcpt] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(preReceipts)
+    .where(
+      sql`coalesce(left(${preReceipts.issuedAt}, 10), left(${preReceipts.updatedAt}, 10)) is not null AND coalesce(left(${preReceipts.issuedAt}, 10), left(${preReceipts.updatedAt}, 10)) <= ${cutPreRcpt}`,
+    );
+  const [rRentLed] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(rentDepositLedger)
+    .where(sql`left(${rentDepositLedger.entryDate}, 10) <= ${cutRentLed}`);
+  const [rLeaveReq] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(leaveRequests)
+    .where(sql`left(${leaveRequests.fromDate}, 10) <= ${cutLeaveReq}`);
+  const [rTraderBlock] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(traderBlockingLog)
+    .where(sql`left(${traderBlockingLog.actionedAt}, 10) <= ${cutTraderBlock}`);
+
+  const { tablePresent: loginSessionTablePresent, count: loginSessionPast } = await countLoginSessionRowsPastRetention(
+    cutLoginSessUnix,
+  );
+
   const asOf = new Date().toISOString();
   return {
     asOf,
     note:
-      "Read-only snapshot: most entities use created_at vs cutoff; M-04 purchase uses transaction_date; check_post_inward uses entry_date; rent invoices use period_month (YYYY-MM) vs cutoff month; users with null created_at are excluded from the users count. No deletes.",
+      "Read-only snapshot: most entities use created_at vs cutoff; M-04 purchase uses transaction_date; check_post_inward uses entry_date; rent invoices use period_month (YYYY-MM) vs cutoff month; users with null created_at are excluded from the users count; express login sessions use public.session.expire (unix) vs cutoff when that table exists; pre_receipts use coalesce(issued_at, updated_at); leave_requests use from_date; rent_deposit_ledger uses entry_date; trader_blocking_log uses actioned_at. No deletes.",
+    loginSessionTablePresent,
     policyYears: {
       iomsReceipts: yReceipts,
       paymentVouchers: yVouchers,
@@ -160,6 +238,12 @@ export async function getDataRetentionSummary(): Promise<DataRetentionSummary> {
       purchaseTransactions: yPurch,
       checkPostInward: yCp,
       users: yUsers,
+      expressLoginSessions: yLoginSess,
+      traderLicences: yTraderLic,
+      preReceipts: yPreRcpt,
+      rentDepositLedger: yRentLed,
+      leaveRequests: yLeaveReq,
+      traderBlockingLog: yTraderBlock,
     },
     cutoffDates: {
       iomsReceipts: cutR,
@@ -174,6 +258,12 @@ export async function getDataRetentionSummary(): Promise<DataRetentionSummary> {
       purchaseTransactions: cutPurch,
       checkPostInward: cutCp,
       users: cutUsers,
+      expressLoginSessions: cutLoginSessYmd,
+      traderLicences: cutTraderLic,
+      preReceipts: cutPreRcpt,
+      rentDepositLedger: cutRentLed,
+      leaveRequests: cutLeaveReq,
+      traderBlockingLog: cutTraderBlock,
     },
     countsPastRetention: {
       iomsReceipts: Number(rR?.c ?? 0),
@@ -188,6 +278,12 @@ export async function getDataRetentionSummary(): Promise<DataRetentionSummary> {
       purchaseTransactions: Number(rPurch?.c ?? 0),
       checkPostInward: Number(rCp?.c ?? 0),
       users: Number(rUsers?.c ?? 0),
+      expressLoginSessions: loginSessionPast,
+      traderLicences: Number(rTraderLic?.c ?? 0),
+      preReceipts: Number(rPreRcpt?.c ?? 0),
+      rentDepositLedger: Number(rRentLed?.c ?? 0),
+      leaveRequests: Number(rLeaveReq?.c ?? 0),
+      traderBlockingLog: Number(rTraderBlock?.c ?? 0),
     },
   };
 }

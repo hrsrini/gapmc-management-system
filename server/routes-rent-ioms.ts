@@ -3,16 +3,19 @@
  * Tables: rent_invoices, rent_deposit_ledger, credit_notes.
  * Workflow: DO creates Draft; DV verifies (Draft→Verified); DA approves (Verified→Approved).
  */
-import type { Express } from "express";
-import { eq, desc, and, inArray, gte, lte } from "drizzle-orm";
+import type { Express, Request } from "express";
+import { eq, desc, and, inArray, gte, lte, or, isNull } from "drizzle-orm";
 import { db } from "./db";
-import { rentInvoices, rentDepositLedger, creditNotes, iomsReceipts } from "@shared/db-schema";
+import { rentInvoices, rentDepositLedger, creditNotes, iomsReceipts, traderLicences, rentRevisionOverrides, assetAllotments, assets } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import {
   canCreateRentInvoice,
   canEditDraftRentInvoice,
   canTransitionRentInvoice,
   assertSegregationDoDvDa,
+  canCreateRentRevision,
+  canEditDraftRentRevision,
+  canTransitionRentRevision,
 } from "./workflow";
 import { tenantLicenceIsGstExempt } from "./gst-exempt";
 import { validateDvReturnToDraft } from "@shared/workflow-rejection";
@@ -23,8 +26,17 @@ import { resolveRentInvoiceTdsFields } from "./rent-invoice-tds";
 import { isValidYearMonthYm } from "./rent-gstr1";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { recordRentCollectionForM03Receipt } from "./rent-deposit-ledger-from-receipt";
+import { parseUnifiedEntityId, unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
+import { normalizeRentRevisionBasis, yearMonthMinusOne } from "@shared/rent-revision-basis";
+import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
+
+function currentYearMonthUtc(): string {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
 
 export function registerRentIomsRoutes(app: Express) {
+  const nowIso = () => new Date().toISOString();
   // ----- Rent invoices (IOMS M-03; distinct from gapmc.invoices; scoped by user yards) -----
   app.get("/api/ioms/rent/invoices", async (req, res) => {
     try {
@@ -103,9 +115,34 @@ export function registerRentIomsRoutes(app: Express) {
       if ("error" in tdsRes) {
         return sendApiError(res, 400, "RENT_INVOICE_TDS", tdsRes.error);
       }
+
+      // Apply latest rent revision override for the referenced allotment (if any).
+      const allotmentId = String(body.allotmentId ?? "");
+      if (allotmentId) {
+        const [rev] = await db
+          .select()
+          .from(rentRevisionOverrides)
+          .where(
+            and(
+              eq(rentRevisionOverrides.allotmentId, allotmentId),
+              lte(rentRevisionOverrides.effectiveMonth, periodMonth),
+              or(eq(rentRevisionOverrides.status, "Approved"), isNull(rentRevisionOverrides.status)),
+            ),
+          )
+          .orderBy(desc(rentRevisionOverrides.effectiveMonth))
+          .limit(1);
+        if (rev?.rentAmount != null && Number.isFinite(Number(rev.rentAmount))) {
+          rentAmount = Number(rev.rentAmount);
+          if (gstExempt) {
+            cgst = 0;
+            sgst = 0;
+          }
+          totalAmount = rentAmount + cgst + sgst;
+        }
+      }
       await db.insert(rentInvoices).values({
         id,
-        allotmentId: String(body.allotmentId ?? ""),
+        allotmentId,
         tenantLicenceId,
         assetId: String(body.assetId ?? ""),
         yardId,
@@ -131,6 +168,279 @@ export function registerRentIomsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create rent invoice");
+    }
+  });
+
+  // ----- M-03 Sr.17: rent context for revision drafts (aligns with invoice/cron resolution) -----
+  app.get("/api/ioms/rent/allotments/:allotmentId/rent-context", async (req, res) => {
+    try {
+      const allotmentId = routeParamString(req.params.allotmentId);
+      const emRaw = req.query.effectiveMonth as string | undefined;
+      const [all] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, allotmentId)).limit(1);
+      if (!all) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
+      const [assetRow] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, all.assetId)).limit(1);
+      if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetRow.yardId)) {
+        return sendApiError(res, 403, "RENT_CONTEXT_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
+
+      let referenceMonth: string;
+      let effectiveMonth: string | null = null;
+      if (emRaw != null && String(emRaw).trim() !== "") {
+        const em = String(emRaw).trim();
+        if (!isValidYearMonthYm(em)) {
+          return sendApiError(res, 400, "RENT_CONTEXT_MONTH", "effectiveMonth must be YYYY-MM when provided");
+        }
+        effectiveMonth = em;
+        const prior = yearMonthMinusOne(em);
+        if (!prior) return sendApiError(res, 400, "RENT_CONTEXT_MONTH", "effectiveMonth must be YYYY-MM");
+        referenceMonth = prior;
+      } else {
+        referenceMonth = currentYearMonthUtc();
+      }
+
+      const resolved = await resolveRentForAllotmentPeriodMonth(allotmentId, referenceMonth);
+      res.json({
+        allotmentId,
+        effectiveMonth,
+        referenceMonth,
+        resolvedRent: resolved.rentAmount,
+        source: resolved.source,
+        matchedRevisionId: resolved.matchedRevisionId,
+        matchedInvoiceId: resolved.matchedInvoiceId,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to resolve rent context");
+    }
+  });
+
+  // ----- M-03 Sr.17: Rent revision overrides -----
+  app.get("/api/ioms/rent/revisions", async (req, res) => {
+    try {
+      const allotmentId = req.query.allotmentId as string | undefined;
+      let list = await db.select().from(rentRevisionOverrides).orderBy(desc(rentRevisionOverrides.effectiveMonth));
+      if (allotmentId) list = list.filter((r) => r.allotmentId === allotmentId);
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch rent revisions");
+    }
+  });
+
+  app.post("/api/ioms/rent/revisions", async (req, res) => {
+    try {
+      const body = req.body as Record<string, unknown>;
+      const allotmentId = String(body.allotmentId ?? "");
+      const effectiveMonth = String(body.effectiveMonth ?? "").trim();
+      const rentAmount = Number(body.rentAmount ?? NaN);
+      if (!allotmentId || !effectiveMonth || !Number.isFinite(rentAmount)) {
+        return sendApiError(res, 400, "RENT_REV_FIELDS", "allotmentId, effectiveMonth (YYYY-MM), rentAmount (number) required");
+      }
+      if (!isValidYearMonthYm(effectiveMonth)) {
+        return sendApiError(res, 400, "RENT_REV_MONTH", "effectiveMonth must be YYYY-MM");
+      }
+      const [all] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, allotmentId)).limit(1);
+      if (!all) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
+      const [assetRow] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, all.assetId)).limit(1);
+      if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetRow.yardId)) {
+        return sendApiError(res, 403, "RENT_REV_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
+
+      if (!canCreateRentRevision(req.user)) {
+        return sendApiError(res, 403, "RENT_REV_CREATE_DENIED", "Only Data Originator or Admin can create rent revision drafts");
+      }
+
+      const revisionBasis = normalizeRentRevisionBasis(body.revisionBasis);
+      const remarksStr = body.remarks ? String(body.remarks).trim() : "";
+      if (revisionBasis === "OtherDocumented" && remarksStr.length < 20) {
+        return sendApiError(
+          res,
+          400,
+          "RENT_REV_REMARKS_OTHER",
+          "When revision basis is Other (documented), remarks must be at least 20 characters.",
+        );
+      }
+
+      const id = nanoid();
+      const uid = req.user?.id ?? null;
+      await db.insert(rentRevisionOverrides).values({
+        id,
+        allotmentId,
+        effectiveMonth,
+        rentAmount,
+        revisionBasis,
+        remarks: remarksStr ? remarksStr : null,
+        status: "Draft",
+        doUser: uid,
+        dvUser: null,
+        daUser: null,
+        verifiedAt: null,
+        approvedAt: null,
+        workflowRevisionCount: 0,
+        dvReturnRemarks: null,
+        createdAt: nowIso(),
+        createdBy: uid,
+      });
+      const [row] = await db.select().from(rentRevisionOverrides).where(eq(rentRevisionOverrides.id, id)).limit(1);
+      if (row) writeAuditLog(req, { module: "Rent/Tax", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      res.status(201).json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create rent revision");
+    }
+  });
+
+  app.put("/api/ioms/rent/revisions/:id", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const body = req.body as Record<string, unknown>;
+      const [existing] = await db.select().from(rentRevisionOverrides).where(eq(rentRevisionOverrides.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "RENT_REV_NOT_FOUND", "Not found");
+      const [all] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, existing.allotmentId)).limit(1);
+      if (!all) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
+      const [assetRow] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, all.assetId)).limit(1);
+      if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetRow.yardId)) {
+        return sendApiError(res, 403, "RENT_REV_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
+
+      const newStatus = body.status !== undefined ? String(body.status) : String(existing.status ?? "Draft");
+      const statusChange = newStatus !== String(existing.status ?? "Draft");
+      const transition = statusChange ? canTransitionRentRevision(req.user, String(existing.status ?? "Draft"), newStatus) : null;
+
+      let dvReturnRemarks: string | null = null;
+      if (statusChange) {
+        if (!transition?.allowed) {
+          return sendApiError(
+            res,
+            403,
+            "RENT_REV_STATUS_TRANSITION_DENIED",
+            `You cannot change status from ${String(existing.status)} to ${newStatus}.`,
+          );
+        }
+        const seg = assertSegregationDoDvDa(
+          req.user,
+          {
+            doUser: existing.doUser ?? existing.createdBy,
+            dvUser: existing.dvUser,
+            daUser: existing.daUser,
+          },
+          { setDvUser: transition?.setDvUser, setDaUser: transition?.setDaUser },
+        );
+        if (!seg.ok) {
+          return sendApiError(res, 403, "RENT_REV_DO_DV_DA_SEGREGATION", seg.error);
+        }
+        if (String(existing.status ?? "Draft") === "Verified" && newStatus === "Draft") {
+          const ret = validateDvReturnToDraft(body);
+          if (!ret.ok) return sendApiError(res, 400, "RENT_REV_DV_RETURN_INVALID", ret.error);
+          dvReturnRemarks = ret.remarks;
+        }
+      } else if (!canEditDraftRentRevision(req.user, { status: String(existing.status ?? "Draft"), doUser: existing.doUser ?? existing.createdBy })) {
+        return sendApiError(res, 403, "RENT_REV_DRAFT_EDIT_DENIED", "Only the originating DO (or Admin) can edit draft revision fields");
+      }
+
+      const updates: Record<string, unknown> = {};
+      if (!statusChange) {
+        if (String(existing.status ?? "Draft") !== "Draft") {
+          return sendApiError(res, 400, "RENT_REV_NOT_DRAFT", "Only Draft revisions can be edited");
+        }
+        if (body.effectiveMonth !== undefined) {
+          const em = String(body.effectiveMonth ?? "").trim();
+          if (!isValidYearMonthYm(em)) return sendApiError(res, 400, "RENT_REV_MONTH", "effectiveMonth must be YYYY-MM");
+          updates.effectiveMonth = em;
+        }
+        if (body.rentAmount !== undefined) {
+          const ra = Number(body.rentAmount);
+          if (!Number.isFinite(ra)) return sendApiError(res, 400, "RENT_REV_AMOUNT", "rentAmount must be a number");
+          updates.rentAmount = ra;
+        }
+        if (body.revisionBasis !== undefined) {
+          updates.revisionBasis = normalizeRentRevisionBasis(body.revisionBasis);
+        }
+        if (body.remarks !== undefined) updates.remarks = body.remarks == null ? null : String(body.remarks);
+        const mergedBasis =
+          updates.revisionBasis !== undefined ? String(updates.revisionBasis) : String(existing.revisionBasis ?? "FixedMonthlyRent");
+        const mergedRemarks =
+          updates.remarks !== undefined ? (updates.remarks as string | null) : (existing.remarks ?? null);
+        const mergedRemarksTrim = mergedRemarks != null ? String(mergedRemarks).trim() : "";
+        if (mergedBasis === "OtherDocumented" && mergedRemarksTrim.length < 20) {
+          return sendApiError(
+            res,
+            400,
+            "RENT_REV_REMARKS_OTHER",
+            "When revision basis is Other (documented), remarks must be at least 20 characters.",
+          );
+        }
+      } else {
+        updates.status = newStatus;
+        const now = nowIso();
+        if (String(existing.status ?? "Draft") === "Draft" && newStatus === "Verified") {
+          updates.dvUser = req.user?.id ?? null;
+          updates.verifiedAt = now;
+          updates.dvReturnRemarks = null;
+        }
+        if (String(existing.status ?? "Draft") === "Verified" && newStatus === "Approved") {
+          updates.daUser = req.user?.id ?? null;
+          updates.approvedAt = now;
+        }
+        if (String(existing.status ?? "Draft") === "Verified" && newStatus === "Draft") {
+          updates.dvReturnRemarks = dvReturnRemarks;
+          updates.workflowRevisionCount = Number(existing.workflowRevisionCount ?? 0) + 1;
+          updates.daUser = null;
+          updates.approvedAt = null;
+        }
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return sendApiError(res, 400, "RENT_REV_NO_CHANGES", "No changes supplied");
+      }
+
+      await db.update(rentRevisionOverrides).set(updates as Record<string, never>).where(eq(rentRevisionOverrides.id, id));
+      const [row] = await db.select().from(rentRevisionOverrides).where(eq(rentRevisionOverrides.id, id)).limit(1);
+      const action = statusChange ? "Workflow" : "Update";
+      if (row) writeAuditLog(req, { module: "Rent/Tax", action, recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update rent revision");
+    }
+  });
+
+  app.delete("/api/ioms/rent/revisions/:id", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const [existing] = await db.select().from(rentRevisionOverrides).where(eq(rentRevisionOverrides.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "RENT_REV_NOT_FOUND", "Not found");
+      const [all] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, existing.allotmentId)).limit(1);
+      if (!all) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
+      const [assetRow] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, all.assetId)).limit(1);
+      if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetRow.yardId)) {
+        return sendApiError(res, 403, "RENT_REV_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
+      const st = String(existing.status ?? "Draft");
+      const isAdmin = Boolean(req.user?.roles?.some((r) => r.tier === "ADMIN"));
+      if (!isAdmin && st !== "Draft") {
+        return sendApiError(res, 400, "RENT_REV_DELETE_NOT_DRAFT", "Only Draft revisions can be deleted");
+      }
+      if (!isAdmin && st === "Draft") {
+        const doUid = existing.doUser ?? existing.createdBy;
+        if (!doUid || doUid !== req.user?.id) {
+          return sendApiError(res, 403, "RENT_REV_DELETE_DENIED", "Only the originating DO can delete their Draft revision");
+        }
+      }
+      await db.delete(rentRevisionOverrides).where(eq(rentRevisionOverrides.id, id));
+      writeAuditLog(req, { module: "Rent/Tax", action: "Delete", recordId: id, beforeValue: existing }).catch((e) => console.error("Audit log failed:", e));
+      res.status(204).send();
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete rent revision");
     }
   });
 
@@ -273,6 +583,7 @@ export function registerRentIomsRoutes(app: Express) {
             paymentMode: "Cash",
             sourceModule: "M-03",
             sourceRecordId: row.id,
+            unifiedEntityId: unifiedEntityIdFromTrackA(row.tenantLicenceId),
             createdBy,
           });
 
@@ -326,12 +637,64 @@ export function registerRentIomsRoutes(app: Express) {
   });
 
   // ----- Rent deposit ledger -----
+  /** IOMS receipts (any module) where payer is this Track A trader licence — read-only context beside deposit ledger rows. */
+  app.get("/api/ioms/rent/ledger/trader-receipts", async (req, res) => {
+    try {
+      const unifiedRaw = String(req.query.unifiedEntityId ?? "").trim();
+      const tenantLicenceId = String(req.query.tenantLicenceId ?? "").trim();
+      let tid: string | null = tenantLicenceId || null;
+      if (unifiedRaw) {
+        const parsed = parseUnifiedEntityId(unifiedRaw);
+        if (!parsed || parsed.kind !== "TA") {
+          return sendApiError(res, 400, "LEDGER_UNIFIED_ID", "unifiedEntityId must be TA:<trader_licence_id>");
+        }
+        tid = parsed.refId;
+      }
+      if (!tid) {
+        return sendApiError(res, 400, "LEDGER_TENANT_REQUIRED", "tenantLicenceId or unifiedEntityId (TA:) is required");
+      }
+      const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, tid)).limit(1);
+      if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
+        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      }
+      const rows = await db
+        .select()
+        .from(iomsReceipts)
+        .where(and(eq(iomsReceipts.payerType, "TraderLicence"), eq(iomsReceipts.payerRefId, tid)))
+        .orderBy(desc(iomsReceipts.createdAt))
+        .limit(200);
+      res.json(rows);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch trader-linked receipts");
+    }
+  });
+
   app.get("/api/ioms/rent/ledger", async (req, res) => {
     try {
+      const unifiedRaw = String(req.query.unifiedEntityId ?? "").trim();
       const tenantLicenceId = req.query.tenantLicenceId as string | undefined;
       const assetId = req.query.assetId as string | undefined;
       let list = await db.select().from(rentDepositLedger).orderBy(desc(rentDepositLedger.entryDate));
-      if (tenantLicenceId) list = list.filter((r) => r.tenantLicenceId === tenantLicenceId);
+      if (unifiedRaw) {
+        const parsed = parseUnifiedEntityId(unifiedRaw);
+        if (!parsed) {
+          return sendApiError(res, 400, "LEDGER_UNIFIED_ID", "unifiedEntityId must be TA:<id> | TB:<id> | AH:<id>");
+        }
+        if (parsed.kind !== "TA") {
+          return sendApiError(
+            res,
+            400,
+            "LEDGER_UNIFIED_TRACK",
+            "Rent deposit ledger is Track A (tenant licence) scoped — use unifiedEntityId TA:<trader_licence_id>.",
+          );
+        }
+        list = list.filter((r) => r.tenantLicenceId === parsed.refId);
+      } else if (tenantLicenceId) {
+        list = list.filter((r) => r.tenantLicenceId === tenantLicenceId);
+      }
       if (assetId) list = list.filter((r) => r.assetId === assetId);
       res.json(list);
     } catch (e) {
@@ -344,9 +707,11 @@ export function registerRentIomsRoutes(app: Express) {
     try {
       const body = req.body;
       const id = nanoid();
+      const tid = String(body.tenantLicenceId ?? "").trim();
       await db.insert(rentDepositLedger).values({
         id,
-        tenantLicenceId: String(body.tenantLicenceId ?? ""),
+        tenantLicenceId: tid,
+        unifiedEntityId: tid ? unifiedEntityIdFromTrackA(tid) : null,
         assetId: String(body.assetId ?? ""),
         entryDate: String(body.entryDate ?? ""),
         entryType: String(body.entryType ?? "Rent"),
@@ -378,9 +743,12 @@ export function registerRentIomsRoutes(app: Express) {
           "Query params fromMonth and toMonth required (YYYY-MM)",
         );
       }
-      const { validateGstr1MonthRange, gstr1ExportWarnings, buildRentGstr1DraftGstnMapping } = await import(
-        "./rent-gstr1"
-      );
+      const {
+        validateGstr1MonthRange,
+        gstr1ExportWarnings,
+        gstr1CounterpartyGstinIssues,
+        buildRentGstr1DraftGstnMapping,
+      } = await import("./rent-gstr1");
       const vr = validateGstr1MonthRange(fromMonth, toMonth);
       if (!vr.ok) {
         return sendApiError(res, 400, "RENT_GSTR1_QUERY_INVALID", vr.error);
@@ -411,21 +779,41 @@ export function registerRentIomsRoutes(app: Express) {
         .from(rentInvoices)
         .where(and(...conditions))
         .orderBy(desc(rentInvoices.periodMonth));
+      const tenantIds = Array.from(new Set(list.map((r) => r.tenantLicenceId)));
+      const tenantRows =
+        tenantIds.length > 0
+          ? await db
+              .select({
+                id: traderLicences.id,
+                gstin: traderLicences.gstin,
+                isNonGstEntity: traderLicences.isNonGstEntity,
+              })
+              .from(traderLicences)
+              .where(inArray(traderLicences.id, tenantIds))
+          : [];
+      const tenantById = new Map(tenantRows.map((t) => [t.id, t]));
       const gstin = process.env.GSTIN?.trim() || null;
-      const warnings = gstr1ExportWarnings(gstin);
-      const supplies = list.map((r) => ({
-        invoiceNo: r.invoiceNo ?? r.id,
-        periodMonth: r.periodMonth,
-        customerRef: r.tenantLicenceId,
-        assetId: r.assetId,
-        yardId: r.yardId,
-        taxableValue: r.rentAmount,
-        cgst: r.cgst,
-        sgst: r.sgst,
-        totalAmount: r.totalAmount,
-        tdsApplicable: r.tdsApplicable,
-        tdsAmount: r.tdsAmount,
-      }));
+      const supplies = list.map((r) => {
+        const tl = tenantById.get(r.tenantLicenceId);
+        const rawGstin = tl?.gstin != null && String(tl.gstin).trim() ? String(tl.gstin).trim() : null;
+        return {
+          invoiceNo: r.invoiceNo ?? r.id,
+          periodMonth: r.periodMonth,
+          tenantLicenceId: r.tenantLicenceId,
+          counterpartyGstin: rawGstin,
+          isNonGstEntity: Boolean(tl?.isNonGstEntity),
+          customerRef: r.tenantLicenceId,
+          assetId: r.assetId,
+          yardId: r.yardId,
+          taxableValue: r.rentAmount,
+          cgst: r.cgst,
+          sgst: r.sgst,
+          totalAmount: r.totalAmount,
+          tdsApplicable: r.tdsApplicable,
+          tdsAmount: r.tdsAmount,
+        };
+      });
+      const warnings = [...gstr1ExportWarnings(gstin), ...gstr1CounterpartyGstinIssues(supplies)];
       const gstnDraftMapping = buildRentGstr1DraftGstnMapping({
         gstin,
         filingPeriodMonth: toMonth,

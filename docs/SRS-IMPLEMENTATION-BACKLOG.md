@@ -14,21 +14,22 @@
 | Or use Drizzle | `npm run db:push` (after reviewing schema) |
 | Seed defaults | `npm run db:seed-ioms-m10` (merges `system_config` from `shared/system-config-defaults.ts`) |
 | Admin UI | `/admin/config` — all keys in `SYSTEM_CONFIG_KEYS` including retention years, `tally_xml_export_enabled`, `rent_dishonour_bank_charge_hint`, rent TDS thresholds, AMC gate, etc. |
-| Env samples | `.env.example` (`OBJECT_STORAGE_DRIVER`, receipt PDF vars, cron notes) |
+| Env samples | `.env.example` (`OBJECT_STORAGE_DRIVER`, S3 vars, receipt PDF vars, cron notes) |
 
-## Implementation snapshot (2026-04-20)
+## Implementation snapshot (2026-04-23)
 
 | Area | Delivered in repo | Still open |
 |------|-------------------|------------|
 | **P0 #15 TDS** | Indian **FY (Apr–Mar)** cumulative **Approved+Paid** rent before invoice `period_month` + current month vs threshold; **monthly×12**; PAN + `rent_tds_*` config; **`rent_invoices.tds_*`**; **`ioms_receipts.tds_amount`** + **receipt PDF** line; sync TDS on linked receipt; **YYYY-MM** `periodMonth` enforced for TDS | **GL posting** for TDS; optional **marginal** TDS (first month over threshold); run **`004` / `005`** migrations on each DB |
 | **P0 §8.6 (partial)** | **`RECEIPT_PDF_PRINT_MODE`** (`full` \| `body-only` \| `preprinted`), **`RECEIPT_PDF_SIGNATORY_NAME`** (text line) | Cryptographic **DSC** / officer signature |
-| **P1 #50** | **`GET /api/admin/data-retention-summary`** — counts past policy for: `ioms_receipts`, `payment_vouchers`, `dak_inward`, `dak_outward`, `audit_log`, `employees`, **`users`** (`created_at` when present), `rent_invoices` (by `period_month`), `land_records`, `bug_tickets`, **`purchase_transactions`** (`transaction_date`), **`check_post_inward`** (`entry_date`). Matching **`data_retention_*_years`** keys in `system_config`. | Session/login tables when present; other modules when policy years exist |
+| **P0 #33 (partial)** | **`OBJECT_STORAGE_DRIVER`** `local` \| `s3`; **`UploadBlobStore`** in `server/object-storage.ts` (**`@aws-sdk/client-s3`**); Dak + voucher attachments + **receipt PDF logo** use same blob keys as under `uploads/` when local; optional **SSE-S3** (`S3_SERVER_SIDE_ENCRYPTION` / `OBJECT_STORAGE_SSE` = **AES256**) | Customer-managed **KMS** if policy requires; **cutover** runbook (disk → bucket); Infra IAM / bucket / backups |
+| **P1 #50** | **`GET /api/admin/data-retention-summary`** — read-only counts for receipts, vouchers, Dak, audit, employees, users, rent invoices, land, bugs, M-04 purchases, check-post inward, **`trader_licences`**, **`pre_receipts`**, **`rent_deposit_ledger`**, **`leave_requests`**, **`trader_blocking_log`**, **`public.session`** (when present). | Further modules / purge job if mandated |
 | **P1 #49** | **`GET /api/ioms/reports/tally-export`** — `format=csv` (legacy + `columns=srs`), **`format=xml`** → `gapmcTallyExport` v1 (`server/tally-export-xml.ts`); **`tally_xml_export_enabled`** | Native Tally Prime **import** XML without CA transform |
-| **P1 #17** | **`GET /api/ioms/rent/gstr1`** — strict **`fromMonth`/`toMonth`**, **`warnings`**, **`tdsFyRule`**, GSTIN hint, **`gstnDraftMapping`** (draft B2B-style line list + `fp`; not filed JSON) | Final GSTN schema in filing tool; counterparty GSTIN / dates |
+| **P1 #17 (partial)** | **`GET /api/ioms/rent/gstr1`** — joins **`trader_licences`**; supplies include **`counterpartyGstin`** / **`isNonGstEntity`**; **`gstnDraftMapping`** lines include **`ctin`** (when valid) + **`idtDdMmYyyy`**; **`gstr1CounterpartyGstinIssues`** merged into **`warnings`** | Final **GSTN** JSON per filing tool; **POS** / state codes if required beyond placeholder; counterparty dates beyond period-month-first |
 | **P2 #28–30** | **`GET /api/ioms/reference/tally-ledgers/stats`** — counts + **`expectedSrsTallyHeads`** (38) + **`activeHeadCountMatchesSrs`** / **`mapEntryCountMatchesActiveLedgers`** | DA workflow if live chart ≠ 38 |
-| **P2 #31** | **`rent_dishonour_bank_charge_hint`** + **`rent_dishonour_bank_charge_inr`** (hints only) on dishonour **interest** hint (`routes-receipts-ioms`) | Auto **bank charge voucher** / fee line item |
+| **P2 #31** | **`rent_dishonour_bank_charge_hint`** + **`rent_dishonour_bank_charge_inr`** on dishonour hint; rent **Reversed** response includes **`rentDishonourScaffold`** (`voucherCreateHref` when configured INR is positive) + **`VoucherCreate`** prefills from query string | Auto-posted **bank charge voucher** / fee line item |
 | **P2 #39–40** | **`GET /api/ioms/fleet/maintenance-due`**, shared **`listFleetMaintenanceDueEnriched`**, **operational digest** cron/notify includes **maintenance-due count** (60d); fuel/maintenance **`voucherId`**, trip odometer/km, `routeParamString` on fleet routes | Full BR-VEH calendar SLA / alerts parity |
-| **P2 #16** | After prior **M-03** dishonour for same invoice: **`rentArrearsDisclosure`** on **`GET /api/ioms/receipts/:id`** + PDF line (`rent-receipt-arrears`, `receipt-pdf`) | Ledger posting of interest; UI copy beyond receipt detail |
+| **P2 #16** | After prior **M-03** dishonour for same invoice: **`rentArrearsDisclosure`** on **`GET /api/ioms/receipts/:id`** + PDF line (`rent-receipt-arrears`, `receipt-pdf`); **IOMS receipt detail** + **Outstanding dues** pay dialog surface arrears / invoice links | Ledger posting of interest; richer counter pay flows if finance requires |
 
 Rows that are **fully done for the Excel slice** appear under [Satisfied in repo](#satisfied-in-repo). **Partial** deliveries stay in the snapshot above and may also appear in the priority table with narrowed “Next action”.
 
@@ -51,16 +52,16 @@ Rows that are **fully done for the Excel slice** appear under [Satisfied in repo
 | Pri | # | SRS / Excel anchor | Target resolution (short) | Current state in repo | Clarification (Q# / doc) | Owner | Next action |
 |-----|---|---------------------|---------------------------|-------------------------|----------------------------|--------|-------------|
 | P0 | 15 | §6.1 FR-RENT-005; 194-I | TDS + receipt + **ledger** | FY + annualized TDS on invoice, M-05 receipt field, PDF; **no** TDS GL | [Q15 pending](./CLIENT-CLARIFICATION-PENDING.md); [Responses §15–17](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng | Finance: GL rules; optional marginal-month TDS |
-| P0 | 33 | §15.1 Data Tier | Object storage + encryption | Local `uploads/` + `server/object-storage.ts` stub | [Q33](./CLIENT-CLARIFICATION-PENDING.md), [Q46](./CLIENT-CLARIFICATION-PENDING.md) (storage / scans) | Eng + Infra | S3-compatible adapter, encryption, migration runbook |
+| P0 | 33 | §15.1 Data Tier | Object storage + encryption | **Local** `uploads/<key>` + **S3-compatible** blob store (`OBJECT_STORAGE_DRIVER`, Dak / vouchers / receipt logo); optional **SSE-S3 AES256** | [Q33](./CLIENT-CLARIFICATION-PENDING.md), [Q46](./CLIENT-CLARIFICATION-PENDING.md) (storage / scans) | Eng + Infra | Bucket/IAM, **KMS** if mandated, **disk→S3 cutover** + ops runbook |
 | P0 | — | §8.6 FR-PRT-001; Q52 | PDF + **digital signature** | PDF + QR + env signatory **text**; print modes | **SRS** §8.6 (DSC); [Q52](./CLIENT-CLARIFICATION-PENDING.md) = PDF *channel* (server vs print), not DSC | Eng | DSC / HSM per policy |
 | P0 | SSO | §13.1 / §14.2 / §15.2 | SSO + **MFA** | Password sessions only | [Responses Q3](./CLIENT-CLARIFICATION-RESPONSES-2026.md); [SSO follow-up pending](./CLIENT-CLARIFICATION-PENDING.md) | Eng + Client IdP | OIDC/SAML + MFA for DA/ADMIN |
-| P1 | 50 | §16.2 Data Retention | Full schedule | Many snapshot counts + **`users`**; **no purge** | [Q50 pending + interim note](./CLIENT-CLARIFICATION-PENDING.md); [Responses Q50](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng | Session/login tables when present; expand per policy |
+| P1 | 50 | §16.2 Data Retention | Full schedule | Snapshot counts + **`users`** + **`public.session`** when Postgres session store is used (`loginSessionTablePresent`); **no purge** | [Q50 pending + interim note](./CLIENT-CLARIFICATION-PENDING.md); [Responses Q50](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng | Expand per policy for other modules; optional purge job if client mandates |
 | P1 | 49 | §8.3 FR-RCP-008 | Tally export | CSV + interchange **XML** + admin toggle | [Q49 pending](./CLIENT-CLARIFICATION-PENDING.md); [Responses Q49](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng | UAT with finance / Tally Prime |
-| P1 | 17 | §6.1 FR-RENT-003 | GSTR-1 / GSTIN | Export + **`gstnDraftMapping`** draft (not filed JSON) | [Q17 pending](./CLIENT-CLARIFICATION-PENDING.md); [Responses §15–17](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng | Counterparty GSTIN, date formats, filing-tool schema |
-| P2 | 16 | FR-RENT-007 | Arrears on **next receipt** | Disclosure on **GET receipt** + **PDF** after prior dishonour (same invoice) | [Q16 pending](./CLIENT-CLARIFICATION-PENDING.md); [Responses §15–17](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng | Post interest to GL; richer pay-in UI |
+| P1 | 17 | §6.1 FR-RENT-003 | GSTR-1 / GSTIN | Export + tenant **`ctin`** / **`idtDdMmYyyy`** in draft + supply **`counterpartyGstin`** + GSTIN **warnings** | [Q17 pending](./CLIENT-CLARIFICATION-PENDING.md); [Responses §15–17](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng | Filing-tool **final schema**; **POS** / other GSTN fields per CA tool |
+| P2 | 16 | FR-RENT-007 | Arrears on **next receipt** | Disclosure on **GET receipt** + **PDF**; **receipt detail** + **dues pay** dialog copy and invoice/ledger links | [Q16 pending](./CLIENT-CLARIFICATION-PENDING.md); [Responses §15–17](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng | Post interest to GL; deeper counter settlement UX if required |
 | P2 | 18–19 | §5.2 / §5.5 | Allottee / Pre-Receipt | Partial data model + flows | [Q18–19 pending](./CLIENT-CLARIFICATION-PENDING.md); [Responses Q18–19](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng + BA | SRS appendix trace |
 | P2 | 28–30 | §8.3 FR-RCP-006 | **38** Tally heads | Stats + **SRS 38** flags vs active/map counts | [Q28–30 pending](./CLIENT-CLARIFICATION-PENDING.md); [Responses Q28–30](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng | DA if chart ≠ 38 |
-| P2 | 31 | BR-AST-35 / BR-RCP-34 | Dishonour fees + re-invoice | Reversal + interest + **hint + INR config** | [Responses Q31](./CLIENT-CLARIFICATION-RESPONSES-2026.md); voucher automation **off sheet** | Eng | Bank charge voucher automation |
+| P2 | 31 | BR-AST-35 / BR-RCP-34 | Dishonour fees + re-invoice | Reversal + interest + **hint + INR config**; **`rentDishonourScaffold.voucherCreateHref`** + voucher create query prefill | [Responses Q31](./CLIENT-CLARIFICATION-RESPONSES-2026.md); voucher automation **off sheet** | Eng | One-click posted bank charge if finance mandates |
 | P2 | 39–40 | §10.1 FR-VEH | Calendar + km maintenance | `maintenance-due` + **digest count** | [Q39–40 pending](./CLIENT-CLARIFICATION-PENDING.md); [Responses Q39–40](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | Eng | BR-VEH SLA rules in product |
 | P2 | 48 | §8.6 FR-PRT-001 | Letterhead assets | Admin logo + body-only PDF | [Q48 pending](./CLIENT-CLARIFICATION-PENDING.md); [Responses Q48](./CLIENT-CLARIFICATION-RESPONSES-2026.md) | **Client** | Supply assets |
 
@@ -91,9 +92,9 @@ Rows that are **fully done for the Excel slice** appear under [Satisfied in repo
 | Tally stats | `server/routes-finance-reference.ts` (`/api/ioms/reference/tally-ledgers/stats`) |
 | Fleet + ops digest | `server/routes-fleet.ts`, `server/operational-alerts.ts`, `server/cron-operational-reminders.ts` |
 | Config | `shared/system-config-defaults.ts`, `server/routes-admin.ts`, `server/system-config.ts` |
-| Object storage stub | `server/object-storage.ts`, `.env.example` |
+| Object storage (local + S3) | `server/object-storage.ts`, `server/dak-attachment-storage.ts`, `server/voucher-attachment-storage.ts`, `server/receipt-logo-storage.ts`, `server/routes-dak.ts`, `server/routes-vouchers.ts`, `.env.example` |
 | Clarifications | [CLIENT-CLARIFICATION-PENDING.md](./CLIENT-CLARIFICATION-PENDING.md), [CLIENT-CLARIFICATION-RESPONSES-2026.md](./CLIENT-CLARIFICATION-RESPONSES-2026.md) |
 
 ---
 
-*Last updated: 2026-04-20 — refresh when SRS, Excel, or repo behaviour changes.*
+*Last updated: 2026-04-23 — refresh when SRS, Excel, or repo behaviour changes.*

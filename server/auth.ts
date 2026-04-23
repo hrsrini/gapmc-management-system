@@ -238,6 +238,10 @@ export function getModuleForPath(path: string): string | null {
     path.startsWith("/api/ioms/traders") ||
     path.startsWith("/api/ioms/assets") ||
     path.startsWith("/api/ioms/asset-allotments") ||
+    path.startsWith("/api/ioms/entities") ||
+    path.startsWith("/api/ioms/entity-allotments") ||
+    path.startsWith("/api/ioms/unified-entities") ||
+    path.startsWith("/api/ioms/pre-receipts") ||
     path.startsWith("/api/ioms/msp-settings")
   )
     return "M-02";
@@ -279,6 +283,95 @@ export async function requireModulePermissionByPath(req: Request, res: Response,
   if (req.path.startsWith("/api/admin")) return next();
   if (await isPublicReceiptVerificationPath(req.path, req.method)) return next();
   if (isPublicPaymentWebhookCallbackPath(req.path, req.method)) return next();
+  /** Counter market-fee settlement creates M-05 receipts; allow M-04 Create or Update (purchase desk). */
+  if (req.method === "POST" && req.path === "/api/ioms/dues/pay-market-fee") {
+    if (!req.user) {
+      sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      return;
+    }
+    if (req.user.roles.some((r) => r.tier === "ADMIN")) return next();
+    if (hasPermission(req.user, "M-04", "Create") || hasPermission(req.user, "M-04", "Update")) {
+      return next();
+    }
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", {
+      required: "M-04:Create or M-04:Update",
+    });
+    return;
+  }
+  /** Outstanding dues (M-02 Sr.6): read for traders or rent desk; rent counter payment matches OutstandingDues UI (M-03 Update). */
+  if (req.method === "GET" && req.path === "/api/ioms/dues") {
+    if (!req.user) {
+      sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      return;
+    }
+    if (req.user.roles.some((r) => r.tier === "ADMIN")) return next();
+    if (hasPermission(req.user, "M-02", "Read") || hasPermission(req.user, "M-03", "Read")) {
+      return next();
+    }
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", {
+      required: "M-02:Read or M-03:Read",
+    });
+    return;
+  }
+  if (req.method === "POST" && req.path === "/api/ioms/dues/pay-rent-invoice") {
+    if (!req.user) {
+      sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      return;
+    }
+    if (req.user.roles.some((r) => r.tier === "ADMIN")) return next();
+    if (hasPermission(req.user, "M-03", "Update")) {
+      return next();
+    }
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", {
+      required: "M-03:Update",
+    });
+    return;
+  }
+  /** Unified entity picker on dues/ledger: allow rent module readers without full M-02 master access. */
+  if (req.method === "GET" && req.path.startsWith("/api/ioms/unified-entities")) {
+    if (!req.user) {
+      sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      return;
+    }
+    if (req.user.roles.some((r) => r.tier === "ADMIN")) return next();
+    if (hasPermission(req.user, "M-02", "Read") || hasPermission(req.user, "M-03", "Read")) {
+      return next();
+    }
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", {
+      required: "M-02:Read or M-03:Read",
+    });
+    return;
+  }
+  /** BM form file upload: DO may have Create on new apps or Update when editing drafts. */
+  if (req.method === "POST" && /^\/api\/ioms\/traders\/licences\/[^/]+\/bm-form-document$/.test(req.path)) {
+    if (!req.user) {
+      sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      return;
+    }
+    if (req.user.roles.some((r) => r.tier === "ADMIN")) return next();
+    if (hasPermission(req.user, "M-02", "Update") || hasPermission(req.user, "M-02", "Create")) {
+      return next();
+    }
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", {
+      required: "M-02:Create or M-02:Update",
+    });
+    return;
+  }
+  /** BM form file remove: same as upload (not a master Delete). */
+  if (req.method === "DELETE" && /^\/api\/ioms\/traders\/licences\/[^/]+\/bm-form-document$/.test(req.path)) {
+    if (!req.user) {
+      sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      return;
+    }
+    if (req.user.roles.some((r) => r.tier === "ADMIN")) return next();
+    if (hasPermission(req.user, "M-02", "Update") || hasPermission(req.user, "M-02", "Create")) {
+      return next();
+    }
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", {
+      required: "M-02:Create or M-02:Update",
+    });
+    return;
+  }
   const module = getModuleForPath(req.path);
   if (!module) return next();
   if (!req.user) {

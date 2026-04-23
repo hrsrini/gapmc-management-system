@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -48,6 +48,19 @@ export default function VoucherCreate() {
   const [payeeBank, setPayeeBank] = useState("");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const y = sp.get("yardId")?.trim();
+    const a = sp.get("amount")?.trim();
+    const d = sp.get("description")?.trim();
+    const vt = sp.get("voucherType")?.trim();
+    if (y) setYardId(y);
+    if (a) setAmount(a);
+    if (d) setDescription(d);
+    if (vt && VOUCHER_TYPES.includes(vt)) setVoucherType(vt);
+  }, []);
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
   const { data: heads = [] } = useQuery<ExpenditureHead[]>({

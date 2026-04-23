@@ -22,7 +22,7 @@ export type ReceiptPdfArrearsDisclosure = {
 };
 
 async function loadOptionalReceiptLogo(): Promise<Buffer | null> {
-  const uploaded = readUploadedReceiptLogoBuffer();
+  const uploaded = await readUploadedReceiptLogoBuffer();
   if (uploaded) return uploaded;
 
   const filePath = process.env.RECEIPT_PDF_LOGO_PATH?.trim();
@@ -100,6 +100,7 @@ export async function buildIomsReceiptPdf(params: {
     doc.fontSize(11).text("Payer", { underline: true });
     doc.fontSize(10).text(receipt.payerName ?? receipt.payerRefId ?? "—");
     if (receipt.payerType) doc.text(`Type: ${receipt.payerType}`);
+    if (receipt.unifiedEntityId) doc.text(`Unified entity: ${receipt.unifiedEntityId}`);
     doc.moveDown(0.8);
     doc.fontSize(11).text("Amounts (INR)", { underline: true });
     doc.fontSize(10);
