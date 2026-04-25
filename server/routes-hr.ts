@@ -53,6 +53,7 @@ import {
   assertEmployeeUniqueness,
   allocateNextEmpId,
   isDraftOrSubmitted,
+  parseEmployeeMasterSrs411Fields,
 } from "./hr-employee-rules";
 import { inclusiveCalendarDays } from "./hr-leave-utils";
 
@@ -224,6 +225,20 @@ export function registerHrRoutes(app: Express) {
         if (sendHrEmployeeRuleError(res, e)) return;
         throw e;
       }
+      let srs411: ReturnType<typeof parseEmployeeMasterSrs411Fields>;
+      try {
+        srs411 = parseEmployeeMasterSrs411Fields({
+          locationPosted: body.locationPosted as string | null | undefined,
+          payLevel: body.payLevel as string | number | null | undefined,
+          bankAccountNumber: body.bankAccountNumber as string | null | undefined,
+          ifscCode: body.ifscCode as string | null | undefined,
+          category: body.category as string | null | undefined,
+          fatherOrSpouseName: body.fatherOrSpouseName as string | null | undefined,
+        });
+      } catch (e) {
+        if (sendHrEmployeeRuleError(res, e)) return;
+        throw e;
+      }
 
       const roId =
         body.reportingOfficerEmployeeId != null && String(body.reportingOfficerEmployeeId).trim() !== ""
@@ -276,6 +291,12 @@ export function registerHrRoutes(app: Express) {
             : null,
         emergencyContactMobile: normalizeMobile10(body.emergencyContactMobile ?? null),
         reportingOfficerEmployeeId: roId,
+        locationPosted: srs411.locationPosted,
+        payLevel: srs411.payLevel,
+        bankAccountNumber: srs411.bankAccountNumber,
+        ifscCode: srs411.ifscCode,
+        category: srs411.category,
+        fatherOrSpouseName: srs411.fatherOrSpouseName,
         userId: null,
         createdAt: now(),
         updatedAt: now(),
@@ -326,6 +347,14 @@ export function registerHrRoutes(app: Express) {
           aadhaarMasked,
           personalEmail: pe,
           excludeEmployeeId: id,
+        });
+        parseEmployeeMasterSrs411Fields({
+          locationPosted: emp.locationPosted,
+          payLevel: emp.payLevel,
+          bankAccountNumber: emp.bankAccountNumber,
+          ifscCode: emp.ifscCode,
+          category: emp.category,
+          fatherOrSpouseName: emp.fatherOrSpouseName,
         });
       } catch (e) {
         if (sendHrEmployeeRuleError(res, e)) return;
@@ -391,9 +420,23 @@ export function registerHrRoutes(app: Express) {
         "emergencyContactName",
         "emergencyContactMobile",
         "reportingOfficerEmployeeId",
+        "locationPosted",
+        "payLevel",
+        "bankAccountNumber",
+        "ifscCode",
+        "category",
+        "fatherOrSpouseName",
       ];
       for (const key of allowed) {
         if (body[key] === undefined) continue;
+        if (key === "payLevel") {
+          if (body.payLevel === null || (typeof body.payLevel === "string" && String(body.payLevel).trim() === "")) {
+            updates.payLevel = null;
+          } else {
+            updates.payLevel = typeof body.payLevel === "number" ? body.payLevel : String(body.payLevel).trim();
+          }
+          continue;
+        }
         if (key === "personalEmail") {
           updates.personalEmail =
             body.personalEmail === null || String(body.personalEmail).trim() === ""
@@ -456,6 +499,7 @@ export function registerHrRoutes(app: Express) {
       let workEmailNorm: string | null;
       let mobileNorm: string | null;
       let emergencyMobileNorm: string | null;
+      let srs411: ReturnType<typeof parseEmployeeMasterSrs411Fields>;
       try {
         personalEmailNorm =
           merged.personalEmail != null && String(merged.personalEmail).trim() !== ""
@@ -478,6 +522,14 @@ export function registerHrRoutes(app: Express) {
           personalEmail: personalEmailNorm,
           excludeEmployeeId: id,
         });
+        srs411 = parseEmployeeMasterSrs411Fields({
+          locationPosted: (merged as { locationPosted?: string | null }).locationPosted,
+          payLevel: (merged as { payLevel?: number | string | null }).payLevel,
+          bankAccountNumber: (merged as { bankAccountNumber?: string | null }).bankAccountNumber,
+          ifscCode: (merged as { ifscCode?: string | null }).ifscCode,
+          category: (merged as { category?: string | null }).category,
+          fatherOrSpouseName: (merged as { fatherOrSpouseName?: string | null }).fatherOrSpouseName,
+        });
       } catch (e) {
         if (sendHrEmployeeRuleError(res, e)) return;
         throw e;
@@ -491,7 +543,13 @@ export function registerHrRoutes(app: Express) {
         workEmail: workEmailNorm,
         mobile: mobileNorm,
         emergencyContactMobile: emergencyMobileNorm,
-      } as Record<string, string | null>;
+        locationPosted: srs411.locationPosted,
+        payLevel: srs411.payLevel,
+        bankAccountNumber: srs411.bankAccountNumber,
+        ifscCode: srs411.ifscCode,
+        category: srs411.category,
+        fatherOrSpouseName: srs411.fatherOrSpouseName,
+      } as Record<string, string | number | null | undefined>;
 
       const terminalStatuses = ["Inactive", "Retired", "Suspended", "Resigned"];
       await db.transaction(async (tx) => {
@@ -502,13 +560,14 @@ export function registerHrRoutes(app: Express) {
           .where(eq(employees.id, id))
           .limit(1);
         if (after?.status && terminalStatuses.includes(after.status)) {
+          const t = now();
           if (after.userId) {
             await tx
               .update(users)
-              .set({ isActive: false, updatedAt: now() })
+              .set({ isActive: false, disabledAt: t, updatedAt: t })
               .where(or(eq(users.employeeId, id), eq(users.id, after.userId)));
           } else {
-            await tx.update(users).set({ isActive: false, updatedAt: now() }).where(eq(users.employeeId, id));
+            await tx.update(users).set({ isActive: false, disabledAt: t, updatedAt: t }).where(eq(users.employeeId, id));
           }
         }
       });

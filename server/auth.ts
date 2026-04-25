@@ -36,6 +36,11 @@ declare global {
 declare module "express-session" {
   interface SessionData {
     userId: string;
+    /** US-M10-003: when true, session has passed MFA check for privileged roles. */
+    mfaVerified?: boolean;
+    /** When MFA is required but not yet enrolled/verified, allow only MFA endpoints. */
+    mfaPending?: boolean;
+    mfaTempSecret?: string;
   }
 }
 
@@ -98,12 +103,16 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
     return null;
   }
   const [emp] = await db
-    .select({ id: employees.id, empId: employees.empId })
+    .select({ id: employees.id, empId: employees.empId, status: employees.status })
     .from(employees)
     .where(eq(employees.id, user.employeeId))
     .limit(1);
   if (!emp) {
     console.warn(`[auth] User ${userId} points to missing employee ${user.employeeId}; session denied.`);
+    return null;
+  }
+  if (emp.status !== "Active") {
+    console.warn(`[auth] User ${userId} employee ${emp.id} status=${emp.status}; session denied (§1.4 / US-M10-001).`);
     return null;
   }
   const roleRows = await db
@@ -153,6 +162,15 @@ export async function requireAuthApi(req: Request, res: Response, next: NextFunc
     return;
   }
   if (await isPublicApiAsync(req.path, req.method)) {
+    next();
+    return;
+  }
+  // US-M10-003: If MFA is pending, allow only MFA verification/setup endpoints (+ logout) until completed.
+  if (req.session?.userId && req.session.mfaPending && req.path.startsWith("/api/auth/mfa")) {
+    next();
+    return;
+  }
+  if (req.session?.userId && req.session.mfaPending && req.path === "/api/auth/logout" && req.method === "POST") {
     next();
     return;
   }

@@ -34,3 +34,15 @@ export function isStrictAadhaar12Digits(raw: string): boolean {
   const t = String(raw).trim();
   return t.length === 12 && /^\d{12}$/.test(t);
 }
+
+/** Indian bank IFSC: 4 letters + 0 + 6 alphanumeric (e.g. SBIN0001234). SRS / BR-EMP data dictionary. */
+export const INDIAN_IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+
+export function normalizeIfscInput(raw: string): string {
+  return String(raw).trim().toUpperCase().replace(/\s/g, "");
+}
+
+export function isValidIfscFormat(raw: string): boolean {
+  const t = normalizeIfscInput(raw);
+  return t.length > 0 && INDIAN_IFSC_RE.test(t);
+}

@@ -29,6 +29,11 @@
     "db:apply-rent-invoice-tds": "dotenv -e .env -- tsx scripts/apply-rent-invoice-tds.ts",
     "db:apply-ioms-receipt-tds": "dotenv -e .env -- tsx scripts/apply-ioms-receipt-tds.ts",
     "db:apply-hr-m01-module01-gaps": "dotenv -e .env -- tsx scripts/apply-hr-m01-module01-gaps.ts",
+    "db:apply-employee-master-srs-411": "dotenv -e .env -- tsx scripts/apply-employee-master-srs-411.ts",
+    "db:apply-users-disabled-at": "dotenv -e .env -- tsx scripts/apply-users-disabled-at.ts",
+    "db:apply-users-mfa-totp": "dotenv -e .env -- tsx scripts/apply-users-mfa-totp.ts",
+    "db:reset-admin-password": "dotenv -e .env -- tsx scripts/reset-admin-password.ts",
+    "db:disable-mfa-enforcement": "dotenv -e .env -- tsx scripts/disable-mfa-enforcement.ts",
     "db:apply-m02-trackb-entities": "dotenv -e .env -- tsx scripts/apply-m02-trackb-entities.ts",
     "db:apply-m02-pre-receipts": "dotenv -e .env -- tsx scripts/apply-m02-pre-receipts.ts",
     "db:apply-m02-unified-entities-rent-revisions": "dotenv -e .env -- tsx scripts/apply-m02-unified-entities-rent-revisions.ts",
@@ -40,7 +45,8 @@
     "db:apply-m03-rent-revision-basis": "dotenv -e .env -- tsx scripts/apply-m03-rent-revision-basis.ts",
     "db:apply-m02-bm-form-doc-url": "dotenv -e .env -- tsx scripts/apply-m02-bm-form-doc-url.ts",
     "db:apply-m02-bm-form-doc-file": "dotenv -e .env -- tsx scripts/apply-m02-bm-form-doc-file.ts",
-    "test-plan:expand": "node scripts/expand-test-plan.mjs"
+    "test-plan:expand": "node scripts/expand-test-plan.mjs",
+    "srs:fr-traceability": "python scripts/generate-srs-v3-fr-traceability.py && node scripts/build-srs-fr-traceability-xlsx.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.741.0",
@@ -107,6 +113,7 @@
     "react-icons": "^5.4.0",
     "react-resizable-panels": "^2.1.7",
     "recharts": "^2.15.2",
+    "speakeasy": "^2.0.0",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
     "tw-animate-css": "^1.2.5",
@@ -137,6 +144,7 @@
     "@types/pdfkit": "^0.17.5",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
+    "@types/speakeasy": "^2.0.10",
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.20",

@@ -33,7 +33,7 @@ export async function disableUsersForSeparatedEmployees(): Promise<{ disabled: n
   for (const uid of Array.from(userIds)) {
     const [u] = await db.select().from(users).where(eq(users.id, uid)).limit(1);
     if (!u?.isActive) continue;
-    await db.update(users).set({ isActive: false, updatedAt: ts }).where(eq(users.id, uid));
+    await db.update(users).set({ isActive: false, disabledAt: ts, updatedAt: ts }).where(eq(users.id, uid));
     await writeAuditLogSystem({
       module: "M-01",
       action: "DisableUserOnSeparation",

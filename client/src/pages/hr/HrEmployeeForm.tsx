@@ -25,6 +25,7 @@ import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessS
 import {
   isValidEmailFormat,
   isStrictAadhaar12Digits,
+  isValidIfscFormat,
   parseIndianMobile10Digits,
   sanitizeMobile10Input,
 } from "@shared/india-validation";
@@ -61,6 +62,12 @@ interface Employee {
   emergencyContactName?: string | null;
   emergencyContactMobile?: string | null;
   reportingOfficerEmployeeId?: string | null;
+  locationPosted?: string | null;
+  payLevel?: number | null;
+  bankAccountNumber?: string | null;
+  ifscCode?: string | null;
+  category?: string | null;
+  fatherOrSpouseName?: string | null;
   status: string;
   userId?: string | null;
 }
@@ -75,6 +82,9 @@ const EMPLOYEE_TYPES = ["Regular", "Contract", "Daily Wage", "Temporary"];
 const STATUS_OPTIONS = ["Draft", "Submitted", "Active", "Inactive", "Suspended", "Retired", "Resigned"];
 const GENDER_OPTIONS = ["", "Male", "Female", "Other", "Prefer not to say"];
 const MARITAL_OPTIONS = ["", "Single", "Married", "Widowed", "Divorced"];
+/** SRS §4.1.1 — reservation / employee category (value stored as text). */
+const EMPLOYEE_CATEGORIES = ["General", "SC", "ST", "OBC", "EWS", "PwBD", "Ex-servicemen"];
+const PAY_LEVELS = Array.from({ length: 18 }, (_, i) => i + 1);
 
 export default function HrEmployeeForm() {
   const { id } = useParams<{ id: string }>();
@@ -116,6 +126,12 @@ export default function HrEmployeeForm() {
   const [emergencyContactName, setEmergencyContactName] = useState("");
   const [emergencyContactMobile, setEmergencyContactMobile] = useState("");
   const [reportingOfficerEmployeeId, setReportingOfficerEmployeeId] = useState("");
+  const [locationPosted, setLocationPosted] = useState("");
+  const [payLevel, setPayLevel] = useState<string>("");
+  const [bankAccountNumber, setBankAccountNumber] = useState("");
+  const [ifscCode, setIfscCode] = useState("");
+  const [category, setCategory] = useState("");
+  const [fatherOrSpouseName, setFatherOrSpouseName] = useState("");
 
   const [enableLoginOnCreate, setEnableLoginOnCreate] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
@@ -169,6 +185,12 @@ export default function HrEmployeeForm() {
       setEmergencyContactName(employee.emergencyContactName ?? "");
       setEmergencyContactMobile(sanitizeMobile10Input(employee.emergencyContactMobile ?? ""));
       setReportingOfficerEmployeeId(employee.reportingOfficerEmployeeId ?? "");
+      setLocationPosted(employee.locationPosted ?? "");
+      setPayLevel(employee.payLevel != null && !Number.isNaN(Number(employee.payLevel)) ? String(employee.payLevel) : "");
+      setBankAccountNumber(employee.bankAccountNumber ?? "");
+      setIfscCode(employee.ifscCode ?? "");
+      setCategory(employee.category ?? "");
+      setFatherOrSpouseName(employee.fatherOrSpouseName ?? "");
     }
   }, [employee]);
 
@@ -295,6 +317,21 @@ export default function HrEmployeeForm() {
       return;
     }
 
+    const bankDigits = bankAccountNumber.replace(/\D/g, "");
+    if (bankDigits.length > 0 && (bankDigits.length < 9 || bankDigits.length > 18)) {
+      toast({
+        title: "Invalid bank account number",
+        description: "Use 9 to 18 digits, or leave blank.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const ifscTrim = ifscCode.trim();
+    if (ifscTrim && !isValidIfscFormat(ifscTrim)) {
+      toast({ title: "Invalid IFSC", description: "Use 11 characters: 4 letters, 0, then 6 letters or digits (e.g. SBIN0001234).", variant: "destructive" });
+      return;
+    }
+
     const payload: Record<string, unknown> = {
       firstName,
       middleName: middleName || null,
@@ -319,6 +356,12 @@ export default function HrEmployeeForm() {
       emergencyContactName: emergencyContactName.trim() || null,
       emergencyContactMobile: emMobile,
       reportingOfficerEmployeeId: reportingOfficerEmployeeId.trim() || null,
+      locationPosted: locationPosted.trim() || null,
+      payLevel: payLevel ? parseInt(payLevel, 10) : null,
+      bankAccountNumber: bankDigits || null,
+      ifscCode: ifscTrim ? ifscTrim.toUpperCase().replace(/\s/g, "") : null,
+      category: category.trim() || null,
+      fatherOrSpouseName: fatherOrSpouseName.trim() || null,
     };
     if (!isEdit) {
       payload.aadhaarToken = aadhaarTrim || null;
@@ -498,6 +541,47 @@ export default function HrEmployeeForm() {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="md:col-span-2">
+                    <Label>Location posted</Label>
+                    <Input
+                      value={locationPosted}
+                      onChange={(e) => setLocationPosted(e.target.value)}
+                      placeholder="Official posting / work location (SRS §4.1.1)"
+                      maxLength={200}
+                    />
+                  </div>
+                  <div>
+                    <Label>Pay level</Label>
+                    <Select
+                      value={payLevel || "__none__"}
+                      onValueChange={(v) => setPayLevel(v === "__none__" ? "" : v)}
+                    >
+                      <SelectTrigger><SelectValue placeholder="1–18" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Not specified</SelectItem>
+                        {PAY_LEVELS.map((n) => (
+                          <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">§4.1.1: level 1–18 (optional).</p>
+                  </div>
+                  <div>
+                    <Label>Category</Label>
+                    <Select
+                      value={category || "__none__"}
+                      onValueChange={(v) => setCategory(v === "__none__" ? "" : v)}
+                    >
+                      <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent>
+                        {EMPLOYEE_CATEGORIES.map((c) => (
+                          <SelectItem key={c} value={c}>{c}</SelectItem>
+                        ))}
+                        <SelectItem value="__none__">Not specified</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">Reservation / employee category (§4.1.1).</p>
+                  </div>
                   {isEdit && (
                     <div className="md:col-span-2">
                       <Label>Employee ID (EMP-NNN)</Label>
@@ -511,6 +595,15 @@ export default function HrEmployeeForm() {
               </TabsContent>
               <TabsContent value="personal" className="space-y-4 pt-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <Label>Father / spouse name</Label>
+                    <Input
+                      value={fatherOrSpouseName}
+                      onChange={(e) => setFatherOrSpouseName(e.target.value)}
+                      placeholder="As per service record (§4.1.1)"
+                      maxLength={150}
+                    />
+                  </div>
                   <div className="md:col-span-2">
                     <Label>Aadhaar number</Label>
                     {isEdit && employee?.aadhaarToken ? (
@@ -597,6 +690,32 @@ export default function HrEmployeeForm() {
                 </div>
               </TabsContent>
               <TabsContent value="hr" className="space-y-4 pt-4">
+                <div>
+                  <p className="text-sm font-medium text-foreground mb-2">Bank &amp; financial (§4.1.1)</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label>Bank account no.</Label>
+                      <Input
+                        value={bankAccountNumber}
+                        onChange={(e) => setBankAccountNumber(e.target.value.replace(/\D/g, "").slice(0, 18))}
+                        inputMode="numeric"
+                        placeholder="9–18 digits"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div>
+                      <Label>IFSC code</Label>
+                      <Input
+                        value={ifscCode}
+                        onChange={(e) => setIfscCode(e.target.value.toUpperCase().replace(/\s/g, "").slice(0, 11))}
+                        placeholder="e.g. SBIN0001234"
+                        className="font-mono"
+                        maxLength={11}
+                        autoComplete="off"
+                      />
+                    </div>
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
                     <Label>Reporting officer</Label>

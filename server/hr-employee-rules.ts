@@ -4,7 +4,7 @@
 import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { employees } from "@shared/db-schema";
-import { INDIAN_MOBILE_10_RE, isStrictAadhaar12Digits } from "@shared/india-validation";
+import { INDIAN_IFSC_RE, INDIAN_MOBILE_10_RE, isStrictAadhaar12Digits } from "@shared/india-validation";
 import { getPasswordPolicyBrUsr10FirstViolation } from "@shared/password-policy-br-usr-10";
 
 const EMP_ID_RE = /^EMP-(\d{3})$/i;
@@ -216,4 +216,82 @@ export async function allocateNextEmpId(): Promise<string> {
 
 export function isDraftOrSubmitted(status: string): boolean {
   return status === "Draft" || status === "Submitted";
+}
+
+/** §4.1.1: Pay Level 1–18 (optional). */
+export function normalizePayLevel(input: string | number | null | undefined): number | null {
+  if (input == null) return null;
+  if (typeof input === "string" && String(input).trim() === "") return null;
+  const n = typeof input === "number" ? input : parseInt(String(input).trim(), 10);
+  if (Number.isNaN(n) || n < 1 || n > 18) {
+    throw new HrEmployeeRuleError("HR_EMP_PAY_LEVEL_RANGE", "Pay level must be a whole number from 1 to 18.");
+  }
+  return n;
+}
+
+/** §4.1.1: bank account 9–18 digits (optional). */
+export function normalizeBankAccountNumber(input: string | null | undefined): string | null {
+  if (input == null || String(input).trim() === "") return null;
+  const d = String(input).replace(/\D/g, "");
+  if (d.length < 9 || d.length > 18) {
+    throw new HrEmployeeRuleError("HR_EMP_BANK_ACCOUNT_FORMAT", "Bank account number must be 9 to 18 digits.");
+  }
+  return d;
+}
+
+/** §4.1.1: IFSC 11 characters (optional). */
+export function normalizeIfscCode(input: string | null | undefined): string | null {
+  if (input == null || String(input).trim() === "") return null;
+  const t = String(input).trim().toUpperCase().replace(/\s/g, "");
+  if (!INDIAN_IFSC_RE.test(t)) {
+    throw new HrEmployeeRuleError("HR_EMP_IFSC_FORMAT", "IFSC must be 11 characters: 4 letters, then 0, then 6 letters or digits (e.g. SBIN0001234).");
+  }
+  return t;
+}
+
+function trimMax(input: string | null | undefined, maxLen: number, code: string, label: string): string | null {
+  if (input == null || String(input).trim() === "") return null;
+  const t = String(input).trim();
+  if (t.length > maxLen) {
+    throw new HrEmployeeRuleError(code, `${label} must be at most ${maxLen} characters.`);
+  }
+  return t;
+}
+
+/**
+ * SCR-EMP-02 / SRS §4.1.1 optional master fields: Location Posted, Pay Level, bank, IFSC, Category, Father/Spouse name.
+ */
+export function parseEmployeeMasterSrs411Fields(input: {
+  locationPosted?: string | null;
+  payLevel?: string | number | null;
+  bankAccountNumber?: string | null;
+  ifscCode?: string | null;
+  category?: string | null;
+  fatherOrSpouseName?: string | null;
+}): {
+  locationPosted: string | null;
+  payLevel: number | null;
+  bankAccountNumber: string | null;
+  ifscCode: string | null;
+  category: string | null;
+  fatherOrSpouseName: string | null;
+} {
+  return {
+    locationPosted: trimMax(
+      input.locationPosted ?? null,
+      200,
+      "HR_EMP_LOCATION_POSTED_LENGTH",
+      "Location posted",
+    ),
+    payLevel: normalizePayLevel(input.payLevel ?? null),
+    bankAccountNumber: normalizeBankAccountNumber(input.bankAccountNumber ?? null),
+    ifscCode: normalizeIfscCode(input.ifscCode ?? null),
+    category: trimMax(input.category ?? null, 100, "HR_EMP_CATEGORY_LENGTH", "Category"),
+    fatherOrSpouseName: trimMax(
+      input.fatherOrSpouseName ?? null,
+      150,
+      "HR_EMP_FATHER_SPOUSE_LENGTH",
+      "Father or spouse name",
+    ),
+  };
 }

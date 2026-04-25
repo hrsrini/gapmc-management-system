@@ -139,6 +139,12 @@ export function EmployeeLoginAccessSection({
     }
   }, [linkedUser, displayName, workEmail]);
 
+  useEffect(() => {
+    if (employeeStatus !== "Active") {
+      setIsActive(false);
+    }
+  }, [employeeStatus]);
+
   const accessDenied =
     usersError &&
     usersErr instanceof Error &&
@@ -267,7 +273,7 @@ export function EmployeeLoginAccessSection({
         name: name.trim(),
         username: username.trim() === "" ? null : username.trim().toLowerCase(),
         phone: phoneNorm,
-        isActive,
+        isActive: employeeStatus === "Active" ? isActive : false,
         roleIds: Array.from(selectedRoleIds),
         yardIds: Array.from(selectedYardIds),
       };
@@ -432,9 +438,18 @@ export function EmployeeLoginAccessSection({
               <div className="flex items-center justify-between rounded-lg border p-3">
                 <div className="space-y-0.5">
                   <Label htmlFor="emp-access-active">Account active</Label>
-                  <p className="text-xs text-muted-foreground">Inactive users cannot sign in.</p>
+                  <p className="text-xs text-muted-foreground">
+                    {employeeStatus !== "Active"
+                      ? "Employee is not Active in M-01; sign-in stays off until employment is Active again (US-M10-001)."
+                      : "Inactive users cannot sign in."}
+                  </p>
                 </div>
-                <Switch id="emp-access-active" checked={isActive} onCheckedChange={setIsActive} />
+                <Switch
+                  id="emp-access-active"
+                  checked={employeeStatus === "Active" ? isActive : false}
+                  onCheckedChange={setIsActive}
+                  disabled={employeeStatus !== "Active"}
+                />
               </div>
             )}
 

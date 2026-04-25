@@ -119,3 +119,33 @@ export async function dispatchNotification(payload: NotificationPayload): Promis
 export function sendNotificationStub(payload: NotificationPayload): void {
   void dispatchNotification(payload).catch((e) => console.error("[NOTIFY] dispatch failed:", e));
 }
+
+/**
+ * Send one email to an arbitrary recipient (e.g. employee) when SMTP is configured.
+ * US-M10-001: provisioning notice to the employee sign-in address. Failures are logged only.
+ */
+export async function sendTransactionalEmailTo(to: string, subject: string, text: string): Promise<void> {
+  const host = process.env.SMTP_HOST?.trim();
+  const from = process.env.SMTP_FROM?.trim();
+  const recipient = to.trim();
+  if (!host || !from || !recipient) {
+    console.log(`[NOTIFY] skip transactional email (SMTP_HOST/SMTP_FROM or empty to): ${subject}`);
+    return;
+  }
+  try {
+    const nodemailer = await import("nodemailer");
+    const transporter = nodemailer.createTransport({
+      host,
+      port: Number(process.env.SMTP_PORT || "587"),
+      secure: process.env.SMTP_SECURE === "true",
+      auth:
+        process.env.SMTP_USER?.trim() != null && process.env.SMTP_USER !== ""
+          ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS ?? "" }
+          : undefined,
+    });
+    await transporter.sendMail({ from, to: recipient, subject, text });
+    console.log(`[NOTIFY] transactional email sent to ${recipient}: ${subject}`);
+  } catch (e) {
+    console.error("[NOTIFY] transactional SMTP failed:", e);
+  }
+}

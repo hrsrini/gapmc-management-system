@@ -18,6 +18,10 @@ export interface AuthUser {
 interface LoginResult {
   ok: boolean;
   error?: string;
+  /** US-M10-003 */
+  mfaRequired?: boolean;
+  mfaEnrolled?: boolean;
+  mfaMessage?: string;
 }
 
 /** Map older API / proxy messages so UI always mentions username + email. */
@@ -67,7 +71,7 @@ interface AuthContextType {
   /** True if user has ADMIN role or has the given module:action in permissions. */
   can: (module: string, action: PermissionAction) => boolean;
   /** `identifier` may be email address or username (case-insensitive). */
-  login: (identifier: string, password: string) => Promise<LoginResult>;
+  login: (identifier: string, password: string, mfaCode?: string) => Promise<LoginResult>;
   logout: () => void;
 }
 
@@ -134,18 +138,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(AUTH_401_EVENT, on401);
   }, [setLocation]);
 
-  const login = async (identifier: string, password: string): Promise<LoginResult> => {
+  const login = async (identifier: string, password: string, mfaCode?: string): Promise<LoginResult> => {
     try {
       const trimmed = identifier.trim();
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ login: trimmed, email: trimmed, password }),
+        body: JSON.stringify({ login: trimmed, email: trimmed, password, ...(mfaCode ? { mfaCode } : {}) }),
         credentials: 'include',
       });
       const contentType = res.headers.get('content-type') ?? '';
       const isJson = contentType.includes('application/json');
       const data = isJson ? await res.json().catch(() => ({})) : {};
+      if (isJson && data?.mfaRequired) {
+        return {
+          ok: false,
+          mfaRequired: true,
+          mfaEnrolled: Boolean(data?.enrolled),
+          mfaMessage: typeof data?.message === 'string' ? data.message : undefined,
+          error: typeof data?.message === 'string' ? data.message : 'MFA required',
+        };
+      }
       if (!res.ok) {
         const raw = typeof data?.error === 'string' ? data.error : 'Invalid email/username or password';
         return { ok: false, error: normalizeLoginErrorMessage(raw) };

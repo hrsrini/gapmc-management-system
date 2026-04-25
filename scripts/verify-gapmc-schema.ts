@@ -39,7 +39,16 @@ const COLUMN_CHECKS: { table: string; columns: string[] }[] = [
   },
   {
     table: "employees",
-    columns: ["gender", "reporting_officer_employee_id"],
+    columns: [
+      "gender",
+      "reporting_officer_employee_id",
+      "location_posted",
+      "pay_level",
+      "bank_account_number",
+      "ifsc_code",
+      "category",
+      "father_or_spouse_name",
+    ],
   },
 ];
 

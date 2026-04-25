@@ -8,11 +8,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { Leaf } from 'lucide-react';
+import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
 
 export default function Login() {
   const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaEnrolled, setMfaEnrolled] = useState(true);
+  const [mfaCode, setMfaCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
   const [, setLocation] = useLocation();
@@ -21,7 +25,7 @@ export default function Login() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    const result = await login(loginId, password);
+    const result = await login(loginId, password, mfaRequired ? mfaCode : undefined);
     if (result.ok) {
       toast({
         title: 'Welcome back!',
@@ -29,8 +33,19 @@ export default function Login() {
       });
       window.location.href = '/dashboard';
     } else {
+      if (result.mfaRequired) {
+        setMfaRequired(true);
+        setMfaEnrolled(Boolean(result.mfaEnrolled));
+        toast({
+          title: 'MFA required',
+          description: result.mfaMessage ?? (result.mfaEnrolled ? 'Enter your authenticator code.' : 'Complete MFA enrollment to continue.'),
+          variant: 'destructive',
+        });
+        setIsLoading(false);
+        return;
+      }
       toast({
-        title: 'Invalid credentials',
+        title: (result.error ?? '').toLowerCase().includes('login failed') ? 'Login failed' : 'Invalid credentials',
         description:
           result.error ??
           'Invalid email/username or password. Try full email or the part before @ (e.g. admin).',
@@ -62,7 +77,7 @@ export default function Login() {
           <CardHeader className="space-y-1 pb-4">
             <CardTitle className="text-xl text-center">Sign In</CardTitle>
             <CardDescription className="text-center">
-              Enter your credentials to access the system.
+              {mfaRequired ? 'Enter your MFA code to continue.' : 'Enter your credentials to access the system.'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -92,6 +107,26 @@ export default function Login() {
                   data-testid="input-password"
                 />
               </div>
+              {mfaRequired && (
+                <div className="space-y-2">
+                  <Label>MFA code</Label>
+                  {mfaEnrolled ? (
+                    <div className="flex justify-center">
+                      <InputOTP maxLength={6} value={mfaCode} onChange={setMfaCode}>
+                        <InputOTPGroup>
+                          {Array.from({ length: 6 }).map((_, i) => (
+                            <InputOTPSlot key={i} index={i} />
+                          ))}
+                        </InputOTPGroup>
+                      </InputOTP>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      MFA enrollment is required for your role. Ask a System Administrator to complete setup (or use the new MFA setup endpoint).
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="flex items-center space-x-2">
                 <Checkbox
                   id="remember"

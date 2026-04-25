@@ -208,6 +208,13 @@ export const users = gapmc.table("users", {
   employeeId: text("employee_id"),
   passwordHash: text("password_hash"),
   isActive: boolean("is_active").default(true),
+  /** Set when account is disabled (employment ended or admin); cleared when re-enabled. US-M10-001 / §1.4. */
+  disabledAt: text("disabled_at"),
+  /** US-M10-003: per-user MFA (TOTP). */
+  mfaEnabled: boolean("mfa_enabled").default(false),
+  /** Base32 TOTP secret. Store access is restricted by M-10 and never returned after enrollment. */
+  mfaSecret: text("mfa_secret"),
+  mfaVerifiedAt: text("mfa_verified_at"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
@@ -389,6 +396,17 @@ export const employees = gapmc.table("employees", {
   emergencyContactMobile: text("emergency_contact_mobile"),
   /** Optional link to another employee record (reporting officer). */
   reportingOfficerEmployeeId: text("reporting_officer_employee_id"),
+  /** SRS §4.1.1 / SCR-EMP-02: posting location (text; may differ from home yard). */
+  locationPosted: text("location_posted"),
+  /** §4.1.1: pay level 1–18. */
+  payLevel: integer("pay_level"),
+  /** §4.1.1: bank account (9–18 digits, stored digits-only). */
+  bankAccountNumber: text("bank_account_number"),
+  ifscCode: text("ifsc_code"),
+  /** §4.1.1: reservation / employee category (e.g. General, SC, ST, OBC, EWS). */
+  category: text("category"),
+  /** §4.1.1: father or spouse name. */
+  fatherOrSpouseName: text("father_or_spouse_name"),
   status: text("status").notNull(), // Draft | Submitted | Active | Inactive | Suspended | Retired | Resigned
   userId: text("user_id"),
   createdAt: text("created_at"),

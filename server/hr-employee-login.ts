@@ -19,6 +19,7 @@ import {
 } from "@shared/db-schema";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
+import { sendTransactionalEmailTo } from "./notify";
 import { assertRoleIdsNoDvDaConflict } from "./role-constraints";
 import {
   assertPasswordComplexityBrUsr10,
@@ -338,29 +339,33 @@ export async function handleCreateEmployeeLogin(req: Request, res: Response, emp
     const usernameVal = rawU === "" ? null : rawU;
     const passwordHash = await hash(passwordStr, 10);
     const id = nanoid();
-    await db.insert(users).values({
-      id,
-      email: emailNorm,
-      username: usernameVal,
-      name: String(name),
-      phone: phoneNorm,
-      employeeId: employeeIdRaw,
-      passwordHash,
-      isActive: true,
-      createdAt: now(),
-      updatedAt: now(),
+    const ts = now();
+    await db.transaction(async (tx) => {
+      await tx.insert(users).values({
+        id,
+        email: emailNorm,
+        username: usernameVal,
+        name: String(name),
+        phone: phoneNorm,
+        employeeId: employeeIdRaw,
+        passwordHash,
+        isActive: true,
+        disabledAt: null,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      await tx.update(employees).set({ userId: id, updatedAt: ts }).where(eq(employees.id, employeeIdRaw));
+      if (Array.isArray(roleIds) && roleIds.length) {
+        for (const roleId of roleIds) {
+          await tx.insert(userRoles).values({ userId: id, roleId: String(roleId) }).onConflictDoNothing();
+        }
+      }
+      if (Array.isArray(yardIds) && yardIds.length) {
+        for (const yardId of yardIds) {
+          await tx.insert(userYards).values({ userId: id, yardId: String(yardId) }).onConflictDoNothing();
+        }
+      }
     });
-    await db.update(employees).set({ userId: id, updatedAt: now() }).where(eq(employees.id, employeeIdRaw));
-    if (Array.isArray(roleIds) && roleIds.length) {
-      for (const roleId of roleIds) {
-        await db.insert(userRoles).values({ userId: id, roleId: String(roleId) }).onConflictDoNothing();
-      }
-    }
-    if (Array.isArray(yardIds) && yardIds.length) {
-      for (const yardId of yardIds) {
-        await db.insert(userYards).values({ userId: id, yardId: String(yardId) }).onConflictDoNothing();
-      }
-    }
     const [row] = await db.select().from(users).where(eq(users.id, id));
     writeAuditLog(req, {
       module: "M-01",
@@ -368,6 +373,15 @@ export async function handleCreateEmployeeLogin(req: Request, res: Response, emp
       recordId: id,
       afterValue: userSnapshotForAudit(row as unknown as Record<string, unknown>),
     }).catch((e) => console.error("Audit log failed:", e));
+    const loginHint =
+      usernameVal != null
+        ? `Sign in with this email address or username "${usernameVal}" and the password set by your administrator.`
+        : "Sign in with this email address and the password set by your administrator.";
+    await sendTransactionalEmailTo(
+      emailNorm,
+      "IOMS user account provisioned",
+      `Hello ${String(name).trim()},\n\nAn IOMS application user account was created for you (M-10 / SRS §1.4).\n\n${loginHint} Change your password after first sign-in if prompted.\n\nIf you did not expect this message, contact your system administrator.\n\n— GAPMC IOMS`,
+    );
     res.status(201).json(row);
   } catch (e: unknown) {
     console.error(e);
@@ -453,22 +467,25 @@ export async function handleUpdateEmployeeLogin(req: Request, res: Response, emp
       }
     }
 
-    await db
-      .update(users)
-      .set({
-        ...emailUpdate,
-        ...usernameUpdate,
-        ...(name != null && { name: String(name) }),
-        ...phoneUpdate,
-        ...(isActive !== undefined && { isActive: Boolean(isActive) }),
-        ...passwordUpdate,
-        employeeId: employeeIdRaw,
-        updatedAt: now(),
-      })
-      .where(eq(users.id, id));
-
-    await db.update(employees).set({ userId: null, updatedAt: now() }).where(eq(employees.userId, id));
-    await db.update(employees).set({ userId: id, updatedAt: now() }).where(eq(employees.id, employeeIdRaw));
+    const employmentActive = emp.status === "Active";
+    let nextIsActive = Boolean(beforeUser.isActive);
+    if (isActive !== undefined) {
+      if (!employmentActive && Boolean(isActive)) {
+        sendApiError(
+          res,
+          400,
+          "HR_LOGIN_EMPLOYEE_NOT_ACTIVE",
+          "Cannot enable user account while employee record is not Active in M-01 (US-M10-001 / §1.4).",
+        );
+        return;
+      }
+      nextIsActive = Boolean(isActive);
+    }
+    if (!employmentActive) {
+      nextIsActive = false;
+    }
+    const ts = now();
+    const nextDisabledAt = nextIsActive ? null : ts;
 
     if (Array.isArray(roleIds)) {
       const ridList = roleIds.map((r) => String(r));
@@ -477,17 +494,41 @@ export async function handleUpdateEmployeeLogin(req: Request, res: Response, emp
         sendApiError(res, 400, "HR_ROLE_DV_DA_CONFLICT", dvDa.message);
         return;
       }
-      await db.delete(userRoles).where(eq(userRoles.userId, id));
-      for (const roleId of ridList) {
-        await db.insert(userRoles).values({ userId: id, roleId: String(roleId) }).onConflictDoNothing();
-      }
     }
-    if (Array.isArray(yardIds)) {
-      await db.delete(userYards).where(eq(userYards.userId, id));
-      for (const yardId of yardIds) {
-        await db.insert(userYards).values({ userId: id, yardId: String(yardId) }).onConflictDoNothing();
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(users)
+        .set({
+          ...emailUpdate,
+          ...usernameUpdate,
+          ...(name != null && { name: String(name) }),
+          ...phoneUpdate,
+          isActive: nextIsActive,
+          disabledAt: nextDisabledAt,
+          ...passwordUpdate,
+          employeeId: employeeIdRaw,
+          updatedAt: ts,
+        })
+        .where(eq(users.id, id));
+
+      await tx.update(employees).set({ userId: null, updatedAt: ts }).where(eq(employees.userId, id));
+      await tx.update(employees).set({ userId: id, updatedAt: ts }).where(eq(employees.id, employeeIdRaw));
+
+      if (Array.isArray(roleIds)) {
+        const ridList = roleIds.map((r) => String(r));
+        await tx.delete(userRoles).where(eq(userRoles.userId, id));
+        for (const roleId of ridList) {
+          await tx.insert(userRoles).values({ userId: id, roleId: String(roleId) }).onConflictDoNothing();
+        }
       }
-    }
+      if (Array.isArray(yardIds)) {
+        await tx.delete(userYards).where(eq(userYards.userId, id));
+        for (const yardId of yardIds) {
+          await tx.insert(userYards).values({ userId: id, yardId: String(yardId) }).onConflictDoNothing();
+        }
+      }
+    });
 
     const [row] = await db.select().from(users).where(eq(users.id, id));
     if (!row) {

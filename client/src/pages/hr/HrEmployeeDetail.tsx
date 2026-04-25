@@ -68,6 +68,12 @@ interface Employee {
   dob?: string | null;
   pan?: string | null;
   retirementDate?: string | null;
+  locationPosted?: string | null;
+  payLevel?: number | null;
+  bankAccountNumber?: string | null;
+  ifscCode?: string | null;
+  category?: string | null;
+  fatherOrSpouseName?: string | null;
 }
 interface ServiceBookEntry {
   id: string;
@@ -346,6 +352,26 @@ export default function HrEmployeeDetail() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Designation</span><br />{employee.designation}</div>
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[employee.yardId] ?? employee.yardId}</div>
+            <div>
+              <span className="text-muted-foreground">Location posted</span>
+              <br />
+              {employee.locationPosted ?? "—"}
+            </div>
+            <div>
+              <span className="text-muted-foreground">Pay level</span>
+              <br />
+              {employee.payLevel != null && !Number.isNaN(Number(employee.payLevel)) ? String(employee.payLevel) : "—"}
+            </div>
+            <div>
+              <span className="text-muted-foreground">Category</span>
+              <br />
+              {employee.category ?? "—"}
+            </div>
+            <div>
+              <span className="text-muted-foreground">Father / spouse</span>
+              <br />
+              {employee.fatherOrSpouseName ?? "—"}
+            </div>
             <div><span className="text-muted-foreground">Type</span><br />{employee.employeeType}</div>
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant="secondary">{employee.status}</Badge></div>
             <div><span className="text-muted-foreground">Joining date</span><br />{formatYmdToDisplay(employee.joiningDate)}</div>
@@ -355,6 +381,16 @@ export default function HrEmployeeDetail() {
             <div><span className="text-muted-foreground">Personal email</span><br />{employee.personalEmail ?? "—"}</div>
             <div><span className="text-muted-foreground">PAN</span><br />{employee.pan ?? "—"}</div>
             <div><span className="text-muted-foreground">Aadhaar (masked)</span><br />{employee.aadhaarToken ?? "—"}</div>
+            <div>
+              <span className="text-muted-foreground">Bank account no.</span>
+              <br />
+              <span className="font-mono tabular-nums">{employee.bankAccountNumber ?? "—"}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">IFSC</span>
+              <br />
+              <span className="font-mono">{employee.ifscCode ?? "—"}</span>
+            </div>
             {employee.retirementDate && (
               <div>
                 <span className="text-muted-foreground">Retirement</span>

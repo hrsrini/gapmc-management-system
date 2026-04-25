@@ -16,7 +16,7 @@ import { registerDakRoutes } from "./routes-dak";
 import { registerBugRoutes } from "./routes-bugs";
 import { registerReportsRoutes } from "./routes-reports";
 import { registerFinanceReferenceRoutes } from "./routes-finance-reference";
-import { registerPublicAuthRoutes, registerAuthMeRoute } from "./routes-auth";
+import { registerAuthMeRoute, registerMfaRoutes, registerPublicAuthRoutes } from "./routes-auth";
 import { getMergedSystemConfig } from "./system-config";
 import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermissionByPath } from "./auth";
 import { writeAuditLog } from "./audit";
@@ -228,6 +228,7 @@ export async function registerRoutes(
 
   // Login/logout before requireAuthApi (Express 5 + session.save must be awaited in the handler).
   registerPublicAuthRoutes(app);
+  registerMfaRoutes(app);
 
   // Require session for all other /api routes; attach req.user and req.scopedLocationIds
   app.use(requireAuthApi);

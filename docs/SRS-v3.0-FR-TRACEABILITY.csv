@@ -1,0 +1,144 @@
+fr_id,srs_document,iom_module_or_nfr,test_plan_test_ids,test_plan_qa_status,repo_trace_status,notes
+FR-AST-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-005,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-006,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-007,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-008,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-009,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-010,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-011,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-012,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-013,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AST-014,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Assets,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-AVAIL-01,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Availability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-AVAIL-02,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Availability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-AVAIL-03,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Availability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-AVAIL-04,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Availability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-AVAIL-05,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Availability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-AVAIL-06,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Availability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-CFG-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR / Admin config,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-CFG-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR / Admin config,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-CFG-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR / Admin config,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-CHG-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR Change / release (SRS),,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-CHG-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR Change / release (SRS),,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-CHG-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR Change / release (SRS),,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-CNST-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Construction,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-CNST-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Construction,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-CNST-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Construction,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-CNST-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Construction,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-CNST-005,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-08 Construction,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-COR-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-09 Correspondence,TP-COR-SLA-001,,Implemented (test_plan link),At least one test_plan row references this FR.
+FR-COR-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-09 Correspondence,TP-COR-UC01-001,,Partial,Dak workflow; UC-COR-01 state names may be simplified (TP-COR-UC01-001).
+FR-COR-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-09 Correspondence,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-COR-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-09 Correspondence,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-EMP-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-EMP-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-EMP-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-EMP-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-EMP-005,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-LTC-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (LTC),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-LTC-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (LTC),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-LTC-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (LTC),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-LTC-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (LTC),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-LVE-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (leave),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-LVE-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (leave),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-LVE-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (leave),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-MKT-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-MKT-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-MKT-005,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,TP-MKT-FR005,,Implemented (test_plan link),At least one test_plan row references this FR.
+FR-MKT-006,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,TP-MKT-FR006,,Implemented (test_plan link),At least one test_plan row references this FR.
+FR-MKT-007,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,TP-MKT-FR007,,Implemented (test_plan link),At least one test_plan row references this FR.
+FR-MKT-008,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,TP-MKT-FR008,,Implemented (test_plan link),At least one test_plan row references this FR.
+FR-MKT-009,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,TP-MKT-FR009,,Implemented (test_plan link),At least one test_plan row references this FR.
+FR-MKT-010,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,TP-MKT-FR010,,Implemented (test_plan link),At least one test_plan row references this FR.
+FR-MKT-011,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,TP-MKT-FR011,,Implemented (test_plan link),At least one test_plan row references this FR.
+FR-MKT-012,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-MKT-013,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-MKT-014,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-MKT-015,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-04 Market fee,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-MNT-01,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Maintainability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-MNT-02,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Maintainability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-MNT-03,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Maintainability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-MNT-04,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Maintainability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-MNT-05,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Maintainability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-MNT-06,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Maintainability,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-NRT-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Notifications,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-NRT-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Notifications,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-NRT-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Notifications,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-PAY-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-06 Payment vouchers,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PAY-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-06 Payment vouchers,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PAY-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-06 Payment vouchers,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PAY-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-06 Payment vouchers,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PAY-005,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-06 Payment vouchers,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PAY-006,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-06 Payment vouchers,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PAY-007,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-06 Payment vouchers,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PERF-01,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Performance,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-PERF-02,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Performance,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-PERF-03,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Performance,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-PERF-04,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Performance,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-PERF-05,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Performance,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-PERF-06,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Performance,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-PRE-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-02 Track B / pre-receipt,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PRE-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-02 Track B / pre-receipt,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PRE-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-02 Track B / pre-receipt,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PRE-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-02 Track B / pre-receipt,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-PRT-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 / §8.6 Printing,,,Partial,Server PDF + signatory text + print modes; DSC/HSM not built (Q52).
+FR-RCP-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-005,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-006,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Partial,Ledger stats vs SRS 38 heads — DA sign-off if chart differs (Q28–30).
+FR-RCP-007,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-008,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Partial,Tally CSV + interchange XML; Prime import UAT TBD (Q49).
+FR-RCP-009,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-010,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-011,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-012,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-013,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RCP-014,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-05 Receipts,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RENT-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-03 Rent / GST,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RENT-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-03 Rent / GST,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RENT-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-03 Rent / GST,,,Partial,GSTR-1 export + warnings; filing-tool final schema / POS TBD (Q17).
+FR-RENT-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-03 Rent / GST,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RENT-005,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-03 Rent / GST,TP-RENT-TDS,,Partial,Invoice+receipt TDS fields; TDS GL posting not built (Q15).
+FR-RENT-006,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-03 Rent / GST,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-RENT-007,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-03 Rent / GST,,,Partial,Arrears disclosure on receipt/PDF; interest GL TBD (Q16).
+FR-SEC-01,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-02,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-03,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-04,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-05,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-06,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-07,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-08,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-09,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-10,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-11,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-12,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-SEC-13,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,NFR §14 Security,,,NFR (spot-check / infra),Cross-cutting; verify against §14 deployment checklist + TP-NF-* / TP-NFR-*.
+FR-TADA-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (TA/DA),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-TADA-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (TA/DA),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-TADA-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (TA/DA),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-TADA-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-01 HRMS (TA/DA),,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-USA-01,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Usability / UI,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-USA-02,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Usability / UI,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-USA-03,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Usability / UI,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-USA-04,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Usability / UI,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-USA-05,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Usability / UI,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-USA-06,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Usability / UI,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-USA-07,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Usability / UI,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-USR-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Users / coupling,TP-USR-SRS-001,,Implemented (test_plan link),At least one test_plan row references this FR.
+FR-USR-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Users / coupling,TP-USR-SRS-002,,Implemented (test_plan link),At least one test_plan row references this FR.
+FR-USR-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Users / coupling,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-USR-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Users / coupling,TP-USR-MFA,,Deferred,MFA not implemented; TP-USR-MFA pending_not_in_scope.
+FR-USR-005,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-10 Users / coupling,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-VEH-001,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-07 Fleet,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-VEH-002,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-07 Fleet,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-VEH-003,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-07 Fleet,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-VEH-004,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-07 Fleet,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-VEH-005,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-07 Fleet,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.
+FR-VEH-006,GAPLMB-GOA-IOMS-SRS-v3.0.pdf,M-07 Fleet,,,Module delivered (no explicit TP row),Feature area exists in app; add srs_reference to test_plan for strict RTM.

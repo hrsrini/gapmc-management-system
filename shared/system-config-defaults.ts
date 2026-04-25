@@ -27,6 +27,11 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   expenditure_head_authority_url: "",
   /** M-10 / reports: allow `format=xml` on `/api/ioms/reports/tally-export` (interchange v1). */
   tally_xml_export_enabled: "true",
+  /**
+   * US-M10-003: MFA enforcement (TOTP) for privileged roles.
+   * Default false for easier rollout; enable only when MFA setup process is ready for users.
+   */
+  mfa_privileged_enforced: "false",
   /** Cross-cutting (Q50): policy age in years for read-only retention counts — IOMS receipts (M-05). */
   data_retention_ioms_receipts_years: "10",
   /** Policy age in years for payment vouchers (M-06). */
@@ -96,6 +101,7 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "public_receipt_verify_enabled",
   "expenditure_head_authority_url",
   "tally_xml_export_enabled",
+  "mfa_privileged_enforced",
   "data_retention_ioms_receipts_years",
   "data_retention_payment_vouchers_years",
   "data_retention_dak_inward_years",
@@ -135,6 +141,7 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   public_receipt_verify_enabled: "Public receipt verification (true|false)",
   expenditure_head_authority_url: "Expenditure head authority URL (optional)",
   tally_xml_export_enabled: "Tally export: allow XML interchange (true|false)",
+  mfa_privileged_enforced: "Auth: enforce MFA for privileged roles (DA/ADMIN/ACCOUNTS) (true|false)",
   data_retention_ioms_receipts_years: "Retention policy (years) — IOMS receipts count snapshot",
   data_retention_payment_vouchers_years: "Retention policy (years) — payment vouchers count snapshot",
   data_retention_dak_inward_years: "Retention policy (years) — Dak inward count snapshot",
