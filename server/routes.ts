@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { sql, inArray, and, eq, or, isNull } from "drizzle-orm";
+import { sql, inArray, and, eq, or, isNull, desc } from "drizzle-orm";
 import { storage } from "./storage";
 import { db } from "./db";
 import { registerAdminRoutes } from "./routes-admin";
@@ -21,7 +21,7 @@ import { getMergedSystemConfig } from "./system-config";
 import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermissionByPath } from "./auth";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
-import { yards } from "@shared/db-schema";
+import { agreementDocuments, agreements as agreementsTable, yards } from "@shared/db-schema";
 import { 
   insertTraderSchema, 
   insertInvoiceSchema, 
@@ -31,6 +31,15 @@ import {
   insertStockReturnSchema
 } from "@shared/schema";
 import { z } from "zod";
+import multer from "multer";
+import { nanoid } from "nanoid";
+import {
+  extFromAgreementDocumentMime,
+  isAllowedAgreementDocumentFileName,
+  readAgreementDocumentBuffer,
+  writeAgreementDocumentBuffer,
+  contentTypeForAgreementDocument,
+} from "./agreement-document-storage";
 
 /** Human-readable labels for common validation paths */
 const STOCK_RETURN_PATH_LABELS: Record<string, string> = {
@@ -79,6 +88,11 @@ const stockReturnEntrySchema = z.object({
   sales: z.coerce.number(),
   closingBalance: z.coerce.number(),
 });
+
+const agreementDocUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // align with SRS doc limit
+});
 const bulkStockReturnSchema = z.object({
   traderId: z.string(),
   traderName: z.string(),
@@ -123,6 +137,21 @@ export async function registerRoutes(
       return res.json({ ok: true, ...result });
     } catch (e) {
       console.error("Cron licence expiry auto-block failed:", e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
+    }
+  });
+
+  app.post("/api/cron/m02-entity-alerts", async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers["x-cron-secret"] !== secret) {
+      return sendApiError(res, 401, "CRON_UNAUTHORIZED", "Unauthorized");
+    }
+    try {
+      const { runM02EntityAlerts } = await import("./cron-m02-entity-alerts");
+      const result = await runM02EntityAlerts();
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("Cron M-02 entity alerts failed:", e);
       return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
     }
   });
@@ -627,6 +656,105 @@ export async function registerRoutes(
         return sendApiError(res, 400, "LEGACY_VALIDATION_FAILED", "Validation failed", error.errors);
       }
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update agreement");
+    }
+  });
+
+  // Agreement documents (US-M02-013): list/upload/download versioned files per agreement
+  app.get("/api/agreements/:id/documents", async (req, res) => {
+    try {
+      const agreementId = String(req.params.id ?? "").trim();
+      const [ag] = await db.select({ id: agreementsTable.id }).from(agreementsTable).where(eq(agreementsTable.id, agreementId)).limit(1);
+      if (!ag) return sendApiError(res, 404, "AGREEMENT_NOT_FOUND", "Agreement not found");
+      const rows = await db
+        .select()
+        .from(agreementDocuments)
+        .where(eq(agreementDocuments.agreementId, agreementId))
+        .orderBy(desc(agreementDocuments.version));
+      return res.json(rows);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch agreement documents");
+    }
+  });
+
+  app.post("/api/agreements/:id/documents", (req, res) => {
+    agreementDocUpload.single("file")(req, res, async (err: unknown) => {
+      try {
+        if (err && typeof err === "object" && (err as { code?: string }).code === "LIMIT_FILE_SIZE") {
+          return sendApiError(res, 400, "AGREEMENT_DOC_TOO_LARGE", "Document must be 5 MB or smaller.");
+        }
+        if (err) {
+          const msg = err instanceof Error ? err.message : "Upload failed";
+          return sendApiError(res, 400, "AGREEMENT_DOC_UPLOAD_FAILED", msg);
+        }
+        const agreementId = String(req.params.id ?? "").trim();
+        const [ag] = await db.select({ id: agreementsTable.id }).from(agreementsTable).where(eq(agreementsTable.id, agreementId)).limit(1);
+        if (!ag) return sendApiError(res, 404, "AGREEMENT_NOT_FOUND", "Agreement not found");
+
+        const file = (req as unknown as { file?: Express.Multer.File }).file;
+        if (!file) return sendApiError(res, 400, "AGREEMENT_DOC_REQUIRED", "Upload file required (field name: file)");
+
+        const ext = extFromAgreementDocumentMime(file.mimetype);
+        if (!ext) {
+          return sendApiError(res, 400, "AGREEMENT_DOC_TYPE", "Only PDF/JPG/PNG documents are allowed.");
+        }
+
+        const maxRow = await db
+          .select({ v: sql<number>`COALESCE(MAX(${agreementDocuments.version}), 0)` })
+          .from(agreementDocuments)
+          .where(eq(agreementDocuments.agreementId, agreementId));
+        const nextVersion = Number(maxRow?.[0]?.v ?? 0) + 1;
+
+        const stored = `${nanoid(16)}${ext}`;
+        await writeAgreementDocumentBuffer(agreementId, stored, file.buffer);
+
+        const id = nanoid();
+        const ts = new Date().toISOString();
+        await db.insert(agreementDocuments).values({
+          id,
+          agreementId,
+          version: nextVersion,
+          fileName: file.originalname ? String(file.originalname) : stored,
+          mimeType: file.mimetype,
+          sizeBytes: file.size,
+          blobKey: `agreements/${agreementId}/${stored}`,
+          uploadedBy: req.user?.id ?? null,
+          createdAt: ts,
+        });
+        const [row] = await db.select().from(agreementDocuments).where(eq(agreementDocuments.id, id)).limit(1);
+        writeAuditLog(req, { module: "Agreements", action: "UploadDocument", recordId: id, afterValue: row }).catch((e) =>
+          console.error("Audit log failed:", e),
+        );
+        return res.status(201).json(row);
+      } catch (e) {
+        console.error(e);
+        return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to upload agreement document");
+      }
+    });
+  });
+
+  app.get("/api/agreements/:id/documents/:docId/download", async (req, res) => {
+    try {
+      const agreementId = String(req.params.id ?? "").trim();
+      const docId = String(req.params.docId ?? "").trim();
+      const [doc] = await db.select().from(agreementDocuments).where(eq(agreementDocuments.id, docId)).limit(1);
+      if (!doc || doc.agreementId !== agreementId) {
+        return sendApiError(res, 404, "AGREEMENT_DOC_NOT_FOUND", "Document not found");
+      }
+      const stored = String(doc.blobKey ?? "").split("/").pop() ?? "";
+      if (!isAllowedAgreementDocumentFileName(stored)) {
+        return sendApiError(res, 400, "AGREEMENT_DOC_NAME_INVALID", "Invalid stored file name");
+      }
+      const buf = await readAgreementDocumentBuffer(agreementId, stored);
+      if (!buf?.length) return sendApiError(res, 404, "AGREEMENT_DOC_MISSING", "Document missing on server");
+      res.setHeader("Content-Type", contentTypeForAgreementDocument(stored));
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      const safeName = (doc.fileName ?? stored).replace(/[\r\n"]/g, "_");
+      res.setHeader("Content-Disposition", `inline; filename=\"${safeName}\"`);
+      return res.send(buf);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to download agreement document");
     }
   });
 

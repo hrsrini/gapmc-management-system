@@ -6,12 +6,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Receipt, ArrowLeft, AlertCircle, ExternalLink, Download, QrCode } from "lucide-react";
+import { Receipt, ArrowLeft, AlertCircle, ExternalLink, Download, QrCode, Undo2 } from "lucide-react";
 import QRCode from "qrcode";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { formatDisplayDateTime } from "@/lib/dateFormat";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface RentArrearsDisclosure {
   approxInterestInr: number;
@@ -49,6 +52,9 @@ interface IomsReceipt {
   createdBy: string;
   createdAt: string;
   rentArrearsDisclosure?: RentArrearsDisclosure | null;
+  dishonourReason?: string | null;
+  rentRecomputationNote?: string | null;
+  rentDishonourScaffold?: { bankChargeInr: number | null; bankChargeHint: string | null; voucherCreateHref: string | null } | null;
 }
 interface YardRef {
   id: string;
@@ -74,6 +80,9 @@ export default function IomsReceiptDetail() {
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
 
   const canMockPay = can("M-05", "Create");
+  const canUpdate = can("M-05", "Update");
+  const [dishonourOpen, setDishonourOpen] = useState(false);
+  const [dishonourReason, setDishonourReason] = useState("");
 
   const initiatePaymentMutation = useMutation({
     mutationFn: async () => {
@@ -117,6 +126,33 @@ export default function IomsReceiptDetail() {
       toast({ title: "Receipt marked as Paid (mock)", description: `Receipt updated.` });
     },
     onError: (e: Error) => toast({ title: "Callback failed", description: e.message, variant: "destructive" }),
+  });
+
+  const reverseMutation = useMutation({
+    mutationFn: async () => {
+      if (!id) throw new Error("Missing receipt id");
+      const reason = dishonourReason.trim();
+      if (reason.length < 5) throw new Error("Enter a short reason (min 5 characters)");
+      const res = await fetch(`/api/ioms/receipts/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ status: "Reversed", dishonourReason: reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
+      return data as IomsReceipt;
+    },
+    onSuccess: (data) => {
+      setDishonourOpen(false);
+      setDishonourReason("");
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/receipts", id] });
+      toast({
+        title: "Receipt reversed",
+        description: data.rentRecomputationNote ? data.rentRecomputationNote : "Cheque/DD dishonour reversal recorded.",
+      });
+    },
+    onError: (e: Error) => toast({ title: "Reverse failed", description: e.message, variant: "destructive" }),
   });
 
   const verifyUrl = useMemo(() => {
@@ -225,9 +261,68 @@ export default function IomsReceiptDetail() {
             <Button variant="outline" size="sm" onClick={() => downloadServerPdf()}>
               <Download className="h-4 w-4 mr-1" /> PDF
             </Button>
+            {canUpdate &&
+              (receipt.paymentMode === "Cheque" || receipt.paymentMode === "DD") &&
+              (receipt.status === "Paid" || receipt.status === "Reconciled") && (
+                <Button variant="destructive" size="sm" onClick={() => setDishonourOpen(true)}>
+                  <Undo2 className="h-4 w-4 mr-1" /> Mark dishonoured
+                </Button>
+              )}
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          <Dialog open={dishonourOpen} onOpenChange={setDishonourOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Mark cheque/DD dishonoured</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  This will set receipt status to <span className="font-medium text-foreground">Reversed</span> and, for rent receipts,
+                  post a <span className="font-medium text-foreground">ChequeDishonour</span> entry in the rent deposit ledger (if a prior collection exists).
+                </p>
+                <div className="space-y-1">
+                  <Label>Reason *</Label>
+                  <Input value={dishonourReason} onChange={(e) => setDishonourReason(e.target.value)} placeholder="e.g. Cheque bounced (insufficient funds)" />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setDishonourOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="button" variant="destructive" disabled={reverseMutation.isPending} onClick={() => reverseMutation.mutate()}>
+                  {reverseMutation.isPending ? "Reversing…" : "Confirm dishonour"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {receipt.status === "Reversed" && (receipt.rentRecomputationNote || receipt.dishonourReason) ? (
+            <Alert className="border-amber-500/40 bg-amber-500/5">
+              <AlertTitle className="text-amber-950 dark:text-amber-100">Cheque/DD dishonour recorded</AlertTitle>
+              <AlertDescription className="text-sm text-foreground space-y-2">
+                {receipt.dishonourReason ? (
+                  <div>
+                    <span className="text-muted-foreground">Reason:</span> {receipt.dishonourReason}
+                  </div>
+                ) : null}
+                {receipt.rentRecomputationNote ? (
+                  <div className="text-muted-foreground">{receipt.rentRecomputationNote}</div>
+                ) : null}
+                {receipt.rentDishonourScaffold?.voucherCreateHref ? (
+                  <p>
+                    <Link className="text-primary font-medium hover:underline" href={receipt.rentDishonourScaffold.voucherCreateHref}>
+                      Create bank charge voucher
+                    </Link>
+                    {receipt.rentDishonourScaffold.bankChargeInr != null ? (
+                      <span className="text-muted-foreground"> (₹{receipt.rentDishonourScaffold.bankChargeInr.toLocaleString()})</span>
+                    ) : null}
+                  </p>
+                ) : null}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
           {receipt.rentArrearsDisclosure && receipt.sourceModule === "M-03" && receipt.sourceRecordId ? (
             <Alert className="border-amber-500/40 bg-amber-500/5">
               <AlertTitle className="text-amber-950 dark:text-amber-100">Rent arrears after prior dishonour</AlertTitle>

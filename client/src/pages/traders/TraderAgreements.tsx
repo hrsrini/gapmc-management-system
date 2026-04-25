@@ -4,6 +4,8 @@ import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -18,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { FileText, RefreshCcw, XCircle, FileSignature, AlertCircle } from 'lucide-react';
+import { FileText, RefreshCcw, XCircle, FileSignature, AlertCircle, Download, Upload } from 'lucide-react';
 import { legacyRowMatchesSelectedApiYard } from '@/lib/legacyYardMatch';
 import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
 import { formatDisplayDate } from '@/lib/dateFormat';
@@ -53,6 +55,44 @@ export default function TraderAgreements() {
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [viewAgreement, setViewAgreement] = useState<Agreement | null>(null);
+  const [docFile, setDocFile] = useState<File | null>(null);
+
+  const agreementDocsUrl = viewAgreement?.id ? `/api/agreements/${viewAgreement.id}/documents` : '';
+  const { data: docs = [] } = useQuery<
+    Array<{ id: string; agreementId: string; version: number; fileName: string; createdAt?: string | null }>
+  >({
+    queryKey: [agreementDocsUrl],
+    enabled: Boolean(agreementDocsUrl),
+  });
+
+  const uploadDocMutation = useMutation({
+    mutationFn: async () => {
+      if (!viewAgreement?.id) throw new Error('Agreement not selected');
+      if (!docFile) throw new Error('Choose a file first');
+      const fd = new FormData();
+      fd.append('file', docFile);
+      const res = await fetch(`/api/agreements/${viewAgreement.id}/documents`, {
+        method: 'POST',
+        credentials: 'include',
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
+      return data as { id: string };
+    },
+    onSuccess: () => {
+      if (agreementDocsUrl) queryClient.invalidateQueries({ queryKey: [agreementDocsUrl] });
+      setDocFile(null);
+      toast({ title: 'Uploaded', description: 'Agreement document uploaded.' });
+    },
+    onError: (e: unknown) => {
+      toast({
+        title: 'Upload failed',
+        description: e instanceof Error ? e.message : 'Failed to upload document',
+        variant: 'destructive',
+      });
+    },
+  });
 
   const { data: agreements, isLoading, isError } = useQuery<Agreement[]>({
     queryKey: ['/api/agreements'],
@@ -258,7 +298,8 @@ export default function TraderAgreements() {
               <DialogTitle>Agreement details</DialogTitle>
             </DialogHeader>
             {viewAgreement && (
-              <div className="grid gap-2 text-sm">
+              <div className="grid gap-4 text-sm">
+                <div className="grid gap-2">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Agreement ID</span>
                   <span className="font-mono">{viewAgreement.agreementId}</span>
@@ -297,7 +338,63 @@ export default function TraderAgreements() {
                     {viewAgreement.status}
                   </Badge>
                 </div>
-                <Button variant="outline" size="sm" className="mt-2" onClick={() => setViewAgreement(null)}>Close</Button>
+                </div>
+
+                <div className="rounded-md border p-3 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-medium">Documents</div>
+                    <Badge variant="secondary">{docs.length}</Badge>
+                  </div>
+                  {docs.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No documents uploaded yet.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {docs.slice(0, 8).map((d) => (
+                        <div key={d.id} className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium truncate" title={d.fileName}>
+                              v{d.version} — {d.fileName}
+                            </div>
+                            {d.createdAt ? (
+                              <div className="text-[11px] text-muted-foreground">
+                                {new Date(d.createdAt).toLocaleString()}
+                              </div>
+                            ) : null}
+                          </div>
+                          <Button asChild size="sm" variant="outline">
+                            <a href={`/api/agreements/${viewAgreement.id}/documents/${d.id}/download`} target="_blank" rel="noreferrer">
+                              <Download className="h-4 w-4 mr-1" /> Download
+                            </a>
+                          </Button>
+                        </div>
+                      ))}
+                      {docs.length > 8 ? (
+                        <div className="text-xs text-muted-foreground">…and {docs.length - 8} more</div>
+                      ) : null}
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <Label>Upload new version</Label>
+                    <Input
+                      type="file"
+                      accept="application/pdf,image/png,image/jpeg"
+                      onChange={(e) => setDocFile(e.target.files?.[0] ?? null)}
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        disabled={uploadDocMutation.isPending || !docFile}
+                        onClick={() => uploadDocMutation.mutate()}
+                      >
+                        <Upload className="h-4 w-4 mr-1" />
+                        Upload
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <Button variant="outline" size="sm" onClick={() => setViewAgreement(null)}>Close</Button>
               </div>
             )}
           </DialogContent>

@@ -621,6 +621,128 @@ export function registerTradersAssetsRoutes(app: Express) {
     }
   });
 
+  /**
+   * M-02 US-M02-005: Online payment flow (Phase-2 prep).
+   * Creates a Pending receipt with paymentMode=Online, then the UI can initiate gateway payment via /api/ioms/receipts/:id/payments/initiate.
+   */
+  app.post("/api/ioms/dues/create-online-receipt", async (req, res) => {
+    try {
+      const body = req.body as Record<string, unknown>;
+      const kind = String(body.kind ?? "").trim();
+      const payAmount = Number(body.amount ?? NaN);
+      if (!Number.isFinite(payAmount) || payAmount <= 0) {
+        return sendApiError(res, 400, "DUES_ONLINE_AMOUNT", "amount must be a positive number");
+      }
+
+      const createdBy = req.user?.id ?? "system";
+
+      if (kind === "rent") {
+        const invoiceId = String(body.invoiceId ?? "");
+        if (!invoiceId) return sendApiError(res, 400, "DUES_ONLINE_FIELDS", "kind=rent requires invoiceId");
+        const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
+        if (!inv) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+        const scopedIds = req.scopedLocationIds;
+        if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
+          return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+        }
+        if (String(inv.status) !== "Approved" && String(inv.status) !== "Paid") {
+          return sendApiError(res, 400, "DUES_PAY_STATUS", "Only Approved/Paid invoices can be paid");
+        }
+
+        const recs = await db
+          .select()
+          .from(iomsReceipts)
+          .where(and(eq(iomsReceipts.sourceModule, "M-03"), eq(iomsReceipts.sourceRecordId, invoiceId)));
+        const alreadyPaid = recs
+          .filter((r) => String(r.status) === "Paid" || String(r.status) === "Reconciled")
+          .reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+        const total = Number(inv.totalAmount ?? 0);
+        const outstanding = Math.max(0, total - alreadyPaid);
+        if (payAmount > outstanding + 0.0001) {
+          return sendApiError(res, 400, "DUES_PAY_TOO_MUCH", "Payment amount exceeds outstanding", { outstanding });
+        }
+
+        const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
+        const created = await createIomsReceipt({
+          yardId: inv.yardId,
+          revenueHead,
+          payerName: inv.tenantLicenceId,
+          payerType: "TenantLicence",
+          payerRefId: inv.tenantLicenceId,
+          amount: payAmount,
+          cgst: 0,
+          sgst: 0,
+          tdsAmount: 0,
+          paymentMode: "Online",
+          sourceModule: "M-03",
+          sourceRecordId: inv.id,
+          unifiedEntityId: unifiedEntityIdFromTrackA(inv.tenantLicenceId),
+          createdBy,
+        });
+        return res.status(201).json({ receiptId: created.id, receiptNo: created.receiptNo, kind: "rent" });
+      }
+
+      if (kind === "market") {
+        const purchaseTransactionId = String(body.purchaseTransactionId ?? "").trim();
+        if (!purchaseTransactionId) {
+          return sendApiError(res, 400, "DUES_ONLINE_FIELDS", "kind=market requires purchaseTransactionId");
+        }
+        const [pt] = await db
+          .select()
+          .from(purchaseTransactions)
+          .where(eq(purchaseTransactions.id, purchaseTransactionId))
+          .limit(1);
+        if (!pt) return sendApiError(res, 404, "PURCHASE_TX_NOT_FOUND", "Purchase transaction not found");
+        if (String(pt.status) !== "Approved") {
+          return sendApiError(res, 400, "DUES_MARKET_PAY_STATUS", "Only Approved purchases can be paid");
+        }
+        const scopedIds = req.scopedLocationIds;
+        if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(pt.yardId)) {
+          return sendApiError(res, 404, "PURCHASE_TX_NOT_FOUND", "Purchase transaction not found");
+        }
+        const L = Number(pt.marketFeeAmount ?? 0);
+        if (!Number.isFinite(L) || L <= 0) {
+          return sendApiError(res, 400, "DUES_MARKET_PAY_NO_FEE", "This purchase has no market fee to settle");
+        }
+        const allRecs = await db
+          .select()
+          .from(iomsReceipts)
+          .where(and(eq(iomsReceipts.sourceModule, "M-04"), eq(iomsReceipts.sourceRecordId, purchaseTransactionId)));
+        const paidSum = allRecs
+          .filter((r) => String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled")
+          .reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+        const outstanding = Math.max(0, L - paidSum);
+        if (payAmount > outstanding + 0.01) {
+          return sendApiError(res, 400, "DUES_MARKET_PAY_TOO_MUCH", "Payment amount exceeds outstanding market fee", {
+            outstanding,
+          });
+        }
+        const created = await createIomsReceipt({
+          yardId: pt.yardId,
+          revenueHead: "MarketFee",
+          payerName: String(pt.traderLicenceId ?? ""),
+          payerType: "TraderLicence",
+          payerRefId: String(pt.traderLicenceId ?? ""),
+          amount: payAmount,
+          cgst: 0,
+          sgst: 0,
+          tdsAmount: 0,
+          paymentMode: "Online",
+          sourceModule: "M-04",
+          sourceRecordId: pt.id,
+          unifiedEntityId: pt.traderLicenceId ? unifiedEntityIdFromTrackA(String(pt.traderLicenceId)) : null,
+          createdBy,
+        });
+        return res.status(201).json({ receiptId: created.id, receiptNo: created.receiptNo, kind: "market" });
+      }
+
+      return sendApiError(res, 400, "DUES_ONLINE_KIND", "kind must be 'rent' or 'market'");
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create online payment receipt");
+    }
+  });
+
   /** Counter payment toward M-04 market fee for an approved purchase (partial or full). */
   app.post("/api/ioms/dues/pay-market-fee", async (req, res) => {
     try {

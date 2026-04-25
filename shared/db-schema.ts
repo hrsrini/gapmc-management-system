@@ -155,6 +155,19 @@ export const agreements = gapmc.table("agreements", {
   updatedAt: text("updated_at"),
 });
 
+// Agreement documents (US-M02-013): versioned uploads per agreement
+export const agreementDocuments = gapmc.table("agreement_documents", {
+  id: text("id").primaryKey(),
+  agreementId: text("agreement_id").notNull(),
+  version: integer("version").notNull(),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  blobKey: text("blob_key").notNull(),
+  uploadedBy: text("uploaded_by"),
+  createdAt: text("created_at"),
+});
+
 // Stock returns
 export const stockReturns = gapmc.table("stock_returns", {
   id: text("id").primaryKey(),

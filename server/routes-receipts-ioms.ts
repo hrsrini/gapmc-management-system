@@ -101,6 +101,8 @@ function normalizeReceiptUnifiedEntityId(raw: string | null | undefined): string
 function assertPhase1PaymentMode(mode: string): void {
   if (process.env.RECEIPT_ALLOW_ANY_PAYMENT_MODE === "true") return;
   const m = String(mode ?? "").trim();
+  // Allow Online when gateway initiation is enabled (UAT / Phase-2 prep).
+  if (m === "Online" && process.env.PAYMENT_GATEWAY_INIT_ENABLED === "true") return;
   if (!PHASE1_PAYMENT_MODES.has(m)) {
     throw new ReceiptPaymentModeError(`Phase 1: paymentMode must be Cash, Cheque, or DD (got "${m || "empty"}").`);
   }
@@ -501,6 +503,25 @@ export function registerReceiptsIomsRoutes(app: Express) {
       ) {
         const coll = await recordRentCollectionForM03Receipt(row);
         rentDepositLedgerNotice = coll.message;
+      }
+
+      // If this receipt settles a rent invoice, mark invoice Paid when fully covered (online or counter receipts).
+      if ((status === "Paid" || status === "Reconciled") && row.sourceModule === "M-03" && row.sourceRecordId) {
+        const invoiceId = String(row.sourceRecordId);
+        const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
+        if (inv) {
+          const allRecs = await db
+            .select({ total: iomsReceipts.totalAmount, status: iomsReceipts.status })
+            .from(iomsReceipts)
+            .where(and(eq(iomsReceipts.sourceModule, "M-03"), eq(iomsReceipts.sourceRecordId, invoiceId)));
+          const paidSum = allRecs
+            .filter((r) => String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled")
+            .reduce((s, r) => s + Number(r.total ?? 0), 0);
+          const total = Number(inv.totalAmount ?? 0);
+          if (paidSum >= total - 0.01 && String(inv.status ?? "") !== "Paid") {
+            await db.update(rentInvoices).set({ status: "Paid" }).where(eq(rentInvoices.id, invoiceId));
+          }
+        }
       }
 
       let rentRecomputationNote: string | undefined;

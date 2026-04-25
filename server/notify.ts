@@ -49,12 +49,23 @@ export type EmployeeRegistrationPayload = {
   empId?: string | null;
 };
 
+export type M02EntityAlertsPayload = {
+  kind: "m02_entity_alerts";
+  asOfDate: string; // YYYY-MM-DD
+  expiringLicences60d: number;
+  expiringLicences30d: number;
+  expiredLicencesBlockedToday: number;
+  overdueRentInvoices?: number;
+  overduePreReceipts?: number;
+};
+
 export type NotificationPayload =
   | SlaReminderPayload
   | RetirementReminderPayload
   | OperationalDigestPayload
   | LeaveElCapWarningPayload
-  | EmployeeRegistrationPayload;
+  | EmployeeRegistrationPayload
+  | M02EntityAlertsPayload;
 
 function payloadSummary(payload: NotificationPayload): { subject: string; text: string } {
   if (payload.kind === "sla_reminder") {
@@ -80,6 +91,18 @@ function payloadSummary(payload: NotificationPayload): { subject: string; text: 
     return {
       subject: `[GAPMC HR] Employee registration ${p.status}: ${p.name}`,
       text: `Employee ${p.name} (${p.employeeId}) registration is ${p.status}${p.empId ? ` (EMP-ID ${p.empId})` : ""}. Yard: ${p.yardId ?? "—"}.`,
+    };
+  }
+  if (payload.kind === "m02_entity_alerts") {
+    const p = payload;
+    return {
+      subject: `[GAPMC M-02] Entity alerts (${p.asOfDate})`,
+      text:
+        `Licences expiring (<=60d): ${p.expiringLicences60d}\n` +
+        `Licences expiring (<=30d): ${p.expiringLicences30d}\n` +
+        `Expired licences auto-blocked today: ${p.expiredLicencesBlockedToday}\n` +
+        `Overdue rent invoices: ${p.overdueRentInvoices ?? "n/a"}\n` +
+        `Overdue pre-receipts: ${p.overduePreReceipts ?? "n/a"}`,
     };
   }
   const op = payload;

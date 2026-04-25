@@ -143,6 +143,7 @@ export default function OutstandingDues() {
   const [payInvoice, setPayInvoice] = useState<DueRentInvoice | null>(null);
   const [payMarket, setPayMarket] = useState<DueMarketFeePurchase | null>(null);
   const [payAmount, setPayAmount] = useState("");
+  const [onlineReceiptHref, setOnlineReceiptHref] = useState<string>("");
 
   const payMutation = useMutation({
     mutationFn: async () => {
@@ -183,6 +184,39 @@ export default function OutstandingDues() {
       setPayAmount("");
     },
     onError: (e: Error) => toast({ title: "Payment failed", description: e.message, variant: "destructive" }),
+  });
+
+  const onlineMutation = useMutation({
+    mutationFn: async () => {
+      const amt = Number(payAmount);
+      if (!Number.isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
+      const body =
+        payKind === "rent"
+          ? { kind: "rent", invoiceId: payInvoice?.invoiceId, amount: amt }
+          : { kind: "market", purchaseTransactionId: payMarket?.purchaseTransactionId, amount: amt };
+      const res = await fetch("/api/ioms/dues/create-online-receipt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
+      return data as { receiptId: string; receiptNo?: string };
+    },
+    onSuccess: (d) => {
+      setPayOpen(false);
+      setPayInvoice(null);
+      setPayMarket(null);
+      setPayAmount("");
+      const href = `/receipts/ioms/${encodeURIComponent(d.receiptId)}`;
+      setOnlineReceiptHref(href);
+      toast({
+        title: "Online receipt created",
+        description: d.receiptNo ? `Receipt ${d.receiptNo}. Open it to initiate payment.` : "Open receipt to initiate payment.",
+      });
+    },
+    onError: (e: Error) => toast({ title: "Online payment failed", description: e.message, variant: "destructive" }),
   });
 
   const unifiedLabelById = useMemo(() => {
@@ -373,6 +407,7 @@ export default function OutstandingDues() {
             setPayInvoice(null);
             setPayMarket(null);
             setPayAmount("");
+            setOnlineReceiptHref("");
           }
         }}
       >
@@ -428,6 +463,18 @@ export default function OutstandingDues() {
               Cancel
             </Button>
             <Button
+              variant="secondary"
+              onClick={() => onlineMutation.mutate()}
+              disabled={
+                onlineMutation.isPending ||
+                !Number.isFinite(Number(payAmount)) ||
+                Number(payAmount) <= 0 ||
+                (payKind === "rent" ? !payInvoice : !payMarket)
+              }
+            >
+              Pay online
+            </Button>
+            <Button
               onClick={() => payMutation.mutate()}
               disabled={
                 payMutation.isPending ||
@@ -441,6 +488,20 @@ export default function OutstandingDues() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {onlineReceiptHref ? (
+        <Alert className="mt-4">
+          <AlertTitle>Next step</AlertTitle>
+          <AlertDescription className="text-sm">
+            Open the receipt and use <span className="font-medium">Initiate payment</span> (gateway must be enabled).
+            <div className="mt-2">
+              <Link className="text-primary font-medium hover:underline" href={onlineReceiptHref}>
+                Open created receipt
+              </Link>
+            </div>
+          </AlertDescription>
+        </Alert>
+      ) : null}
     </AppShell>
   );
 }

@@ -42,6 +42,7 @@
     "db:apply-employee-pay-for-encashment": "dotenv -e .env -- tsx scripts/apply-employee-pay-for-encashment.ts",
     "db:apply-tours-and-tada-link": "dotenv -e .env -- tsx scripts/apply-tours-and-tada-link.ts",
     "db:apply-ltc-settlement-fields": "dotenv -e .env -- tsx scripts/apply-ltc-settlement-fields.ts",
+    "db:apply-agreement-documents": "dotenv -e .env -- tsx scripts/apply-agreement-documents.ts",
     "db:apply-m02-trackb-entities": "dotenv -e .env -- tsx scripts/apply-m02-trackb-entities.ts",
     "db:apply-m02-pre-receipts": "dotenv -e .env -- tsx scripts/apply-m02-pre-receipts.ts",
     "db:apply-m02-unified-entities-rent-revisions": "dotenv -e .env -- tsx scripts/apply-m02-unified-entities-rent-revisions.ts",

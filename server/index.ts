@@ -156,6 +156,23 @@ app.use((req, res, next) => {
     log("Cron M-02 licence expiry auto-block scheduled (daily 01:05)");
   }
 
+  if (process.env.CRON_M02_ALERTS === "true") {
+    const cron = await import("node-cron");
+    const { runM02EntityAlerts } = await import("./cron-m02-entity-alerts");
+    cron.default.schedule("10 7 * * *", async () => {
+      try {
+        const r = await runM02EntityAlerts();
+        if (r.skippedAlreadySent) return;
+        log(
+          `Cron M-02 alerts: expiring60d=${r.expiring60d} expiring30d=${r.expiring30d} overdueRent=${r.overdueRentInvoices} overduePre=${r.overduePreReceipts}`,
+        );
+      } catch (e) {
+        console.error("Cron M-02 alerts failed:", e);
+      }
+    });
+    log("Cron M-02 alerts scheduled (daily 07:10)");
+  }
+
   if (process.env.CRON_HR_RETIREMENT === "true") {
     const cron = await import("node-cron");
     const { runHrRetirementReminders } = await import("./cron-hr-retirement");
