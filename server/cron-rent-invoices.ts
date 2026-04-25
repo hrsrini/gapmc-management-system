@@ -78,6 +78,7 @@ export async function generateRentInvoicesForCurrentMonth(): Promise<{ created: 
       yardId,
       periodMonth,
       rentAmount,
+      nonGstChargesJson: null,
       cgst,
       sgst,
       totalAmount,

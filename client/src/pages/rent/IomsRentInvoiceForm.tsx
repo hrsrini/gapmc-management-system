@@ -49,6 +49,8 @@ export default function IomsRentInvoiceForm() {
   const [allotmentId, setAllotmentId] = useState("");
   const [periodMonth, setPeriodMonth] = useState("");
   const [rentAmount, setRentAmount] = useState("");
+  const [nonGstLabel, setNonGstLabel] = useState("Garbage / Premises");
+  const [nonGstAmount, setNonGstAmount] = useState("");
   const [cgst, setCgst] = useState("");
   const [sgst, setSgst] = useState("");
   const [isGovtEntity, setIsGovtEntity] = useState(false);
@@ -94,9 +96,10 @@ export default function IomsRentInvoiceForm() {
   const resolvedYardId = selectedAsset?.yardId ?? yardId;
 
   const rentNum = Number(rentAmount) || 0;
+  const nonGstNum = Number(nonGstAmount) || 0;
   const cgstNum = Number(cgst) || 0;
   const sgstNum = Number(sgst) || 0;
-  const totalAmount = rentNum + cgstNum + sgstNum;
+  const totalAmount = rentNum + nonGstNum + cgstNum + sgstNum;
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -128,6 +131,10 @@ export default function IomsRentInvoiceForm() {
       toast({ title: "Invalid amounts", description: "Rent and total must be non-negative.", variant: "destructive" });
       return;
     }
+    if (nonGstNum > 0 && !nonGstLabel.trim()) {
+      toast({ title: "Non-GST label missing", description: "Enter a label for non-GST charge line.", variant: "destructive" });
+      return;
+    }
     createMutation.mutate({
       yardId: resolvedYardId,
       allotmentId: selectedAllotment.id,
@@ -135,6 +142,7 @@ export default function IomsRentInvoiceForm() {
       assetId: selectedAllotment.assetId,
       periodMonth: periodMonth.trim(),
       rentAmount: rentNum,
+      nonGstCharges: nonGstNum > 0 ? [{ label: nonGstLabel.trim(), amount: nonGstNum }] : [],
       cgst: cgstNum,
       sgst: sgstNum,
       totalAmount,
@@ -230,6 +238,28 @@ export default function IomsRentInvoiceForm() {
                   step={0.01}
                   value={sgst}
                   onChange={(e) => setSgst(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Non-GST charge label (optional)</Label>
+                <Input
+                  value={nonGstLabel}
+                  onChange={(e) => setNonGstLabel(e.target.value)}
+                  placeholder="e.g. Garbage / Verandah / Open space"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Non-GST charge amount (₹) (optional)</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={nonGstAmount}
+                  onChange={(e) => setNonGstAmount(e.target.value)}
+                  placeholder="0"
                 />
               </div>
             </div>

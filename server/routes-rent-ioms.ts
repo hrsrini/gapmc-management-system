@@ -35,6 +35,31 @@ function currentYearMonthUtc(): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
+type NonGstChargeLine = { label: string; amount: number };
+
+function parseNonGstCharges(v: unknown): { ok: true; lines: NonGstChargeLine[]; sum: number; json: string | null } | { ok: false; error: string } {
+  if (v == null || v === "") return { ok: true, lines: [], sum: 0, json: null };
+  if (!Array.isArray(v)) return { ok: false, error: "nonGstCharges must be an array of {label, amount}." };
+  const lines: NonGstChargeLine[] = [];
+  let sum = 0;
+  for (const raw of v) {
+    const o = raw as Record<string, unknown>;
+    const label = String(o?.label ?? "").trim();
+    const amount = Number(o?.amount ?? NaN);
+    if (!label) return { ok: false, error: "nonGstCharges.label is required." };
+    if (!Number.isFinite(amount) || amount < 0) return { ok: false, error: "nonGstCharges.amount must be a number >= 0." };
+    // Keep labels short (UI + exports); avoid bloating DB.
+    const safeLabel = label.slice(0, 80);
+    const safeAmount = Math.round(amount * 100) / 100;
+    lines.push({ label: safeLabel, amount: safeAmount });
+    sum += safeAmount;
+  }
+  sum = Math.round(sum * 100) / 100;
+  const json = JSON.stringify(lines);
+  if (json.length > 4000) return { ok: false, error: "nonGstCharges payload too large." };
+  return { ok: true, lines, sum, json };
+}
+
 export function registerRentIomsRoutes(app: Express) {
   const nowIso = () => new Date().toISOString();
   // ----- Rent invoices (IOMS M-03; distinct from gapmc.invoices; scoped by user yards) -----
@@ -91,6 +116,8 @@ export function registerRentIomsRoutes(app: Express) {
       const now = new Date().toISOString();
       const tenantLicenceId = String(body.tenantLicenceId ?? "");
       let rentAmount = Number(body.rentAmount ?? 0);
+      const nonGst = parseNonGstCharges((body as Record<string, unknown>).nonGstCharges);
+      if (!nonGst.ok) return sendApiError(res, 400, "RENT_INVOICE_NON_GST_CHARGES", nonGst.error);
       let cgst = Number(body.cgst ?? 0);
       let sgst = Number(body.sgst ?? 0);
       let totalAmount = Number(body.totalAmount ?? 0);
@@ -99,7 +126,7 @@ export function registerRentIomsRoutes(app: Express) {
       if (gstExempt) {
         cgst = 0;
         sgst = 0;
-        totalAmount = rentAmount;
+        totalAmount = rentAmount + nonGst.sum;
         isGovtEntity = true;
       }
       const periodMonth = String(body.periodMonth ?? "").trim();
@@ -137,7 +164,7 @@ export function registerRentIomsRoutes(app: Express) {
             cgst = 0;
             sgst = 0;
           }
-          totalAmount = rentAmount + cgst + sgst;
+          totalAmount = rentAmount + nonGst.sum + cgst + sgst;
         }
       }
       await db.insert(rentInvoices).values({
@@ -148,9 +175,10 @@ export function registerRentIomsRoutes(app: Express) {
         yardId,
         periodMonth,
         rentAmount,
+        nonGstChargesJson: nonGst.json,
         cgst,
         sgst,
-        totalAmount,
+        totalAmount: gstExempt ? rentAmount + nonGst.sum : (Number.isFinite(totalAmount) && totalAmount > 0 ? totalAmount : rentAmount + nonGst.sum + cgst + sgst),
         tdsApplicable: tdsRes.tdsApplicable,
         tdsAmount: tdsRes.tdsAmount,
         status: "Draft",
@@ -498,6 +526,11 @@ export function registerRentIomsRoutes(app: Express) {
         else if (k === "isGovtEntity") updates.isGovtEntity = Boolean(body.isGovtEntity);
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
+      if ((body as Record<string, unknown>).nonGstCharges !== undefined) {
+        const parsed = parseNonGstCharges((body as Record<string, unknown>).nonGstCharges);
+        if (!parsed.ok) return sendApiError(res, 400, "RENT_INVOICE_NON_GST_CHARGES", parsed.error);
+        updates.nonGstChargesJson = parsed.json;
+      }
 
       const now = new Date().toISOString();
       if (transition?.setDvUser) updates.dvUser = req.user?.id ?? null;
@@ -515,11 +548,17 @@ export function registerRentIomsRoutes(app: Express) {
         (updates.tenantLicenceId as string | undefined) ?? existing.tenantLicenceId;
       const finalRent =
         updates.rentAmount != null ? Number(updates.rentAmount) : Number(existing.rentAmount ?? 0);
+      const nonGstLines = parseNonGstCharges(
+        (updates.nonGstChargesJson as unknown) != null
+          ? JSON.parse(String(updates.nonGstChargesJson ?? "null"))
+          : (existing.nonGstChargesJson ? JSON.parse(String(existing.nonGstChargesJson)) : null),
+      );
+      const nonGstSum = nonGstLines.ok ? nonGstLines.sum : 0;
       if (existing.status === "Draft" && !statusChange && finalTenant) {
         if (await tenantLicenceIsGstExempt(finalTenant)) {
           updates.cgst = 0;
           updates.sgst = 0;
-          updates.totalAmount = finalRent;
+          updates.totalAmount = finalRent + nonGstSum;
           updates.isGovtEntity = true;
         }
       }
@@ -576,7 +615,7 @@ export function registerRentIomsRoutes(app: Express) {
             payerName: row.tenantLicenceId,
             payerType: "TenantLicence",
             payerRefId: row.tenantLicenceId,
-            amount: row.rentAmount,
+            amount: Number(row.rentAmount ?? 0) + Number(nonGstSum || 0),
             cgst: row.cgst,
             sgst: row.sgst,
             tdsAmount: Number(row.tdsAmount ?? 0) || 0,

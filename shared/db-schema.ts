@@ -816,6 +816,8 @@ export const rentInvoices = gapmc.table("rent_invoices", {
   yardId: text("yard_id").notNull(),
   periodMonth: text("period_month").notNull(),
   rentAmount: doublePrecision("rent_amount").notNull(),
+  /** US-M03-007: JSON text array of non-GST charge lines (e.g. garbage/verandah/open-space). */
+  nonGstChargesJson: text("non_gst_charges_json"),
   cgst: doublePrecision("cgst").notNull(),
   sgst: doublePrecision("sgst").notNull(),
   totalAmount: doublePrecision("total_amount").notNull(),
