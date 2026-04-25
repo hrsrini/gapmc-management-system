@@ -39,6 +39,9 @@ interface LeaveRequest {
   status: string;
   reason?: string | null;
   supportingDocumentUrl?: string | null;
+  isRetrospective?: boolean | null;
+  cancelledAt?: string | null;
+  cancelledBy?: string | null;
   doUser?: string | null;
   dvUser?: string | null;
   approvedBy?: string | null;
@@ -70,6 +73,7 @@ export default function LeaveRequests() {
   const [newTo, setNewTo] = useState("");
   const [newReason, setNewReason] = useState("");
   const [newDocUrl, setNewDocUrl] = useState("");
+  const [newRetrospective, setNewRetrospective] = useState(false);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectCode, setRejectCode] = useState<string>(REJECTION_REASON_CODES[0]);
   const [rejectRemarks, setRejectRemarks] = useState("");
@@ -107,6 +111,7 @@ export default function LeaveRequests() {
       setNewOpen(false);
       setNewReason("");
       setNewDocUrl("");
+      setNewRetrospective(false);
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
@@ -141,6 +146,7 @@ export default function LeaveRequests() {
   });
 
   const showActions = canVerify || canApprove;
+  const canCancel = roles.includes("DO") || roles.includes("ADMIN");
 
   const columns = useMemo((): ReportTableColumn[] => {
     const base: ReportTableColumn[] = [
@@ -187,6 +193,7 @@ export default function LeaveRequests() {
       _statusBlock: (
         <div className="flex flex-col gap-1">
           <Badge variant="secondary">{r.status}</Badge>
+          {r.isRetrospective ? <span className="text-xs text-muted-foreground">Retrospective</span> : null}
           {r.status === "Rejected" && r.rejectionRemarks && (
             <span className="text-xs text-muted-foreground line-clamp-2" title={r.rejectionRemarks}>
               {r.rejectionReasonCode}: {r.rejectionRemarks}
@@ -201,6 +208,16 @@ export default function LeaveRequests() {
       ),
       _actions: showActions ? (
         <div className="flex flex-wrap gap-1">
+          {canCancel && r.status === "Pending" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => statusMutation.mutate({ id: r.id, status: "Cancelled" })}
+              disabled={statusMutation.isPending}
+            >
+              Cancel
+            </Button>
+          )}
           {canVerify && r.status === "Pending" && (
             <Button
               size="sm"
@@ -387,6 +404,12 @@ export default function LeaveRequests() {
               <Label>Supporting document URL (optional)</Label>
               <Input value={newDocUrl} onChange={(e) => setNewDocUrl(e.target.value)} placeholder="https://…" />
             </div>
+            {roles.includes("ADMIN") && (
+              <div className="flex items-center gap-2 pt-1">
+                <Checkbox checked={newRetrospective} onCheckedChange={(v) => setNewRetrospective(Boolean(v))} />
+                <Label>Retrospective entry</Label>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setNewOpen(false)}>
@@ -408,6 +431,7 @@ export default function LeaveRequests() {
                   toDate: newTo,
                   reason: newReason.trim() || null,
                   supportingDocumentUrl: newDocUrl.trim() || null,
+                  isRetrospective: roles.includes("ADMIN") ? newRetrospective : false,
                 });
               }}
             >

@@ -79,7 +79,7 @@ interface Role {
 }
 
 const EMPLOYEE_TYPES = ["Regular", "Contract", "Daily Wage", "Temporary"];
-const STATUS_OPTIONS = ["Draft", "Submitted", "Active", "Inactive", "Suspended", "Retired", "Resigned"];
+const STATUS_OPTIONS = ["Draft", "Submitted", "Recommended", "Active", "Inactive", "Suspended", "Retired", "Resigned"];
 const GENDER_OPTIONS = ["", "Male", "Female", "Other", "Prefer not to say"];
 const MARITAL_OPTIONS = ["", "Single", "Married", "Widowed", "Divorced"];
 /** SRS §4.1.1 — reservation / employee category (value stored as text). */
@@ -102,12 +102,13 @@ export default function HrEmployeeForm() {
   const [middleName, setMiddleName] = useState("");
   const [surname, setSurname] = useState("");
   const [photoUrl, setPhotoUrl] = useState("");
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [designation, setDesignation] = useState("");
   const [yardId, setYardId] = useState("");
   const [employeeType, setEmployeeType] = useState("Regular");
   const [empId, setEmpId] = useState("");
 
-  /** Create: optional 12-digit Aadhaar. Edit: replacement only (empty = leave stored masked value). */
+  /** Create: optional 12-digit Aadhaar (raw, never persisted; server stores masked + fingerprint). */
   const [aadhaarInput, setAadhaarInput] = useState("");
   const [pan, setPan] = useState("");
   const [dob, setDob] = useState("");
@@ -231,6 +232,26 @@ export default function HrEmployeeForm() {
     onError: (e: Error) => toast({ title: "Approval failed", description: e.message, variant: "destructive" }),
   });
 
+  const recommendMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/hr/employees/${id}/recommend-registration`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return (await res.json()) as Employee;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/employees", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
+      toast({ title: "Recommended", description: "Registration forwarded to DA for approval." });
+    },
+    onError: (e: Error) => toast({ title: "Recommend failed", description: e.message, variant: "destructive" }),
+  });
+
   const updateMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
       const res = await fetch(`/api/hr/employees/${id}`, {
@@ -276,6 +297,38 @@ export default function HrEmployeeForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Photo validation (SRS): <= 500 KB, >= 200x200 px (only when uploading a file).
+    if (photoFile) {
+      if (photoFile.size > 500 * 1024) {
+        toast({ title: "Photo too large", description: "Photo must be 500 KB or smaller.", variant: "destructive" });
+        return;
+      }
+      const url = URL.createObjectURL(photoFile);
+      try {
+        let dims: { w: number; h: number } | null = null;
+        try {
+          dims = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve({ w: img.width, h: img.height });
+            img.onerror = () => reject(new Error("PHOTO_LOAD_FAILED"));
+            img.src = url;
+          });
+        } catch {
+          toast({
+            title: "Invalid photo",
+            description: "Could not read this image. Please upload a valid PNG/JPG/WebP file.",
+            variant: "destructive",
+          });
+          return;
+        }
+        if (dims.w < 200 || dims.h < 200) {
+          toast({ title: "Photo too small", description: "Photo must be at least 200×200 pixels.", variant: "destructive" });
+          return;
+        }
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
     const pe = personalEmail.trim() ? personalEmail.trim().toLowerCase() : null;
     if (pe && !isValidEmailFormat(pe)) {
       toast({ title: "Invalid personal email", description: "Please enter a valid email address.", variant: "destructive" });
@@ -364,9 +417,10 @@ export default function HrEmployeeForm() {
       fatherOrSpouseName: fatherOrSpouseName.trim() || null,
     };
     if (!isEdit) {
-      payload.aadhaarToken = aadhaarTrim || null;
+      // Send raw Aadhaar digits for server-side masking + fingerprint; raw is never stored.
+      payload.aadhaarRaw = aadhaarTrim || null;
     } else if (aadhaarTrim) {
-      payload.aadhaarToken = aadhaarTrim;
+      payload.aadhaarRaw = aadhaarTrim;
     }
 
     if (isEdit) {
@@ -378,6 +432,25 @@ export default function HrEmployeeForm() {
     try {
       const emp = await createMutation.mutateAsync(payload);
       queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
+
+      // If a photo file was selected, store it as an employee document (Photo) and set employee.photoUrl to the download URL.
+      if (photoFile) {
+        const fd = new FormData();
+        fd.append("file", photoFile);
+        fd.append("docType", "Photo");
+        const up = await fetch(`/api/hr/employees/${emp.id}/documents`, {
+          method: "POST",
+          credentials: "include",
+          body: fd,
+        });
+        if (!up.ok) {
+          const err = await up.json().catch(() => ({}));
+          throw new Error((err as { error?: string }).error ?? up.statusText);
+        }
+        const uploaded = (await up.json()) as { id: string };
+        const photoDownloadUrl = `${window.location.origin}/api/hr/employees/${emp.id}/documents/${uploaded.id}/download`;
+        await updateMutation.mutateAsync({ photoUrl: photoDownloadUrl });
+      }
 
       if (enableLoginOnCreate && canM10Create) {
         if (status !== "Active") {
@@ -519,7 +592,21 @@ export default function HrEmployeeForm() {
                   <div><Label>First name *</Label><Input value={firstName} onChange={(e) => setFirstName(e.target.value)} required /></div>
                   <div><Label>Middle name</Label><Input value={middleName} onChange={(e) => setMiddleName(e.target.value)} /></div>
                   <div><Label>Surname *</Label><Input value={surname} onChange={(e) => setSurname(e.target.value)} required /></div>
-                  <div><Label>Photo URL</Label><Input value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} placeholder="https://..." /></div>
+                  <div className="space-y-2">
+                    <Label>Photo</Label>
+                    <Input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={(e) => setPhotoFile(e.target.files?.[0] ?? null)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Optional. Must be ≤ 500 KB and ≥ 200×200 px. Uploaded photos are stored under employee documents.
+                    </p>
+                    <div>
+                      <Label className="text-xs text-muted-foreground">Photo URL (optional)</Label>
+                      <Input value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} placeholder="https://..." />
+                    </div>
+                  </div>
                   <div><Label>Designation *</Label><Input value={designation} onChange={(e) => setDesignation(e.target.value)} required /></div>
                   <div><Label>Yard *</Label>
                     <Select value={yardId} onValueChange={setYardId} required>
@@ -845,6 +932,17 @@ export default function HrEmployeeForm() {
                     Approve registration (assign EMP-ID)
                   </Button>
                 )}
+              {isEdit && id && (status === "Submitted") && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={recommendMutation.isPending || pending}
+                  onClick={() => recommendMutation.mutate()}
+                >
+                  {recommendMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  Recommend to DA
+                </Button>
+              )}
               <Button type="button" variant="outline" onClick={() => setLocation(isEdit ? `/hr/employees/${id}` : "/hr/employees")}>Cancel</Button>
               <Button type="submit" disabled={pending}>
                 {pending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}

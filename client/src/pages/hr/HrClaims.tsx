@@ -36,6 +36,12 @@ interface LtcClaim {
   claimDate: string;
   amount: number;
   period?: string | null;
+  blockPeriod?: string | null;
+  ltcType?: string | null;
+  estimatedEntitlement?: number | null;
+  advanceAmount?: number | null;
+  actualClaimAmount?: number | null;
+  netPayable?: number | null;
   status: string;
   doUser?: string | null;
   dvUser?: string | null;
@@ -48,9 +54,19 @@ interface LtcClaim {
 interface TaDaClaim {
   id: string;
   employeeId: string;
+  tourProgrammeId?: string | null;
   travelDate: string;
+  returnDate?: string | null;
   purpose: string;
   amount: number;
+  cityCategory?: string | null;
+  days?: number | null;
+  hotelAmount?: number | null;
+  payLevelSnapshot?: number | null;
+  entitledTrainClass?: string | null;
+  entitledDaPerDay?: number | null;
+  entitledHotelPerDay?: number | null;
+  entitledTotal?: number | null;
   status: string;
   doUser?: string | null;
   dvUser?: string | null;
@@ -65,6 +81,16 @@ interface Employee {
   empId?: string | null;
   firstName: string;
   surname: string;
+}
+
+interface TourProgramme {
+  id: string;
+  tourNo: string;
+  employeeId: string;
+  destination: string;
+  fromDate: string;
+  toDate: string;
+  status: string;
 }
 
 export default function HrClaims() {
@@ -85,18 +111,29 @@ export default function HrClaims() {
   const [ltcNewOpen, setLtcNewOpen] = useState(false);
   const [tadaNewEmployeeId, setTadaNewEmployeeId] = useState("");
   const [tadaNewTravel, setTadaNewTravel] = useState("");
+  const [tadaNewReturn, setTadaNewReturn] = useState("");
   const [tadaNewPurpose, setTadaNewPurpose] = useState("");
   const [tadaNewAmount, setTadaNewAmount] = useState("");
+  const [tadaCityCategory, setTadaCityCategory] = useState<"A" | "B">("A");
+  const [tadaDays, setTadaDays] = useState("1");
+  const [tadaHotelAmount, setTadaHotelAmount] = useState("");
+  const [tadaTourProgrammeId, setTadaTourProgrammeId] = useState("");
   const [ltcNewEmployeeId, setLtcNewEmployeeId] = useState("");
   const [ltcNewDate, setLtcNewDate] = useState("");
   const [ltcNewAmount, setLtcNewAmount] = useState("");
   const [ltcNewPeriod, setLtcNewPeriod] = useState("");
+  const [ltcNewBlockPeriod, setLtcNewBlockPeriod] = useState("");
+  const [ltcNewType, setLtcNewType] = useState<"HomeTown" | "AllIndia">("HomeTown");
+  const [ltcNewEstimated, setLtcNewEstimated] = useState("");
+  const [ltcNewAdvance, setLtcNewAdvance] = useState("");
   const [tadaPendingOnly, setTadaPendingOnly] = useState(false);
   const [tadaRejectId, setTadaRejectId] = useState<string | null>(null);
   const [tadaRejectCode, setTadaRejectCode] = useState<string>(REJECTION_REASON_CODES[0]);
   const [tadaRejectRemarks, setTadaRejectRemarks] = useState("");
   const [tadaReturnId, setTadaReturnId] = useState<string | null>(null);
   const [tadaReturnRemarks, setTadaReturnRemarks] = useState("");
+  const [ltcReportFrom, setLtcReportFrom] = useState("");
+  const [ltcReportTo, setLtcReportTo] = useState("");
 
   const tadaListUrl = tadaPendingOnly ? "/api/hr/claims/tada?pendingMyAction=1" : "/api/hr/claims/tada";
   const ltcListUrl = ltcPendingOnly ? "/api/hr/claims/ltc?pendingMyAction=1" : "/api/hr/claims/ltc";
@@ -114,6 +151,13 @@ export default function HrClaims() {
     }
   }, [sysConfig?.ta_da_entitlement_json]);
 
+  const ltcReportQuery = useMemo(() => {
+    const qs = new URLSearchParams();
+    if (ltcReportFrom) qs.set("from", ltcReportFrom);
+    if (ltcReportTo) qs.set("to", ltcReportTo);
+    return qs.toString();
+  }, [ltcReportFrom, ltcReportTo]);
+
   const { data: ltcList = [], isLoading: ltcLoading, isError: ltcError } = useQuery<LtcClaim[]>({
     queryKey: [ltcListUrl],
   });
@@ -123,6 +167,12 @@ export default function HrClaims() {
   const { data: employees = [] } = useQuery<Employee[]>({
     queryKey: ["/api/hr/employees"],
   });
+  const tadaEmployeeForTours = roles.includes("ADMIN") ? tadaNewEmployeeId : user?.employeeId ?? "";
+  const { data: tours = [] } = useQuery<TourProgramme[]>({
+    queryKey: [`/api/hr/tours?employeeId=${encodeURIComponent(tadaEmployeeForTours)}`],
+    enabled: Boolean(tadaEmployeeForTours),
+  });
+  const approvedTours = useMemo(() => tours.filter((t) => t.status === "Approved"), [tours]);
   const employeeLabelById = Object.fromEntries(
     employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
   );
@@ -241,6 +291,7 @@ export default function HrClaims() {
       { key: "claimDate", header: "Claim date" },
       { key: "period", header: "Period" },
       { key: "amount", header: "Amount", sortField: "amountNum" },
+      { key: "netPayable", header: "Net", sortField: "netPayableNum" },
       { key: "_statusBlock", header: "Status", sortField: "status" },
     ];
     if (showLtcActions) base.push({ key: "_actions", header: "Actions" });
@@ -253,6 +304,7 @@ export default function HrClaims() {
       { key: "travelDate", header: "Travel date" },
       { key: "purpose", header: "Purpose" },
       { key: "amount", header: "Amount", sortField: "amountNum" },
+      { key: "entitledTotal", header: "Entitled", sortField: "entitledTotalNum" },
       { key: "_statusBlock", header: "Status", sortField: "status" },
     ];
     if (showTadaActions) base.push({ key: "_actions", header: "Actions" });
@@ -267,6 +319,8 @@ export default function HrClaims() {
       period: c.period ?? "—",
       amount: `₹${c.amount.toLocaleString()}`,
       amountNum: c.amount,
+      netPayableNum: c.netPayable ?? 0,
+      netPayable: c.netPayable != null ? `₹${Number(c.netPayable).toLocaleString()}` : "—",
       status: c.status,
       rejectionSnippet:
         c.status === "Rejected" && c.rejectionRemarks
@@ -354,6 +408,8 @@ export default function HrClaims() {
       purpose: c.purpose,
       amount: `₹${c.amount.toLocaleString()}`,
       amountNum: c.amount,
+      entitledTotalNum: c.entitledTotal ?? 0,
+      entitledTotal: c.entitledTotal != null ? `₹${Number(c.entitledTotal).toLocaleString()}` : "—",
       status: c.status,
       rejectionSnippet:
         c.status === "Rejected" && c.rejectionRemarks
@@ -363,6 +419,9 @@ export default function HrClaims() {
       _statusBlock: (
         <div className="flex flex-col gap-1">
           <Badge variant="secondary">{c.status}</Badge>
+          {c.entitledTrainClass ? (
+            <span className="text-xs text-muted-foreground">Entitled: {c.entitledTrainClass}</span>
+          ) : null}
           {c.status === "Rejected" && c.rejectionRemarks && (
             <span className="text-xs text-muted-foreground line-clamp-2" title={c.rejectionRemarks}>
               {c.rejectionReasonCode}: {c.rejectionRemarks}
@@ -462,6 +521,34 @@ export default function HrClaims() {
           <p className="text-sm text-muted-foreground">Leave Travel Concession and Travel / Daily Allowance claims.</p>
         </CardHeader>
         <CardContent className="space-y-6">
+          <div className="rounded-md border p-3">
+            <p className="font-medium mb-2">LTC reports</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label>From (claim date)</Label>
+                <Input type="date" value={ltcReportFrom} onChange={(e) => setLtcReportFrom(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>To (claim date)</Label>
+                <Input type="date" value={ltcReportTo} onChange={(e) => setLtcReportTo(e.target.value)} />
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <Button asChild variant="outline" size="sm">
+                <a href={`/api/hr/reports/ltc-block-register?${ltcReportQuery}&format=csv`} target="_blank" rel="noreferrer">
+                  Download block register (CSV)
+                </a>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <a href={`/api/hr/reports/ltc-utilization?${ltcReportQuery}&format=csv`} target="_blank" rel="noreferrer">
+                  Download utilization (CSV)
+                </a>
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Reports include only <span className="font-medium">Approved</span> LTC claims.
+            </p>
+          </div>
           {entitlementRows.length > 0 && (
             <div className="rounded-md border bg-muted/30 p-3 text-sm">
               <p className="font-medium mb-2">TA/DA entitlement matrix (reference, from Admin → Config)</p>
@@ -828,8 +915,52 @@ export default function HrClaims() {
               <Input type="date" value={tadaNewTravel} onChange={(e) => setTadaNewTravel(e.target.value)} />
             </div>
             <div className="space-y-1">
+              <Label>Return date</Label>
+              <Input type="date" value={tadaNewReturn} onChange={(e) => setTadaNewReturn(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Approved tour programme</Label>
+              <Select value={tadaTourProgrammeId} onValueChange={setTadaTourProgrammeId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select approved tour" />
+                </SelectTrigger>
+                <SelectContent>
+                  {approvedTours.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.tourNo} — {t.destination} ({t.fromDate}→{t.toDate})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {tadaEmployeeForTours && approvedTours.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No approved tours found for this employee yet.</p>
+              ) : null}
+            </div>
+            <div className="space-y-1">
               <Label>Purpose</Label>
               <Input value={tadaNewPurpose} onChange={(e) => setTadaNewPurpose(e.target.value)} />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label>City category</Label>
+                <Select value={tadaCityCategory} onValueChange={(v) => setTadaCityCategory((v as "A" | "B") ?? "A")}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="A">A</SelectItem>
+                    <SelectItem value="B">B</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Days</Label>
+                <Input type="number" min={1} max={60} step={1} value={tadaDays} onChange={(e) => setTadaDays(e.target.value)} />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label>Hotel amount (optional, INR)</Label>
+              <Input type="number" min={0} step={1} value={tadaHotelAmount} onChange={(e) => setTadaHotelAmount(e.target.value)} />
             </div>
             <div className="space-y-1">
               <Label>Amount (INR)</Label>
@@ -846,10 +977,12 @@ export default function HrClaims() {
               onClick={() => {
                 const employeeId = roles.includes("ADMIN") ? tadaNewEmployeeId : user?.employeeId ?? "";
                 const amt = Number(tadaNewAmount);
-                if (!employeeId || !tadaNewTravel || !tadaNewPurpose.trim() || !Number.isFinite(amt)) {
+                const days = Number(tadaDays);
+                const hotelAmount = tadaHotelAmount.trim() === "" ? null : Number(tadaHotelAmount);
+                if (!employeeId || !tadaNewTravel || !tadaNewReturn || !tadaTourProgrammeId || !tadaNewPurpose.trim() || !Number.isFinite(amt) || !Number.isFinite(days) || days < 1) {
                   toast({
                     title: "Missing fields",
-                    description: "Employee, travel date, purpose, and amount are required.",
+                    description: "Employee, travel/return dates, approved tour, purpose, city category, days, and amount are required.",
                     variant: "destructive",
                   });
                   return;
@@ -857,8 +990,13 @@ export default function HrClaims() {
                 createTadaMutation.mutate({
                   employeeId,
                   travelDate: tadaNewTravel,
+                  returnDate: tadaNewReturn,
                   purpose: tadaNewPurpose.trim(),
                   amount: amt,
+                  cityCategory: tadaCityCategory,
+                  days,
+                  hotelAmount,
+                  tourProgrammeId: tadaTourProgrammeId,
                 });
               }}
             >
@@ -900,6 +1038,32 @@ export default function HrClaims() {
               <Input value={ltcNewPeriod} onChange={(e) => setLtcNewPeriod(e.target.value)} placeholder="e.g. FY 2025-26" />
             </div>
             <div className="space-y-1">
+              <Label>Block period (optional)</Label>
+              <Input value={ltcNewBlockPeriod} onChange={(e) => setLtcNewBlockPeriod(e.target.value)} placeholder="e.g. 2024-2028" />
+            </div>
+            <div className="space-y-1">
+              <Label>LTC type</Label>
+              <Select value={ltcNewType} onValueChange={(v) => setLtcNewType((v as "HomeTown" | "AllIndia") ?? "HomeTown")}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="HomeTown">Home Town</SelectItem>
+                  <SelectItem value="AllIndia">All India</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label>Estimated entitlement (INR)</Label>
+                <Input type="number" min={0} step={1} value={ltcNewEstimated} onChange={(e) => setLtcNewEstimated(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>Advance amount (INR)</Label>
+                <Input type="number" min={0} step={1} value={ltcNewAdvance} onChange={(e) => setLtcNewAdvance(e.target.value)} />
+              </div>
+            </div>
+            <div className="space-y-1">
               <Label>Amount (INR)</Label>
               <Input type="number" min={0} step={1} value={ltcNewAmount} onChange={(e) => setLtcNewAmount(e.target.value)} />
             </div>
@@ -914,6 +1078,8 @@ export default function HrClaims() {
               onClick={() => {
                 const employeeId = roles.includes("ADMIN") ? ltcNewEmployeeId : user?.employeeId ?? "";
                 const amt = Number(ltcNewAmount);
+                const est = ltcNewEstimated.trim() === "" ? null : Number(ltcNewEstimated);
+                const adv = ltcNewAdvance.trim() === "" ? null : Number(ltcNewAdvance);
                 if (!employeeId || !ltcNewDate || !Number.isFinite(amt)) {
                   toast({
                     title: "Missing fields",
@@ -927,6 +1093,10 @@ export default function HrClaims() {
                   claimDate: ltcNewDate,
                   amount: amt,
                   period: ltcNewPeriod.trim() || null,
+                  blockPeriod: ltcNewBlockPeriod.trim() || null,
+                  ltcType: ltcNewType,
+                  estimatedEntitlement: est,
+                  advanceAmount: adv,
                 });
               }}
             >

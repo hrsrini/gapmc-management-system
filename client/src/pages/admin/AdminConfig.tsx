@@ -10,6 +10,7 @@ import { Settings, AlertCircle, ImageIcon, Trash2, Upload } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { apiRequest, fetchApiGet, queryClient, readApiErrorMessage } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { Badge } from "@/components/ui/badge";
 import {
   SYSTEM_CONFIG_KEYS,
   SYSTEM_CONFIG_LABELS,
@@ -27,6 +28,11 @@ export default function AdminConfig() {
   const [logoPreviewNonce, setLogoPreviewNonce] = useState(0);
   const { data: config, isLoading, isError } = useQuery<Record<string, string>>({
     queryKey: ["/api/admin/config"],
+  });
+  const { data: history } = useQuery<{
+    rows: { id: string; actorUserId: string; createdAt: string; ip: string | null; changeCount: number; changes: { key: string; before: string | null; after: string | null }[] }[];
+  }>({
+    queryKey: ["/api/admin/config/history?limit=25"],
   });
   const { data: logoStatus, isLoading: logoStatusLoading } = useQuery<{ hasLogo: boolean }>({
     queryKey: ["/api/admin/branding/receipt-logo/status"],
@@ -197,6 +203,46 @@ export default function AdminConfig() {
                 </Button>
               </div>
             </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Config history (latest 25)</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Shows per-key diffs captured in <code className="text-xs bg-muted px-1 rounded">audit_log</code> when admins save config.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {!history?.rows?.length ? (
+            <p className="text-sm text-muted-foreground">No history yet.</p>
+          ) : (
+            history.rows.map((h) => (
+              <div key={h.id} className="rounded-md border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">{h.changeCount} change(s)</Badge>
+                    <span className="text-sm text-muted-foreground">{new Date(h.createdAt).toLocaleString()}</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground">actor: {h.actorUserId}{h.ip ? ` • ${h.ip}` : ""}</span>
+                </div>
+                <div className="mt-2 space-y-1">
+                  {h.changes.slice(0, 8).map((c) => (
+                    <div key={c.key} className="text-xs">
+                      <span className="font-medium">{SYSTEM_CONFIG_LABELS[c.key as SystemConfigKey] ?? c.key}</span>
+                      <span className="text-muted-foreground"> ({c.key})</span>
+                      <div className="text-muted-foreground break-all">
+                        {String(c.before ?? "")} {"→"} {String(c.after ?? "")}
+                      </div>
+                    </div>
+                  ))}
+                  {h.changes.length > 8 ? (
+                    <div className="text-xs text-muted-foreground">…and {h.changes.length - 8} more</div>
+                  ) : null}
+                </div>
+              </div>
+            ))
           )}
         </CardContent>
       </Card>

@@ -31,7 +31,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatApiDateOrDateTime, formatYmdToDisplay } from "@/lib/dateFormat";
 import { useAuth } from "@/context/AuthContext";
 import { fetchApiGet } from "@/lib/queryClient";
-import { UserCircle, ArrowLeft, BookOpen, AlertCircle, Plus, Loader2, FileSignature, KeyRound } from "lucide-react";
+import { UserCircle, ArrowLeft, BookOpen, AlertCircle, Plus, Loader2, FileSignature, KeyRound, Paperclip, Trash2, Download } from "lucide-react";
 import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
 
 const SERVICE_BOOK_SECTIONS = ["History", "Appendix", "AuditComments", "Verification", "CertMutable", "CertImmutable"];
@@ -41,6 +41,7 @@ const serviceBookColumns: ReportTableColumn[] = [
   { key: "_status", header: "Status", sortField: "status" },
   { key: "contentText", header: "Content" },
   { key: "_approved", header: "Approved", sortField: "approvedAt" },
+  { key: "_workflow", header: "Workflow" },
 ];
 
 const contractColumns: ReportTableColumn[] = [
@@ -98,6 +99,18 @@ interface YardRef {
   name: string;
 }
 
+interface EmployeeDocument {
+  id: string;
+  employeeId: string;
+  docType: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  status: string;
+  uploadedBy?: string | null;
+  createdAt: string;
+}
+
 export default function HrEmployeeDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
@@ -118,6 +131,9 @@ export default function HrEmployeeDetail() {
   const [payScale, setPayScale] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [docOpen, setDocOpen] = useState(false);
+  const [docType, setDocType] = useState("Other");
+  const [docFile, setDocFile] = useState<File | null>(null);
 
   const { data: employee, isLoading, isError } = useQuery<Employee>({
     queryKey: ["/api/hr/employees", id],
@@ -129,6 +145,10 @@ export default function HrEmployeeDetail() {
   });
   const { data: contracts = [], isLoading: contractsLoading } = useQuery<Contract[]>({
     queryKey: [`/api/hr/employees/${id}/contracts`],
+    enabled: !!id,
+  });
+  const { data: documents = [], isLoading: docsLoading } = useQuery<EmployeeDocument[]>({
+    queryKey: [`/api/hr/employees/${id}/documents`],
     enabled: !!id,
   });
   const { data: yards = [] } = useQuery<YardRef[]>({
@@ -154,6 +174,11 @@ export default function HrEmployeeDetail() {
         approvedBy: e.approvedBy ?? "",
         _status: <Badge variant="outline">{e.status}</Badge>,
         _approved: <span className="text-muted-foreground text-xs">{approvedLine}</span>,
+        _workflow: (
+          <span className="text-muted-foreground text-xs">
+            {e.status === "Pending" ? "DV verify → DA approve/reject" : e.status === "Verified" ? "DA approve/reject (or DV return)" : "—"}
+          </span>
+        ),
       };
     });
   }, [serviceBook]);
@@ -167,6 +192,48 @@ export default function HrEmployeeDetail() {
       endDate: c.endDate ?? "",
     }));
   }, [contracts]);
+
+  const documentRows = useMemo((): Record<string, unknown>[] => {
+    return documents.map((d) => {
+      const downloadUrl = `/api/hr/employees/${id}/documents/${d.id}/download`;
+      return {
+        id: d.id,
+        docType: d.docType,
+        fileName: d.fileName,
+        sizeBytes: d.sizeBytes,
+        createdAt: d.createdAt,
+        _file: (
+          <div className="flex items-center gap-2">
+            <a className="text-primary underline truncate max-w-[260px]" href={downloadUrl} target="_blank" rel="noreferrer">
+              {d.fileName}
+            </a>
+            <span className="text-xs text-muted-foreground">{Math.max(1, Math.round((d.sizeBytes ?? 0) / 1024))} KB</span>
+          </div>
+        ),
+        _actions: (
+          <div className="flex flex-wrap gap-1">
+            <Button size="sm" variant="outline" asChild>
+              <a href={downloadUrl} target="_blank" rel="noreferrer">
+                <Download className="h-3.5 w-3.5 mr-1" />
+                Download
+              </a>
+            </Button>
+            {(canUpdate || canCreate) && (
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => deleteDocMutation.mutate({ docId: d.id })}
+                disabled={deleteDocMutation.isPending}
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+                Delete
+              </Button>
+            )}
+          </div>
+        ),
+      };
+    });
+  }, [documents, id, canUpdate, canCreate]);
 
   const loginProfileUrl = id ? `/api/hr/employees/${id}/login-profile` : "";
   const { data: loginProfile } = useQuery<{ login: { id: string; email: string; isActive: boolean; roles?: { id: string; name: string; tier: string }[] } | null }>({
@@ -245,6 +312,52 @@ export default function HrEmployeeDetail() {
       setEndDate("");
     },
     onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
+  });
+
+  const uploadDocMutation = useMutation({
+    mutationFn: async () => {
+      if (!docFile) throw new Error("Choose a file to upload.");
+      const fd = new FormData();
+      fd.append("file", docFile);
+      fd.append("docType", docType);
+      const res = await fetch(`/api/hr/employees/${id}/documents`, {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/hr/employees/${id}/documents`] });
+      toast({ title: "Document uploaded" });
+      setDocOpen(false);
+      setDocFile(null);
+      setDocType("Other");
+    },
+    onError: (e: Error) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteDocMutation = useMutation({
+    mutationFn: async (vars: { docId: string }) => {
+      const res = await fetch(`/api/hr/employees/${id}/documents/${vars.docId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/hr/employees/${id}/documents`] });
+      toast({ title: "Document deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
   const handleAddContract = (e: React.FormEvent) => {
@@ -442,6 +555,7 @@ export default function HrEmployeeDetail() {
             <TabsList className="flex-wrap h-auto gap-1">
               <TabsTrigger value="servicebook"><BookOpen className="h-4 w-4 mr-2" /> Service book ({serviceBook.length})</TabsTrigger>
               <TabsTrigger value="contracts"><FileSignature className="h-4 w-4 mr-2" /> Contracts ({contracts.length})</TabsTrigger>
+              <TabsTrigger value="documents"><Paperclip className="h-4 w-4 mr-2" /> Documents ({documents.length})</TabsTrigger>
               <TabsTrigger value="access"><KeyRound className="h-4 w-4 mr-2" /> Login &amp; roles</TabsTrigger>
             </TabsList>
             <TabsContent value="servicebook" className="pt-2">
@@ -527,6 +641,81 @@ export default function HrEmployeeDetail() {
                   defaultSortKey="startDate"
                   defaultSortDir="desc"
                   emptyMessage="No contracts."
+                />
+              )}
+            </TabsContent>
+            <TabsContent value="documents" className="pt-2">
+              {(canCreate || canUpdate) && (
+                <div className="flex justify-end mb-2">
+                  <Dialog open={docOpen} onOpenChange={setDocOpen}>
+                    <DialogTrigger asChild>
+                      <Button size="sm">
+                        <Plus className="h-4 w-4 mr-1" /> Upload document
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Upload employee document</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <Label>Document type</Label>
+                          <Select value={docType} onValueChange={setDocType}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {["Photo", "Aadhaar", "PAN", "AppointmentOrder", "JoiningReport", "BankProof", "Other"].map((t) => (
+                                <SelectItem key={t} value={t}>
+                                  {t}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>File (PDF/JPG/PNG, max 5 MB)</Label>
+                          <Input
+                            type="file"
+                            accept="application/pdf,image/png,image/jpeg"
+                            onChange={(e) => setDocFile(e.target.files?.[0] ?? null)}
+                          />
+                          {docFile ? (
+                            <p className="text-xs text-muted-foreground">
+                              Selected: <span className="font-medium">{docFile.name}</span>
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button type="button" variant="outline" onClick={() => setDocOpen(false)}>
+                          Cancel
+                        </Button>
+                        <Button type="button" disabled={uploadDocMutation.isPending} onClick={() => uploadDocMutation.mutate()}>
+                          {uploadDocMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                          Upload
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </div>
+              )}
+              {docsLoading ? (
+                <Skeleton className="h-24 w-full" />
+              ) : (
+                <ClientDataGrid
+                  columns={[
+                    { key: "docType", header: "Type" },
+                    { key: "_file", header: "File", sortField: "fileName" },
+                    { key: "createdAt", header: "Uploaded", sortField: "createdAt" },
+                    { key: "_actions", header: "Actions" },
+                  ]}
+                  sourceRows={documentRows}
+                  searchKeys={["docType", "fileName", "createdAt"]}
+                  searchPlaceholder="Search documents…"
+                  defaultSortKey="createdAt"
+                  defaultSortDir="desc"
+                  emptyMessage="No documents."
                 />
               )}
             </TabsContent>

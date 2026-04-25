@@ -31,6 +31,7 @@ interface Employee {
   yardId: string;
   employeeType: string;
   joiningDate: string;
+  retirementDate?: string | null;
   status: string;
   mobile?: string | null;
   workEmail?: string | null;
@@ -125,7 +126,26 @@ export default function HrEmployees() {
           </Link>
         ),
         _status: (
-          <Badge variant={e.status === "Active" ? "default" : "secondary"}>{e.status}</Badge>
+          <div className="flex flex-col gap-1">
+            <Badge variant={e.status === "Active" ? "default" : "secondary"}>{e.status}</Badge>
+            {e.retirementDate ? (
+              (() => {
+                const today = new Date().toISOString().slice(0, 10);
+                const days = Math.ceil(
+                  (new Date(`${e.retirementDate}T12:00:00.000Z`).getTime() - new Date(`${today}T12:00:00.000Z`).getTime()) /
+                    86400000,
+                );
+                if (days <= 180 && days >= 0) {
+                  return (
+                    <span className="text-[11px] text-amber-700 dark:text-amber-400">
+                      Retires in {days}d ({e.retirementDate})
+                    </span>
+                  );
+                }
+                return null;
+              })()
+            ) : null}
+          </div>
         ),
         _appLogin: e.userId ? (
           <div className="flex flex-col gap-0.5">
