@@ -142,6 +142,22 @@ app.use((req, res, next) => {
     log("Cron M-03 rent invoice generation scheduled (1st of month 00:01)");
   }
 
+  if (process.env.CRON_M03_RENT_ARREARS === "true") {
+    const cron = await import("node-cron");
+    const { runM03RentArrearsInterest } = await import("./cron-m03-rent-arrears-interest");
+    cron.default.schedule("30 0 * * *", async () => {
+      try {
+        const r = await runM03RentArrearsInterest();
+        log(
+          `Cron M-03 arrears: markedOverdue=${r.markedOverdue} interestRows=${r.interestRows} interestInr=${r.interestPosted.toFixed(2)} skipped=${r.skipped}`,
+        );
+      } catch (e) {
+        console.error("Cron M-03 rent arrears interest failed:", e);
+      }
+    });
+    log("Cron M-03 rent arrears + interest scheduled (daily 00:30)");
+  }
+
   if (process.env.CRON_LICENCE_EXPIRY === "true") {
     const cron = await import("node-cron");
     const { autoBlockExpiredTraderLicences } = await import("./cron-licence-expiry");

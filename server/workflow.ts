@@ -56,11 +56,12 @@ export function assertRecordDoDvDaSeparation(
   return { ok: true };
 }
 
-/** Rent invoice status flow: Draft → Verified → Approved (then Paid/Cancelled) */
+/** Rent invoice status flow: Draft → Verified → Approved (then Paid/Cancelled/Overdue) */
 const RENT_INVOICE_FLOW = {
   Draft: ["Verified"], // DV can verify
   Verified: ["Approved", "Draft"], // DA can approve; DV can send back to Draft
-  Approved: ["Paid", "Cancelled"], // DA can set Paid/Cancelled
+  Approved: ["Paid", "Cancelled", "Overdue"], // DA can settle; Overdue also set by arrears cron
+  Overdue: ["Paid", "Cancelled"], // DA settles overdue invoices
   Paid: [],
   Cancelled: [],
 } as const;
@@ -78,7 +79,11 @@ export function canTransitionRentInvoice(
       allowed: true,
       setDoUser: newStatus === "Draft" && !currentStatus,
       setDvUser: newStatus === "Verified",
-      setDaUser: newStatus === "Approved" || newStatus === "Paid" || newStatus === "Cancelled",
+      setDaUser:
+        newStatus === "Approved" ||
+        newStatus === "Paid" ||
+        newStatus === "Cancelled" ||
+        newStatus === "Overdue",
     };
   }
   const allowed = RENT_INVOICE_FLOW[currentStatus as RentInvoiceStatus];
@@ -93,8 +98,16 @@ export function canTransitionRentInvoice(
   if (currentStatus === "Verified" && newStatus === "Draft") {
     return hasRole(user, DV) ? { allowed: true } : { allowed: false };
   }
-  if (currentStatus === "Approved" && (newStatus === "Paid" || newStatus === "Cancelled")) {
-    return hasRole(user, DA) ? { allowed: true } : { allowed: false };
+  if (
+    currentStatus === "Approved" &&
+    (newStatus === "Paid" || newStatus === "Cancelled" || newStatus === "Overdue")
+  ) {
+    return hasRole(user, DA)
+      ? { allowed: true, setDaUser: newStatus === "Paid" || newStatus === "Cancelled" || newStatus === "Overdue" }
+      : { allowed: false };
+  }
+  if (currentStatus === "Overdue" && (newStatus === "Paid" || newStatus === "Cancelled")) {
+    return hasRole(user, DA) ? { allowed: true, setDaUser: true } : { allowed: false };
   }
   return { allowed: false };
 }

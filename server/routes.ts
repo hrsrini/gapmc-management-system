@@ -126,6 +126,22 @@ export async function registerRoutes(
     }
   });
 
+  // M-03: overdue rent invoices + interest accrual on rent_deposit_ledger (secured by CRON_SECRET)
+  app.post("/api/cron/m03-rent-arrears-interest", async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.headers["x-cron-secret"] !== secret) {
+      return sendApiError(res, 401, "CRON_UNAUTHORIZED", "Unauthorized");
+    }
+    try {
+      const { runM03RentArrearsInterest } = await import("./cron-m03-rent-arrears-interest");
+      const result = await runM03RentArrearsInterest();
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("Cron M-03 rent arrears interest failed:", e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Cron job failed");
+    }
+  });
+
   app.post("/api/cron/licence-expiry-auto-block", async (req, res) => {
     const secret = process.env.CRON_SECRET;
     if (secret && req.headers["x-cron-secret"] !== secret) {

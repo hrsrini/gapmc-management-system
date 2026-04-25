@@ -826,7 +826,7 @@ export const rentInvoices = gapmc.table("rent_invoices", {
   /** TDS on rent component for this period (INR); excludes GST components. */
   tdsAmount: doublePrecision("tds_amount").default(0),
   isGovtEntity: boolean("is_govt_entity").default(false),
-  status: text("status").notNull(), // Draft | Verified | Approved | Paid | Cancelled
+  status: text("status").notNull(), // Draft | Verified | Approved | Overdue | Paid | Cancelled
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   daUser: text("da_user"),

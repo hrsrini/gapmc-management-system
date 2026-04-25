@@ -55,7 +55,7 @@ async function dishonourRecomputationHint(
       dueDateIso: due,
       asOfDateIso: today,
     });
-    let msg = `Rent dishonour: simple interest from invoice period end (${due}) to ${today}: ${days} day(s) at ${rate}% p.a. on ₹${principal.toFixed(2)} (rent base) → approx ₹${interest.toFixed(2)} (not posted; re-issue receipt / deposit ledger per finance).`;
+    let msg = `Rent dishonour: simple interest from invoice period end (${due}) to ${today}: ${days} day(s) at ${rate}% p.a. on ₹${principal.toFixed(2)} (rent base) → approx ₹${interest.toFixed(2)} (ongoing accrual posts to rent deposit ledger via M-03 arrears cron when configured).`;
     if (bankChargeInr > 0) msg += ` Reference bank charge (config): ₹${bankChargeInr.toFixed(2)} (not posted).`;
     if (bankHint) msg += ` ${bankHint}`;
     return msg;
