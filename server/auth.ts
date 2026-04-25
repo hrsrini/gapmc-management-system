@@ -345,6 +345,25 @@ export async function requireModulePermissionByPath(req: Request, res: Response,
     });
     return;
   }
+  /** M-03: overdue + interest accrual job (same as daily cron); not plain POST Create. */
+  if (req.method === "POST" && req.path === "/api/ioms/rent/run-arrears-interest") {
+    if (!req.user) {
+      sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      return;
+    }
+    if (req.user.roles.some((r) => r.tier === "ADMIN")) return next();
+    if (
+      hasPermission(req.user, "M-03", "Create") ||
+      hasPermission(req.user, "M-03", "Update") ||
+      hasPermission(req.user, "M-03", "Approve")
+    ) {
+      return next();
+    }
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", {
+      required: "M-03:Create, Update, or Approve",
+    });
+    return;
+  }
   /** Unified entity picker on dues/ledger: allow rent module readers without full M-02 master access. */
   if (req.method === "GET" && req.path.startsWith("/api/ioms/unified-entities")) {
     if (!req.user) {

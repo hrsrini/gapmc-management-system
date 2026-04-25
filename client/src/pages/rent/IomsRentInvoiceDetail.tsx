@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
@@ -17,7 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { FileText, ArrowLeft, ShieldCheck, CheckCircle, AlertCircle, SendHorizontal, Banknote, Ban } from "lucide-react";
+import { FileText, ArrowLeft, ShieldCheck, CheckCircle, AlertCircle, SendHorizontal, Banknote, Ban, StickyNote } from "lucide-react";
 import { formatApiDateOrDateTime, formatYearMonthToDisplay } from "@/lib/dateFormat";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 
@@ -64,10 +65,19 @@ interface LicenceRef {
   firmName?: string | null;
 }
 
+interface CreditNoteRow {
+  id: string;
+  creditNoteNo: string;
+  invoiceId: string;
+  reason: string;
+  amount: number;
+  status: string;
+}
+
 export default function IomsRentInvoiceDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const roles = user?.roles?.map((r) => r.tier) ?? [];
@@ -99,6 +109,15 @@ export default function IomsRentInvoiceDetail() {
 
   const [sendBackOpen, setSendBackOpen] = useState(false);
   const [returnRemarks, setReturnRemarks] = useState("");
+  const [cnReason, setCnReason] = useState("");
+  const [cnAmount, setCnAmount] = useState("");
+  const [cnNo, setCnNo] = useState("");
+
+  const { data: creditNoteList = [] } = useQuery<CreditNoteRow[]>({
+    queryKey: ["/api/ioms/rent/credit-notes"],
+    enabled: !!id,
+  });
+  const creditNotesForInvoice = creditNoteList.filter((c) => c.invoiceId === id);
 
   const statusMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -124,9 +143,45 @@ export default function IomsRentInvoiceDetail() {
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
 
+  const createCreditNoteMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/ioms/rent/credit-notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          invoiceId: id,
+          creditNoteNo: cnNo.trim() || undefined,
+          reason: cnReason.trim(),
+          amount: Number(cnAmount),
+          status: "Draft",
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/credit-notes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/invoices", id] });
+      setCnReason("");
+      setCnNo("");
+      toast({ title: "Credit note created", description: "Draft credit note saved." });
+    },
+    onError: (e: Error) => toast({ title: "Credit note failed", description: e.message, variant: "destructive" }),
+  });
+
   useEffect(() => {
     if (!id) setLocation("/rent/ioms");
   }, [id, setLocation]);
+
+  useEffect(() => {
+    if (invoice?.totalAmount != null) {
+      setCnAmount(String(invoice.totalAmount));
+    }
+  }, [invoice?.id, invoice?.totalAmount]);
   if (!id) return null;
   if (isLoading || invoice === undefined) {
     return (
@@ -163,6 +218,14 @@ export default function IomsRentInvoiceDetail() {
   const canSendBack = canVerify && verified;
   const canMarkPaid = canApprove && (approved || overdue);
   const canCancel = canApprove && (approved || overdue);
+  const canVoidDraft =
+    draft &&
+    (roles.includes("DO") || roles.includes("ADMIN")) &&
+    (can("M-03", "Create") || can("M-03", "Update"));
+  const canVoidVerified = verified && canApprove;
+  const isDoOrAdmin = roles.includes("DO") || roles.includes("ADMIN");
+  const canCreateCreditNote =
+    (approved || overdue) && isDoOrAdmin && (can("M-03", "Create") || can("M-03", "Update"));
 
   const nonGstLines: { label: string; amount: number }[] = (() => {
     const j = invoice.nonGstChargesJson;
@@ -280,6 +343,16 @@ export default function IomsRentInvoiceDetail() {
                 <Banknote className="h-4 w-4 mr-1" /> Mark Paid
               </Button>
             )}
+            {canVoidDraft && (
+              <Button size="sm" variant="outline" onClick={() => statusMutation.mutate({ status: "Cancelled" })} disabled={statusMutation.isPending}>
+                <Ban className="h-4 w-4 mr-1" /> Void draft
+              </Button>
+            )}
+            {canVoidVerified && (
+              <Button size="sm" variant="destructive" onClick={() => statusMutation.mutate({ status: "Cancelled" })} disabled={statusMutation.isPending}>
+                <Ban className="h-4 w-4 mr-1" /> Void verified invoice
+              </Button>
+            )}
             {canCancel && (
               <Button size="sm" variant="destructive" onClick={() => statusMutation.mutate({ status: "Cancelled" })} disabled={statusMutation.isPending}>
                 <Ban className="h-4 w-4 mr-1" /> Cancel
@@ -288,6 +361,65 @@ export default function IomsRentInvoiceDetail() {
           </div>
         </CardContent>
       </Card>
+
+      {(approved || overdue) && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <StickyNote className="h-5 w-5" />
+              Credit notes (M-03)
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Draft credit notes for unsettled Approved/Overdue invoices. Approve credit notes from the list or via API (DA).
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {creditNotesForInvoice.length > 0 ? (
+              <ul className="text-sm space-y-2 border rounded-md p-3 bg-muted/20">
+                {creditNotesForInvoice.map((c) => (
+                  <li key={c.id} className="flex flex-wrap justify-between gap-2">
+                    <span className="font-mono">{c.creditNoteNo}</span>
+                    <Badge variant="secondary">{c.status}</Badge>
+                    <span className="text-muted-foreground w-full">₹{c.amount.toLocaleString()} — {c.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">No credit notes for this invoice yet.</p>
+            )}
+            {canCreateCreditNote && (
+              <div className="space-y-3 max-w-lg border-t pt-4">
+                <p className="text-sm font-medium">New draft credit note</p>
+                <div className="space-y-2">
+                  <Label htmlFor="cn-no">Credit note no. (optional)</Label>
+                  <Input id="cn-no" value={cnNo} onChange={(e) => setCnNo(e.target.value)} placeholder="Leave blank to auto-generate" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="cn-amt">Amount (₹)</Label>
+                  <Input id="cn-amt" type="text" inputMode="decimal" value={cnAmount} onChange={(e) => setCnAmount(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="cn-reason">Reason (min. 10 characters)</Label>
+                  <Textarea id="cn-reason" rows={3} value={cnReason} onChange={(e) => setCnReason(e.target.value)} />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={
+                    createCreditNoteMutation.isPending ||
+                    cnReason.trim().length < 10 ||
+                    !Number.isFinite(Number(cnAmount)) ||
+                    Number(cnAmount) <= 0
+                  }
+                  onClick={() => createCreditNoteMutation.mutate()}
+                >
+                  Save draft credit note
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Dialog open={sendBackOpen} onOpenChange={setSendBackOpen}>
         <DialogContent className="sm:max-w-md">

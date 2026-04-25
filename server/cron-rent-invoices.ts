@@ -9,6 +9,8 @@ import { assetAllotments, assets, rentInvoices } from "@shared/db-schema";
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
 import { nanoid } from "nanoid";
 import { writeAuditLogSystem } from "./audit";
+import { tenantLicenceIsGstExempt } from "./gst-exempt";
+import { resolveRentInvoiceTdsFields } from "./rent-invoice-tds";
 
 function getFirstAndLastDayOfMonth(yyyy: number, mm: number): { first: string; last: string } {
   const first = `${yyyy}-${String(mm).padStart(2, "0")}-01`;
@@ -17,7 +19,14 @@ function getFirstAndLastDayOfMonth(yyyy: number, mm: number): { first: string; l
   return { first, last };
 }
 
-export async function generateRentInvoicesForCurrentMonth(): Promise<{ created: number; skipped: number }> {
+export async function generateRentInvoicesForCurrentMonth(options?: {
+  /** When true (e.g. manual API), caller writes user audit; skip system/cron audit row. */
+  skipSystemAudit?: boolean;
+}): Promise<{
+  created: number;
+  skipped: number;
+  periodMonth: string;
+}> {
   const now = new Date();
   const yyyy = now.getFullYear();
   const mm = now.getMonth() + 1;
@@ -69,6 +78,16 @@ export async function generateRentInvoicesForCurrentMonth(): Promise<{ created: 
     const totalAmount = lastInvoice?.totalAmount ?? rentAmount + cgst + sgst;
     const isGovtEntity = lastInvoice?.isGovtEntity ?? false;
 
+    const gstExempt = Boolean(allotment.traderLicenceId && (await tenantLicenceIsGstExempt(allotment.traderLicenceId)));
+    const tdsRes = await resolveRentInvoiceTdsFields({
+      tenantLicenceId: allotment.traderLicenceId,
+      rentAmount,
+      periodMonth,
+      isGstExemptTenant: gstExempt,
+    });
+    const tdsApplicable = "error" in tdsRes ? false : tdsRes.tdsApplicable;
+    const tdsAmount = "error" in tdsRes ? 0 : tdsRes.tdsAmount;
+
     const id = nanoid();
     await db.insert(rentInvoices).values({
       id,
@@ -83,6 +102,8 @@ export async function generateRentInvoicesForCurrentMonth(): Promise<{ created: 
       sgst,
       totalAmount,
       isGovtEntity,
+      tdsApplicable,
+      tdsAmount,
       status: "Draft",
       invoiceNo: null,
       doUser: null,
@@ -95,7 +116,7 @@ export async function generateRentInvoicesForCurrentMonth(): Promise<{ created: 
     created += 1;
   }
 
-  if (createdInvoiceIds.length > 0) {
+  if (createdInvoiceIds.length > 0 && !options?.skipSystemAudit) {
     writeAuditLogSystem({
       module: "Rent/Tax",
       action: "CronGenerateMonthlyDrafts",
@@ -108,5 +129,5 @@ export async function generateRentInvoicesForCurrentMonth(): Promise<{ created: 
     }).catch((e) => console.error("Audit log failed:", e));
   }
 
-  return { created, skipped };
+  return { created, skipped, periodMonth };
 }

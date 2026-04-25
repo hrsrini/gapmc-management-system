@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
-import { FileText, AlertCircle, CheckCircle, ShieldCheck, Plus, Download } from "lucide-react";
+import { FileText, AlertCircle, CheckCircle, ShieldCheck, Plus, Download, CalendarClock, Percent } from "lucide-react";
 interface RentInvoice {
   id: string;
   invoiceNo?: string | null;
@@ -40,6 +40,9 @@ export default function IomsRentInvoices() {
   const canVerify = roles.includes("DV") || roles.includes("ADMIN");
   const canApprove = roles.includes("DA") || roles.includes("ADMIN");
   const canCreate = can("M-03", "Create");
+  const canRunArrearsInterest =
+    (roles.includes("ADMIN") || roles.includes("DO") || roles.includes("DA")) &&
+    (can("M-03", "Create") || can("M-03", "Update") || can("M-03", "Approve"));
   const { data: list, isLoading, isError } = useQuery<RentInvoice[]>({
     queryKey: ["/api/ioms/rent/invoices"],
   });
@@ -71,6 +74,62 @@ export default function IomsRentInvoices() {
     },
     onError: (e: Error) => {
       toast({ title: "Update failed", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const generateDraftsMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/ioms/rent/invoices/generate-monthly-drafts", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json() as Promise<{ ok: boolean; created: number; skipped: number; periodMonth: string }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/invoices"] });
+      toast({
+        title: "Monthly draft generation",
+        description: `Period ${data.periodMonth}: ${data.created} created, ${data.skipped} skipped (allotment already has an invoice).`,
+      });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Generation failed", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const runArrearsInterestMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/ioms/rent/run-arrears-interest", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json() as Promise<{
+        ok: boolean;
+        asOfDate: string;
+        markedOverdue: number;
+        interestPosted: number;
+        interestRows: number;
+        skipped: number;
+      }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/ledger"] });
+      toast({
+        title: "M-03 arrears & interest",
+        description: `As of ${data.asOfDate}: ${data.markedOverdue} marked overdue, ${data.interestRows} interest line(s) posted (₹${data.interestPosted.toFixed(2)}), ${data.skipped} skipped.`,
+      });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Run failed", description: e.message, variant: "destructive" });
     },
   });
 
@@ -163,6 +222,36 @@ export default function IomsRentInvoices() {
     }
   };
 
+  const handleExportGstr1Csv = async () => {
+    const from = gstr1From.trim();
+    const to = gstr1To.trim();
+    if (!from || !to) {
+      toast({ title: "Period required", description: "Enter From month and To month (YYYY-MM).", variant: "destructive" });
+      return;
+    }
+    setGstr1Loading(true);
+    try {
+      const params = new URLSearchParams({ fromMonth: from, toMonth: to, format: "csv" });
+      const res = await fetch(`/api/ioms/rent/gstr1?${params}`, { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `gstr1-rent-outward-${from}-${to}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "GSTR-1 CSV exported", description: "Supply lines + warnings at end; use JSON for full GSTN draft mapping." });
+    } catch (e: unknown) {
+      toast({ title: "Export failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setGstr1Loading(false);
+    }
+  };
+
   if (isError) {
     return (
       <AppShell breadcrumbs={[{ label: "Rent (IOMS)", href: "/rent/ioms" }, { label: "Invoices" }]}>
@@ -193,10 +282,36 @@ export default function IomsRentInvoices() {
           </div>
           <div className="flex flex-wrap items-end gap-3">
             {canCreate && (
-              <Button asChild size="sm">
-                <Link href="/rent/ioms/invoices/new">
-                  <Plus className="h-4 w-4 mr-2" /> Create invoice
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => generateDraftsMutation.mutate()}
+                  disabled={generateDraftsMutation.isPending}
+                  title="Same as month-start cron: Draft invoices for the current month per active allotment (skips if already present)."
+                >
+                  <CalendarClock className="h-4 w-4 mr-2" />
+                  Generate monthly drafts
+                </Button>
+                <Button asChild size="sm">
+                  <Link href="/rent/ioms/invoices/new">
+                    <Plus className="h-4 w-4 mr-2" /> Create invoice
                 </Link>
+                </Button>
+              </>
+            )}
+            {canRunArrearsInterest && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => runArrearsInterestMutation.mutate()}
+                disabled={runArrearsInterestMutation.isPending}
+                title="Same as daily cron: mark past-due Approved as Overdue and post simple interest to rent deposit ledger (rate in Admin → system config)."
+              >
+                <Percent className="h-4 w-4 mr-2" />
+                Run arrears & interest
               </Button>
             )}
             <div className="flex items-end gap-2 border-l pl-3">
@@ -208,8 +323,23 @@ export default function IomsRentInvoices() {
                 <Label className="text-xs">To (YYYY-MM)</Label>
                 <Input className="w-28 h-8" placeholder="2025-03" value={gstr1To} onChange={(e) => setGstr1To(e.target.value)} />
               </div>
-              <Button size="sm" variant="outline" onClick={handleExportGstr1} disabled={gstr1Loading}>
-                <Download className="h-4 w-4 mr-1" /> Export GSTR-1
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExportGstr1}
+                disabled={gstr1Loading}
+                title="JSON: supplies, warnings, gstnDraftMapping (GSTN alignment aid)."
+              >
+                <Download className="h-4 w-4 mr-1" /> GSTR-1 JSON
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExportGstr1Csv}
+                disabled={gstr1Loading}
+                title="CSV: one row per outward supply; # rows for meta and warnings."
+              >
+                <Download className="h-4 w-4 mr-1" /> GSTR-1 CSV
               </Button>
             </div>
           </div>

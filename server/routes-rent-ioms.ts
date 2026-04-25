@@ -10,6 +10,7 @@ import { rentInvoices, rentDepositLedger, creditNotes, iomsReceipts, traderLicen
 import { nanoid } from "nanoid";
 import {
   canCreateRentInvoice,
+  canRunM03RentArrearsInterest,
   canEditDraftRentInvoice,
   canTransitionRentInvoice,
   assertSegregationDoDvDa,
@@ -106,6 +107,61 @@ export function registerRentIomsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch rent invoices");
+    }
+  });
+
+  /** M-03: same job as cron (1st of month) — idempotent Draft rows for current month; DO/ADMIN + M-03:Create. */
+  app.post("/api/ioms/rent/invoices/generate-monthly-drafts", async (req, res) => {
+    try {
+      if (!canCreateRentInvoice(req.user)) {
+        return sendApiError(
+          res,
+          403,
+          "RENT_INVOICE_GENERATE_DENIED",
+          "Only Data Originator or Admin can generate monthly draft invoices",
+        );
+      }
+      const { generateRentInvoicesForCurrentMonth } = await import("./cron-rent-invoices");
+      const { created, skipped, periodMonth } = await generateRentInvoicesForCurrentMonth({ skipSystemAudit: true });
+      writeAuditLog(req, {
+        module: "Rent/Tax",
+        action: "GenerateMonthlyDrafts",
+        recordId: periodMonth,
+        afterValue: { created, skipped, periodMonth, source: "manual" },
+      }).catch((e) => console.error("Audit log failed:", e));
+      return res.json({ ok: true, created, skipped, periodMonth });
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate monthly draft invoices");
+    }
+  });
+
+  /**
+   * M-03 US-M03-002: same batch as daily cron (`runM03RentArrearsInterest`):
+   * Approved → Overdue when past due and outstanding; post incremental Interest on rent_deposit_ledger.
+   */
+  app.post("/api/ioms/rent/run-arrears-interest", async (req, res) => {
+    try {
+      if (!canRunM03RentArrearsInterest(req.user)) {
+        return sendApiError(
+          res,
+          403,
+          "RENT_ARREARS_INTEREST_DENIED",
+          "Only Data Originator, Data Approver, or Admin can run arrears interest",
+        );
+      }
+      const { runM03RentArrearsInterest } = await import("./cron-m03-rent-arrears-interest");
+      const result = await runM03RentArrearsInterest();
+      writeAuditLog(req, {
+        module: "Rent/Tax",
+        action: "RunArrearsInterest",
+        recordId: result.asOfDate,
+        afterValue: { ...result, source: "manual" },
+      }).catch((e) => console.error("Audit log failed:", e));
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to run M-03 arrears interest");
     }
   });
 
@@ -538,6 +594,31 @@ export function registerRentIomsRoutes(app: Express) {
           if (!ret.ok) return sendApiError(res, 400, "RENT_INVOICE_DV_RETURN_INVALID", ret.error);
           dvReturnRemarks = ret.remarks;
         }
+        if (newStatus === "Cancelled") {
+          const linkedReceipts = await db
+            .select()
+            .from(iomsReceipts)
+            .where(and(eq(iomsReceipts.sourceModule, "M-03"), eq(iomsReceipts.sourceRecordId, id)));
+          const hasSettled = linkedReceipts.some(
+            (r) => String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled",
+          );
+          if (hasSettled) {
+            return sendApiError(
+              res,
+              400,
+              "RENT_INVOICE_CANCEL_HAS_PAYMENT",
+              "Cannot cancel: this invoice has a Paid or Reconciled M-03 receipt. Use credit note or receipt reversal per policy.",
+            );
+          }
+          for (const r of linkedReceipts) {
+            if (String(r.status ?? "") === "Pending") {
+              await db
+                .update(iomsReceipts)
+                .set({ status: "Failed", gatewayRef: "InvoiceCancelled" })
+                .where(eq(iomsReceipts.id, r.id));
+            }
+          }
+        }
       } else if (existing.status === "Draft" && !canEditDraftRentInvoice(req.user)) {
         return sendApiError(
           res,
@@ -933,6 +1014,9 @@ export function registerRentIomsRoutes(app: Express) {
     try {
       const fromMonth = (req.query.fromMonth as string) || "";
       const toMonth = (req.query.toMonth as string) || "";
+      const format = String(req.query.format ?? "")
+        .trim()
+        .toLowerCase();
       if (!fromMonth || !toMonth) {
         return sendApiError(
           res,
@@ -1012,6 +1096,56 @@ export function registerRentIomsRoutes(app: Express) {
         };
       });
       const warnings = [...gstr1ExportWarnings(gstin), ...gstr1CounterpartyGstinIssues(supplies)];
+
+      if (format === "csv") {
+        const header = [
+          "invoiceNo",
+          "periodMonth",
+          "tenantLicenceId",
+          "counterpartyGstin",
+          "isNonGstEntity",
+          "customerRef",
+          "assetId",
+          "yardId",
+          "taxableValue",
+          "cgst",
+          "sgst",
+          "totalAmount",
+          "tdsApplicable",
+          "tdsAmount",
+        ];
+        const dataLines = supplies.map((s) =>
+          toCsvRow([
+            s.invoiceNo,
+            s.periodMonth,
+            s.tenantLicenceId,
+            s.counterpartyGstin,
+            s.isNonGstEntity,
+            s.customerRef,
+            s.assetId,
+            s.yardId,
+            s.taxableValue,
+            s.cgst,
+            s.sgst,
+            s.totalAmount,
+            s.tdsApplicable,
+            s.tdsAmount,
+          ]),
+        );
+        const tail: string[] = [
+          "",
+          toCsvRow(["#", "meta", "fromMonth", fromMonth, "toMonth", toMonth, "gstrSupplierGstin", gstin ?? ""]),
+          toCsvRow(["#", "warnings"]),
+        ];
+        for (const w of warnings) {
+          tail.push(toCsvRow(["#", w]));
+        }
+        const csv = [toCsvRow(header), ...dataLines, ...tail].join("\r\n");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename=gstr1-rent-outward-${fromMonth}-${toMonth}.csv`);
+        return res.send("\uFEFF" + csv);
+      }
+
       const gstnDraftMapping = buildRentGstr1DraftGstnMapping({
         gstin,
         filingPeriodMonth: toMonth,
@@ -1059,6 +1193,14 @@ export function registerRentIomsRoutes(app: Express) {
 
   app.post("/api/ioms/rent/credit-notes", async (req, res) => {
     try {
+      if (!canCreateRentInvoice(req.user)) {
+        return sendApiError(
+          res,
+          403,
+          "RENT_CREDIT_NOTE_CREATE_DENIED",
+          "Only Data Originator or Admin can create rent credit notes",
+        );
+      }
       const body = req.body;
       const invoiceId = String(body.invoiceId ?? "");
       if (!invoiceId) {
@@ -1081,13 +1223,25 @@ export function registerRentIomsRoutes(app: Express) {
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
         return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       }
+      const reason = String(body.reason ?? "").trim();
+      if (reason.length < 10) {
+        return sendApiError(res, 400, "RENT_CREDIT_NOTE_REASON", "reason must be at least 10 characters.");
+      }
+      const amount = Number(body.amount ?? NaN);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return sendApiError(res, 400, "RENT_CREDIT_NOTE_AMOUNT", "amount must be a positive number.");
+      }
+      let creditNoteNo = String(body.creditNoteNo ?? "").trim();
+      if (!creditNoteNo) {
+        creditNoteNo = `M03-CN-${nanoid(10)}`;
+      }
       const id = nanoid();
       await db.insert(creditNotes).values({
         id,
-        creditNoteNo: String(body.creditNoteNo ?? ""),
+        creditNoteNo,
         invoiceId,
-        reason: String(body.reason ?? ""),
-        amount: Number(body.amount ?? 0),
+        reason,
+        amount,
         status: String(body.status ?? "Draft"),
         daUser: body.daUser ? String(body.daUser) : null,
         approvedAt: body.approvedAt ? String(body.approvedAt) : null,

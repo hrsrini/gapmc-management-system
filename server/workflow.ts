@@ -58,8 +58,8 @@ export function assertRecordDoDvDaSeparation(
 
 /** Rent invoice status flow: Draft → Verified → Approved (then Paid/Cancelled/Overdue) */
 const RENT_INVOICE_FLOW = {
-  Draft: ["Verified"], // DV can verify
-  Verified: ["Approved", "Draft"], // DA can approve; DV can send back to Draft
+  Draft: ["Verified", "Cancelled"], // DV verifies; DO/Admin may void draft
+  Verified: ["Approved", "Draft", "Cancelled"], // DA may void before approval
   Approved: ["Paid", "Cancelled", "Overdue"], // DA can settle; Overdue also set by arrears cron
   Overdue: ["Paid", "Cancelled"], // DA settles overdue invoices
   Paid: [],
@@ -89,8 +89,14 @@ export function canTransitionRentInvoice(
   const allowed = RENT_INVOICE_FLOW[currentStatus as RentInvoiceStatus];
   if (!allowed || !allowed.includes(newStatus as never)) return { allowed: false };
 
+  if (currentStatus === "Draft" && newStatus === "Cancelled") {
+    return hasAnyRole(user, [DO, ADMIN]) ? { allowed: true } : { allowed: false };
+  }
   if (currentStatus === "Draft" && newStatus === "Verified") {
     return hasRole(user, DV) ? { allowed: true, setDvUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Cancelled") {
+    return hasRole(user, DA) ? { allowed: true, setDaUser: true } : { allowed: false };
   }
   if (currentStatus === "Verified" && newStatus === "Approved") {
     return hasRole(user, DA) ? { allowed: true, setDaUser: true } : { allowed: false };
@@ -115,6 +121,11 @@ export function canTransitionRentInvoice(
 /** Who can create a rent invoice (must be DO or ADMIN). */
 export function canCreateRentInvoice(user: AuthUser | undefined): boolean {
   return hasAnyRole(user, [DO, ADMIN]);
+}
+
+/** M-03 US-M03-002: batch mark Overdue + post interest (manual trigger); DO / DA / ADMIN only (not DV). */
+export function canRunM03RentArrearsInterest(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, DA, ADMIN]);
 }
 
 /** Who can edit a draft rent invoice (DO or ADMIN). */
