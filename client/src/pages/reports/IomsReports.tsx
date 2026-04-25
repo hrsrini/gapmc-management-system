@@ -298,6 +298,29 @@ export default function IomsReports() {
     }
   };
 
+  const downloadRentAgeingCsv = async () => {
+    try {
+      const params = new URLSearchParams({ format: "csv", asOf: ageingAsOf });
+      if (yardId && yardId !== "all") params.set("yardId", yardId);
+      const res = await fetch(`/api/ioms/rent/reports/ageing?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `rent-outstanding-ageing-${ageingAsOf}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Download started", description: "rent-outstanding-ageing CSV is being saved." });
+    } catch (e) {
+      toast({
+        title: "Download failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
   const downloadCheckPostCsv = async (endpoint: "check-post-arrivals" | "check-post-passway-transit", filename: string) => {
     try {
       const params = new URLSearchParams({ format: "csv" });
@@ -466,6 +489,10 @@ export default function IomsReports() {
                   placeholder="2026-04-25"
                 />
               </div>
+              <Button type="button" variant="outline" onClick={downloadRentAgeingCsv} className="shrink-0">
+                <Download className="h-4 w-4 mr-2" />
+                Download CSV
+              </Button>
               {ageingData && (
                 <p className="text-sm text-muted-foreground">
                   {ageingData.totals.count} line(s) · total outstanding ≈ ₹{ageingData.totals.outstanding.toLocaleString()}

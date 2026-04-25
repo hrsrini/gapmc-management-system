@@ -61,6 +61,17 @@ function parseNonGstCharges(v: unknown): { ok: true; lines: NonGstChargeLine[]; 
   return { ok: true, lines, sum, json };
 }
 
+function escapeCsvCell(val: unknown): string {
+  if (val == null) return "";
+  const s = String(val);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function toCsvRow(arr: unknown[]): string {
+  return arr.map(escapeCsvCell).join(",");
+}
+
 async function sumPaidM03ByInvoiceIds(invoiceIds: string[]): Promise<Map<string, number>> {
   const m = new Map<string, number>();
   if (invoiceIds.length === 0) return m;
@@ -807,6 +818,7 @@ export function registerRentIomsRoutes(app: Express) {
       const asOfDate =
         asOfRaw && /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : new Date().toISOString().slice(0, 10);
       const yardQ = String(req.query.yardId ?? "").trim();
+      const format = String(req.query.format ?? "").toLowerCase();
       const conditions = [inArray(rentInvoices.status, ["Approved", "Overdue"])];
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0) conditions.push(inArray(rentInvoices.yardId, scopedIds));
@@ -855,17 +867,60 @@ export function registerRentIomsRoutes(app: Express) {
       }
       rows.sort((a, b) => b.daysPastDue - a.daysPastDue);
       const totOut = Math.round(rows.reduce((s, r) => s + r.outstandingAmount, 0) * 100) / 100;
+      const bucketTotals = ["0-30", "31-60", "61-90", "90+"].map((b) => ({
+        bucket: b,
+        count: rows.filter((r) => r.ageingBucket === b).length,
+        outstanding: Math.round(
+          rows.filter((r) => r.ageingBucket === b).reduce((s, r) => s + r.outstandingAmount, 0) * 100,
+        ) / 100,
+      }));
+
+      if (format === "csv") {
+        const header = [
+          "asOfDate",
+          "invoiceId",
+          "invoiceNo",
+          "yardId",
+          "tenantLicenceId",
+          "periodMonth",
+          "dueDate",
+          "daysPastDue",
+          "ageingBucket",
+          "outstandingAmount",
+          "status",
+        ];
+        const dataLines = rows.map((r) =>
+          toCsvRow([
+            asOfDate,
+            r.invoiceId,
+            r.invoiceNo,
+            r.yardId,
+            r.tenantLicenceId,
+            r.periodMonth,
+            r.dueDate,
+            r.daysPastDue,
+            r.ageingBucket,
+            r.outstandingAmount,
+            r.status,
+          ]),
+        );
+        const summaryLines: string[] = [
+          "",
+          toCsvRow(["# summary", "asOfDate", asOfDate, "rowCount", rows.length, "totalOutstanding", totOut]),
+          toCsvRow(["# buckets", "bucket", "count", "outstanding"]),
+          ...bucketTotals.map((b) => toCsvRow([b.bucket, b.count, b.outstanding])),
+        ];
+        const csv = [toCsvRow(header), ...dataLines, ...summaryLines].join("\r\n");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", "attachment; filename=rent-outstanding-ageing.csv");
+        return res.send("\uFEFF" + csv);
+      }
+
       return res.json({
         asOfDate,
         rows,
         totals: { count: rows.length, outstanding: totOut },
-        bucketTotals: ["0-30", "31-60", "61-90", "90+"].map((b) => ({
-          bucket: b,
-          count: rows.filter((r) => r.ageingBucket === b).length,
-          outstanding: Math.round(
-            rows.filter((r) => r.ageingBucket === b).reduce((s, r) => s + r.outstandingAmount, 0) * 100,
-          ) / 100,
-        })),
+        bucketTotals,
       });
     } catch (e) {
       console.error(e);
