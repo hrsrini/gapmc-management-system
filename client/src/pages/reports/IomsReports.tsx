@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -13,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { FileText, Receipt, Banknote, Download, UserCircle, BarChart3, Table2, Truck } from "lucide-react";
+import { FileText, Receipt, Banknote, Download, UserCircle, BarChart3, Table2, Truck, Clock } from "lucide-react";
 import {
   ReportDataTable,
   type ReportPagedParams,
@@ -161,6 +162,7 @@ export default function IomsReports() {
   const [to, setTo] = useState("");
   const [yardId, setYardId] = useState<string>("all");
   const [previewKind, setPreviewKind] = useState<ReportKind>("licences");
+  const [ageingAsOf, setAgeingAsOf] = useState(() => new Date().toISOString().slice(0, 10));
   const [tableParams, setTableParams] = useState<ReportPagedParams>({
     page: 1,
     pageSize: 25,
@@ -179,6 +181,34 @@ export default function IomsReports() {
   );
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards/for-reports"] });
+  const ageingUrl = useMemo(() => {
+    const p = new URLSearchParams();
+    p.set("asOf", ageingAsOf);
+    if (yardId && yardId !== "all") p.set("yardId", yardId);
+    return `/api/ioms/rent/reports/ageing?${p.toString()}`;
+  }, [ageingAsOf, yardId]);
+  const { data: ageingData, isLoading: ageingLoading, isError: ageingError } = useQuery<{
+    asOfDate: string;
+    rows: {
+      invoiceId: string;
+      invoiceNo: string;
+      periodMonth: string;
+      dueDate: string;
+      daysPastDue: number;
+      ageingBucket: string;
+      outstandingAmount: number;
+      status: string;
+    }[];
+    totals: { count: number; outstanding: number };
+    bucketTotals: { bucket: string; count: number; outstanding: number }[];
+  }>({
+    queryKey: [ageingUrl],
+    queryFn: async () => {
+      const res = await fetch(ageingUrl, { credentials: "include" });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+  });
   const consolidatedUrl =
     yardId && yardId !== "all"
       ? `/api/hr/reports/consolidated?yardId=${encodeURIComponent(yardId)}`
@@ -409,6 +439,93 @@ export default function IomsReports() {
                 isLoading={previewLoading}
                 searchPlaceholder={searchPlaceholderForKind(previewKind)}
               />
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5" />
+              Rent outstanding ageing (M-03)
+            </CardTitle>
+            <CardDescription>
+              Past-due Approved/Overdue invoices with positive balance (total minus Paid/Reconciled M-03 receipts). Due date
+              is the last day of the invoice period month. Buckets are days after that due date, as of the date below.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-end gap-4">
+              <div className="space-y-2">
+                <Label>As of (YYYY-MM-DD)</Label>
+                <Input
+                  className="w-44"
+                  type="text"
+                  value={ageingAsOf}
+                  onChange={(e) => setAgeingAsOf(e.target.value)}
+                  placeholder="2026-04-25"
+                />
+              </div>
+              {ageingData && (
+                <p className="text-sm text-muted-foreground">
+                  {ageingData.totals.count} line(s) · total outstanding ≈ ₹{ageingData.totals.outstanding.toLocaleString()}
+                </p>
+              )}
+            </div>
+            {ageingError && <p className="text-sm text-destructive">Could not load ageing (check M-03 read access).</p>}
+            {ageingLoading && <Skeleton className="h-32 w-full" />}
+            {!ageingLoading && !ageingError && ageingData && (
+              <div className="space-y-3">
+                {ageingData.bucketTotals && ageingData.bucketTotals.length > 0 && (
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    {ageingData.bucketTotals.map((b) => (
+                      <span
+                        key={b.bucket}
+                        className="rounded border bg-muted/50 px-2 py-1"
+                        title="Bucket count / outstanding"
+                      >
+                        {b.bucket} d: {b.count} · ₹{b.outstanding.toLocaleString()}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="overflow-x-auto border rounded-md">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/30 text-left">
+                        <th className="p-2">Invoice</th>
+                        <th className="p-2">Period</th>
+                        <th className="p-2">Due</th>
+                        <th className="p-2">Days</th>
+                        <th className="p-2">Bucket</th>
+                        <th className="p-2">Outstanding</th>
+                        <th className="p-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ageingData.rows.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="p-4 text-muted-foreground">
+                            No past-due outstanding IOMS rent invoices for this filter.
+                          </td>
+                        </tr>
+                      ) : (
+                        ageingData.rows.map((r) => (
+                          <tr key={r.invoiceId} className="border-b border-border/50">
+                            <td className="p-2 font-mono text-xs">{r.invoiceNo}</td>
+                            <td className="p-2">{r.periodMonth}</td>
+                            <td className="p-2">{r.dueDate}</td>
+                            <td className="p-2">{r.daysPastDue}</td>
+                            <td className="p-2">{r.ageingBucket}</td>
+                            <td className="p-2">₹{r.outstandingAmount.toLocaleString()}</td>
+                            <td className="p-2">{r.status}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
           </CardContent>
         </Card>

@@ -29,6 +29,7 @@ import { recordRentCollectionForM03Receipt } from "./rent-deposit-ledger-from-re
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
 import { normalizeRentRevisionBasis, yearMonthMinusOne } from "@shared/rent-revision-basis";
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
+import { rentPeriodMonthEndIso } from "./rent-interest";
 
 function currentYearMonthUtc(): string {
   const d = new Date();
@@ -58,6 +59,22 @@ function parseNonGstCharges(v: unknown): { ok: true; lines: NonGstChargeLine[]; 
   const json = JSON.stringify(lines);
   if (json.length > 4000) return { ok: false, error: "nonGstCharges payload too large." };
   return { ok: true, lines, sum, json };
+}
+
+async function sumPaidM03ByInvoiceIds(invoiceIds: string[]): Promise<Map<string, number>> {
+  const m = new Map<string, number>();
+  if (invoiceIds.length === 0) return m;
+  const recs = await db
+    .select({ sourceRecordId: iomsReceipts.sourceRecordId, totalAmount: iomsReceipts.totalAmount, status: iomsReceipts.status })
+    .from(iomsReceipts)
+    .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
+  for (const r of recs) {
+    if (String(r.status ?? "") !== "Paid" && String(r.status ?? "") !== "Reconciled") continue;
+    const id = String(r.sourceRecordId ?? "");
+    if (!id) continue;
+    m.set(id, (m.get(id) ?? 0) + Number(r.totalAmount ?? 0));
+  }
+  return m;
 }
 
 export function registerRentIomsRoutes(app: Express) {
@@ -548,11 +565,25 @@ export function registerRentIomsRoutes(app: Express) {
         (updates.tenantLicenceId as string | undefined) ?? existing.tenantLicenceId;
       const finalRent =
         updates.rentAmount != null ? Number(updates.rentAmount) : Number(existing.rentAmount ?? 0);
-      const nonGstLines = parseNonGstCharges(
-        (updates.nonGstChargesJson as unknown) != null
-          ? JSON.parse(String(updates.nonGstChargesJson ?? "null"))
-          : (existing.nonGstChargesJson ? JSON.parse(String(existing.nonGstChargesJson)) : null),
-      );
+      let rawNonGstMerge: unknown = null;
+      if ((updates as Record<string, unknown>).nonGstChargesJson !== undefined) {
+        const j = (updates as Record<string, unknown>).nonGstChargesJson;
+        if (j == null) rawNonGstMerge = null;
+        else {
+          try {
+            rawNonGstMerge = typeof j === "string" ? JSON.parse(j) : j;
+          } catch {
+            rawNonGstMerge = null;
+          }
+        }
+      } else if (existing.nonGstChargesJson) {
+        try {
+          rawNonGstMerge = JSON.parse(String(existing.nonGstChargesJson));
+        } catch {
+          rawNonGstMerge = null;
+        }
+      }
+      const nonGstLines = parseNonGstCharges(rawNonGstMerge);
       const nonGstSum = nonGstLines.ok ? nonGstLines.sum : 0;
       if (existing.status === "Draft" && !statusChange && finalTenant) {
         if (await tenantLicenceIsGstExempt(finalTenant)) {
@@ -769,6 +800,79 @@ export function registerRentIomsRoutes(app: Express) {
     }
   });
 
+  /** US-M03-006: past-due outstanding rent with simple ageing buckets (days after period-month end). */
+  app.get("/api/ioms/rent/reports/ageing", async (req, res) => {
+    try {
+      const asOfRaw = String(req.query.asOf ?? "").trim();
+      const asOfDate =
+        asOfRaw && /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : new Date().toISOString().slice(0, 10);
+      const yardQ = String(req.query.yardId ?? "").trim();
+      const conditions = [inArray(rentInvoices.status, ["Approved", "Overdue"])];
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0) conditions.push(inArray(rentInvoices.yardId, scopedIds));
+      if (yardQ && yardQ !== "all") conditions.push(eq(rentInvoices.yardId, yardQ));
+
+      const list = await db.select().from(rentInvoices).where(and(...conditions));
+      const paidMap = await sumPaidM03ByInvoiceIds(list.map((r) => r.id));
+      const MS_PER_DAY = 86_400_000;
+      const rows: {
+        invoiceId: string;
+        invoiceNo: string;
+        periodMonth: string;
+        dueDate: string;
+        daysPastDue: number;
+        ageingBucket: string;
+        outstandingAmount: number;
+        status: string;
+        yardId: string;
+        tenantLicenceId: string;
+      }[] = [];
+
+      for (const inv of list) {
+        const due = rentPeriodMonthEndIso(inv.periodMonth);
+        if (!due) continue;
+        const paid = paidMap.get(inv.id) ?? 0;
+        const outstanding = Number(inv.totalAmount ?? 0) - paid;
+        if (outstanding <= 0.01) continue;
+        if (asOfDate <= due) continue;
+        const dueT = Date.parse(`${due}T00:00:00.000Z`);
+        const asT = Date.parse(`${asOfDate}T00:00:00.000Z`);
+        const daysPastDue = Math.max(0, Math.floor((asT - dueT) / MS_PER_DAY));
+        const ageingBucket =
+          daysPastDue <= 30 ? "0-30" : daysPastDue <= 60 ? "31-60" : daysPastDue <= 90 ? "61-90" : "90+";
+        rows.push({
+          invoiceId: inv.id,
+          invoiceNo: (inv.invoiceNo ?? inv.id) as string,
+          periodMonth: String(inv.periodMonth),
+          dueDate: due,
+          daysPastDue,
+          ageingBucket,
+          outstandingAmount: Math.round(outstanding * 100) / 100,
+          status: String(inv.status),
+          yardId: inv.yardId,
+          tenantLicenceId: inv.tenantLicenceId,
+        });
+      }
+      rows.sort((a, b) => b.daysPastDue - a.daysPastDue);
+      const totOut = Math.round(rows.reduce((s, r) => s + r.outstandingAmount, 0) * 100) / 100;
+      return res.json({
+        asOfDate,
+        rows,
+        totals: { count: rows.length, outstanding: totOut },
+        bucketTotals: ["0-30", "31-60", "61-90", "90+"].map((b) => ({
+          bucket: b,
+          count: rows.filter((r) => r.ageingBucket === b).length,
+          outstanding: Math.round(
+            rows.filter((r) => r.ageingBucket === b).reduce((s, r) => s + r.outstandingAmount, 0) * 100,
+          ) / 100,
+        })),
+      });
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to build rent ageing report");
+    }
+  });
+
   // ----- GSTR-1 export (outward supplies JSON for GSTN) -----
   app.get("/api/ioms/rent/gstr1", async (req, res) => {
     try {
@@ -910,12 +1014,12 @@ export function registerRentIomsRoutes(app: Express) {
       if (inv.status === "Paid") {
         return sendApiError(res, 400, "RENT_CREDIT_NOTE_PAID_INVOICE", "Credit note not allowed for paid invoice");
       }
-      if (inv.status !== "Approved") {
+      if (inv.status !== "Approved" && inv.status !== "Overdue") {
         return sendApiError(
           res,
           400,
           "RENT_CREDIT_NOTE_INVOICE_NOT_APPROVED",
-          "Credit note only for approved invoices",
+          "Credit note only for Approved or Overdue invoices (unsettled).",
         );
       }
       const scopedIds = req.scopedLocationIds;
@@ -961,12 +1065,12 @@ export function registerRentIomsRoutes(app: Express) {
       if (inv.status === "Paid") {
         return sendApiError(res, 400, "RENT_CREDIT_NOTE_PAID_INVOICE", "Credit note not allowed for paid invoice");
       }
-      if (inv.status !== "Approved") {
+      if (inv.status !== "Approved" && inv.status !== "Overdue") {
         return sendApiError(
           res,
           400,
           "RENT_CREDIT_NOTE_INVOICE_NOT_APPROVED",
-          "Credit note only for approved invoices",
+          "Credit note only for Approved or Overdue invoices (unsettled).",
         );
       }
       const scopedIds = req.scopedLocationIds;

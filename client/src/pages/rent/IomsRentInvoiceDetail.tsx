@@ -44,6 +44,7 @@ interface RentInvoice {
   approvedAt?: string | null;
   workflowRevisionCount?: number | null;
   dvReturnRemarks?: string | null;
+  nonGstChargesJson?: string | null;
 }
 interface YardRef {
   id: string;
@@ -156,11 +157,29 @@ export default function IomsRentInvoiceDetail() {
   const draft = invoice.status === "Draft";
   const verified = invoice.status === "Verified";
   const approved = invoice.status === "Approved";
+  const overdue = invoice.status === "Overdue";
   const canDoVerify = canVerify && draft;
   const canDoApprove = canApprove && verified;
   const canSendBack = canVerify && verified;
-  const canMarkPaid = canApprove && approved;
-  const canCancel = canApprove && approved;
+  const canMarkPaid = canApprove && (approved || overdue);
+  const canCancel = canApprove && (approved || overdue);
+
+  const nonGstLines: { label: string; amount: number }[] = (() => {
+    const j = invoice.nonGstChargesJson;
+    if (j == null || String(j).trim() === "") return [];
+    try {
+      const arr = JSON.parse(String(j)) as unknown;
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .map((o) => {
+          const x = o as { label?: unknown; amount?: unknown };
+          return { label: String(x?.label ?? ""), amount: Number(x?.amount) };
+        })
+        .filter((l) => l.label && Number.isFinite(l.amount) && l.amount > 0);
+    } catch {
+      return [];
+    }
+  })();
 
   return (
     <AppShell breadcrumbs={[{ label: "Rent (IOMS)", href: "/rent/ioms" }, { label: invoice.invoiceNo ?? invoice.id }]}>
@@ -183,7 +202,11 @@ export default function IomsRentInvoiceDetail() {
             <div><span className="text-muted-foreground">Asset</span><br />{assetById[invoice.assetId] ?? invoice.assetId}</div>
             <div><span className="text-muted-foreground">Allotment</span><br />{allotmentById[invoice.allotmentId] ?? invoice.allotmentId}</div>
             <div><span className="text-muted-foreground">Tenant licence</span><br />{licenceById[invoice.tenantLicenceId] ?? invoice.tenantLicenceId}</div>
-            <div><span className="text-muted-foreground">Status</span><br /><Badge variant="secondary">{invoice.status}</Badge></div>
+            <div>
+              <span className="text-muted-foreground">Status</span>
+              <br />
+              <Badge variant={overdue ? "destructive" : "secondary"}>{invoice.status}</Badge>
+            </div>
             <div><span className="text-muted-foreground">Rent</span><br />₹{invoice.rentAmount.toLocaleString()}</div>
             <div><span className="text-muted-foreground">CGST / SGST</span><br />₹{invoice.cgst.toLocaleString()} / ₹{invoice.sgst.toLocaleString()}</div>
             <div><span className="text-muted-foreground">Total</span><br />₹{invoice.totalAmount.toLocaleString()}</div>
@@ -197,6 +220,18 @@ export default function IomsRentInvoiceDetail() {
                 <span className="text-muted-foreground">TDS</span>
                 <br />
                 Not applicable
+              </div>
+            )}
+            {nonGstLines.length > 0 && (
+              <div className="md:col-span-2">
+                <span className="text-muted-foreground">Non-GST charge lines (M-03)</span>
+                <ul className="mt-1 list-disc list-inside text-sm">
+                  {nonGstLines.map((l, i) => (
+                    <li key={i}>
+                      {l.label}: ₹{l.amount.toLocaleString()}
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
             {invoice.isGovtEntity && <div><span className="text-muted-foreground">Govt entity</span><br />Yes</div>}
