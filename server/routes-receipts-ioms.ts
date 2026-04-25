@@ -511,12 +511,12 @@ export function registerReceiptsIomsRoutes(app: Express) {
         const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
         if (inv) {
           const allRecs = await db
-            .select({ total: iomsReceipts.totalAmount, status: iomsReceipts.status })
+            .select({ totalAmount: iomsReceipts.totalAmount, status: iomsReceipts.status })
             .from(iomsReceipts)
             .where(and(eq(iomsReceipts.sourceModule, "M-03"), eq(iomsReceipts.sourceRecordId, invoiceId)));
           const paidSum = allRecs
             .filter((r) => String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled")
-            .reduce((s, r) => s + Number(r.total ?? 0), 0);
+            .reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
           const total = Number(inv.totalAmount ?? 0);
           if (paidSum >= total - 0.01 && String(inv.status ?? "") !== "Paid") {
             await db.update(rentInvoices).set({ status: "Paid" }).where(eq(rentInvoices.id, invoiceId));

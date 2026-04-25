@@ -39,13 +39,6 @@ export async function runM02EntityAlerts(): Promise<{
   }
 
   // Licence expiry windows (based on validTo date part).
-  const [exp60] = await db
-    .select({
-      c: sql<number>`COUNT(*)`,
-    })
-    .from(traderLicences)
-    .where(and(eq(traderLicences.status, "Active"), isNotNull(traderLicences.validTo), ne(traderLicences.validTo, "")));
-
   // Narrow windows using string date compare on YYYY-MM-DD slice. validTo is stored as text but normally iso.
   const plusDays = (days: number) => {
     const d = new Date(`${asOfDate}T12:00:00.000Z`);

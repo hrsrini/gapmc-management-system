@@ -627,6 +627,14 @@ export function registerTradersAssetsRoutes(app: Express) {
    */
   app.post("/api/ioms/dues/create-online-receipt", async (req, res) => {
     try {
+      if (process.env.PAYMENT_GATEWAY_INIT_ENABLED !== "true") {
+        return sendApiError(
+          res,
+          403,
+          "RECEIPT_GATEWAY_DISABLED",
+          "Online dues payment is disabled until the gateway is enabled (set PAYMENT_GATEWAY_INIT_ENABLED=true).",
+        );
+      }
       const body = req.body as Record<string, unknown>;
       const kind = String(body.kind ?? "").trim();
       const payAmount = Number(body.amount ?? NaN);
