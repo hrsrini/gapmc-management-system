@@ -2,9 +2,9 @@
  * M-01: retirement date reminders (stub notify). Run daily via CRON_HR_RETIREMENT=true or HTTP cron.
  * Also disables login for users linked to employees in terminal HR statuses (idempotent).
  */
-import { eq, and, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, inArray, isNotNull, lte, gte, lt } from "drizzle-orm";
 import { db } from "./db";
-import { employees, users } from "@shared/db-schema";
+import { employees, users, auditLog } from "@shared/db-schema";
 import { sendNotificationStub } from "./notify";
 import { writeAuditLogSystem } from "./audit";
 
@@ -46,6 +46,37 @@ export async function disableUsersForSeparatedEmployees(): Promise<{ disabled: n
   return { disabled };
 }
 
+/** US-M01-002: auto-retire employees whose retirementDate is due (status Active → Retired) and disable login. */
+export async function autoRetireDueEmployees(): Promise<{ retired: number }> {
+  const today = new Date().toISOString().slice(0, 10);
+  const due = await db
+    .select({ id: employees.id, userId: employees.userId, retirementDate: employees.retirementDate })
+    .from(employees)
+    .where(and(eq(employees.status, "Active"), isNotNull(employees.retirementDate), lte(employees.retirementDate, today)));
+
+  const ts = new Date().toISOString();
+  let retired = 0;
+  for (const e of due) {
+    await db.transaction(async (tx) => {
+      await tx.update(employees).set({ status: "Retired", updatedAt: ts }).where(eq(employees.id, e.id));
+      // Disable linked user rows in the same transaction (SRS §1.4 coupling).
+      await tx
+        .update(users)
+        .set({ isActive: false, disabledAt: ts, updatedAt: ts })
+        .where(and(isNotNull(users.employeeId), eq(users.employeeId, e.id)));
+    });
+    await writeAuditLogSystem({
+      module: "M-01",
+      action: "AutoRetireEmployee",
+      recordId: e.id,
+      beforeValue: { status: "Active", retirementDate: e.retirementDate },
+      afterValue: { status: "Retired", disabledUser: true },
+    });
+    retired += 1;
+  }
+  return { retired };
+}
+
 function daysUntil(dateYmd: string): number {
   const t = new Date(`${dateYmd}T12:00:00.000Z`).getTime();
   const now = Date.now();
@@ -62,8 +93,30 @@ const NOTIFY_DAYS: Array<{ days: number; band: "180" | "90" | "60" | "30" | "due
   { days: 0, band: "due" },
 ];
 
+async function wasRetirementReminderSentToday(employeeId: string, band: string): Promise<boolean> {
+  const today = new Date().toISOString().slice(0, 10);
+  const from = `${today}T00:00:00.000Z`;
+  const to = `${today}T23:59:59.999Z`;
+  const recordId = `retirement_reminder:${employeeId}:${band}`;
+  const rows = await db
+    .select({ id: auditLog.id })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.module, "M-01"),
+        eq(auditLog.action, "RetirementReminderSent"),
+        eq(auditLog.recordId, recordId),
+        gte(auditLog.createdAt, from),
+        lt(auditLog.createdAt, to),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
 export async function runHrRetirementReminders(): Promise<{ checked: number; notified: number; usersDisabled: number }> {
   const { disabled: usersDisabled } = await disableUsersForSeparatedEmployees();
+  await autoRetireDueEmployees();
   const list = await db.select().from(employees).where(eq(employees.status, "Active"));
   let notified = 0;
   for (const e of list) {
@@ -71,6 +124,7 @@ export async function runHrRetirementReminders(): Promise<{ checked: number; not
     const d = daysUntil(e.retirementDate);
     const hit = NOTIFY_DAYS.find((x) => x.days === d);
     if (!hit) continue;
+    if (await wasRetirementReminderSentToday(e.id, hit.band)) continue;
     const name = `${e.firstName} ${e.surname}`.trim();
     sendNotificationStub({
       kind: "retirement_reminder",
@@ -79,6 +133,12 @@ export async function runHrRetirementReminders(): Promise<{ checked: number; not
       retirementDate: e.retirementDate,
       daysUntil: d,
       band: hit.band,
+    });
+    await writeAuditLogSystem({
+      module: "M-01",
+      action: "RetirementReminderSent",
+      recordId: `retirement_reminder:${e.id}:${hit.band}`,
+      afterValue: { employeeId: e.id, band: hit.band, daysUntil: d, retirementDate: e.retirementDate },
     });
     notified += 1;
   }

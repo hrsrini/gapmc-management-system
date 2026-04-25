@@ -29,7 +29,32 @@ export type OperationalDigestPayload = {
   maintenanceDueCount?: number;
 };
 
-export type NotificationPayload = SlaReminderPayload | RetirementReminderPayload | OperationalDigestPayload;
+export type LeaveElCapWarningPayload = {
+  kind: "leave_el_cap_warning";
+  employeeId: string;
+  empId: string;
+  name: string;
+  leaveType: "EL";
+  balanceDays: number;
+  capDays: number;
+  date: string;
+};
+
+export type EmployeeRegistrationPayload = {
+  kind: "employee_registration";
+  employeeId: string;
+  status: "Submitted" | "Recommended" | "Approved";
+  name: string;
+  yardId?: string | null;
+  empId?: string | null;
+};
+
+export type NotificationPayload =
+  | SlaReminderPayload
+  | RetirementReminderPayload
+  | OperationalDigestPayload
+  | LeaveElCapWarningPayload
+  | EmployeeRegistrationPayload;
 
 function payloadSummary(payload: NotificationPayload): { subject: string; text: string } {
   if (payload.kind === "sla_reminder") {
@@ -42,6 +67,19 @@ function payloadSummary(payload: NotificationPayload): { subject: string; text: 
     return {
       subject: `[GAPMC HR] Retirement reminder: ${payload.name}`,
       text: `Employee ${payload.name} (${payload.employeeId}) retires on ${payload.retirementDate} (${payload.daysUntil} days, band ${payload.band}).`,
+    };
+  }
+  if (payload.kind === "leave_el_cap_warning") {
+    return {
+      subject: `[GAPMC HR] EL cap warning: ${payload.name}`,
+      text: `Employee ${payload.name} (${payload.empId}) has EL balance ${payload.balanceDays} days, above cap ${payload.capDays} (as of ${payload.date}).`,
+    };
+  }
+  if (payload.kind === "employee_registration") {
+    const p = payload;
+    return {
+      subject: `[GAPMC HR] Employee registration ${p.status}: ${p.name}`,
+      text: `Employee ${p.name} (${p.employeeId}) registration is ${p.status}${p.empId ? ` (EMP-ID ${p.empId})` : ""}. Yard: ${p.yardId ?? "—"}.`,
     };
   }
   const op = payload;

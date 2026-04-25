@@ -30,6 +30,7 @@ import {
   checkPostInward,
   checkPostInwardCommodities,
   commodities,
+  ltcClaims,
 } from "@shared/db-schema";
 
 function escapeCsvCell(val: unknown): string {
@@ -44,6 +45,140 @@ function toCsvRow(arr: unknown[]): string {
 }
 
 export function registerReportsRoutes(app: Express) {
+  // ----- M-01: LTC reports -----
+  /**
+   * LTC block register: Approved claims within date range.
+   * Query: from (ISO), to (ISO), employeeId (optional), format=csv|json
+   */
+  app.get("/api/hr/reports/ltc-block-register", async (req, res) => {
+    try {
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const employeeId = req.query.employeeId as string | undefined;
+      const format = (req.query.format as string)?.toLowerCase();
+
+      const conditions = [eq(ltcClaims.status, "Approved")];
+      if (from) conditions.push(gte(ltcClaims.claimDate, from));
+      if (to) conditions.push(lte(ltcClaims.claimDate, to));
+      if (employeeId) conditions.push(eq(ltcClaims.employeeId, employeeId));
+
+      const rows = await db
+        .select({
+          id: ltcClaims.id,
+          employeeId: ltcClaims.employeeId,
+          empId: employees.empId,
+          employeeName: sql<string>`${employees.firstName} || ' ' || ${employees.surname}`,
+          claimDate: ltcClaims.claimDate,
+          period: ltcClaims.period,
+          amount: ltcClaims.amount,
+        })
+        .from(ltcClaims)
+        .leftJoin(employees, eq(ltcClaims.employeeId, employees.id))
+        .where(and(...conditions))
+        .orderBy(desc(ltcClaims.claimDate));
+
+      if (format === "csv") {
+        const headers = ["id", "employeeId", "empId", "employeeName", "claimDate", "period", "amount"];
+        const csv = [headers.join(","), ...rows.map((r) => toCsvRow([r.id, r.employeeId, r.empId, r.employeeName, r.claimDate, r.period, r.amount]))].join(
+          "\r\n",
+        );
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", "attachment; filename=ltc-block-register.csv");
+        return res.send("\uFEFF" + csv);
+      }
+
+      res.json({
+        description: "LTC block register (Approved claims only).",
+        from: from ?? null,
+        to: to ?? null,
+        employeeId: employeeId ?? null,
+        count: rows.length,
+        rows,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate LTC block register");
+    }
+  });
+
+  /**
+   * LTC utilization summary: totals by employee + period (Approved claims).
+   * Query: from (ISO), to (ISO), employeeId (optional), format=csv|json
+   */
+  app.get("/api/hr/reports/ltc-utilization", async (req, res) => {
+    try {
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const employeeId = req.query.employeeId as string | undefined;
+      const format = (req.query.format as string)?.toLowerCase();
+
+      const conditions = [eq(ltcClaims.status, "Approved")];
+      if (from) conditions.push(gte(ltcClaims.claimDate, from));
+      if (to) conditions.push(lte(ltcClaims.claimDate, to));
+      if (employeeId) conditions.push(eq(ltcClaims.employeeId, employeeId));
+
+      const rows = await db
+        .select({
+          employeeId: ltcClaims.employeeId,
+          empId: employees.empId,
+          employeeName: sql<string>`${employees.firstName} || ' ' || ${employees.surname}`,
+          period: ltcClaims.period,
+          claimCount: sql<number>`count(*)::int`,
+          totalAmount: sql<number>`coalesce(sum(${ltcClaims.amount}), 0)::double precision`,
+          firstClaimDate: sql<string>`min(${ltcClaims.claimDate})`,
+          lastClaimDate: sql<string>`max(${ltcClaims.claimDate})`,
+        })
+        .from(ltcClaims)
+        .leftJoin(employees, eq(ltcClaims.employeeId, employees.id))
+        .where(and(...conditions))
+        .groupBy(ltcClaims.employeeId, employees.empId, employees.firstName, employees.surname, ltcClaims.period)
+        .orderBy(desc(sql`max(${ltcClaims.claimDate})`));
+
+      if (format === "csv") {
+        const headers = [
+          "employeeId",
+          "empId",
+          "employeeName",
+          "period",
+          "claimCount",
+          "totalAmount",
+          "firstClaimDate",
+          "lastClaimDate",
+        ];
+        const csv = [
+          headers.join(","),
+          ...rows.map((r) =>
+            toCsvRow([
+              r.employeeId,
+              r.empId,
+              r.employeeName,
+              r.period,
+              r.claimCount,
+              r.totalAmount,
+              r.firstClaimDate,
+              r.lastClaimDate,
+            ]),
+          ),
+        ].join("\r\n");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", "attachment; filename=ltc-utilization.csv");
+        return res.send("\uFEFF" + csv);
+      }
+
+      res.json({
+        description: "LTC utilization summary (Approved claims only), grouped by employee + period.",
+        from: from ?? null,
+        to: to ?? null,
+        employeeId: employeeId ?? null,
+        count: rows.length,
+        rows,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate LTC utilization report");
+    }
+  });
+
   /**
    * Check-post commodity arrivals for "Arrival of Commodities" reporting — excludes Passway/Transit
    * (market fee exempt; tracked separately). Only Verified inward rows.

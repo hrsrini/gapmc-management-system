@@ -378,6 +378,12 @@ export const employees = gapmc.table("employees", {
   yardId: text("yard_id").notNull(),
   employeeType: text("employee_type").notNull(),
   aadhaarToken: text("aadhaar_token"),
+  /** BR-EMP-09: SHA256-HMAC fingerprint of raw Aadhaar (for uniqueness); raw value never persisted. */
+  aadhaarFingerprint: text("aadhaar_fingerprint"),
+  /** US-M01-005: basic pay (INR) for leave encashment at retirement. */
+  basicPayInr: doublePrecision("basic_pay_inr"),
+  /** US-M01-005: dearness allowance amount (INR) for leave encashment at retirement. */
+  daAmountInr: doublePrecision("da_amount_inr"),
   pan: text("pan"),
   dob: text("dob"),
   joiningDate: text("joining_date").notNull(),
@@ -407,7 +413,7 @@ export const employees = gapmc.table("employees", {
   category: text("category"),
   /** §4.1.1: father or spouse name. */
   fatherOrSpouseName: text("father_or_spouse_name"),
-  status: text("status").notNull(), // Draft | Submitted | Active | Inactive | Suspended | Retired | Resigned
+  status: text("status").notNull(), // Draft | Submitted | Recommended | Active | Inactive | Suspended | Retired | Resigned
   userId: text("user_id"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
@@ -459,8 +465,31 @@ export const serviceBookEntries = gapmc.table("service_book_entries", {
   content: jsonb("content").notNull(),
   isImmutable: boolean("is_immutable").default(false),
   status: text("status").notNull(),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
   approvedBy: text("approved_by"),
   approvedAt: text("approved_at"),
+  rejectionReasonCode: text("rejection_reason_code"),
+  rejectionRemarks: text("rejection_remarks"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
+  dvReturnRemarks: text("dv_return_remarks"),
+});
+
+/** US-M01-009: employee master document storage (file metadata; content in uploads blob store). */
+export const employeeDocuments = gapmc.table("employee_documents", {
+  id: text("id").primaryKey(),
+  employeeId: text("employee_id").notNull(),
+  /** Free text like "Aadhaar", "PAN", "AppointmentLetter", etc. */
+  docType: text("doc_type").notNull(),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  /** Relative upload key inside blob store, e.g. employees/{employeeId}/{storedFileName} */
+  blobKey: text("blob_key").notNull(),
+  /** Draft/Submitted/Approved: optional alignment with HR workflows. */
+  status: text("status").notNull(),
+  uploadedBy: text("uploaded_by"),
+  createdAt: text("created_at").notNull(),
 });
 
 export const leaveRequests = gapmc.table("leave_requests", {
@@ -469,9 +498,13 @@ export const leaveRequests = gapmc.table("leave_requests", {
   leaveType: text("leave_type").notNull(),
   fromDate: text("from_date").notNull(),
   toDate: text("to_date").notNull(),
-  status: text("status").notNull(), // Pending | Verified | Approved | Rejected
+  status: text("status").notNull(), // Pending | Verified | Approved | Rejected | Cancelled
   reason: text("reason"),
   supportingDocumentUrl: text("supporting_document_url"),
+  /** US-M01-014: retrospective entry indicator (e.g. entered after the fact by HR/Admin). */
+  isRetrospective: boolean("is_retrospective").default(false),
+  cancelledAt: text("cancelled_at"),
+  cancelledBy: text("cancelled_by"),
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   approvedBy: text("approved_by"),
@@ -490,13 +523,41 @@ export const employeeLeaveBalances = gapmc.table("employee_leave_balances", {
   updatedAt: text("updated_at"),
 });
 
+/** US-M01-006: pre-travel tour programme (must be approved before TA/DA bill submission). */
+export const tourProgrammes = gapmc.table("tour_programmes", {
+  id: text("id").primaryKey(),
+  tourNo: text("tour_no").notNull().unique(), // e.g. TOUR-2026-0001
+  employeeId: text("employee_id").notNull(),
+  destination: text("destination").notNull(),
+  purpose: text("purpose").notNull(),
+  fromDate: text("from_date").notNull(),
+  toDate: text("to_date").notNull(),
+  status: text("status").notNull(), // Pending | Verified | Approved | Rejected
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  approvedBy: text("approved_by"),
+  rejectionReasonCode: text("rejection_reason_code"),
+  rejectionRemarks: text("rejection_remarks"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
+  dvReturnRemarks: text("dv_return_remarks"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const ltcClaims = gapmc.table("ltc_claims", {
   id: text("id").primaryKey(),
   employeeId: text("employee_id").notNull(),
   claimDate: text("claim_date").notNull(),
   amount: doublePrecision("amount").notNull(),
   period: text("period"),
-  status: text("status").notNull(), // Pending | Verified | Approved | Rejected
+  blockPeriod: text("block_period"), // e.g. 2024-2028
+  ltcType: text("ltc_type"), // HomeTown | AllIndia
+  estimatedEntitlement: doublePrecision("estimated_entitlement"),
+  advanceAmount: doublePrecision("advance_amount"),
+  actualClaimAmount: doublePrecision("actual_claim_amount"),
+  netPayable: doublePrecision("net_payable"),
+  status: text("status").notNull(), // Pending | Verified | Approved | Rejected | Settled
+  settledAt: text("settled_at"),
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   approvedBy: text("approved_by"),
@@ -509,9 +570,27 @@ export const ltcClaims = gapmc.table("ltc_claims", {
 export const taDaClaims = gapmc.table("ta_da_claims", {
   id: text("id").primaryKey(),
   employeeId: text("employee_id").notNull(),
+  tourProgrammeId: text("tour_programme_id"),
   travelDate: text("travel_date").notNull(),
+  returnDate: text("return_date"),
   purpose: text("purpose").notNull(),
+  /** Claimed total amount in INR. */
   amount: doublePrecision("amount").notNull(),
+  /** Pay level snapshot used for entitlement calc. */
+  payLevelSnapshot: integer("pay_level_snapshot"),
+  /** City category for daily allowance/hotel ceiling. */
+  cityCategory: text("city_category"), // A | B
+  /** Number of tour days for DA/hotel computation. */
+  days: integer("days"),
+  /** Claimed hotel amount in INR (optional). */
+  hotelAmount: doublePrecision("hotel_amount"),
+  /** Entitlement row snapshot (admin-configurable via system_config). */
+  entitledTrainClass: text("entitled_train_class"),
+  entitledDaPerDay: doublePrecision("entitled_da_per_day"),
+  entitledHotelPerDay: doublePrecision("entitled_hotel_per_day"),
+  entitledTotal: doublePrecision("entitled_total"),
+  /** Set true only when DA explicitly overrides 61+ day block. */
+  daOverrideLateSubmission: boolean("da_override_late_submission").default(false),
   status: text("status").notNull(), // Pending | Verified | Approved | Rejected
   doUser: text("do_user"),
   dvUser: text("dv_user"),

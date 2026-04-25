@@ -230,12 +230,65 @@ export function voucherAwaitingMyAction(
   return hit;
 }
 
-// ----- M-01: Leave requests (Pending → Verified → Approved | Rejected; DV may return Verified → Pending) -----
-const LEAVE_REQUEST_FLOW: Record<string, string[]> = {
+// ----- M-01: Service book entries (Pending → Verified → Approved | Rejected; DV may return Verified → Pending) -----
+const SERVICE_BOOK_FLOW: Record<string, string[]> = {
   Pending: ["Verified"],
   Verified: ["Approved", "Rejected", "Pending"],
   Approved: [],
   Rejected: [],
+};
+
+export function canTransitionServiceBookEntry(
+  user: AuthUser | undefined,
+  currentStatus: string,
+  newStatus: string,
+): { allowed: boolean; setDvUser?: boolean; setApprovedBy?: boolean } {
+  if (!user) return { allowed: false };
+  if (hasRole(user, ADMIN)) {
+    return {
+      allowed: true,
+      setDvUser: newStatus === "Verified",
+      setApprovedBy: newStatus === "Approved" || newStatus === "Rejected",
+    };
+  }
+  const allowed = SERVICE_BOOK_FLOW[currentStatus];
+  if (!allowed || !allowed.includes(newStatus)) return { allowed: false };
+  if (currentStatus === "Pending" && newStatus === "Verified") {
+    return hasRole(user, DV) ? { allowed: true, setDvUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && (newStatus === "Approved" || newStatus === "Rejected")) {
+    return hasRole(user, DA) ? { allowed: true, setApprovedBy: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Pending") {
+    return hasRole(user, DV) ? { allowed: true } : { allowed: false };
+  }
+  return { allowed: false };
+}
+
+export function canCreateServiceBookEntry(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, ADMIN]);
+}
+
+export function serviceBookEntryAwaitingMyAction(
+  user: AuthUser | undefined,
+  row: { status: string; doUser?: string | null; dvUser?: string | null },
+): boolean {
+  if (!user?.id) return false;
+  const uid = user.id;
+  const st = row.status;
+  if (hasRole(user, ADMIN)) return st === "Pending" || st === "Verified";
+  if (hasRole(user, DV) && st === "Pending") return !(row.doUser && row.doUser === uid);
+  if (hasRole(user, DA) && st === "Verified") return !(row.doUser && row.doUser === uid) && !(row.dvUser && row.dvUser === uid);
+  return false;
+}
+
+// ----- M-01: Leave requests (Pending → Verified → Approved | Rejected; DV may return Verified → Pending; DO/Admin may cancel Pending) -----
+const LEAVE_REQUEST_FLOW: Record<string, string[]> = {
+  Pending: ["Verified", "Cancelled"],
+  Verified: ["Approved", "Rejected", "Pending"],
+  Approved: [],
+  Rejected: [],
+  Cancelled: [],
 };
 
 export function canTransitionLeaveRequest(
@@ -255,6 +308,9 @@ export function canTransitionLeaveRequest(
   if (!allowed || !allowed.includes(newStatus)) return { allowed: false };
   if (currentStatus === "Pending" && newStatus === "Verified") {
     return hasRole(user, DV) ? { allowed: true, setDvUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Pending" && newStatus === "Cancelled") {
+    return hasRole(user, DO) ? { allowed: true } : { allowed: false };
   }
   if (currentStatus === "Verified" && (newStatus === "Approved" || newStatus === "Rejected")) {
     return hasRole(user, DA) ? { allowed: true, setApprovedBy: true } : { allowed: false };
@@ -358,12 +414,72 @@ export function canCreateTaDaClaim(user: AuthUser | undefined): boolean {
   return hasAnyRole(user, [DO, ADMIN]);
 }
 
-// ----- M-01: LTC claims (Pending → Verified → Approved | Rejected; DV may return Verified → Pending) -----
-const LTC_CLAIM_FLOW: Record<string, string[]> = {
+// ----- M-01: Tour programmes (Pending → Verified → Approved | Rejected; DV may return Verified → Pending) -----
+const TOUR_PROGRAMME_FLOW: Record<string, string[]> = {
   Pending: ["Verified"],
   Verified: ["Approved", "Rejected", "Pending"],
   Approved: [],
   Rejected: [],
+};
+
+export function canTransitionTourProgramme(
+  user: AuthUser | undefined,
+  currentStatus: string,
+  newStatus: string
+): { allowed: boolean; setDvUser?: boolean; setApprovedBy?: boolean } {
+  if (!user) return { allowed: false };
+  if (hasRole(user, ADMIN)) {
+    return {
+      allowed: true,
+      setDvUser: newStatus === "Verified",
+      setApprovedBy: newStatus === "Approved" || newStatus === "Rejected",
+    };
+  }
+  const allowed = TOUR_PROGRAMME_FLOW[currentStatus];
+  if (!allowed || !allowed.includes(newStatus)) return { allowed: false };
+  if (currentStatus === "Pending" && newStatus === "Verified") {
+    return hasRole(user, DV) ? { allowed: true, setDvUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && (newStatus === "Approved" || newStatus === "Rejected")) {
+    return hasRole(user, DA) ? { allowed: true, setApprovedBy: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Pending") {
+    return hasRole(user, DV) ? { allowed: true } : { allowed: false };
+  }
+  return { allowed: false };
+}
+
+export function tourProgrammeAwaitingMyAction(
+  user: AuthUser | undefined,
+  row: { status: string; doUser?: string | null; dvUser?: string | null },
+): boolean {
+  if (!user?.id) return false;
+  const uid = user.id;
+  const st = row.status;
+  if (hasRole(user, ADMIN)) return st === "Pending" || st === "Verified";
+  if (hasRole(user, DV) && st === "Pending") {
+    if (row.doUser && row.doUser === uid) return false;
+    return true;
+  }
+  if (hasRole(user, DA) && st === "Verified") {
+    if (row.doUser && row.doUser === uid) return false;
+    if (row.dvUser && row.dvUser === uid) return false;
+    return true;
+  }
+  return false;
+}
+
+export function canCreateTourProgramme(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, ADMIN]);
+}
+
+// ----- M-01: LTC claims (Pending → Verified → Approved | Rejected; DV may return Verified → Pending) -----
+const LTC_CLAIM_FLOW: Record<string, string[]> = {
+  Pending: ["Verified"],
+  Verified: ["Approved", "Rejected", "Pending"],
+  Approved: ["Settled"],
+  Rejected: [],
+  Settled: [],
 };
 
 export function canTransitionLtcClaim(
@@ -389,6 +505,9 @@ export function canTransitionLtcClaim(
   }
   if (currentStatus === "Verified" && newStatus === "Pending") {
     return hasRole(user, DV) ? { allowed: true } : { allowed: false };
+  }
+  if (currentStatus === "Approved" && newStatus === "Settled") {
+    return hasRole(user, DA) ? { allowed: true, setApprovedBy: true } : { allowed: false };
   }
   return { allowed: false };
 }

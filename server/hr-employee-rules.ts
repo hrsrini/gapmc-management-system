@@ -168,6 +168,13 @@ async function aadhaarMaskedTakenByOther(masked: string, excludeId: string | nul
   return rows.length > 0;
 }
 
+async function aadhaarFingerprintTakenByOther(fp: string, excludeId: string | null): Promise<boolean> {
+  const conds = [isNotNull(employees.aadhaarFingerprint), eq(employees.aadhaarFingerprint, fp)];
+  if (excludeId) conds.push(ne(employees.id, excludeId));
+  const rows = await db.select({ id: employees.id }).from(employees).where(and(...conds));
+  return rows.length > 0;
+}
+
 async function personalEmailTakenByOther(emailNorm: string, excludeId: string | null): Promise<boolean> {
   const conds = [
     isNotNull(employees.personalEmail),
@@ -182,11 +189,15 @@ async function personalEmailTakenByOther(emailNorm: string, excludeId: string | 
 export async function assertEmployeeUniqueness(args: {
   pan: string | null;
   aadhaarMasked: string | null;
+  aadhaarFingerprint?: string | null;
   personalEmail: string | null;
   excludeEmployeeId: string | null;
 }): Promise<void> {
   if (args.pan && (await panTakenByOther(args.pan, args.excludeEmployeeId))) {
     throw new HrEmployeeRuleError("HR_EMP_PAN_DUPLICATE", "PAN is already used by another employee.");
+  }
+  if (args.aadhaarFingerprint && (await aadhaarFingerprintTakenByOther(args.aadhaarFingerprint, args.excludeEmployeeId))) {
+    throw new HrEmployeeRuleError("HR_EMP_AADHAAR_DUPLICATE", "This Aadhaar is already on file for another employee.");
   }
   if (args.aadhaarMasked && (await aadhaarMaskedTakenByOther(args.aadhaarMasked, args.excludeEmployeeId))) {
     throw new HrEmployeeRuleError("HR_EMP_AADHAAR_DUPLICATE", "This masked Aadhaar value is already on file for another employee.");

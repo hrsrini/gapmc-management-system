@@ -81,6 +81,16 @@ export const SYSTEM_CONFIG_DEFAULTS = {
    */
   ta_da_entitlement_json:
     '[{"payLevel":"1-5","trainClass":"Sleeper / 3AC","daA":500,"daB":300,"hotelA":1000,"hotelB":800},{"payLevel":"6-8","trainClass":"AC 3 Tier","daA":800,"daB":500,"hotelA":2250,"hotelB":1500},{"payLevel":"9-11","trainClass":"AC 2 Tier","daA":1200,"daB":800,"hotelA":4500,"hotelB":3000},{"payLevel":"12-13","trainClass":"AC 1st Class","daA":1500,"daB":1000,"hotelA":7500,"hotelB":4500},{"payLevel":"14+","trainClass":"AC 1st / Air (Economy)","daA":2000,"daB":1200,"hotelA":10000,"hotelB":6000}]',
+  /** M-01 Leave: EL credit per half-year (days). */
+  leave_el_credit_half_year_days: "15",
+  /** M-01 Leave: CL credit per year (days). */
+  leave_cl_credit_year_days: "8",
+  /** M-01 Leave: HPL credit per year (days). */
+  leave_hpl_credit_year_days: "20",
+  /** M-01 Leave: EL balance cap (days) for warning. */
+  leave_el_cap_days: "300",
+  /** M-01 Leave: JSON array of holiday ISO dates (YYYY-MM-DD). */
+  leave_holidays_json: "[]",
 } as const;
 
 export type SystemConfigKey = keyof typeof SYSTEM_CONFIG_DEFAULTS;
@@ -123,6 +133,11 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "data_retention_leave_requests_years",
   "data_retention_trader_blocking_log_years",
   "ta_da_entitlement_json",
+  "leave_el_credit_half_year_days",
+  "leave_cl_credit_year_days",
+  "leave_hpl_credit_year_days",
+  "leave_el_cap_days",
+  "leave_holidays_json",
 ];
 
 export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
@@ -164,4 +179,9 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   data_retention_leave_requests_years: "Retention policy (years) — leave_requests.from_date snapshot",
   data_retention_trader_blocking_log_years: "Retention policy (years) — trader_blocking_log.actioned_at snapshot",
   ta_da_entitlement_json: "M-01 TA/DA: entitlement matrix JSON (payLevel, trainClass, daA, daB, hotelA, hotelB in INR)",
+  leave_el_credit_half_year_days: "M-01 Leave: EL credit per half-year (days)",
+  leave_cl_credit_year_days: "M-01 Leave: CL credit per year (days)",
+  leave_hpl_credit_year_days: "M-01 Leave: HPL credit per year (days)",
+  leave_el_cap_days: "M-01 Leave: EL cap (days) for warning",
+  leave_holidays_json: "M-01 Leave: holidays JSON array (YYYY-MM-DD)",
 };

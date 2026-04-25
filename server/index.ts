@@ -170,6 +170,20 @@ app.use((req, res, next) => {
     log("Cron M-01 HR retirement reminders scheduled (daily 07:15)");
   }
 
+  if (process.env.CRON_HR_LEAVE_ACCRUAL === "true") {
+    const cron = await import("node-cron");
+    const { runHrLeaveAccrual } = await import("./cron-hr-leave-accrual");
+    cron.default.schedule("45 7 * * *", async () => {
+      try {
+        const r = await runHrLeaveAccrual();
+        log(`Cron M-01: HR leave accrual credited=${r.credited} warnings=${r.warnings}`);
+      } catch (e) {
+        console.error("Cron M-01 HR leave accrual failed:", e);
+      }
+    });
+    log("Cron M-01 HR leave accrual scheduled (daily 07:45)");
+  }
+
   if (process.env.CRON_OPERATIONAL_DIGEST === "true") {
     const cron = await import("node-cron");
     const { runOperationalRemindersDigest } = await import("./cron-operational-reminders");

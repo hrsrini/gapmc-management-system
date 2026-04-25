@@ -161,6 +161,57 @@ export function registerAdminRoutes(app: Express) {
     }
   });
 
+  /**
+   * US-M01-016: system_config version history derived from audit_log diffs.
+   * Returns latest N "system_config" updates with per-key changes.
+   */
+  app.get("/api/admin/config/history", async (req, res) => {
+    try {
+      const limit = Math.max(1, Math.min(200, Number(req.query.limit ?? 50) || 50));
+      const key = req.query.key ? String(req.query.key) : null;
+
+      const rows = await db
+        .select({
+          id: auditLog.id,
+          userId: auditLog.userId,
+          createdAt: auditLog.createdAt,
+          ip: auditLog.ip,
+          beforeValue: auditLog.beforeValue,
+          afterValue: auditLog.afterValue,
+        })
+        .from(auditLog)
+        .where(and(eq(auditLog.recordId, "system_config"), eq(auditLog.module, "M-10")))
+        .orderBy(desc(auditLog.createdAt))
+        .limit(limit);
+
+      const out = rows.map((r) => {
+        const before = (r.beforeValue ?? {}) as Record<string, unknown>;
+        const after = (r.afterValue ?? {}) as Record<string, unknown>;
+        const changes: { key: string; before: string | null; after: string | null }[] = [];
+        const keys = Array.from(new Set<string>([...Object.keys(before), ...Object.keys(after)]));
+        for (const k of keys) {
+          if (key && k !== key) continue;
+          const b = before[k] == null ? null : String(before[k]);
+          const a = after[k] == null ? null : String(after[k]);
+          if (b !== a) changes.push({ key: k, before: b, after: a });
+        }
+        return {
+          id: r.id,
+          actorUserId: r.userId,
+          createdAt: r.createdAt,
+          ip: r.ip,
+          changeCount: changes.length,
+          changes,
+        };
+      });
+
+      res.json({ limit, key, rows: out.filter((x) => x.changeCount > 0) });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load config history");
+    }
+  });
+
   app.put("/api/admin/config", async (req, res) => {
     try {
       const userId = req.user!.id;
