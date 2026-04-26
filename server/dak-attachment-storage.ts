@@ -1,5 +1,5 @@
 import path from "path";
-import { getUploadBlobStore } from "./object-storage";
+import { getUploadBlobStore, resolveLocalUploadsRoot } from "./object-storage";
 import { contentTypeForVoucherAttachment } from "./voucher-attachment-storage";
 
 export type DakAttachmentKind = "inward" | "outward";
@@ -10,7 +10,7 @@ export function dakBlobKey(kind: DakAttachmentKind, recordId: string, storedFile
 
 /** Legacy absolute path under `uploads/` (local layout matches blob key). */
 export function dakAttachmentFilePath(kind: DakAttachmentKind, recordId: string, storedFileName: string): string {
-  return path.join(process.cwd(), "uploads", dakBlobKey(kind, recordId, storedFileName));
+  return path.join(resolveLocalUploadsRoot(), dakBlobKey(kind, recordId, storedFileName));
 }
 
 export async function writeDakAttachmentBuffer(

@@ -21,8 +21,9 @@ import { createBugBodySchema, patchBugSchema, bugCommentSchema, BUG_STATUSES } f
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import type { AuthUser } from "./auth";
+import { resolveLocalUploadsRoot } from "./object-storage";
 
-const UPLOAD_ROOT = path.resolve(process.cwd(), "uploads", "bugs");
+const UPLOAD_ROOT = path.join(resolveLocalUploadsRoot(), "bugs");
 
 const ALLOWED_MIMES = new Set([
   "image/jpeg",

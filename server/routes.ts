@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import path from "path";
 import { createServer, type Server } from "http";
 import { sql, inArray, and, eq, or, isNull, desc } from "drizzle-orm";
 import { storage } from "./storage";
@@ -771,12 +772,19 @@ export async function registerRoutes(
       if (!doc || doc.agreementId !== agreementId) {
         return sendApiError(res, 404, "AGREEMENT_DOC_NOT_FOUND", "Document not found");
       }
-      const stored = String(doc.blobKey ?? "").split("/").pop() ?? "";
+      const stored = path.basename(String(doc.blobKey ?? "").replace(/\\/g, "/"));
       if (!isAllowedAgreementDocumentFileName(stored)) {
         return sendApiError(res, 400, "AGREEMENT_DOC_NAME_INVALID", "Invalid stored file name");
       }
       const buf = await readAgreementDocumentBuffer(agreementId, stored);
-      if (!buf?.length) return sendApiError(res, 404, "AGREEMENT_DOC_MISSING", "Document missing on server");
+      if (!buf?.length) {
+        return sendApiError(
+          res,
+          404,
+          "AGREEMENT_DOC_MISSING",
+          "Document missing on server. Restore the uploads folder that matches this database, or re-upload the file.",
+        );
+      }
       res.setHeader("Content-Type", contentTypeForAgreementDocument(stored));
       res.setHeader("Cache-Control", "private, max-age=3600");
       const safeName = (doc.fileName ?? stored).replace(/[\r\n"]/g, "_");

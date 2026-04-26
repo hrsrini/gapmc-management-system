@@ -1,9 +1,14 @@
 /**
  * Upload blob storage: local `uploads/<key>` or S3-compatible bucket (SRS §15.1).
  * Keys are relative paths (no leading slash), e.g. `dak/inward/{id}/{file}.pdf`.
+ *
+ * Local disk root defaults to `<project>/uploads` (parent of `server/` in dev, parent of `dist/` when
+ * running `node dist/index.cjs`), not `process.cwd()/uploads`, so reads/writes stay aligned if the
+ * process working directory is not the repo root.
  */
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile, unlink, stat } from "fs/promises";
 import {
   S3Client,
@@ -44,8 +49,29 @@ export interface UploadBlobStore {
   exists(key: string): Promise<boolean>;
 }
 
+/** Application / repo root for resolving `uploads/` (override when deployment layout differs). */
+export function resolveProjectRootDir(): string {
+  const env = (process.env.GAPMC_PROJECT_ROOT ?? "").trim();
+  if (env) {
+    return path.isAbsolute(env) ? env : path.resolve(process.cwd(), env);
+  }
+  const thisFile = fileURLToPath(import.meta.url);
+  return path.join(path.dirname(thisFile), "..");
+}
+
+/**
+ * Directory where local blob keys are stored (`employees/...`, `agreements/...`, etc.).
+ * Default: `<project>/uploads`. Set `LOCAL_UPLOADS_DIR` to an absolute path, or a path relative to the project root.
+ */
+export function resolveLocalUploadsRoot(): string {
+  const sub = (process.env.LOCAL_UPLOADS_DIR ?? "").trim();
+  const root = resolveProjectRootDir();
+  if (!sub) return path.join(root, "uploads");
+  return path.isAbsolute(sub) ? sub : path.join(root, sub);
+}
+
 function uploadsRoot(): string {
-  return path.join(process.cwd(), "uploads");
+  return resolveLocalUploadsRoot();
 }
 
 class LocalUploadBlobStore implements UploadBlobStore {

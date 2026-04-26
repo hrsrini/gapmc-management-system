@@ -4,6 +4,7 @@
  * service_book_entries, leave_requests, ltc_claims, ta_da_claims.
  */
 import type { Express, Response, Request } from "express";
+import path from "path";
 import { eq, desc, or, and, gte, lte, isNotNull } from "drizzle-orm";
 import multer from "multer";
 import { db } from "./db";
@@ -183,12 +184,19 @@ export function registerHrRoutes(app: Express) {
       if (!doc || doc.employeeId !== employeeId) {
         return sendApiError(res, 404, "HR_EMP_DOC_NOT_FOUND", "Document not found");
       }
-      const stored = String(doc.blobKey ?? "").split("/").pop() ?? "";
+      const stored = path.basename(String(doc.blobKey ?? "").replace(/\\/g, "/"));
       if (!isAllowedEmployeeDocumentFileName(stored)) {
         return sendApiError(res, 400, "HR_EMP_DOC_NAME_INVALID", "Invalid stored file name");
       }
       const buf = await readEmployeeDocumentBuffer(employeeId, stored);
-      if (!buf?.length) return sendApiError(res, 404, "HR_EMP_DOC_MISSING", "Document missing on server");
+      if (!buf?.length) {
+        return sendApiError(
+          res,
+          404,
+          "HR_EMP_DOC_MISSING",
+          "Document missing on server. Restore the uploads folder that matches this database, or re-upload the file.",
+        );
+      }
       res.setHeader("Content-Type", contentTypeForEmployeeDocument(stored));
       res.setHeader("Cache-Control", "private, max-age=3600");
       const safeName = (doc.fileName ?? stored).replace(/[\r\n"]/g, "_");
@@ -212,7 +220,7 @@ export function registerHrRoutes(app: Express) {
       if (!doc || doc.employeeId !== employeeId) {
         return sendApiError(res, 404, "HR_EMP_DOC_NOT_FOUND", "Document not found");
       }
-      const stored = String(doc.blobKey ?? "").split("/").pop() ?? "";
+      const stored = path.basename(String(doc.blobKey ?? "").replace(/\\/g, "/"));
       if (isAllowedEmployeeDocumentFileName(stored)) {
         await unlinkEmployeeDocumentIfExists(employeeId, stored);
       }

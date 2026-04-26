@@ -1,16 +1,16 @@
 import path from "path";
-import { getUploadBlobStore } from "./object-storage";
+import { getUploadBlobStore, resolveLocalUploadsRoot } from "./object-storage";
 
 export function voucherBlobKey(voucherId: string, storedFileName: string): string {
   return `vouchers/${path.basename(voucherId)}/${path.basename(storedFileName)}`;
 }
 
 export function voucherAttachmentsDir(voucherId: string): string {
-  return path.join(process.cwd(), "uploads", "vouchers", path.basename(voucherId));
+  return path.join(resolveLocalUploadsRoot(), "vouchers", path.basename(voucherId));
 }
 
 export function voucherAttachmentFilePath(voucherId: string, storedFileName: string): string {
-  return path.join(process.cwd(), "uploads", voucherBlobKey(voucherId, storedFileName));
+  return path.join(resolveLocalUploadsRoot(), voucherBlobKey(voucherId, storedFileName));
 }
 
 /** Stored names are `nanoid + ext`; reject path traversal and odd names. */
