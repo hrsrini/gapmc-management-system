@@ -692,16 +692,24 @@ export default function HrEmployeeForm() {
                       maxLength={150}
                     />
                   </div>
-                  <div className="md:col-span-2">
-                    <Label>Aadhaar number</Label>
-                    {isEdit && employee?.aadhaarToken ? (
-                      <p className="text-sm text-muted-foreground rounded-md border bg-muted/40 px-3 py-2 mb-2">
-                        On file (masked):{" "}
-                        <span className="font-mono tabular-nums text-foreground">{employee.aadhaarToken}</span>.
-                        Leave the field below empty to keep it; enter 12 digits only to replace.
-                      </p>
-                    ) : null}
+                  <div className="md:col-span-2 space-y-2">
+                    <Label htmlFor="hr-emp-aadhaar" className="leading-snug">
+                      {isEdit && employee?.aadhaarToken ? (
+                        <>
+                          <span className="block">Aadhaar number</span>
+                          <span className="mt-1.5 block rounded-md border bg-muted/40 px-2.5 py-2 font-mono text-sm font-normal tabular-nums tracking-normal text-foreground">
+                            {employee.aadhaarToken}
+                          </span>
+                          <span className="mt-1.5 block text-xs font-normal text-muted-foreground">
+                            Masked value on file. Leave the field below empty to keep it; enter 12 digits only to replace.
+                          </span>
+                        </>
+                      ) : (
+                        "Aadhaar number"
+                      )}
+                    </Label>
                     <Input
+                      id="hr-emp-aadhaar"
                       value={aadhaarInput}
                       onChange={(e) => setAadhaarInput(e.target.value.replace(/\D/g, "").slice(0, 12))}
                       placeholder={

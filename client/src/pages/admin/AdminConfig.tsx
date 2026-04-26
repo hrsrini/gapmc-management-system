@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Settings, AlertCircle, ImageIcon, Trash2, Upload } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { apiRequest, fetchApiGet, queryClient, readApiErrorMessage } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
@@ -16,16 +16,20 @@ import {
   SYSTEM_CONFIG_LABELS,
   type SystemConfigKey,
 } from "@shared/system-config-defaults";
-
-const CONFIG_FIELDS: { key: SystemConfigKey; label: string }[] = SYSTEM_CONFIG_KEYS.map((key) => ({
-  key,
-  label: SYSTEM_CONFIG_LABELS[key],
-}));
+import { randomHexSecret } from "@/lib/randomHexSecret";
 
 export default function AdminConfig() {
   const { toast } = useToast();
   const logoFileRef = useRef<HTMLInputElement>(null);
   const [logoPreviewNonce, setLogoPreviewNonce] = useState(0);
+  const configFields = useMemo(
+    () =>
+      SYSTEM_CONFIG_KEYS.map((key) => ({
+        key,
+        label: SYSTEM_CONFIG_LABELS[key],
+      })),
+    [],
+  );
   const { data: config, isLoading, isError } = useQuery<Record<string, string>>({
     queryKey: ["/api/admin/config"],
   });
@@ -154,8 +158,9 @@ export default function AdminConfig() {
           <p className="text-sm text-muted-foreground">
             Default values used across the app (market fee %, MSP rate, admin charges, licence fee, rent interest %, dak
             diary scope, data retention policy years). Changes apply to new fee rates, MSP rows, and licences when amounts
-            are omitted. Authenticated users can read merged values via{" "}
-            <code className="text-xs bg-muted px-1 rounded">GET /api/system/config</code>. Admins can run a read-only
+            are omitted.             Authenticated users can read merged values via{" "}
+            <code className="text-xs bg-muted px-1 rounded">GET /api/system/config</code> (sensitive keys such as Aadhaar
+            HMAC are omitted). Admins can run a read-only
             retention count snapshot via{" "}
             <code className="text-xs bg-muted px-1 rounded">GET /api/admin/data-retention-summary</code> (no deletes).
           </p>
@@ -165,7 +170,7 @@ export default function AdminConfig() {
             <Skeleton className="h-48 w-full" />
           ) : (
             <>
-              {CONFIG_FIELDS.map(({ key, label }) => (
+              {configFields.map(({ key, label }) => (
                 <div key={key} className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start">
                   <Label className="md:col-span-1 pt-2" htmlFor={`cfg-${key}`}>
                     {label}
@@ -178,6 +183,26 @@ export default function AdminConfig() {
                       onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
                       spellCheck={false}
                     />
+                  ) : key === "aadhaar_hmac_secret" ? (
+                    <div className="md:col-span-2 flex flex-col sm:flex-row gap-2">
+                      <Input
+                        id={`cfg-${key}`}
+                        type="password"
+                        autoComplete="new-password"
+                        className="font-mono text-sm flex-1 min-w-0"
+                        value={values[key] ?? ""}
+                        onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0 self-start sm:self-auto"
+                        onClick={() => setValues((v) => ({ ...v, [key]: randomHexSecret() }))}
+                      >
+                        Random secret
+                      </Button>
+                    </div>
                   ) : (
                     <Input
                       id={`cfg-${key}`}

@@ -18,7 +18,7 @@ import { registerBugRoutes } from "./routes-bugs";
 import { registerReportsRoutes } from "./routes-reports";
 import { registerFinanceReferenceRoutes } from "./routes-finance-reference";
 import { registerAuthMeRoute, registerMfaRoutes, registerPublicAuthRoutes } from "./routes-auth";
-import { getMergedSystemConfig } from "./system-config";
+import { getMergedSystemConfig, omitSensitiveSystemConfigKeys } from "./system-config";
 import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermissionByPath } from "./auth";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
@@ -338,11 +338,11 @@ export async function registerRoutes(
   // IOMS M-10: Admin (RBAC) routes — yards, users, roles, config, audit
   registerAdminRoutes(app);
 
-  /** Merged system_config + code defaults; any authenticated user (forms use for suggested values). */
+  /** Merged system_config + code defaults; any authenticated user (forms use for suggested values). Sensitive keys omitted. */
   app.get("/api/system/config", async (_req, res) => {
     try {
       const merged = await getMergedSystemConfig();
-      res.json(merged);
+      res.json(omitSensitiveSystemConfigKeys(merged));
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load system configuration");

@@ -103,9 +103,17 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   leave_el_cap_days: "300",
   /** M-01 Leave: JSON array of holiday ISO dates (YYYY-MM-DD). */
   leave_holidays_json: "[]",
+  /**
+   * M-01 HR: SHA256-HMAC key for Aadhaar fingerprint (BR-EMP-09). Stored in DB; never exposed on GET /api/system/config.
+   * Env AADHAAR_HMAC_SECRET is used only when this value is empty (legacy / bootstrap).
+   */
+  aadhaar_hmac_secret: "",
 } as const;
 
 export type SystemConfigKey = keyof typeof SYSTEM_CONFIG_DEFAULTS;
+
+/** Omitted from GET /api/system/config so non-admin sessions never receive secrets. */
+export const SYSTEM_CONFIG_KEYS_SENSITIVE: readonly SystemConfigKey[] = ["aadhaar_hmac_secret"];
 
 /** Stable field order for Admin Config UI and server validation. */
 export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
@@ -156,6 +164,7 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "leave_hpl_credit_year_days",
   "leave_el_cap_days",
   "leave_holidays_json",
+  "aadhaar_hmac_secret",
 ];
 
 export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
@@ -208,4 +217,6 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   leave_hpl_credit_year_days: "M-01 Leave: HPL credit per year (days)",
   leave_el_cap_days: "M-01 Leave: EL cap (days) for warning",
   leave_holidays_json: "M-01 Leave: holidays JSON array (YYYY-MM-DD)",
+  aadhaar_hmac_secret:
+    "M-01 HR: Aadhaar HMAC secret (fingerprint for dedup; use a long random value; keep stable — rotating changes new fingerprints)",
 };

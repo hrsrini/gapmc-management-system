@@ -44,7 +44,7 @@ import { validateDaRejection, validateDvReturnToDraft } from "@shared/workflow-r
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
 import { hasPermission } from "./auth";
-import { getMergedSystemConfig } from "./system-config";
+import { getMergedSystemConfig, resolveAadhaarHmacSecret } from "./system-config";
 import { sendNotificationStub } from "./notify";
 import {
   contentTypeForEmployeeDocument,
@@ -73,7 +73,7 @@ import {
   isDraftOrSubmitted,
   parseEmployeeMasterSrs411Fields,
 } from "./hr-employee-rules";
-import { aadhaarFingerprintHmac, maskAadhaar, normalizeAadhaarRaw12 } from "./aadhaar-fingerprint";
+import { aadhaarFingerprintHmac, maskAadhaar, readAadhaarRawFromRequestBody } from "./aadhaar-fingerprint";
 import { inclusiveCalendarDays } from "./hr-leave-utils";
 
 const employeeDocUpload = multer({
@@ -345,6 +345,8 @@ export function registerHrRoutes(app: Express) {
         return sendApiError(res, 400, "HR_EMP_EMPID_CREATE", "Employee ID cannot be set at registration; it is assigned at DA approval.");
       }
 
+      const aadhaarHmacSecret = await resolveAadhaarHmacSecret();
+
       let panNorm: string | null;
       let aadhaarMasked: string | null;
       let aadhaarFp: string | null;
@@ -364,10 +366,18 @@ export function registerHrRoutes(app: Express) {
         assertWorkEmailFormat(workEmailNorm);
         mobileNorm = normalizeMobile10(body.mobile ?? null);
         panNorm = normalizePan(body.pan);
-        const rawAadhaar = normalizeAadhaarRaw12((body as Record<string, unknown>).aadhaarRaw ?? (body as Record<string, unknown>).aadhaar);
+        const rawAadhaar = readAadhaarRawFromRequestBody(body as Record<string, unknown>);
         if (rawAadhaar) {
+          if (!aadhaarHmacSecret) {
+            return sendApiError(
+              res,
+              500,
+              "HR_EMP_AADHAAR_SECRET",
+              "Aadhaar HMAC secret is not configured. Set it under Admin → Config & PDF logo (Aadhaar HMAC secret), or set AADHAAR_HMAC_SECRET for legacy bootstrap.",
+            );
+          }
           aadhaarMasked = maskAadhaar(rawAadhaar);
-          aadhaarFp = aadhaarFingerprintHmac(rawAadhaar);
+          aadhaarFp = aadhaarFingerprintHmac(rawAadhaar, aadhaarHmacSecret);
         } else {
           aadhaarMasked = normalizeAadhaarMasked(body.aadhaarToken ?? body.aadhaar ?? null);
           aadhaarFp = null;
@@ -382,9 +392,6 @@ export function registerHrRoutes(app: Express) {
         });
       } catch (e) {
         if (sendHrEmployeeRuleError(res, e)) return;
-        if (e instanceof Error && e.message === "AADHAAR_HMAC_SECRET_NOT_CONFIGURED") {
-          return sendApiError(res, 500, "HR_EMP_AADHAAR_SECRET", "AADHAAR_HMAC_SECRET is not configured on the server.");
-        }
         throw e;
       }
       let srs411: ReturnType<typeof parseEmployeeMasterSrs411Fields>;
@@ -699,6 +706,10 @@ export function registerHrRoutes(app: Express) {
         }
         updates[key] = body[key] === null ? null : String(body[key]);
       }
+      const rawAadhaarForSave = readAadhaarRawFromRequestBody(body as Record<string, unknown>);
+      if (rawAadhaarForSave) {
+        delete updates.aadhaarToken;
+      }
       if (
         updates.reportingOfficerEmployeeId !== undefined &&
         updates.reportingOfficerEmployeeId &&
@@ -734,6 +745,7 @@ export function registerHrRoutes(app: Express) {
 
       let panNorm: string | null;
       let aadhaarMasked: string | null;
+      let aadhaarFingerprintOut: string | null;
       let personalEmailNorm: string | null;
       let workEmailNorm: string | null;
       let mobileNorm: string | null;
@@ -753,11 +765,27 @@ export function registerHrRoutes(app: Express) {
         mobileNorm = normalizeMobile10(merged.mobile);
         emergencyMobileNorm = normalizeMobile10((merged as { emergencyContactMobile?: string | null }).emergencyContactMobile);
         panNorm = normalizePan(merged.pan);
-        aadhaarMasked = normalizeAadhaarMasked(merged.aadhaarToken);
+        if (rawAadhaarForSave) {
+          const aadhaarHmacSecret = await resolveAadhaarHmacSecret();
+          if (!aadhaarHmacSecret) {
+            return sendApiError(
+              res,
+              500,
+              "HR_EMP_AADHAAR_SECRET",
+              "Aadhaar HMAC secret is not configured. Set it under Admin → Config & PDF logo (Aadhaar HMAC secret), or set AADHAAR_HMAC_SECRET for legacy bootstrap.",
+            );
+          }
+          aadhaarMasked = maskAadhaar(rawAadhaarForSave);
+          aadhaarFingerprintOut = aadhaarFingerprintHmac(rawAadhaarForSave, aadhaarHmacSecret);
+        } else {
+          aadhaarMasked = normalizeAadhaarMasked(merged.aadhaarToken);
+          aadhaarFingerprintOut = beforeEmp.aadhaarFingerprint ?? null;
+        }
         assertJoiningAndDob(merged.joiningDate, merged.dob);
         await assertEmployeeUniqueness({
           pan: panNorm,
           aadhaarMasked,
+          aadhaarFingerprint: aadhaarFingerprintOut ?? undefined,
           personalEmail: personalEmailNorm,
           excludeEmployeeId: id,
         });
@@ -778,6 +806,7 @@ export function registerHrRoutes(app: Express) {
         ...updates,
         pan: panNorm,
         aadhaarToken: aadhaarMasked,
+        ...(rawAadhaarForSave ? { aadhaarFingerprint: aadhaarFingerprintOut } : {}),
         personalEmail: personalEmailNorm,
         workEmail: workEmailNorm,
         mobile: mobileNorm,

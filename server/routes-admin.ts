@@ -21,7 +21,11 @@ import {
   tallyLedgers,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
-import { SYSTEM_CONFIG_KEYS } from "@shared/system-config-defaults";
+import {
+  SYSTEM_CONFIG_KEYS,
+  SYSTEM_CONFIG_KEYS_SENSITIVE,
+  type SystemConfigKey,
+} from "@shared/system-config-defaults";
 import { getMergedSystemConfig } from "./system-config";
 import { getDataRetentionSummary } from "./data-retention-audit";
 import { writeAuditLog } from "./audit";
@@ -35,6 +39,23 @@ import {
   writeReceiptLogoUpload,
 } from "./receipt-logo-storage";
 import { HrEmployeeRuleError, normalizeMobile10 } from "./hr-employee-rules";
+
+function redactSystemConfigForAudit(map: Record<SystemConfigKey, string>): Record<string, string> {
+  const o: Record<string, string> = { ...map };
+  for (const k of SYSTEM_CONFIG_KEYS_SENSITIVE) {
+    const v = o[k]?.trim();
+    if (v) o[k] = "[configured]";
+  }
+  return o;
+}
+
+function redactSensitiveConfigHistoryValue(key: string, val: string | null): string | null {
+  if (val == null) return null;
+  if (!SYSTEM_CONFIG_KEYS_SENSITIVE.includes(key as SystemConfigKey)) return val;
+  const t = val.trim();
+  if (t === "" || t === "[configured]") return val;
+  return "[redacted]";
+}
 
 const receiptLogoUpload = multer({
   storage: multer.memoryStorage(),
@@ -191,8 +212,8 @@ export function registerAdminRoutes(app: Express) {
         const keys = Array.from(new Set<string>([...Object.keys(before), ...Object.keys(after)]));
         for (const k of keys) {
           if (key && k !== key) continue;
-          const b = before[k] == null ? null : String(before[k]);
-          const a = after[k] == null ? null : String(after[k]);
+          const b = redactSensitiveConfigHistoryValue(k, before[k] == null ? null : String(before[k]));
+          const a = redactSensitiveConfigHistoryValue(k, after[k] == null ? null : String(after[k]));
           if (b !== a) changes.push({ key: k, before: b, after: a });
         }
         return {
@@ -295,6 +316,17 @@ export function registerAdminRoutes(app: Express) {
             );
           }
         }
+        if (key === "aadhaar_hmac_secret") {
+          const t = value.trim();
+          if (t.length > 0 && (t.length < 16 || t.length > 2048)) {
+            return sendApiError(
+              res,
+              400,
+              "ADMIN_CONFIG_AADHAAR_HMAC_SECRET",
+              "aadhaar_hmac_secret must be empty (unset) or between 16 and 2048 characters.",
+            );
+          }
+        }
         await db
           .insert(systemConfig)
           .values({
@@ -313,8 +345,8 @@ export function registerAdminRoutes(app: Express) {
         module: "M-10",
         action: "Update",
         recordId: "system_config",
-        beforeValue: before,
-        afterValue: after,
+        beforeValue: redactSystemConfigForAudit(before),
+        afterValue: redactSystemConfigForAudit(after),
       }).catch((err) => console.error("Audit log failed:", err));
       res.json(after);
     } catch (e) {

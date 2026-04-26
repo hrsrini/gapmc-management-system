@@ -69,8 +69,9 @@ async function seed() {
   const yardIds = allYardRows.map((y) => y.id);
   console.log("Seeded yards/check posts");
 
-  // 2. System config
+  // 2. System config (skip secrets so re-seed does not wipe admin-set values)
   for (const [key, value] of Object.entries(SYSTEM_CONFIG_DEFAULTS)) {
+    if (key === "aadhaar_hmac_secret") continue;
     await db.insert(systemConfig).values({
       key,
       value,

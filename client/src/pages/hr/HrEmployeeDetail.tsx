@@ -156,6 +156,25 @@ export default function HrEmployeeDetail() {
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
 
+  const deleteDocMutation = useMutation({
+    mutationFn: async (vars: { docId: string }) => {
+      const res = await fetch(`/api/hr/employees/${id}/documents/${vars.docId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/hr/employees/${id}/documents`] });
+      toast({ title: "Document deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
+  });
+
   const serviceBookRows = useMemo((): Record<string, unknown>[] => {
     return serviceBook.map((e) => {
       const contentText =
@@ -233,7 +252,7 @@ export default function HrEmployeeDetail() {
         ),
       };
     });
-  }, [documents, id, canUpdate, canCreate]);
+  }, [documents, id, canUpdate, canCreate, deleteDocMutation]);
 
   const loginProfileUrl = id ? `/api/hr/employees/${id}/login-profile` : "";
   const { data: loginProfile } = useQuery<{ login: { id: string; email: string; isActive: boolean; roles?: { id: string; name: string; tier: string }[] } | null }>({
@@ -339,25 +358,6 @@ export default function HrEmployeeDetail() {
       setDocType("Other");
     },
     onError: (e: Error) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
-  });
-
-  const deleteDocMutation = useMutation({
-    mutationFn: async (vars: { docId: string }) => {
-      const res = await fetch(`/api/hr/employees/${id}/documents/${vars.docId}`, {
-        method: "DELETE",
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error ?? res.statusText);
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/hr/employees/${id}/documents`] });
-      toast({ title: "Document deleted" });
-    },
-    onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
   const handleAddContract = (e: React.FormEvent) => {

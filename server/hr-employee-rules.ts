@@ -199,7 +199,13 @@ export async function assertEmployeeUniqueness(args: {
   if (args.aadhaarFingerprint && (await aadhaarFingerprintTakenByOther(args.aadhaarFingerprint, args.excludeEmployeeId))) {
     throw new HrEmployeeRuleError("HR_EMP_AADHAAR_DUPLICATE", "This Aadhaar is already on file for another employee.");
   }
-  if (args.aadhaarMasked && (await aadhaarMaskedTakenByOther(args.aadhaarMasked, args.excludeEmployeeId))) {
+  // Masked value is only last 4 digits — many distinct Aadhaar numbers share the same mask. When a fingerprint exists,
+  // uniqueness is enforced on the fingerprint only; otherwise masked-only legacy rows still collide on full mask string.
+  if (
+    !args.aadhaarFingerprint &&
+    args.aadhaarMasked &&
+    (await aadhaarMaskedTakenByOther(args.aadhaarMasked, args.excludeEmployeeId))
+  ) {
     throw new HrEmployeeRuleError("HR_EMP_AADHAAR_DUPLICATE", "This masked Aadhaar value is already on file for another employee.");
   }
   if (args.personalEmail) {

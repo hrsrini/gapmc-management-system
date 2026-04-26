@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { useLocation } from 'wouter';
 import { AUTH_401_EVENT } from '@/lib/queryClient';
 
@@ -200,12 +200,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLocation('/');
   };
 
-  const can = (module: string, action: PermissionAction): boolean => {
+  const can = useCallback((module: string, action: PermissionAction): boolean => {
     if (!user) return false;
     const isAdmin = user.roles?.some((r) => r.tier === 'ADMIN');
     if (isAdmin) return true;
     return Boolean(user.permissions?.some((p) => p.module === module && p.action === action));
-  };
+  }, [user]);
 
   return (
     <AuthContext.Provider value={{ isAuthenticated, isLoading, user, can, login, logout }}>
