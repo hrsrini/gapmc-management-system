@@ -185,7 +185,7 @@ export default function DakInwardDetail() {
 
   if (isLoading) {
     return (
-      <AppShell breadcrumbs={[{ label: "Dak Inward", href: "/correspondence/inward" }, { label: "Detail" }]}>
+      <AppShell breadcrumbs={[{ label: "Tapal Inward", href: "/correspondence/inward" }, { label: "Detail" }]}>
         <Card>
           <CardContent className="p-6">
             <Skeleton className="h-8 w-48 mb-4" />
@@ -198,7 +198,7 @@ export default function DakInwardDetail() {
 
   if (isError || !inward) {
     return (
-      <AppShell breadcrumbs={[{ label: "Dak Inward", href: "/correspondence/inward" }, { label: "Detail" }]}>
+      <AppShell breadcrumbs={[{ label: "Tapal Inward", href: "/correspondence/inward" }, { label: "Detail" }]}>
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
@@ -211,7 +211,7 @@ export default function DakInwardDetail() {
   }
 
   return (
-    <AppShell breadcrumbs={[{ label: "Dak Inward", href: "/correspondence/inward" }, { label: inward.diaryNo ?? inward.id }]}>
+    <AppShell breadcrumbs={[{ label: "Tapal Inward", href: "/correspondence/inward" }, { label: inward.diaryNo ?? inward.id }]}>
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="flex items-center gap-2">

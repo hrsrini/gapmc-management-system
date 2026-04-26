@@ -81,7 +81,7 @@ export default function DakOutwardForm() {
   };
 
   return (
-    <AppShell breadcrumbs={[{ label: "Dak Outward", href: "/correspondence/outward" }, { label: "Add outward" }]}>
+    <AppShell breadcrumbs={[{ label: "Tapal Outward", href: "/correspondence/outward" }, { label: "Add outward" }]}>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -93,8 +93,8 @@ export default function DakOutwardForm() {
           <form onSubmit={handleSubmit} className="space-y-4 max-w-2xl">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label>Despatch no</Label>
-                <Input value={despatchNo} onChange={(e) => setDespatchNo(e.target.value)} placeholder="Optional" />
+                <Label>Tapal reference (OUT-LOC-YYYY-NNNNN)</Label>
+                <Input value={despatchNo} onChange={(e) => setDespatchNo(e.target.value)} placeholder="Leave blank for auto" />
               </div>
               <div>
                 <Label>Despatch date *</Label>

@@ -122,7 +122,7 @@ export default function DakSlaReport() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <ClipboardList className="h-5 w-5" />
-            Dak SLA breach report
+            Tapal SLA breach report
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             Inward items with deadline on or before {data?.asOf ? formatYmdToDisplay(data.asOf) : "—"} and status other than Closed.

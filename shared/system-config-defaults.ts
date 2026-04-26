@@ -29,6 +29,10 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   rent_revision_suggested_percent: "0",
   /** M-08: when `true`, cron / HTTP AMC monthly bill job may create rows; Excel default is manual (`false`). */
   amc_monthly_auto_generate: "false",
+  /** M-07: maintenance cost threshold (INR) above which a Work (M-08) link is required. */
+  fleet_maintenance_work_order_threshold_inr: "20000",
+  /** M-07: single-trip fuel filled (litres) above this triggers an alert flag in reports. */
+  fleet_trip_fuel_alert_litres: "100",
   /** M-05: allow unauthenticated receipt verify + public QR (`true` / `false`). Overridden if env `PUBLIC_RECEIPT_VERIFY_ENABLED=false`. */
   public_receipt_verify_enabled: "true",
   /** M-06: optional URL to GFR/treasury authority for expenditure heads (shown on voucher forms). */
@@ -120,6 +124,8 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "rent_tds_rate_percent",
   "rent_revision_suggested_percent",
   "amc_monthly_auto_generate",
+  "fleet_maintenance_work_order_threshold_inr",
+  "fleet_trip_fuel_alert_litres",
   "public_receipt_verify_enabled",
   "expenditure_head_authority_url",
   "tally_xml_export_enabled",
@@ -169,6 +175,8 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   rent_revision_suggested_percent:
     "Rent revision UI: default % vs baseline (0 = empty; pre-fills Adjust field on /rent/ioms/revisions)",
   amc_monthly_auto_generate: "AMC: allow auto monthly bill cron (true|false)",
+  fleet_maintenance_work_order_threshold_inr: "Fleet: maintenance work-order threshold (INR; require M-08 Work link above this)",
+  fleet_trip_fuel_alert_litres: "Fleet: high fuel alert threshold per trip (litres; default 100)",
   public_receipt_verify_enabled: "Public receipt verification (true|false)",
   expenditure_head_authority_url: "Expenditure head authority URL (optional)",
   tally_xml_export_enabled: "Tally export: allow XML interchange (true|false)",

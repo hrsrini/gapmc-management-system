@@ -31,6 +31,7 @@ import { createIomsReceipt } from "./routes-receipts-ioms";
 import { tenantLicenceIsGstExempt } from "./gst-exempt";
 import { assertRecordDoDvDaSeparation } from "./workflow";
 import { sendApiError } from "./api-errors";
+import { disablePortalAccessForUnifiedEntity } from "./routes-portal";
 import { parseReportPaging, parseReportSort, reportSearchPattern } from "./report-paging";
 import { orderLicenceReport, LICENCE_REPORT_SORT_ALLOW } from "./report-order";
 import { recordRentCollectionForM03Receipt } from "./rent-deposit-ledger-from-receipt";
@@ -327,7 +328,15 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (!yardInScope(req, yid)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
         updates.yardId = yid;
       }
-      await db.update(entities).set(updates as Record<string, string | null>).where(eq(entities.id, id));
+      const nextStatus = updates.status !== undefined ? String(updates.status ?? "") : String(existing.status ?? "");
+      await db.transaction(async (tx) => {
+        await tx.update(entities).set(updates as Record<string, string | null>).where(eq(entities.id, id));
+      });
+      if (nextStatus && nextStatus !== "Active") {
+        await disablePortalAccessForUnifiedEntity(`TB:${id}`, req.user?.id ?? null).catch((e) =>
+          console.error("[portal] disable on entity status change failed:", e),
+        );
+      }
       const [row] = await db.select().from(entities).where(eq(entities.id, id));
       if (row) writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);

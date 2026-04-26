@@ -277,6 +277,94 @@ export function registerReceiptsIomsRoutes(app: Express) {
     }
   });
 
+  // US-M05-002: cash-in-hand / deposit dashboard (scoped)
+  // Query: yardId (optional), date=YYYY-MM-DD (optional; defaults today)
+  app.get("/api/ioms/receipts/dashboard/cash-in-hand", async (req, res) => {
+    try {
+      const yardId = String(req.query.yardId ?? "").trim();
+      const date = String(req.query.date ?? new Date().toISOString().slice(0, 10)).trim(); // YYYY-MM-DD
+      const iso = /^\d{4}-\d{2}-\d{2}$/;
+      if (!iso.test(date)) return sendApiError(res, 400, "RECEIPT_DASH_DATE", "date must be YYYY-MM-DD");
+      const scopedIds = req.scopedLocationIds;
+      if (yardId && scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
+        return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
+
+      const conds = [
+        inArray(iomsReceipts.status, ["Paid", "Reconciled"]),
+        eq(sql`substring(${iomsReceipts.createdAt}, 1, 10)`, date),
+      ];
+      if (scopedIds && scopedIds.length > 0) conds.push(inArray(iomsReceipts.yardId, scopedIds));
+      if (yardId) conds.push(eq(iomsReceipts.yardId, yardId));
+
+      const rows = await db
+        .select({
+          paymentMode: iomsReceipts.paymentMode,
+          revenueHead: iomsReceipts.revenueHead,
+          total: sql<number>`coalesce(sum(${iomsReceipts.totalAmount}), 0)`,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(iomsReceipts)
+        .where(and(...conds))
+        .groupBy(iomsReceipts.paymentMode, iomsReceipts.revenueHead);
+
+      const byMode: Record<string, { total: number; count: number }> = {};
+      for (const r of rows) {
+        const m = String(r.paymentMode ?? "Unknown");
+        byMode[m] = {
+          total: Math.round(((byMode[m]?.total ?? 0) + (Number(r.total ?? 0) || 0)) * 100) / 100,
+          count: (byMode[m]?.count ?? 0) + (Number(r.count ?? 0) || 0),
+        };
+      }
+
+      res.json({
+        date,
+        yardId: yardId || null,
+        totalsByMode: byMode,
+        rows,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to compute cash-in-hand dashboard");
+    }
+  });
+
+  // US-M05-007: yearly summary by revenue head (scoped)
+  // Query: financialYear=YYYY-YY (optional; defaults current FY)
+  app.get("/api/ioms/receipts/summary/yearly", async (req, res) => {
+    try {
+      const fy = String(req.query.financialYear ?? "").trim();
+      const fyNorm = fy && /^\d{4}-\d{2}$/.test(fy) ? fy : null;
+      const scopedIds = req.scopedLocationIds;
+      const whereParts = [inArray(iomsReceipts.status, ["Paid", "Reconciled"])];
+      if (scopedIds && scopedIds.length > 0) whereParts.push(inArray(iomsReceipts.yardId, scopedIds));
+      // receiptNo format includes FY segment: GAPLMB/LOC/FY/HEAD/NNNN
+      if (fyNorm) whereParts.push(sql`${iomsReceipts.receiptNo} like ${`%/${fyNorm}/%`}`);
+
+      const rows = await db
+        .select({
+          revenueHead: iomsReceipts.revenueHead,
+          total: sql<number>`coalesce(sum(${iomsReceipts.totalAmount}), 0)`,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(iomsReceipts)
+        .where(and(...whereParts))
+        .groupBy(iomsReceipts.revenueHead)
+        .orderBy(iomsReceipts.revenueHead);
+
+      const grandTotal = rows.reduce((s, r) => s + (Number(r.total ?? 0) || 0), 0);
+      res.json({
+        financialYear: fyNorm,
+        count: rows.reduce((s, r) => s + (Number(r.count ?? 0) || 0), 0),
+        grandTotal: Math.round(grandTotal * 100) / 100,
+        rows: rows.map((r) => ({ ...r, total: Math.round((Number(r.total ?? 0) || 0) * 100) / 100 })),
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to compute yearly receipt summary");
+    }
+  });
+
   // Public verify by receipt number (no auth) — must be before /:id
   app.get("/api/ioms/receipts/verify/:receiptNo", async (req, res) => {
     try {
@@ -304,11 +392,20 @@ export function registerReceiptsIomsRoutes(app: Express) {
   // Server-generated receipt PDF (auth) — before /:id so "pdf" is not parsed as id
   app.get("/api/ioms/receipts/:id/pdf", async (req, res) => {
     try {
+      const copy = String(req.query.copy ?? "").trim().toLowerCase(); // duplicate
       const [row] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, req.params.id));
       if (!row) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(row.yardId)) {
         return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
+      }
+      const isDuplicate = copy === "duplicate";
+      if (isDuplicate) {
+        const roles = req.user?.roles?.map((r) => r.tier) ?? [];
+        const allowed = roles.includes("DV") || roles.includes("DA") || roles.includes("ADMIN");
+        if (!allowed) {
+          return sendApiError(res, 403, "RECEIPT_DUPLICATE_DENIED", "Only DV/DA/Admin can print authorised duplicate receipts.");
+        }
       }
       const [yard] = await db.select({ name: yards.name }).from(yards).where(eq(yards.id, row.yardId)).limit(1);
       const verifyBase =
@@ -320,6 +417,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
         yardName: yard?.name ?? null,
         verifyBaseUrl: verifyBase,
         arrearsDisclosure,
+        duplicateLabel: isDuplicate ? "DUPLICATE" : null,
       });
       const safeName = row.receiptNo.replace(/[^\w.-]+/g, "_");
       res.setHeader("Content-Type", "application/pdf");

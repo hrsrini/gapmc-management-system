@@ -56,6 +56,10 @@
     "db:apply-m02-bm-form-doc-url": "dotenv -e .env -- tsx scripts/apply-m02-bm-form-doc-url.ts",
     "db:apply-m02-bm-form-doc-file": "dotenv -e .env -- tsx scripts/apply-m02-bm-form-doc-file.ts",
     "db:apply-m04-market-fee-extensions": "dotenv -e .env -- tsx scripts/apply-m04-market-fee-extensions.ts",
+    "db:apply-m04-grace-period-flags": "dotenv -e .env -- tsx scripts/apply-m04-grace-period-flags.ts",
+    "db:apply-m08-milestones-final-account": "dotenv -e .env -- tsx scripts/apply-m08-milestones-final-account.ts",
+    "db:apply-m07-fleet-extensions": "dotenv -e .env -- tsx scripts/apply-m07-fleet-extensions.ts",
+    "db:apply-m10-portal-users": "dotenv -e .env -- tsx scripts/apply-m10-portal-users.ts",
     "test-plan:expand": "node scripts/expand-test-plan.mjs",
     "srs:fr-traceability": "python scripts/generate-srs-v3-fr-traceability.py && node scripts/build-srs-fr-traceability-xlsx.mjs"
   },

@@ -68,7 +68,7 @@ export default function DakOutward() {
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
-            <span className="text-destructive">Failed to load outward dak.</span>
+            <span className="text-destructive">Failed to load outward tapal.</span>
           </CardContent>
         </Card>
       </AppShell>
@@ -81,9 +81,9 @@ export default function DakOutward() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Send className="h-5 w-5" />
-            Dak Outward (IOMS M-09)
+            Tapal Outward (IOMS M-09)
           </CardTitle>
-          <p className="text-sm text-muted-foreground">Outward correspondence — despatch no, to party, subject, mode.</p>
+          <p className="text-sm text-muted-foreground">Outward correspondence — tapal reference, addressee, subject, mode.</p>
           {canCreate && (
             <div className="pt-2">
               <Button asChild size="sm">
@@ -102,7 +102,7 @@ export default function DakOutward() {
               searchKeys={["despatchNo", "despatchDate", "toParty", "subject", "modeOfDespatch", "despatchedBy", "inwardRefId"]}
               defaultSortKey="despatchDate"
               defaultSortDir="desc"
-              emptyMessage="No outward dak."
+              emptyMessage="No outward tapal."
             />
           )}
         </CardContent>

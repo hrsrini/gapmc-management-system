@@ -20,12 +20,13 @@ interface Vehicle {
   status: string;
   insuranceExpiry?: string | null;
   fitnessExpiry?: string | null;
+  pucExpiry?: string | null;
 }
 
 interface FleetRenewalAlert {
   vehicleId: string;
   registrationNo: string;
-  kind: "insurance" | "fitness";
+  kind: "insurance" | "fitness" | "puc";
   expiryDate: string;
   daysRemaining: number;
   urgency: "overdue" | "30d" | "60d";
@@ -37,6 +38,7 @@ const columns: ReportTableColumn[] = [
   { key: "yardName", header: "Yard" },
   { key: "insuranceExpiry", header: "Insurance" },
   { key: "fitnessExpiry", header: "Fitness" },
+  { key: "pucExpiry", header: "PUC" },
   { key: "_status", header: "Status", sortField: "status" },
 ];
 
@@ -70,6 +72,7 @@ export default function FleetVehicles() {
       yardName: yardById[v.yardId] ?? v.yardId,
       insuranceExpiry: v.insuranceExpiry ?? "—",
       fitnessExpiry: v.fitnessExpiry ?? "—",
+      pucExpiry: v.pucExpiry ?? "—",
       status: v.status,
       _status: <Badge variant="secondary">{v.status}</Badge>,
     }));

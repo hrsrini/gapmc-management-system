@@ -11,7 +11,7 @@ import { dakInward, dakOutward, dakActionLog, dakEscalations } from "@shared/db-
 import { nanoid } from "nanoid";
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
-import { generateNextDakDiaryNo } from "./dak-diary-sequence";
+import { generateNextDakDiaryNo, generateNextTapalRef } from "./dak-diary-sequence";
 import { routeParamString } from "./route-params";
 import {
   contentTypeForVoucherAttachment,
@@ -280,12 +280,8 @@ export function registerDakRoutes(app: Express) {
       const manualDiary = body.diaryNo != null ? String(body.diaryNo).trim() : "";
       let diaryNo: string | null = manualDiary || null;
       if (!diaryNo) {
-        const scope = "per_yard" as const;
-        diaryNo = await generateNextDakDiaryNo({
-          yardId,
-          receivedDate: receivedDateRaw,
-          scope,
-        });
+        // SRS v3 prefers "Tapal" format, but field remains diaryNo for compatibility.
+        diaryNo = await generateNextTapalRef({ kind: "IN", yardId, date: receivedDateRaw });
       }
       const id = nanoid();
       await db.insert(dakInward).values({
@@ -409,11 +405,14 @@ export function registerDakRoutes(app: Express) {
       const body = req.body;
       const yardId = body.yardId != null ? String(body.yardId) : null;
       if (yardId != null && !dakYardInScope(req, yardId)) return sendApiError(res, 403, "DAK_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      const despatchDateRaw = String(body.despatchDate ?? "").trim().slice(0, 10) || new Date().toISOString().slice(0, 10);
+      const manualDespatch = body.despatchNo != null ? String(body.despatchNo).trim() : "";
+      const despatchNo = manualDespatch || (await generateNextTapalRef({ kind: "OUT", yardId, date: despatchDateRaw }));
       const id = nanoid();
       await db.insert(dakOutward).values({
         id,
         yardId: yardId || null,
-        despatchDate: String(body.despatchDate ?? ""),
+        despatchDate: despatchDateRaw,
         toParty: String(body.toParty ?? ""),
         subject: String(body.subject ?? ""),
         modeOfDespatch: String(body.modeOfDespatch ?? "Post"),
@@ -422,7 +421,7 @@ export function registerDakRoutes(app: Express) {
         fileRef: body.fileRef ? String(body.fileRef) : null,
         attachments: null,
         despatchedBy: body.despatchedBy ? String(body.despatchedBy) : null,
-        despatchNo: body.despatchNo ? String(body.despatchNo) : null,
+        despatchNo,
         createdAt: now(),
       });
       const [row] = await db.select().from(dakOutward).where(eq(dakOutward.id, id));

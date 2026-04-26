@@ -39,16 +39,20 @@ function TripForm({
   const [tripDate, setTripDate] = useState("");
   const [purpose, setPurpose] = useState("");
   const [route, setRoute] = useState("");
-  const [distanceKm, setDistanceKm] = useState("");
-  const [fuelConsumed, setFuelConsumed] = useState("");
+  const [odometerStart, setOdometerStart] = useState("");
+  const [odometerEnd, setOdometerEnd] = useState("");
+  const [fuelFilledLitres, setFuelFilledLitres] = useState("");
+  const [fuelCostInr, setFuelCostInr] = useState("");
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({
       tripDate: tripDate || undefined,
       purpose: purpose || undefined,
       route: route || undefined,
-      distanceKm: distanceKm ? Number(distanceKm) : undefined,
-      fuelConsumed: fuelConsumed ? Number(fuelConsumed) : undefined,
+      odometerStart: odometerStart ? Number(odometerStart) : undefined,
+      odometerEnd: odometerEnd ? Number(odometerEnd) : undefined,
+      fuelFilledLitres: fuelFilledLitres ? Number(fuelFilledLitres) : undefined,
+      fuelCostInr: fuelCostInr ? Number(fuelCostInr) : undefined,
     });
   };
   return (
@@ -56,8 +60,14 @@ function TripForm({
       <div><Label>Trip date *</Label><Input type="date" value={tripDate} onChange={(e) => setTripDate(e.target.value)} required /></div>
       <div><Label>Purpose</Label><Input value={purpose} onChange={(e) => setPurpose(e.target.value)} /></div>
       <div><Label>Route</Label><Input value={route} onChange={(e) => setRoute(e.target.value)} /></div>
-      <div><Label>Distance (km)</Label><Input type="number" step="0.01" value={distanceKm} onChange={(e) => setDistanceKm(e.target.value)} /></div>
-      <div><Label>Fuel consumed</Label><Input type="number" step="0.01" value={fuelConsumed} onChange={(e) => setFuelConsumed(e.target.value)} /></div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><Label>Odometer start (km)</Label><Input type="number" step="0.01" value={odometerStart} onChange={(e) => setOdometerStart(e.target.value)} /></div>
+        <div><Label>Odometer end (km)</Label><Input type="number" step="0.01" value={odometerEnd} onChange={(e) => setOdometerEnd(e.target.value)} /></div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><Label>Fuel filled (litres)</Label><Input type="number" step="0.01" value={fuelFilledLitres} onChange={(e) => setFuelFilledLitres(e.target.value)} /></div>
+        <div><Label>Fuel cost (₹)</Label><Input type="number" step="0.01" value={fuelCostInr} onChange={(e) => setFuelCostInr(e.target.value)} /></div>
+      </div>
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
         <Button type="submit" disabled={saving}>{saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Add</Button>
@@ -157,7 +167,8 @@ interface Trip {
   purpose?: string | null;
   route?: string | null;
   distanceKm?: number | null;
-  fuelConsumed?: number | null;
+  fuelFilledLitres?: number | null;
+  fuelCostInr?: number | null;
 }
 interface FuelEntry {
   id: string;
@@ -182,7 +193,8 @@ const tripColumns: ReportTableColumn[] = [
   { key: "purpose", header: "Purpose" },
   { key: "route", header: "Route" },
   { key: "distanceKm", header: "Distance (km)", sortField: "distanceKmNum" },
-  { key: "fuelConsumed", header: "Fuel", sortField: "fuelConsumedNum" },
+  { key: "fuelFilledLitres", header: "Fuel (L)", sortField: "fuelFilledLitresNum" },
+  { key: "fuelCostInr", header: "Fuel cost", sortField: "fuelCostInrNum" },
 ];
 
 const fuelColumns: ReportTableColumn[] = [
@@ -239,8 +251,10 @@ export default function FleetVehicleDetail() {
       route: t.route ?? "—",
       distanceKm: t.distanceKm ?? "—",
       distanceKmNum: t.distanceKm ?? null,
-      fuelConsumed: t.fuelConsumed ?? "—",
-      fuelConsumedNum: t.fuelConsumed ?? null,
+      fuelFilledLitres: t.fuelFilledLitres ?? "—",
+      fuelFilledLitresNum: t.fuelFilledLitres ?? null,
+      fuelCostInr: t.fuelCostInr != null ? `₹${t.fuelCostInr}` : "—",
+      fuelCostInrNum: t.fuelCostInr ?? null,
     }));
   }, [trips]);
 
@@ -427,7 +441,7 @@ export default function FleetVehicleDetail() {
                     <ClientDataGrid
                       columns={tripColumns}
                       sourceRows={tripRows}
-                      searchKeys={["tripDate", "purpose", "route", "distanceKm", "fuelConsumed"]}
+                      searchKeys={["tripDate", "purpose", "route", "distanceKm", "fuelFilledLitres", "fuelCostInr"]}
                       searchPlaceholder="Search trips…"
                       defaultSortKey="tripDate"
                       defaultSortDir="desc"

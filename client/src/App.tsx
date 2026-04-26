@@ -87,6 +87,7 @@ import VoucherMonthlyStatement from "@/pages/vouchers/VoucherMonthlyStatement";
 import FleetVehicles from "@/pages/fleet/FleetVehicles";
 import FleetVehicleForm from "@/pages/fleet/FleetVehicleForm";
 import FleetVehicleDetail from "@/pages/fleet/FleetVehicleDetail";
+import FleetReports from "@/pages/fleet/FleetReports";
 import ConstructionWorks from "@/pages/construction/ConstructionWorks";
 import WorkForm from "@/pages/construction/WorkForm";
 import WorkDetail from "@/pages/construction/WorkDetail";
@@ -255,6 +256,9 @@ function Router() {
       </Route>
       <Route path="/fleet/vehicles/:id">
         <ProtectedRoute><FleetVehicleDetail /></ProtectedRoute>
+      </Route>
+      <Route path="/fleet/reports">
+        <ProtectedRoute><FleetReports /></ProtectedRoute>
       </Route>
       <Route path="/construction">
         <ProtectedRoute><ConstructionWorks /></ProtectedRoute>

@@ -177,6 +177,7 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
     group: 'Fleet (IOMS M-07)',
     items: [
       { title: 'Vehicles', icon: Truck, href: '/fleet', requirePermission: { module: 'M-07', action: 'Read' } },
+      { title: 'Reports', icon: BarChart3, href: '/fleet/reports', requirePermission: { module: 'M-07', action: 'Read' } },
     ]
   },
   {
@@ -191,12 +192,12 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
   {
     group: 'Correspondence (IOMS M-09)',
     items: [
-      { title: 'Dak Inward', icon: Mail, href: '/correspondence/inward', requirePermission: { module: 'M-09', action: 'Read' } },
-      { title: 'My pending dak', icon: Inbox, href: '/correspondence/inward/my-pending', requirePermission: { module: 'M-09', action: 'Read' } },
-      { title: 'Dak escalations', icon: BellRing, href: '/correspondence/inward/escalations', requirePermission: { module: 'M-09', action: 'Read' } },
+      { title: 'Tapal Inward', icon: Mail, href: '/correspondence/inward', requirePermission: { module: 'M-09', action: 'Read' } },
+      { title: 'My pending tapal', icon: Inbox, href: '/correspondence/inward/my-pending', requirePermission: { module: 'M-09', action: 'Read' } },
+      { title: 'Tapal escalations', icon: BellRing, href: '/correspondence/inward/escalations', requirePermission: { module: 'M-09', action: 'Read' } },
       { title: 'Inward by subject', icon: Grid3X3, href: '/correspondence/inward/subjects', requirePermission: { module: 'M-09', action: 'Read' } },
       { title: 'SLA breach report', icon: ClipboardList, href: '/correspondence/sla-report', requirePermission: { module: 'M-09', action: 'Read' } },
-      { title: 'Dak Outward', icon: Send, href: '/correspondence/outward', requirePermission: { module: 'M-09', action: 'Read' } },
+      { title: 'Tapal Outward', icon: Send, href: '/correspondence/outward', requirePermission: { module: 'M-09', action: 'Read' } },
     ]
   },
   {

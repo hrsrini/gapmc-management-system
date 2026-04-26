@@ -13,6 +13,7 @@ import { registerVoucherRoutes } from "./routes-vouchers";
 import { registerFleetRoutes } from "./routes-fleet";
 import { registerConstructionRoutes } from "./routes-construction";
 import { registerDakRoutes } from "./routes-dak";
+import { registerPortalRoutes } from "./routes-portal";
 import { registerBugRoutes } from "./routes-bugs";
 import { registerReportsRoutes } from "./routes-reports";
 import { registerFinanceReferenceRoutes } from "./routes-finance-reference";
@@ -275,10 +276,23 @@ export async function registerRoutes(
   registerPublicAuthRoutes(app);
   registerMfaRoutes(app);
 
+  // US-M10-005: external entity portal auth + read-only APIs (separate from employee users).
+  // Registered before requireAuthApi so portal users don't need employee sessions.
+  registerPortalRoutes(app);
+
   // Require session for all other /api routes; attach req.user and req.scopedLocationIds
   app.use(requireAuthApi);
 
   registerAuthMeRoute(app);
+
+  // M-09 terminology compatibility: treat /api/ioms/tapal/* as /api/ioms/dak/*
+  // Do this early so auth + permission routing sees the rewritten path.
+  app.use((req, _res, next) => {
+    if (req.url.startsWith("/api/ioms/tapal")) {
+      req.url = req.url.replace("/api/ioms/tapal", "/api/ioms/dak");
+    }
+    next();
+  });
 
   // IOMS M-10: Admin — require M-10 permission by method (Read/Create/Update/Delete) from role_permissions
   app.use("/api/admin", requireAdminPermissionByMethod);
@@ -370,7 +384,7 @@ export async function registerRoutes(
   // IOMS M-08: Construction & Maintenance
   registerConstructionRoutes(app);
 
-  // IOMS M-09: Correspondence (Dak)
+  // IOMS M-09: Correspondence (Dak) — underlying implementation
   registerDakRoutes(app);
 
   // Bug tracking (all authenticated users)

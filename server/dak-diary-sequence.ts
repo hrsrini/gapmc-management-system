@@ -19,6 +19,18 @@ export function financialYearFromReceivedDate(receivedDate: string): string {
   return `${y - 1}-${String(y).slice(-2)}`;
 }
 
+function calendarYearFromDate(date: string): string {
+  const y = String(date ?? "").slice(0, 4);
+  return /^\d{4}$/.test(y) ? y : String(new Date().getFullYear());
+}
+
+async function locationCodeForYard(yardId: string | null): Promise<string> {
+  if (!yardId) return "HO";
+  const [y] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, yardId)).limit(1);
+  const code = String(y?.code ?? "").replace(/\s+/g, "");
+  return code || "YRD";
+}
+
 /**
  * Next unique diary number: `DAK/{LOC}/{FY}/{NNNNN}`.
  * LOC = yard code (per_yard) or HO (central / no yard).
@@ -57,4 +69,31 @@ export async function generateNextDakDiaryNo(params: {
   });
 
   return `DAK/${locCode}/${fy}/${String(nextSeq).padStart(5, "0")}`;
+}
+
+/**
+ * M-09 (SRS v3): Tapal references (preferred terminology):
+ * - Inward:  IN-[LOC]-[YYYY]-[NNNNN]
+ * - Outward: OUT-[LOC]-[YYYY]-[NNNNN]
+ *
+ * Uses existing `dak_diary_sequence` table for atomic sequencing.
+ */
+export async function generateNextTapalRef(params: {
+  kind: "IN" | "OUT";
+  yardId: string | null;
+  date: string; // YYYY-MM-DD
+}): Promise<string> {
+  const year = calendarYearFromDate(params.date);
+  const locCode = await locationCodeForYard(params.yardId);
+  const scopeKey = `${params.kind}:${params.yardId ?? "__NO_YARD__"}`;
+  const nextSeq = await db.transaction(async (tx) => {
+    await tx.insert(dakDiarySequence).values({ scopeKey, financialYear: year, lastSeq: 0 }).onConflictDoNothing();
+    const [updated] = await tx
+      .update(dakDiarySequence)
+      .set({ lastSeq: sql`${dakDiarySequence.lastSeq} + 1` })
+      .where(and(eq(dakDiarySequence.scopeKey, scopeKey), eq(dakDiarySequence.financialYear, year)))
+      .returning({ lastSeq: dakDiarySequence.lastSeq });
+    return updated?.lastSeq ?? 1;
+  });
+  return `${params.kind}-${locCode}-${year}-${String(nextSeq).padStart(5, "0")}`;
 }

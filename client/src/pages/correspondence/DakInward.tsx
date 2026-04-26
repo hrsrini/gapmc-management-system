@@ -95,7 +95,7 @@ export default function DakInward() {
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
-            <span className="text-destructive">Failed to load inward dak.</span>
+            <span className="text-destructive">Failed to load inward tapal.</span>
           </CardContent>
         </Card>
       </AppShell>
@@ -108,7 +108,7 @@ export default function DakInward() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Mail className="h-5 w-5" />
-            Dak Inward (IOMS M-09)
+            Tapal Inward (IOMS M-09)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             Inward correspondence — diary no, routing, action log, escalation.{" "}

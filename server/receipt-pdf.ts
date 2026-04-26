@@ -55,8 +55,10 @@ export async function buildIomsReceiptPdf(params: {
   verifyBaseUrl: string;
   /** Optional M-03 rent arrears line (after prior dishonour for same invoice). */
   arrearsDisclosure?: ReceiptPdfArrearsDisclosure | null;
+  /** US-M05-004: render authorised duplicate watermark/label. */
+  duplicateLabel?: string | null;
 }): Promise<Buffer> {
-  const { receipt, yardName, verifyBaseUrl, arrearsDisclosure } = params;
+  const { receipt, yardName, verifyBaseUrl, arrearsDisclosure, duplicateLabel } = params;
   const printMode = (process.env.RECEIPT_PDF_PRINT_MODE ?? "full").trim().toLowerCase();
   const bodyOnly = printMode === "body-only" || printMode === "preprinted";
   const signatoryName = process.env.RECEIPT_PDF_SIGNATORY_NAME?.trim();
@@ -80,6 +82,19 @@ export async function buildIomsReceiptPdf(params: {
       const x = (doc.page.width - logoW) / 2;
       doc.image(logoBuf, x, doc.y, { width: logoW });
       doc.moveDown(2.2);
+    }
+
+    if (duplicateLabel) {
+      doc
+        .save()
+        .rotate(-18, { origin: [doc.page.width / 2, doc.page.height / 2] })
+        .fontSize(44)
+        .fillColor("#d1d5db")
+        .opacity(0.35)
+        .text(String(duplicateLabel).slice(0, 40), 0, doc.page.height / 2 - 40, { align: "center" })
+        .opacity(1)
+        .restore();
+      doc.moveDown(0.2);
     }
 
     if (!bodyOnly) {

@@ -284,7 +284,7 @@ export function getModuleForPath(path: string): string | null {
     path.startsWith("/api/ioms/fixed-assets")
   )
     return "M-08";
-  if (path.startsWith("/api/ioms/dak")) return "M-09";
+  if (path.startsWith("/api/ioms/dak") || path.startsWith("/api/ioms/tapal")) return "M-09";
   if (path.startsWith("/api/ioms/reports")) return "M-05";
   if (path.startsWith("/api/traders")) return "M-02";
   if (path.startsWith("/api/invoices")) return "M-03";

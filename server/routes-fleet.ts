@@ -6,13 +6,14 @@
 import type { Express } from "express";
 import { eq, desc, asc, and, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { vehicles, vehicleTripLog, vehicleFuelRegister, vehicleMaintenance } from "@shared/db-schema";
+import { employees, vehicles, works, vehicleTripLog, vehicleFuelRegister, vehicleMaintenance } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import { routeParamString } from "./route-params";
 import { assertRecordDoDvDaSeparation } from "./workflow";
 import { computeFleetRenewalAlerts, listFleetMaintenanceDueEnriched } from "./operational-alerts";
+import { getMergedSystemConfig } from "./system-config";
 
 function vehicleInScope(req: Express.Request, yardId: string): boolean {
   const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
@@ -20,6 +21,82 @@ function vehicleInScope(req: Express.Request, yardId: string): boolean {
 }
 
 export function registerFleetRoutes(app: Express) {
+  app.get("/api/ioms/fleet/reports/summary", async (req, res) => {
+    try {
+      const from = String(req.query.from ?? "").slice(0, 10);
+      const to = String(req.query.to ?? "").slice(0, 10);
+      if (!from || !to) return sendApiError(res, 400, "FLEET_REPORT_RANGE_REQUIRED", "from and to are required (YYYY-MM-DD)");
+
+      const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+      const vCond = [];
+      if (scopedIds && scopedIds.length > 0) vCond.push(inArray(vehicles.yardId, scopedIds));
+      const vBase = db.select().from(vehicles);
+      const vehiclesList = vCond.length > 0 ? await vBase.where(and(...vCond)) : await vBase;
+      const vehicleById = new Map(vehiclesList.map((v) => [v.id, v]));
+      if (vehiclesList.length === 0) return res.json([]);
+
+      const tripRows = await db
+        .select()
+        .from(vehicleTripLog)
+        .where(inArray(vehicleTripLog.vehicleId, vehiclesList.map((v) => v.id)))
+        .orderBy(desc(vehicleTripLog.tripDate));
+
+      const cfg = await getMergedSystemConfig();
+      const hiFuel = Number(cfg.fleet_trip_fuel_alert_litres ?? 0) || 0;
+
+      const within = tripRows.filter((t) => {
+        const d = String(t.tripDate ?? "").slice(0, 10);
+        return d >= from && d <= to;
+      });
+
+      const agg = new Map<
+        string,
+        {
+          tripCount: number;
+          totalDistanceKm: number;
+          totalFuelLitres: number;
+          totalFuelCostInr: number;
+          highFuelTripCount: number;
+        }
+      >();
+      for (const t of within) {
+        const vid = String(t.vehicleId);
+        if (!vehicleById.has(vid)) continue;
+        const cur =
+          agg.get(vid) ?? { tripCount: 0, totalDistanceKm: 0, totalFuelLitres: 0, totalFuelCostInr: 0, highFuelTripCount: 0 };
+        cur.tripCount += 1;
+        cur.totalDistanceKm += Number(t.distanceKm ?? 0) || 0;
+        const fuel = Number((t as { fuelFilledLitres?: number | null }).fuelFilledLitres ?? 0) || 0;
+        const cost = Number((t as { fuelCostInr?: number | null }).fuelCostInr ?? 0) || 0;
+        cur.totalFuelLitres += fuel;
+        cur.totalFuelCostInr += cost;
+        if (hiFuel > 0 && fuel > hiFuel) cur.highFuelTripCount += 1;
+        agg.set(vid, cur);
+      }
+
+      const out = Array.from(agg.entries()).map(([vehicleId, a]) => {
+        const v = vehicleById.get(vehicleId)!;
+        const eff = a.totalFuelLitres > 0 ? a.totalDistanceKm / a.totalFuelLitres : null;
+        return {
+          vehicleId,
+          registrationNo: v.registrationNo,
+          yardId: v.yardId,
+          tripCount: a.tripCount,
+          totalDistanceKm: Number(a.totalDistanceKm.toFixed(2)),
+          totalFuelLitres: Number(a.totalFuelLitres.toFixed(2)),
+          totalFuelCostInr: Number(a.totalFuelCostInr.toFixed(2)),
+          efficiencyKmPerLitre: eff == null ? null : Number(eff.toFixed(2)),
+          highFuelTripCount: a.highFuelTripCount,
+        };
+      });
+
+      res.json(out.sort((a, b) => b.totalFuelCostInr - a.totalFuelCostInr || a.registrationNo.localeCompare(b.registrationNo)));
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to build fleet report");
+    }
+  });
+
   app.get("/api/ioms/fleet/renewal-alerts", async (req, res) => {
     try {
       const yardId = req.query.yardId as string | undefined;
@@ -182,18 +259,63 @@ export function registerFleetRoutes(app: Express) {
       if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       if (!vehicleInScope(req, vehicle.yardId))
         return sendApiError(res, 403, "FLEET_VEHICLE_YARD_ACCESS_DENIED", "You do not have access to this vehicle's yard");
+
+      // Block trip logs when non-compliant: expired insurance/fitness/PUC (if present).
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const expired =
+        (vehicle.insuranceExpiry && String(vehicle.insuranceExpiry).slice(0, 10) < todayIso) ||
+        (vehicle.fitnessExpiry && String(vehicle.fitnessExpiry).slice(0, 10) < todayIso) ||
+        ((vehicle as { pucExpiry?: string | null }).pucExpiry && String((vehicle as { pucExpiry?: string | null }).pucExpiry).slice(0, 10) < todayIso);
+      if (expired) {
+        return sendApiError(
+          res,
+          400,
+          "FLEET_VEHICLE_NON_COMPLIANT",
+          "Vehicle is non-compliant (expired insurance/fitness/PUC). Renew documents before logging new trips.",
+        );
+      }
+
+      const odStart = body.odometerStart != null ? Number(body.odometerStart) : null;
+      const odEnd = body.odometerEnd != null ? Number(body.odometerEnd) : null;
+      if (odStart != null && odEnd != null) {
+        if (!Number.isFinite(odStart) || !Number.isFinite(odEnd)) {
+          return sendApiError(res, 400, "FLEET_ODOMETER_INVALID", "Odometer values must be numbers");
+        }
+        if (odEnd < odStart) {
+          return sendApiError(res, 400, "FLEET_ODOMETER_ORDER", "End odometer cannot be less than start odometer");
+        }
+      }
+      const distanceKm =
+        odStart != null && odEnd != null
+          ? Math.max(0, odEnd - odStart)
+          : body.distanceKm != null
+            ? Number(body.distanceKm)
+            : null;
+
+      // Validate driver exists when provided.
+      const driverId = body.driverId ? String(body.driverId) : null;
+      if (driverId) {
+        const [emp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, driverId)).limit(1);
+        if (!emp) {
+          return sendApiError(res, 400, "FLEET_DRIVER_NOT_FOUND", "Driver must be a valid employee");
+        }
+      }
+
       const id = nanoid();
       await db.insert(vehicleTripLog).values({
         id,
         vehicleId,
         tripDate: String(body.tripDate ?? ""),
-        driverId: body.driverId ? String(body.driverId) : null,
+        driverId,
         purpose: body.purpose ? String(body.purpose) : null,
         route: body.route ? String(body.route) : null,
-        odometerStart: body.odometerStart != null ? Number(body.odometerStart) : null,
-        odometerEnd: body.odometerEnd != null ? Number(body.odometerEnd) : null,
-        distanceKm: body.distanceKm != null ? Number(body.distanceKm) : null,
+        odometerStart: odStart,
+        odometerEnd: odEnd,
+        distanceKm: distanceKm != null ? Number(distanceKm) : null,
         fuelConsumed: body.fuelConsumed != null ? Number(body.fuelConsumed) : null,
+        fuelFilledLitres: body.fuelFilledLitres != null ? Number(body.fuelFilledLitres) : null,
+        fuelCostInr: body.fuelCostInr != null ? Number(body.fuelCostInr) : null,
+        fuelReceiptDocs: null,
         officerId: body.officerId ? String(body.officerId) : null,
       });
       const [row] = await db.select().from(vehicleTripLog).where(eq(vehicleTripLog.id, id));
@@ -269,15 +391,62 @@ export function registerFleetRoutes(app: Express) {
       if (!vehicle) return sendApiError(res, 404, "FLEET_VEHICLE_NOT_FOUND", "Vehicle not found");
       if (!vehicleInScope(req, vehicle.yardId))
         return sendApiError(res, 403, "FLEET_VEHICLE_YARD_ACCESS_DENIED", "You do not have access to this vehicle's yard");
+
+      const serviceDate = String(body.serviceDate ?? "").slice(0, 10);
+      const todayIso = new Date().toISOString().slice(0, 10);
+      if (serviceDate && serviceDate > todayIso) {
+        return sendApiError(res, 400, "FLEET_MAINT_DATE_FUTURE", "Maintenance date cannot be in the future");
+      }
+
+      const odometerReadingKm = body.odometerReadingKm != null ? Number(body.odometerReadingKm) : null;
+      if (odometerReadingKm != null && !Number.isFinite(odometerReadingKm)) {
+        return sendApiError(res, 400, "FLEET_MAINT_ODO_INVALID", "Odometer reading must be a number");
+      }
+      if (odometerReadingKm != null) {
+        const prevRows = await db
+          .select({ m: vehicleMaintenance.odometerReadingKm })
+          .from(vehicleMaintenance)
+          .where(eq(vehicleMaintenance.vehicleId, vehicleId))
+          .orderBy(desc(vehicleMaintenance.serviceDate))
+          .limit(1);
+        const prev = prevRows?.[0]?.m != null ? Number(prevRows[0].m) : null;
+        if (prev != null && odometerReadingKm < prev) {
+          return sendApiError(res, 400, "FLEET_MAINT_ODO_ORDER", "Odometer reading must be ≥ last recorded reading for this vehicle");
+        }
+      }
+
+      const cost = body.cost != null ? Number(body.cost) : null;
+      if (cost != null && (!Number.isFinite(cost) || cost <= 0)) {
+        return sendApiError(res, 400, "FLEET_MAINT_COST_INVALID", "Cost must be a positive number");
+      }
+
+      // If cost above threshold → require linked M-08 work order (workId).
+      const cfg = await getMergedSystemConfig();
+      const threshold = Number(cfg.fleet_maintenance_work_order_threshold_inr ?? 0) || 0;
+      const workId = body.workId ? String(body.workId) : null;
+      if (cost != null && threshold > 0 && cost > threshold && !workId) {
+        return sendApiError(res, 400, "FLEET_MAINT_WORK_ORDER_REQUIRED", "Cost above threshold: link a Work Order (M-08 Work) before submission");
+      }
+      if (workId) {
+        const [w] = await db.select({ id: works.id, yardId: works.yardId }).from(works).where(eq(works.id, workId)).limit(1);
+        if (!w) return sendApiError(res, 400, "FLEET_WORK_NOT_FOUND", "Linked work order not found");
+        if (!vehicleInScope(req, w.yardId)) return sendApiError(res, 403, "FLEET_WORK_YARD_DENIED", "You do not have access to the linked work order yard");
+      }
+
       const id = nanoid();
       await db.insert(vehicleMaintenance).values({
         id,
         vehicleId,
         maintenanceType: String(body.maintenanceType ?? ""),
-        serviceDate: String(body.serviceDate ?? ""),
+        serviceDate,
+        odometerReadingKm,
         description: body.description ? String(body.description) : null,
-        cost: body.cost != null ? Number(body.cost) : null,
+        cost,
         vendorName: body.vendorName ? String(body.vendorName) : null,
+        invoiceNo: body.invoiceNo ? String(body.invoiceNo) : null,
+        invoiceDocs: null,
+        workId,
+        isEmergency: body.isEmergency != null ? Boolean(body.isEmergency) : false,
         voucherId: body.voucherId ? String(body.voucherId) : null,
         nextServiceDate: body.nextServiceDate ? String(body.nextServiceDate) : null,
         officerId: body.officerId ? String(body.officerId) : null,

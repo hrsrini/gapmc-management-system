@@ -232,6 +232,22 @@ export const users = gapmc.table("users", {
   updatedAt: text("updated_at"),
 });
 
+/** US-M10-005: external entity (Trader/TrackB) portal access (separate from employee-linked users). */
+export const portalUsers = gapmc.table("portal_users", {
+  id: text("id").primaryKey(),
+  /** Unified entity id: TA:<trader_licence_id> | TB:<entity_id> | AH:<ad_hoc_entity_id>. */
+  unifiedEntityId: text("unified_entity_id").notNull().unique(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  isActive: boolean("is_active").default(true),
+  disabledAt: text("disabled_at"),
+  /** Force change password on first login (temporary password provisioning). */
+  forcePasswordChange: boolean("force_password_change").default(true),
+  lastLoginAt: text("last_login_at"),
+  provisionedAt: text("provisioned_at").notNull(),
+  provisionedBy: text("provisioned_by"),
+});
+
 export const roles = gapmc.table("roles", {
   id: text("id").primaryKey(),
   name: text("name").notNull().unique(),
@@ -1166,10 +1182,19 @@ export const vehicles = gapmc.table("vehicles", {
   vehicleType: text("vehicle_type").notNull(),
   capacity: text("capacity"),
   yardId: text("yard_id").notNull(),
+  make: text("make"),
+  model: text("model"),
+  yearOfManufacture: integer("year_of_manufacture"),
+  fuelType: text("fuel_type"), // Petrol | Diesel | CNG | Electric | Other
+  ownershipType: text("ownership_type"), // Owned | Hired
+  ownershipVendorName: text("ownership_vendor_name"),
   purchaseDate: text("purchase_date"),
   purchaseValue: doublePrecision("purchase_value"),
   insuranceExpiry: text("insurance_expiry"),
   fitnessExpiry: text("fitness_expiry"),
+  pucExpiry: text("puc_expiry"),
+  /** RC/insurance/fitness/PUC scans (uploads under uploads/fleet/vehicles/{id}/). */
+  documents: jsonb("documents").$type<string[]>(),
   status: text("status").notNull(), // Active | UnderRepair | Decommissioned
   doUser: text("do_user"),
   daUser: text("da_user"),
@@ -1186,6 +1211,10 @@ export const vehicleTripLog = gapmc.table("vehicle_trip_log", {
   odometerEnd: doublePrecision("odometer_end"),
   distanceKm: doublePrecision("distance_km"),
   fuelConsumed: doublePrecision("fuel_consumed"),
+  fuelFilledLitres: doublePrecision("fuel_filled_litres"),
+  fuelCostInr: doublePrecision("fuel_cost_inr"),
+  /** Optional scan(s) for fuel receipts under uploads/fleet/trips/{id}/. */
+  fuelReceiptDocs: jsonb("fuel_receipt_docs").$type<string[]>(),
   officerId: text("officer_id"),
 });
 
@@ -1205,9 +1234,17 @@ export const vehicleMaintenance = gapmc.table("vehicle_maintenance", {
   vehicleId: text("vehicle_id").notNull(),
   maintenanceType: text("maintenance_type").notNull(), // Scheduled | Repair | Inspection
   serviceDate: text("service_date").notNull(),
+  odometerReadingKm: doublePrecision("odometer_reading_km"),
   description: text("description"),
   cost: doublePrecision("cost"),
   vendorName: text("vendor_name"),
+  invoiceNo: text("invoice_no"),
+  /** Optional workshop invoice docs under uploads/fleet/maintenance/{id}/. */
+  invoiceDocs: jsonb("invoice_docs").$type<string[]>(),
+  /** For high-cost maintenance: link to M-08 works/work order. */
+  workId: text("work_id"),
+  /** Emergency breakdown: post-facto approval path. */
+  isEmergency: boolean("is_emergency").default(false),
   voucherId: text("voucher_id"),
   nextServiceDate: text("next_service_date"),
   officerId: text("officer_id"),
@@ -1246,6 +1283,41 @@ export const worksBills = gapmc.table("works_bills", {
   voucherId: text("voucher_id"),
   status: text("status").notNull(),
   approvedBy: text("approved_by"),
+});
+
+/** US-M08-002: milestone/progress entries per work/project. */
+export const worksMilestones = gapmc.table("works_milestones", {
+  id: text("id").primaryKey(),
+  workId: text("work_id").notNull(),
+  milestoneName: text("milestone_name").notNull(),
+  expectedDate: text("expected_date"),
+  actualDate: text("actual_date"),
+  percentComplete: integer("percent_complete").notNull(), // 0..100 (monotonic per work)
+  valueOfWorkInr: doublePrecision("value_of_work_inr").default(0).notNull(),
+  /** Stored file names under uploads/works/milestones/{id}/ (same blob store as vouchers/dak). */
+  attachments: jsonb("attachments").$type<string[]>(),
+  status: text("status").notNull(), // Draft | Verified | Approved
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  createdAt: text("created_at"),
+});
+
+/** US-M08-002: final account per work/project. */
+export const worksFinalAccounts = gapmc.table("works_final_accounts", {
+  id: text("id").primaryKey(),
+  workId: text("work_id").notNull().unique(),
+  actualCostInr: doublePrecision("actual_cost_inr").notNull(),
+  sanctionedAmountInr: doublePrecision("sanctioned_amount_inr"),
+  revisedEstimateApprovedBy: text("revised_estimate_approved_by"),
+  revisedEstimateRemarks: text("revised_estimate_remarks"),
+  supportingDocs: jsonb("supporting_docs").$type<string[]>(),
+  status: text("status").notNull(), // Draft | Submitted | Approved
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  createdAt: text("created_at"),
+  approvedAt: text("approved_at"),
 });
 
 export const amcContracts = gapmc.table("amc_contracts", {

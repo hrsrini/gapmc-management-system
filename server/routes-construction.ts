@@ -4,9 +4,9 @@
  * Yard-scoped: list/get/create/update for works, amc, land_records, fixed_assets.
  */
 import type { Express } from "express";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { eq, desc, and, inArray, sql } from "drizzle-orm";
 import { db } from "./db";
-import { works, worksBills, amcContracts, amcBills, landRecords, fixedAssets } from "@shared/db-schema";
+import { works, worksBills, worksMilestones, worksFinalAccounts, amcContracts, amcBills, landRecords, fixedAssets } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
@@ -20,6 +20,8 @@ function yardInScope(req: Express.Request, yardId: string): boolean {
 }
 
 export function registerConstructionRoutes(app: Express) {
+  const now = () => new Date().toISOString();
+
   app.get("/api/ioms/works", async (req, res) => {
     try {
       const yardId = req.query.yardId as string | undefined;
@@ -158,6 +160,155 @@ export function registerConstructionRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create bill");
+    }
+  });
+
+  // --- US-M08-002: milestones / progress entries ---
+  app.get("/api/ioms/works/:workId/milestones", async (req, res) => {
+    try {
+      const [work] = await db.select().from(works).where(eq(works.id, req.params.workId)).limit(1);
+      if (!work) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      if (!yardInScope(req, work.yardId)) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      const list = await db
+        .select()
+        .from(worksMilestones)
+        .where(eq(worksMilestones.workId, req.params.workId))
+        .orderBy(desc(worksMilestones.percentComplete));
+      return res.json(list);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch milestones");
+    }
+  });
+
+  app.post("/api/ioms/works/milestones", async (req, res) => {
+    try {
+      const body = req.body;
+      const workId = String(body.workId ?? "");
+      const [work] = await db.select().from(works).where(eq(works.id, workId)).limit(1);
+      if (!work) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      if (!yardInScope(req, work.yardId))
+        return sendApiError(res, 403, "WORK_RECORD_YARD_ACCESS_DENIED", "You do not have access to this work's yard");
+
+      const pct = Number(body.percentComplete ?? 0);
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+        return sendApiError(res, 400, "E-AST-CON-002", "% completion must be between 0 and 100");
+      }
+      const prevMaxRow = await db
+        .select({ m: sql<number>`COALESCE(MAX(${worksMilestones.percentComplete}), 0)` })
+        .from(worksMilestones)
+        .where(eq(worksMilestones.workId, workId));
+      const prevMax = Number(prevMaxRow?.[0]?.m ?? 0);
+      if (pct < prevMax) {
+        return sendApiError(res, 400, "E-AST-CON-002", "Completion % cannot be less than previously approved/recorded progress");
+      }
+      const actualDate = body.actualDate ? String(body.actualDate).slice(0, 10) : null;
+      if (actualDate && actualDate > new Date().toISOString().slice(0, 10)) {
+        return sendApiError(res, 400, "MILESTONE_DATE_FUTURE", "Actual date cannot be in the future");
+      }
+
+      const id = nanoid();
+      await db.insert(worksMilestones).values({
+        id,
+        workId,
+        milestoneName: String(body.milestoneName ?? ""),
+        expectedDate: body.expectedDate ? String(body.expectedDate).slice(0, 10) : null,
+        actualDate,
+        percentComplete: Math.trunc(pct),
+        valueOfWorkInr: body.valueOfWorkInr != null ? Number(body.valueOfWorkInr) : 0,
+        attachments: null,
+        status: String(body.status ?? "Draft"),
+        doUser: body.doUser ? String(body.doUser) : null,
+        dvUser: body.dvUser ? String(body.dvUser) : null,
+        daUser: body.daUser ? String(body.daUser) : null,
+        createdAt: now(),
+      });
+      const [row] = await db.select().from(worksMilestones).where(eq(worksMilestones.id, id));
+      if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      return res.status(201).json(row);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create milestone");
+    }
+  });
+
+  // --- US-M08-002/004: final account ---
+  app.get("/api/ioms/works/:workId/final-account", async (req, res) => {
+    try {
+      const [work] = await db.select().from(works).where(eq(works.id, req.params.workId)).limit(1);
+      if (!work) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      if (!yardInScope(req, work.yardId)) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      const [fa] = await db.select().from(worksFinalAccounts).where(eq(worksFinalAccounts.workId, req.params.workId)).limit(1);
+      return res.json(fa ?? null);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch final account");
+    }
+  });
+
+  app.post("/api/ioms/works/:workId/final-account", async (req, res) => {
+    try {
+      const workId = String(req.params.workId ?? "");
+      const body = req.body;
+      const [work] = await db.select().from(works).where(eq(works.id, workId)).limit(1);
+      if (!work) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      if (!yardInScope(req, work.yardId))
+        return sendApiError(res, 403, "WORK_RECORD_YARD_ACCESS_DENIED", "You do not have access to this work's yard");
+
+      const pctRow = await db
+        .select({ m: sql<number>`COALESCE(MAX(${worksMilestones.percentComplete}), 0)` })
+        .from(worksMilestones)
+        .where(eq(worksMilestones.workId, workId));
+      const pct = Number(pctRow?.[0]?.m ?? 0);
+      if (pct < 100) {
+        return sendApiError(res, 400, "E-AST-CON-004", "Final Account can be submitted only after 100% completion");
+      }
+
+      const sanctioned = work.estimateAmount != null ? Number(work.estimateAmount) : null;
+      const actual = Number(body.actualCostInr ?? 0);
+      if (!Number.isFinite(actual) || actual <= 0) {
+        return sendApiError(res, 400, "FINAL_ACCOUNT_COST_INVALID", "Actual cost must be a positive number");
+      }
+      if (sanctioned != null) {
+        const limit = sanctioned * 1.1;
+        const revisedBy = body.revisedEstimateApprovedBy ? String(body.revisedEstimateApprovedBy) : "";
+        if (actual > limit && !revisedBy) {
+          return sendApiError(
+            res,
+            400,
+            "E-AST-CON-001",
+            "Actual cost exceeds sanctioned amount by >10%. Provide revised estimate approval before submitting Final Account.",
+          );
+        }
+      }
+
+      const [existing] = await db.select().from(worksFinalAccounts).where(eq(worksFinalAccounts.workId, workId)).limit(1);
+      if (existing) {
+        return sendApiError(res, 409, "FINAL_ACCOUNT_EXISTS", "Final Account already exists for this work");
+      }
+
+      const id = nanoid();
+      await db.insert(worksFinalAccounts).values({
+        id,
+        workId,
+        actualCostInr: actual,
+        sanctionedAmountInr: sanctioned,
+        revisedEstimateApprovedBy: body.revisedEstimateApprovedBy ? String(body.revisedEstimateApprovedBy) : null,
+        revisedEstimateRemarks: body.revisedEstimateRemarks ? String(body.revisedEstimateRemarks) : null,
+        supportingDocs: null,
+        status: String(body.status ?? "Submitted"),
+        doUser: body.doUser ? String(body.doUser) : null,
+        dvUser: body.dvUser ? String(body.dvUser) : null,
+        daUser: body.daUser ? String(body.daUser) : null,
+        createdAt: now(),
+        approvedAt: null,
+      });
+      const [row] = await db.select().from(worksFinalAccounts).where(eq(worksFinalAccounts.id, id)).limit(1);
+      if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      return res.status(201).json(row);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to submit final account");
     }
   });
 
