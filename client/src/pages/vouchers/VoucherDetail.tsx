@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -36,9 +36,14 @@ import {
   Paperclip,
   Trash2,
   Download,
+  Eye,
+  Loader2,
 } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { formatApiDateOrDateTime } from "@/lib/dateFormat";
+import { FormFileAttachments } from "@/components/forms/FormFileAttachments";
+import { AuthenticatedBlobPreviewDialog } from "@/components/attachment/AuthenticatedBlobPreviewDialog";
+import { filesToFileList } from "@/lib/filesToFileList";
 
 interface Voucher {
   id: string;
@@ -97,7 +102,10 @@ export default function VoucherDetail() {
   const [rejectRemarks, setRejectRemarks] = useState("");
   const [returnDraftOpen, setReturnDraftOpen] = useState(false);
   const [returnDraftRemarks, setReturnDraftRemarks] = useState("");
-  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
+  const [attachmentPreviewOpen, setAttachmentPreviewOpen] = useState(false);
+  const [attachmentPreviewPath, setAttachmentPreviewPath] = useState<string | null>(null);
+  const [attachmentPreviewTitle, setAttachmentPreviewTitle] = useState("");
 
   const statusMutation = useMutation({
     mutationFn: async (payload: { status: string } & Record<string, unknown>) => {
@@ -149,7 +157,7 @@ export default function VoucherDetail() {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/vouchers", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/vouchers"] });
       toast({ title: "Attachments uploaded" });
-      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+      setPendingAttachments([]);
     },
     onError: (e: Error) => {
       toast({ title: "Upload failed", description: e.message, variant: "destructive" });
@@ -291,27 +299,41 @@ export default function VoucherDetail() {
               </p>
             </CardHeader>
             <CardContent className="space-y-3">
-              <input
-                ref={attachmentInputRef}
-                type="file"
-                multiple
-                accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
-                className="hidden"
-                onChange={(e) => {
-                  const fl = e.target.files;
-                  if (fl?.length) attachmentMutation.mutate(fl);
-                }}
-              />
               {canManageAttachments && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={attachmentMutation.isPending}
-                  onClick={() => attachmentInputRef.current?.click()}
-                >
-                  Upload files
-                </Button>
+                <div className="space-y-3 rounded-md border border-border bg-muted/10 p-3">
+                  <FormFileAttachments
+                    label="Files to upload"
+                    description="Add supporting documents, review thumbnails, then upload."
+                    files={pendingAttachments}
+                    onChange={setPendingAttachments}
+                    accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                    maxFiles={20}
+                    maxBytesPerFile={8 * 1024 * 1024}
+                    disabled={attachmentMutation.isPending}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={attachmentMutation.isPending || pendingAttachments.length === 0}
+                      onClick={() => attachmentMutation.mutate(filesToFileList(pendingAttachments))}
+                    >
+                      {attachmentMutation.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                      Upload selected
+                    </Button>
+                    {pendingAttachments.length > 0 ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={attachmentMutation.isPending}
+                        onClick={() => setPendingAttachments([])}
+                      >
+                        Clear selection
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
               )}
               {(voucher.supportingDocs?.length ?? 0) === 0 ? (
                 <p className="text-sm text-muted-foreground">No supporting documents attached.</p>
@@ -320,9 +342,24 @@ export default function VoucherDetail() {
                   {(voucher.supportingDocs ?? []).map((name) => (
                     <li key={name} className="flex flex-wrap items-center gap-2 border rounded-md px-3 py-2">
                       <span className="font-mono text-xs break-all flex-1 min-w-0">{name}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        title="Preview"
+                        onClick={() => {
+                          setAttachmentPreviewTitle(name);
+                          setAttachmentPreviewPath(
+                            `/api/ioms/vouchers/${encodeURIComponent(id)}/files/${encodeURIComponent(name)}`,
+                          );
+                          setAttachmentPreviewOpen(true);
+                        }}
+                      >
+                        <Eye className="h-4 w-4" />
+                      </Button>
                       <Button variant="ghost" size="sm" asChild>
                         <a
-                          href={`/api/ioms/vouchers/${id}/files/${encodeURIComponent(name)}`}
+                          href={`/api/ioms/vouchers/${encodeURIComponent(id)}/files/${encodeURIComponent(name)}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           download
@@ -441,6 +478,12 @@ export default function VoucherDetail() {
           </DialogContent>
         </Dialog>
       </div>
+      <AuthenticatedBlobPreviewDialog
+        open={attachmentPreviewOpen}
+        onOpenChange={setAttachmentPreviewOpen}
+        title={attachmentPreviewTitle}
+        fetchPath={attachmentPreviewPath}
+      />
     </AppShell>
   );
 }

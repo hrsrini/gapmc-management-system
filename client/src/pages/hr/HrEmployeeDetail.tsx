@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -31,7 +31,20 @@ import { useToast } from "@/hooks/use-toast";
 import { formatApiDateOrDateTime, formatYmdToDisplay } from "@/lib/dateFormat";
 import { useAuth } from "@/context/AuthContext";
 import { fetchApiGet } from "@/lib/queryClient";
-import { UserCircle, ArrowLeft, BookOpen, AlertCircle, Plus, Loader2, FileSignature, KeyRound, Paperclip, Trash2, Download } from "lucide-react";
+import {
+  UserCircle,
+  ArrowLeft,
+  BookOpen,
+  AlertCircle,
+  Plus,
+  Loader2,
+  FileSignature,
+  KeyRound,
+  Paperclip,
+  Trash2,
+  Download,
+  Eye,
+} from "lucide-react";
 import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
 
 const SERVICE_BOOK_SECTIONS = ["History", "Appendix", "AuditComments", "Verification", "CertMutable", "CertImmutable"];
@@ -111,6 +124,10 @@ interface EmployeeDocument {
   createdAt: string;
 }
 
+function employeeDocumentDownloadPath(employeeId: string, docId: string): string {
+  return `/api/hr/employees/${encodeURIComponent(employeeId)}/documents/${encodeURIComponent(docId)}/download`;
+}
+
 export default function HrEmployeeDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
@@ -134,6 +151,28 @@ export default function HrEmployeeDetail() {
   const [docOpen, setDocOpen] = useState(false);
   const [docType, setDocType] = useState("Other");
   const [docFile, setDocFile] = useState<File | null>(null);
+  const [docPreview, setDocPreview] = useState<{
+    open: boolean;
+    title: string;
+    blobUrl: string | null;
+    mime: string;
+    loading: boolean;
+    error: string | null;
+  }>({ open: false, title: "", blobUrl: null, mime: "", loading: false, error: null });
+
+  const uploadPreviewUrl = useMemo(() => {
+    if (!docFile) return null;
+    if (docFile.type.startsWith("image/") || docFile.type === "application/pdf") {
+      return URL.createObjectURL(docFile);
+    }
+    return null;
+  }, [docFile]);
+
+  useEffect(() => {
+    return () => {
+      if (uploadPreviewUrl) URL.revokeObjectURL(uploadPreviewUrl);
+    };
+  }, [uploadPreviewUrl]);
 
   const { data: employee, isLoading, isError } = useQuery<Employee>({
     queryKey: ["/api/hr/employees", id],
@@ -148,7 +187,7 @@ export default function HrEmployeeDetail() {
     enabled: !!id,
   });
   const { data: documents = [], isLoading: docsLoading } = useQuery<EmployeeDocument[]>({
-    queryKey: [`/api/hr/employees/${id}/documents`],
+    queryKey: ["/api/hr/employees", id, "documents"],
     enabled: !!id,
   });
   const { data: yards = [] } = useQuery<YardRef[]>({
@@ -156,20 +195,68 @@ export default function HrEmployeeDetail() {
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
 
+  /** Drop rows that do not belong to this page (avoids wrong links when React Query briefly shows cached data from another employee). */
+  const docsForEmployee = useMemo(() => {
+    if (!id) return [];
+    return documents.filter((d) => d.employeeId === id);
+  }, [documents, id]);
+
+  const closeDocPreview = useCallback(() => {
+    setDocPreview((s) => {
+      if (s.blobUrl) URL.revokeObjectURL(s.blobUrl);
+      return { open: false, title: "", blobUrl: null, mime: "", loading: false, error: null };
+    });
+  }, []);
+
+  const loadDocPreview = useCallback(
+    async (d: EmployeeDocument, employeeOwnerId: string) => {
+      setDocPreview({
+        open: true,
+        title: d.fileName,
+        blobUrl: null,
+        mime: d.mimeType || "application/octet-stream",
+        loading: true,
+        error: null,
+      });
+      const url = employeeDocumentDownloadPath(employeeOwnerId, d.id);
+      try {
+        const res = await fetch(url, { credentials: "include" });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error((err as { error?: string }).error ?? res.statusText);
+        }
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        setDocPreview((s) => {
+          if (s.blobUrl) URL.revokeObjectURL(s.blobUrl);
+          return { ...s, blobUrl, loading: false };
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Failed to load document";
+        setDocPreview((s) => ({ ...s, loading: false, error: msg }));
+      }
+    },
+    [],
+  );
+
   const deleteDocMutation = useMutation({
     mutationFn: async (vars: { docId: string }) => {
-      const res = await fetch(`/api/hr/employees/${id}/documents/${vars.docId}`, {
-        method: "DELETE",
-        credentials: "include",
-      });
+      if (!id) throw new Error("Missing employee id");
+      const res = await fetch(
+        `/api/hr/employees/${encodeURIComponent(id)}/documents/${encodeURIComponent(vars.docId)}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        },
+      );
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as { error?: string }).error ?? res.statusText);
       }
-      return res.json();
+      // Server responds with 204 No Content — no JSON body.
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/hr/employees/${id}/documents`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/employees", id, "documents"] });
       toast({ title: "Document deleted" });
     },
     onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
@@ -213,8 +300,9 @@ export default function HrEmployeeDetail() {
   }, [contracts]);
 
   const documentRows = useMemo((): Record<string, unknown>[] => {
-    return documents.map((d) => {
-      const downloadUrl = `/api/hr/employees/${id}/documents/${d.id}/download`;
+    if (!id) return [];
+    return docsForEmployee.map((d) => {
+      const downloadUrl = employeeDocumentDownloadPath(id, d.id);
       return {
         id: d.id,
         docType: d.docType,
@@ -223,14 +311,22 @@ export default function HrEmployeeDetail() {
         createdAt: d.createdAt,
         _file: (
           <div className="flex items-center gap-2">
-            <a className="text-primary underline truncate max-w-[260px]" href={downloadUrl} target="_blank" rel="noreferrer">
+            <button
+              type="button"
+              className="text-primary underline truncate max-w-[260px] text-left hover:opacity-90"
+              onClick={() => loadDocPreview(d, id)}
+            >
               {d.fileName}
-            </a>
+            </button>
             <span className="text-xs text-muted-foreground">{Math.max(1, Math.round((d.sizeBytes ?? 0) / 1024))} KB</span>
           </div>
         ),
         _actions: (
           <div className="flex flex-wrap gap-1">
+            <Button type="button" size="sm" variant="secondary" onClick={() => loadDocPreview(d, id)}>
+              <Eye className="h-3.5 w-3.5 mr-1" />
+              View
+            </Button>
             <Button size="sm" variant="outline" asChild>
               <a href={downloadUrl} target="_blank" rel="noreferrer">
                 <Download className="h-3.5 w-3.5 mr-1" />
@@ -252,7 +348,7 @@ export default function HrEmployeeDetail() {
         ),
       };
     });
-  }, [documents, id, canUpdate, canCreate, deleteDocMutation]);
+  }, [docsForEmployee, id, canUpdate, canCreate, deleteDocMutation, loadDocPreview]);
 
   const loginProfileUrl = id ? `/api/hr/employees/${id}/login-profile` : "";
   const { data: loginProfile } = useQuery<{ login: { id: string; email: string; isActive: boolean; roles?: { id: string; name: string; tier: string }[] } | null }>({
@@ -335,11 +431,12 @@ export default function HrEmployeeDetail() {
 
   const uploadDocMutation = useMutation({
     mutationFn: async () => {
+      if (!id) throw new Error("Missing employee id.");
       if (!docFile) throw new Error("Choose a file to upload.");
       const fd = new FormData();
       fd.append("file", docFile);
       fd.append("docType", docType);
-      const res = await fetch(`/api/hr/employees/${id}/documents`, {
+      const res = await fetch(`/api/hr/employees/${encodeURIComponent(id)}/documents`, {
         method: "POST",
         credentials: "include",
         body: fd,
@@ -351,7 +448,7 @@ export default function HrEmployeeDetail() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/hr/employees/${id}/documents`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/employees", id, "documents"] });
       toast({ title: "Document uploaded" });
       setDocOpen(false);
       setDocFile(null);
@@ -647,7 +744,13 @@ export default function HrEmployeeDetail() {
             <TabsContent value="documents" className="pt-2">
               {(canCreate || canUpdate) && (
                 <div className="flex justify-end mb-2">
-                  <Dialog open={docOpen} onOpenChange={setDocOpen}>
+                  <Dialog
+                    open={docOpen}
+                    onOpenChange={(open) => {
+                      setDocOpen(open);
+                      if (!open) setDocFile(null);
+                    }}
+                  >
                     <DialogTrigger asChild>
                       <Button size="sm">
                         <Plus className="h-4 w-4 mr-1" /> Upload document
@@ -684,6 +787,22 @@ export default function HrEmployeeDetail() {
                             <p className="text-xs text-muted-foreground">
                               Selected: <span className="font-medium">{docFile.name}</span>
                             </p>
+                          ) : null}
+                          {uploadPreviewUrl && docFile?.type.startsWith("image/") ? (
+                            <div className="rounded-md border bg-muted/30 p-2">
+                              <p className="text-xs text-muted-foreground mb-2">Preview</p>
+                              <img
+                                src={uploadPreviewUrl}
+                                alt=""
+                                className="max-h-48 max-w-full object-contain mx-auto rounded"
+                              />
+                            </div>
+                          ) : null}
+                          {uploadPreviewUrl && docFile?.type === "application/pdf" ? (
+                            <div className="rounded-md border bg-muted/30 p-2 min-h-[200px]">
+                              <p className="text-xs text-muted-foreground mb-2">Preview</p>
+                              <iframe title="Upload preview" src={uploadPreviewUrl} className="w-full h-56 rounded border-0 bg-background" />
+                            </div>
                           ) : null}
                         </div>
                       </div>
@@ -730,6 +849,52 @@ export default function HrEmployeeDetail() {
           </Tabs>
         </CardContent>
       </Card>
+
+      <Dialog open={docPreview.open} onOpenChange={(open) => !open && closeDocPreview()}>
+        <DialogContent className="max-w-4xl w-[min(95vw,56rem)] max-h-[90vh] flex flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl">
+          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+            <DialogTitle className="pr-8 truncate">{docPreview.title || "Document"}</DialogTitle>
+          </DialogHeader>
+          <div className="min-h-[240px] max-h-[min(72vh,720px)] border-y bg-muted/20 overflow-auto flex items-center justify-center">
+            {docPreview.loading ? (
+              <div className="flex flex-col items-center gap-3 py-16">
+                <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">Loading preview…</p>
+              </div>
+            ) : null}
+            {docPreview.error && !docPreview.loading ? (
+              <p className="text-destructive text-sm px-6 py-8 text-center">{docPreview.error}</p>
+            ) : null}
+            {!docPreview.loading && docPreview.blobUrl ? (
+              docPreview.mime === "application/pdf" ? (
+                <iframe title="Document preview" src={docPreview.blobUrl} className="w-full min-h-[65vh] border-0 bg-background" />
+              ) : docPreview.mime.startsWith("image/") ? (
+                <img
+                  src={docPreview.blobUrl}
+                  alt=""
+                  className="max-w-full max-h-[min(70vh,800px)] w-auto h-auto object-contain mx-auto block p-2"
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground px-6 py-8 text-center">
+                  Inline preview is not available for this file type. Use Download.
+                </p>
+              )
+            ) : null}
+          </div>
+          <DialogFooter className="px-6 py-4 shrink-0 border-t flex-row justify-end gap-2 sm:justify-end">
+            {docPreview.blobUrl ? (
+              <Button variant="outline" asChild>
+                <a href={docPreview.blobUrl} download={docPreview.title || "document"}>
+                  Save copy…
+                </a>
+              </Button>
+            ) : null}
+            <Button type="button" variant="secondary" onClick={closeDocPreview}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

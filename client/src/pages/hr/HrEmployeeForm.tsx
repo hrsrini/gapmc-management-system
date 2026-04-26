@@ -30,6 +30,7 @@ import {
   sanitizeMobile10Input,
 } from "@shared/india-validation";
 import { getPasswordPolicyBrUsr10FirstViolation, passwordPolicyBrUsr10Hint } from "@shared/password-policy-br-usr-10";
+import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 
 interface Yard {
   id: string;
@@ -104,6 +105,7 @@ export default function HrEmployeeForm() {
   const [surname, setSurname] = useState("");
   const [photoUrl, setPhotoUrl] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const photoPickPreviewUrl = useUploadFilePreview(photoFile);
   const [designation, setDesignation] = useState("");
   const [yardId, setYardId] = useState("");
   const [employeeType, setEmployeeType] = useState("Regular");
@@ -436,10 +438,11 @@ export default function HrEmployeeForm() {
 
       // If a photo file was selected, store it as an employee document (Photo) and set employee.photoUrl to the download URL.
       if (photoFile) {
+        const empSeg = encodeURIComponent(emp.id);
         const fd = new FormData();
         fd.append("file", photoFile);
         fd.append("docType", "Photo");
-        const up = await fetch(`/api/hr/employees/${emp.id}/documents`, {
+        const up = await fetch(`/api/hr/employees/${empSeg}/documents`, {
           method: "POST",
           credentials: "include",
           body: fd,
@@ -449,7 +452,8 @@ export default function HrEmployeeForm() {
           throw new Error((err as { error?: string }).error ?? up.statusText);
         }
         const uploaded = (await up.json()) as { id: string };
-        const photoDownloadUrl = `${window.location.origin}/api/hr/employees/${emp.id}/documents/${uploaded.id}/download`;
+        const docSeg = encodeURIComponent(uploaded.id);
+        const photoDownloadUrl = `${window.location.origin}/api/hr/employees/${empSeg}/documents/${docSeg}/download`;
         await updateMutation.mutateAsync({ photoUrl: photoDownloadUrl });
       }
 
@@ -600,6 +604,11 @@ export default function HrEmployeeForm() {
                       accept="image/png,image/jpeg,image/webp"
                       onChange={(e) => setPhotoFile(e.target.files?.[0] ?? null)}
                     />
+                    {photoPickPreviewUrl ? (
+                      <div className="rounded-md border bg-muted/20 p-2 w-fit">
+                        <img src={photoPickPreviewUrl} alt="" className="max-h-40 max-w-full object-contain rounded" />
+                      </div>
+                    ) : null}
                     <p className="text-xs text-muted-foreground">
                       Optional. Must be ≤ 500 KB and ≥ 200×200 px. Uploaded photos are stored under employee documents.
                     </p>

@@ -20,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { FileText, RefreshCcw, XCircle, FileSignature, AlertCircle, Download, Upload } from 'lucide-react';
+import { FileText, RefreshCcw, XCircle, FileSignature, AlertCircle, Download, Upload, Eye } from 'lucide-react';
 import { legacyRowMatchesSelectedApiYard } from '@/lib/legacyYardMatch';
 import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
 import { formatDisplayDate } from '@/lib/dateFormat';
@@ -29,6 +29,8 @@ import { useToast } from '@/hooks/use-toast';
 import type { Agreement } from '@shared/schema';
 import { ClientDataGrid } from '@/components/reports/ClientDataGrid';
 import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
+import { useUploadFilePreview } from '@/hooks/useUploadFilePreview';
+import { AuthenticatedBlobPreviewDialog } from '@/components/attachment/AuthenticatedBlobPreviewDialog';
 
 const statusColors: Record<string, string> = {
   Active: 'bg-accent/10 text-accent border-accent/20',
@@ -56,8 +58,14 @@ export default function TraderAgreements() {
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [viewAgreement, setViewAgreement] = useState<Agreement | null>(null);
   const [docFile, setDocFile] = useState<File | null>(null);
+  const [docPreviewOpen, setDocPreviewOpen] = useState(false);
+  const [docPreviewPath, setDocPreviewPath] = useState<string | null>(null);
+  const [docPreviewTitle, setDocPreviewTitle] = useState('');
+  const docPickPreviewUrl = useUploadFilePreview(docFile);
 
-  const agreementDocsUrl = viewAgreement?.id ? `/api/agreements/${viewAgreement.id}/documents` : '';
+  const agreementDocsUrl = viewAgreement?.id
+    ? `/api/agreements/${encodeURIComponent(viewAgreement.id)}/documents`
+    : '';
   const { data: docs = [] } = useQuery<
     Array<{ id: string; agreementId: string; version: number; fileName: string; createdAt?: string | null }>
   >({
@@ -71,7 +79,7 @@ export default function TraderAgreements() {
       if (!docFile) throw new Error('Choose a file first');
       const fd = new FormData();
       fd.append('file', docFile);
-      const res = await fetch(`/api/agreements/${viewAgreement.id}/documents`, {
+      const res = await fetch(`/api/agreements/${encodeURIComponent(viewAgreement.id)}/documents`, {
         method: 'POST',
         credentials: 'include',
         body: fd,
@@ -361,8 +369,27 @@ export default function TraderAgreements() {
                               </div>
                             ) : null}
                           </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            title="Preview"
+                            onClick={() => {
+                              setDocPreviewTitle(d.fileName);
+                              setDocPreviewPath(
+                                `/api/agreements/${encodeURIComponent(viewAgreement.id)}/documents/${encodeURIComponent(d.id)}/download`,
+                              );
+                              setDocPreviewOpen(true);
+                            }}
+                          >
+                            <Eye className="h-4 w-4 mr-1" /> View
+                          </Button>
                           <Button asChild size="sm" variant="outline">
-                            <a href={`/api/agreements/${viewAgreement.id}/documents/${d.id}/download`} target="_blank" rel="noreferrer">
+                            <a
+                              href={`/api/agreements/${encodeURIComponent(viewAgreement.id)}/documents/${encodeURIComponent(d.id)}/download`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
                               <Download className="h-4 w-4 mr-1" /> Download
                             </a>
                           </Button>
@@ -381,6 +408,21 @@ export default function TraderAgreements() {
                       accept="application/pdf,image/png,image/jpeg"
                       onChange={(e) => setDocFile(e.target.files?.[0] ?? null)}
                     />
+                    {docPickPreviewUrl ? (
+                      docFile?.type === 'application/pdf' ? (
+                        <iframe
+                          title="Selected file preview"
+                          src={docPickPreviewUrl}
+                          className="w-full h-44 rounded-md border bg-background"
+                        />
+                      ) : (
+                        <img
+                          src={docPickPreviewUrl}
+                          alt=""
+                          className="max-h-40 max-w-full rounded-md border object-contain"
+                        />
+                      )
+                    ) : null}
                     <div className="flex justify-end">
                       <Button
                         size="sm"
@@ -399,6 +441,12 @@ export default function TraderAgreements() {
             )}
           </DialogContent>
         </Dialog>
+        <AuthenticatedBlobPreviewDialog
+          open={docPreviewOpen}
+          onOpenChange={setDocPreviewOpen}
+          title={docPreviewTitle}
+          fetchPath={docPreviewPath}
+        />
       </div>
     </AppShell>
   );

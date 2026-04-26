@@ -20,7 +20,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
-import { ArrowLeft, FileCheck, Loader2, AlertCircle } from "lucide-react";
+import { ArrowLeft, FileCheck, Loader2, AlertCircle, Eye } from "lucide-react";
 import {
   isValidEmailFormat,
   isStrictAadhaar12Digits,
@@ -28,6 +28,8 @@ import {
   sanitizeMobile10Input,
 } from "@shared/india-validation";
 import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
+import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
+import { AuthenticatedBlobPreviewDialog } from "@/components/attachment/AuthenticatedBlobPreviewDialog";
 
 const LICENCE_TYPES = ["Associated", "Functionary", "Hamali", "Weighman", "AssistantTrader"] as const;
 
@@ -132,6 +134,9 @@ export default function TraderLicenceForm() {
   const [characterCertDate, setCharacterCertDate] = useState("");
   const [bmFormDocUrl, setBmFormDocUrl] = useState("");
   const bmFileInputRef = useRef<HTMLInputElement>(null);
+  const [bmPendingFile, setBmPendingFile] = useState<File | null>(null);
+  const [bmUploadedPreviewOpen, setBmUploadedPreviewOpen] = useState(false);
+  const bmPendingPreviewUrl = useUploadFilePreview(bmPendingFile);
   const [renewalNoArrearsDeclared, setRenewalNoArrearsDeclared] = useState(false);
 
   const { data: licence, isLoading: licenceLoading } = useQuery<LicenceRow>({
@@ -358,6 +363,7 @@ export default function TraderLicenceForm() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/traders/licences", editId] });
       if (bmFileInputRef.current) bmFileInputRef.current.value = "";
+      setBmPendingFile(null);
       toast({ title: "Uploaded", description: "BM supporting document file saved." });
     },
     onError: (e: Error) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
@@ -618,14 +624,15 @@ export default function TraderLicenceForm() {
                         </p>
                         {licence?.bmFormDocFile ? (
                           <div className="flex flex-wrap items-center gap-2 text-sm">
-                            <a
-                              href={`/api/ioms/traders/licences/${encodeURIComponent(editId!)}/bm-form-document`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-primary font-medium hover:underline"
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="h-auto px-2 text-primary font-medium hover:text-primary"
+                              onClick={() => setBmUploadedPreviewOpen(true)}
                             >
+                              <Eye className="h-4 w-4 mr-1 inline" />
                               View uploaded file
-                            </a>
+                            </Button>
                             <Button
                               type="button"
                               variant="outline"
@@ -637,7 +644,7 @@ export default function TraderLicenceForm() {
                             </Button>
                           </div>
                         ) : null}
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex flex-col gap-2 max-w-xl">
                           <Input
                             ref={bmFileInputRef}
                             type="file"
@@ -645,11 +652,56 @@ export default function TraderLicenceForm() {
                             className="max-w-xs cursor-pointer"
                             disabled={uploadBmMutation.isPending}
                             onChange={(e) => {
-                              const f = e.target.files?.[0];
-                              if (f) uploadBmMutation.mutate(f);
+                              const f = e.target.files?.[0] ?? null;
+                              e.target.value = "";
+                              setBmPendingFile(f);
                             }}
                           />
-                          {uploadBmMutation.isPending ? <span className="text-sm text-muted-foreground">Uploading…</span> : null}
+                          {bmPendingPreviewUrl ? (
+                            bmPendingFile?.type === "application/pdf" ? (
+                              <iframe
+                                title="BM file preview"
+                                src={bmPendingPreviewUrl}
+                                className="w-full h-44 rounded-md border bg-background"
+                              />
+                            ) : (
+                              <img
+                                src={bmPendingPreviewUrl}
+                                alt=""
+                                className="max-h-40 max-w-full rounded-md border object-contain"
+                              />
+                            )
+                          ) : null}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              disabled={uploadBmMutation.isPending || !bmPendingFile}
+                              onClick={() => {
+                                if (bmPendingFile) uploadBmMutation.mutate(bmPendingFile);
+                              }}
+                            >
+                              {uploadBmMutation.isPending ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                  Uploading…
+                                </>
+                              ) : (
+                                "Upload selected file"
+                              )}
+                            </Button>
+                            {bmPendingFile ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                disabled={uploadBmMutation.isPending}
+                                onClick={() => setBmPendingFile(null)}
+                              >
+                                Clear selection
+                              </Button>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                     ) : null}
@@ -739,6 +791,16 @@ export default function TraderLicenceForm() {
           </CardContent>
         </Card>
       </div>
+      <AuthenticatedBlobPreviewDialog
+        open={bmUploadedPreviewOpen}
+        onOpenChange={setBmUploadedPreviewOpen}
+        title="BM supporting document"
+        fetchPath={
+          editId
+            ? `/api/ioms/traders/licences/${encodeURIComponent(editId)}/bm-form-document`
+            : null
+        }
+      />
     </AppShell>
   );
 }

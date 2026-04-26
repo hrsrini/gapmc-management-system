@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -24,8 +24,12 @@ import {
   Paperclip,
   Download,
   Trash2,
+  Eye,
 } from "lucide-react";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
+import { FormFileAttachments } from "@/components/forms/FormFileAttachments";
+import { AuthenticatedBlobPreviewDialog } from "@/components/attachment/AuthenticatedBlobPreviewDialog";
+import { filesToFileList } from "@/lib/filesToFileList";
 
 interface Inward {
   id: string;
@@ -67,7 +71,10 @@ export default function DakInwardDetail() {
   const [actionNote, setActionNote] = useState("");
   const [statusAfter, setStatusAfter] = useState("");
   const actionByDisplay = user?.name ?? user?.email ?? "Current User";
-  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
+  const [attachmentPreviewOpen, setAttachmentPreviewOpen] = useState(false);
+  const [attachmentPreviewPath, setAttachmentPreviewPath] = useState<string | null>(null);
+  const [attachmentPreviewTitle, setAttachmentPreviewTitle] = useState("");
 
   const { data: inward, isLoading, isError } = useQuery<Inward>({
     queryKey: ["/api/ioms/dak/inward", id],
@@ -144,7 +151,7 @@ export default function DakInwardDetail() {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/dak/inward", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/dak/inward"] });
       toast({ title: "Attachments uploaded" });
-      if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+      setPendingAttachments([]);
     },
     onError: (e: Error) => {
       toast({ title: "Upload failed", description: e.message, variant: "destructive" });
@@ -284,27 +291,43 @@ export default function DakInwardDetail() {
               <p className="text-sm text-muted-foreground">
                 PDF or images up to 8 MB each; max 20 files. Upload and remove require M-09 Update.
               </p>
-              <input
-                ref={attachmentInputRef}
-                type="file"
-                multiple
-                accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
-                className="hidden"
-                onChange={(e) => {
-                  const fl = e.target.files;
-                  if (fl?.length) attachmentMutation.mutate(fl);
-                }}
-              />
               {canUpdate && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={attachmentMutation.isPending}
-                  onClick={() => attachmentInputRef.current?.click()}
-                >
-                  Upload files
-                </Button>
+                <div className="space-y-3 rounded-md border border-border bg-muted/10 p-3">
+                  <FormFileAttachments
+                    label="Files to upload"
+                    description="Add one or more files, review thumbnails, then upload to the server."
+                    files={pendingAttachments}
+                    onChange={setPendingAttachments}
+                    accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                    maxFiles={20}
+                    maxBytesPerFile={8 * 1024 * 1024}
+                    disabled={attachmentMutation.isPending}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={attachmentMutation.isPending || pendingAttachments.length === 0}
+                      onClick={() =>
+                        attachmentMutation.mutate(filesToFileList(pendingAttachments))
+                      }
+                    >
+                      {attachmentMutation.isPending && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+                      Upload selected
+                    </Button>
+                    {pendingAttachments.length > 0 ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={attachmentMutation.isPending}
+                        onClick={() => setPendingAttachments([])}
+                      >
+                        Clear selection
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
               )}
               {(inward.attachments?.length ?? 0) === 0 ? (
                 <p className="text-sm text-muted-foreground">No attachments.</p>
@@ -313,9 +336,24 @@ export default function DakInwardDetail() {
                   {(inward.attachments ?? []).map((name) => (
                     <li key={name} className="flex flex-wrap items-center gap-2 border rounded-md px-3 py-2">
                       <span className="font-mono text-xs break-all flex-1 min-w-0">{name}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        title="Preview"
+                        onClick={() => {
+                          setAttachmentPreviewTitle(name);
+                          setAttachmentPreviewPath(
+                            `/api/ioms/dak/inward/${encodeURIComponent(id!)}/files/${encodeURIComponent(name)}`,
+                          );
+                          setAttachmentPreviewOpen(true);
+                        }}
+                      >
+                        <Eye className="h-4 w-4" />
+                      </Button>
                       <Button variant="ghost" size="sm" asChild>
                         <a
-                          href={`/api/ioms/dak/inward/${id}/files/${encodeURIComponent(name)}`}
+                          href={`/api/ioms/dak/inward/${encodeURIComponent(id!)}/files/${encodeURIComponent(name)}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           download
@@ -343,6 +381,12 @@ export default function DakInwardDetail() {
           </Tabs>
         </CardContent>
       </Card>
+      <AuthenticatedBlobPreviewDialog
+        open={attachmentPreviewOpen}
+        onOpenChange={setAttachmentPreviewOpen}
+        title={attachmentPreviewTitle}
+        fetchPath={attachmentPreviewPath}
+      />
     </AppShell>
   );
 }

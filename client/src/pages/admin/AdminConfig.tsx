@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Settings, AlertCircle, ImageIcon, Trash2, Upload } from "lucide-react";
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { apiRequest, fetchApiGet, queryClient, readApiErrorMessage } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
@@ -17,19 +17,20 @@ import {
   type SystemConfigKey,
 } from "@shared/system-config-defaults";
 import { randomHexSecret } from "@/lib/randomHexSecret";
+import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
+
+/** Module scope (not inside the component) avoids production TDZ from useMemo + .map over shared config maps. */
+const ADMIN_CONFIG_FIELDS: { key: SystemConfigKey; label: string }[] = SYSTEM_CONFIG_KEYS.map((key) => ({
+  key,
+  label: SYSTEM_CONFIG_LABELS[key],
+}));
 
 export default function AdminConfig() {
   const { toast } = useToast();
   const logoFileRef = useRef<HTMLInputElement>(null);
   const [logoPreviewNonce, setLogoPreviewNonce] = useState(0);
-  const configFields = useMemo(
-    () =>
-      SYSTEM_CONFIG_KEYS.map((key) => ({
-        key,
-        label: SYSTEM_CONFIG_LABELS[key],
-      })),
-    [],
-  );
+  const [pendingLogo, setPendingLogo] = useState<File | null>(null);
+  const pendingLogoPreviewUrl = useUploadFilePreview(pendingLogo);
   const { data: config, isLoading, isError } = useQuery<Record<string, string>>({
     queryKey: ["/api/admin/config"],
   });
@@ -79,6 +80,7 @@ export default function AdminConfig() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/branding/receipt-logo/status"] });
       setLogoPreviewNonce((n) => n + 1);
+      setPendingLogo(null);
       if (logoFileRef.current) logoFileRef.current.value = "";
       toast({ title: "Logo saved", description: "Receipt PDFs will use this image (PNG or JPEG, max 2 MB)." });
     },
@@ -123,6 +125,7 @@ export default function AdminConfig() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/branding/receipt-logo/status"] });
       setLogoPreviewNonce((n) => n + 1);
+      setPendingLogo(null);
       toast({ title: "Logo removed", description: "PDFs will fall back to env logo or text-only header." });
     },
     onError: (e: Error) => {
@@ -170,7 +173,7 @@ export default function AdminConfig() {
             <Skeleton className="h-48 w-full" />
           ) : (
             <>
-              {configFields.map(({ key, label }) => (
+              {ADMIN_CONFIG_FIELDS.map(({ key, label }) => (
                 <div key={key} className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start">
                   <Label className="md:col-span-1 pt-2" htmlFor={`cfg-${key}`}>
                     {label}
@@ -295,15 +298,29 @@ export default function AdminConfig() {
             aria-hidden
             tabIndex={-1}
             onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) uploadLogoMutation.mutate(f);
+              const f = e.target.files?.[0] ?? null;
+              e.target.value = "";
+              if (f && f.size > 2 * 1024 * 1024) {
+                toast({ title: "File too large", description: "Logo must be 2 MB or smaller.", variant: "destructive" });
+                return;
+              }
+              setPendingLogo(f);
             }}
           />
           {logoStatusLoading ? (
             <Skeleton className="h-32 w-full max-w-md" />
           ) : (
             <div className="flex flex-col sm:flex-row gap-4 items-start">
-              {logoStatus?.hasLogo ? (
+              {pendingLogoPreviewUrl ? (
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">Selected (not saved yet)</p>
+                  <img
+                    src={pendingLogoPreviewUrl}
+                    alt="Selected logo preview"
+                    className="max-h-28 max-w-[200px] object-contain border rounded-md bg-muted/30 p-2"
+                  />
+                </div>
+              ) : logoStatus?.hasLogo ? (
                 <img
                   src={`/api/admin/branding/receipt-logo/image?x=${logoPreviewNonce}`}
                   alt="Current receipt PDF logo"
@@ -312,29 +329,52 @@ export default function AdminConfig() {
               ) : (
                 <p className="text-sm text-muted-foreground">No logo uploaded yet.</p>
               )}
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant={logoStatus?.hasLogo ? "outline" : "default"}
-                  size="sm"
-                  onClick={() => logoFileRef.current?.click()}
-                  disabled={uploadLogoMutation.isPending}
-                >
-                  <Upload className="h-4 w-4 mr-1" />
-                  {logoStatus?.hasLogo ? "Replace logo" : "Upload logo"}
-                </Button>
-                {logoStatus?.hasLogo ? (
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
-                    variant="destructive"
+                    variant={logoStatus?.hasLogo ? "outline" : "default"}
                     size="sm"
-                    onClick={() => deleteLogoMutation.mutate()}
-                    disabled={deleteLogoMutation.isPending}
+                    onClick={() => logoFileRef.current?.click()}
+                    disabled={uploadLogoMutation.isPending}
                   >
-                    <Trash2 className="h-4 w-4 mr-1" />
-                    Remove logo
+                    <Upload className="h-4 w-4 mr-1" />
+                    {logoStatus?.hasLogo ? "Choose replacement" : "Choose logo file"}
                   </Button>
-                ) : null}
+                  {pendingLogo ? (
+                    <>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={uploadLogoMutation.isPending}
+                        onClick={() => uploadLogoMutation.mutate(pendingLogo)}
+                      >
+                        Save logo
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={uploadLogoMutation.isPending}
+                        onClick={() => setPendingLogo(null)}
+                      >
+                        Clear selection
+                      </Button>
+                    </>
+                  ) : null}
+                  {logoStatus?.hasLogo ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => deleteLogoMutation.mutate()}
+                      disabled={deleteLogoMutation.isPending}
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Remove logo
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             </div>
           )}
