@@ -55,6 +55,7 @@
     "db:apply-m03-rent-revision-basis": "dotenv -e .env -- tsx scripts/apply-m03-rent-revision-basis.ts",
     "db:apply-m02-bm-form-doc-url": "dotenv -e .env -- tsx scripts/apply-m02-bm-form-doc-url.ts",
     "db:apply-m02-bm-form-doc-file": "dotenv -e .env -- tsx scripts/apply-m02-bm-form-doc-file.ts",
+    "db:apply-m04-market-fee-extensions": "dotenv -e .env -- tsx scripts/apply-m04-market-fee-extensions.ts",
     "test-plan:expand": "node scripts/expand-test-plan.mjs",
     "srs:fr-traceability": "python scripts/generate-srs-v3-fr-traceability.py && node scripts/build-srs-fr-traceability-xlsx.mjs"
   },

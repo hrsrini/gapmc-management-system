@@ -18,11 +18,13 @@ interface InwardEntry {
   id: string;
   entryNo?: string | null;
   checkPostId: string;
+  traderLicenceId?: string | null;
   transactionType: string;
   entryDate: string;
   vehicleNumber?: string | null;
   status: string;
   totalCharges?: number | null;
+  receiptId?: string | null;
 }
 interface InwardCommodity {
   id: string;
@@ -42,6 +44,7 @@ export default function CheckPostInward() {
   const canCreate = can("M-04", "Create");
   const [open, setOpen] = useState(false);
   const [checkPostId, setCheckPostId] = useState("");
+  const [traderLicenceId, setTraderLicenceId] = useState("");
   const [transactionType, setTransactionType] = useState("Permanent");
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [vehicleNumber, setVehicleNumber] = useState("");
@@ -69,6 +72,9 @@ export default function CheckPostInward() {
   const { data: commodities = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ["/api/ioms/commodities"],
   });
+  const { data: licences = [] } = useQuery<Array<{ id: string; firmName: string; licenceNo?: string | null }>>({
+    queryKey: ["/api/ioms/traders/licences"],
+  });
   const {
     data: commodityLines = [],
     isLoading: commodityLinesLoading,
@@ -85,14 +91,17 @@ export default function CheckPostInward() {
   const checkPostById = useMemo(() => new Map(checkposts.map((c) => [c.id, c])), [checkposts]);
   const commodityIds = useMemo(() => new Set(commodities.map((c) => c.id)), [commodities]);
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
+  const licenceIds = useMemo(() => new Set(licences.map((l) => l.id)), [licences]);
+  const licenceById = useMemo(() => new Map(licences.map((l) => [l.id, l])), [licences]);
   const inwardCreateError = useMemo(() => {
     if (!checkPostId.trim()) return "Check post ID is required.";
     if (!entryDate.trim()) return "Entry date is required.";
     if (!checkPostIds.has(checkPostId.trim())) return "Check post ID is invalid or out of scope.";
+    if (traderLicenceId.trim() && !licenceIds.has(traderLicenceId.trim())) return "Trader licence ID is invalid.";
     const charges = totalCharges === "" ? null : Number(totalCharges);
     if (charges != null && (Number.isNaN(charges) || charges < 0)) return "Total charges must be a non-negative number.";
     return null;
-  }, [checkPostId, entryDate, totalCharges, checkPostIds]);
+  }, [checkPostId, entryDate, totalCharges, checkPostIds, traderLicenceId, licenceIds]);
   const commodityAddError = useMemo(() => {
     if (!selectedInwardId) return "Select an inward entry first.";
     if (!commodityId.trim()) return "Commodity ID is required.";
@@ -129,6 +138,7 @@ export default function CheckPostInward() {
           vehicleNumber,
           fromFirm,
           toFirm,
+          traderLicenceId: traderLicenceId.trim() || null,
           totalCharges: totalCharges === "" ? null : Number(totalCharges),
           status: "Draft",
         }),
@@ -142,6 +152,7 @@ export default function CheckPostInward() {
       toast({ title: "Inward entry created" });
       setOpen(false);
       setCheckPostId("");
+      setTraderLicenceId("");
       setTransactionType("Permanent");
       setEntryDate(new Date().toISOString().slice(0, 10));
       setVehicleNumber("");
@@ -220,10 +231,12 @@ export default function CheckPostInward() {
     (): ReportTableColumn[] => [
       { key: "entryNo", header: "Entry No" },
       { key: "checkPostName", header: "Check Post" },
+      { key: "trader", header: "Trader" },
       { key: "transactionType", header: "Type" },
       { key: "entryDate", header: "Date" },
       { key: "vehicleNumber", header: "Vehicle" },
       { key: "totalCharges", header: "Charges" },
+      { key: "receipt", header: "Receipt" },
       { key: "_status", header: "Status", sortField: "status" },
       { key: "_actions", header: "Actions" },
     ],
@@ -239,6 +252,14 @@ export default function CheckPostInward() {
       entryDate: e.entryDate.slice(0, 10),
       vehicleNumber: e.vehicleNumber ?? "—",
       totalCharges: e.totalCharges != null ? e.totalCharges : "—",
+      trader: e.traderLicenceId ? (licenceById.get(e.traderLicenceId)?.firmName ?? e.traderLicenceId) : "—",
+      receipt: e.receiptId ? (
+        <a className="text-primary hover:underline text-sm font-mono" href={`/receipts/ioms/${e.receiptId}`}>
+          View
+        </a>
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      ),
       status: e.status,
       _status: <Badge variant="secondary">{e.status}</Badge>,
       _actions: (
@@ -260,7 +281,7 @@ export default function CheckPostInward() {
         </div>
       ),
     }));
-  }, [filteredList, checkPostById, canVerify, statusMutation, openCommodities]);
+  }, [filteredList, checkPostById, canVerify, statusMutation, openCommodities, licenceById]);
 
   const commodityLineColumns = useMemo(
     (): ReportTableColumn[] => [
@@ -328,6 +349,20 @@ export default function CheckPostInward() {
                     <datalist id="checkpost-list-inward">
                       {checkposts.map((c) => (<option key={c.id} value={c.id}>{c.name} ({c.code})</option>))}
                     </datalist>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Trader licence (optional)</Label>
+                    <Select value={traderLicenceId || "none"} onValueChange={(v) => setTraderLicenceId(v === "none" ? "" : v)}>
+                      <SelectTrigger><SelectValue placeholder="Select trader (optional)" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">—</SelectItem>
+                        {licences.map((l) => (
+                          <SelectItem key={l.id} value={l.id}>
+                            {`${l.firmName}${l.licenceNo ? ` (${l.licenceNo})` : ""}`.slice(0, 72)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">

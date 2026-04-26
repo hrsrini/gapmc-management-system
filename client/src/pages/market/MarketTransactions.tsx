@@ -34,6 +34,7 @@ interface Transaction {
   declaredValue: number;
   marketFeeAmount: number;
   transactionDate: string;
+  isGracePeriod?: boolean | null;
   status: string;
   workflowRevisionCount?: number | null;
   dvReturnRemarks?: string | null;
@@ -318,7 +319,16 @@ export default function MarketTransactions() {
         _entryKind: (
           <Badge variant={t.entryKind === "Adjustment" ? "outline" : "secondary"}>{kind}</Badge>
         ),
-        _status: <Badge variant="secondary">{t.status}</Badge>,
+        _status: (
+          <div className="flex flex-col gap-1">
+            <Badge variant="secondary">{t.status}</Badge>
+            {t.isGracePeriod ? (
+              <span className="text-[11px] text-amber-700 dark:text-amber-400">
+                Grace period (renewal pending)
+              </span>
+            ) : null}
+          </div>
+        ),
         _actions: showTxnActions ? (
           <div className="flex flex-wrap gap-1">
             {canCreate && t.status === "Approved" && t.entryKind !== "Adjustment" && (

@@ -84,6 +84,7 @@ const GENDER_OPTIONS = ["", "Male", "Female", "Other", "Prefer not to say"];
 const MARITAL_OPTIONS = ["", "Single", "Married", "Widowed", "Divorced"];
 /** SRS §4.1.1 — reservation / employee category (value stored as text). */
 const EMPLOYEE_CATEGORIES = ["General", "SC", "ST", "OBC", "EWS", "PwBD", "Ex-servicemen"];
+const BLOOD_GROUP_OPTIONS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] as const;
 const PAY_LEVELS = Array.from({ length: 18 }, (_, i) => i + 1);
 
 export default function HrEmployeeForm() {
@@ -754,7 +755,18 @@ export default function HrEmployeeForm() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div><Label>Blood group</Label><Input value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)} placeholder="e.g. O+" /></div>
+                  <div>
+                    <Label>Blood group</Label>
+                    <Select value={bloodGroup || "__none__"} onValueChange={(v) => setBloodGroup(v === "__none__" ? "" : v)}>
+                      <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent>
+                        {BLOOD_GROUP_OPTIONS.map((b) => (
+                          <SelectItem key={b} value={b}>{b}</SelectItem>
+                        ))}
+                        <SelectItem value="__none__">Not specified</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="md:col-span-2">
                     <Label>Permanent address</Label>
                     <Textarea value={permanentAddress} onChange={(e) => setPermanentAddress(e.target.value)} rows={2} />

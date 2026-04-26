@@ -96,6 +96,14 @@ export async function buildIomsReceiptPdf(params: {
     doc.text(`Receipt no.: ${receipt.receiptNo}`);
     doc.text(`Date: ${String(receipt.createdAt ?? "").slice(0, 19).replace("T", " ")}`);
     doc.text(`Status: ${receipt.status}`);
+    if ((receipt as { isGracePeriod?: boolean | null }).isGracePeriod) {
+      doc
+        .moveDown(0.25)
+        .fontSize(9)
+        .fillColor("#b45309")
+        .text("Grace period transaction: licence renewal required before transaction window end date (see policy).");
+      doc.fillColor("#000");
+    }
     doc.moveDown(0.6);
     doc.fontSize(11).text("Payer", { underline: true });
     doc.fontSize(10).text(receipt.payerName ?? receipt.payerRefId ?? "—");

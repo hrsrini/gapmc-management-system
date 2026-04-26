@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,6 +57,25 @@ interface Employee {
   surname: string;
 }
 
+interface LeaveBalanceRow {
+  id: string;
+  employeeId: string;
+  leaveType: string;
+  balanceDays: number;
+}
+
+const DEFAULT_LEAVE_TYPES = ["EL", "CL", "ML", "CCL"] as const;
+
+function inclusiveCalendarDays(fromIso: string, toIso: string): number {
+  const [fy, fm, fd] = String(fromIso).slice(0, 10).split("-").map((x) => Number(x));
+  const [ty, tm, td] = String(toIso).slice(0, 10).split("-").map((x) => Number(x));
+  if (![fy, fm, fd, ty, tm, td].every((n) => Number.isFinite(n))) return 0;
+  const d0 = Date.UTC(fy, fm - 1, fd);
+  const d1 = Date.UTC(ty, tm - 1, td);
+  if (d1 < d0) return 0;
+  return Math.round((d1 - d0) / 86400000) + 1;
+}
+
 export default function LeaveRequests() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -87,9 +106,54 @@ export default function LeaveRequests() {
   const { data: employees = [] } = useQuery<Employee[]>({
     queryKey: ["/api/hr/employees"],
   });
+  const { data: balances = [] } = useQuery<LeaveBalanceRow[]>({
+    queryKey: ["/api/hr/leave-balances"],
+  });
   const employeeLabelById = Object.fromEntries(
     employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
   );
+
+  const isAdmin = roles.includes("ADMIN");
+  const effectiveEmployeeId = isAdmin ? newEmployeeId : user?.employeeId ?? "";
+
+  const leaveTypesForEmployee = useMemo((): string[] => {
+    const empId = effectiveEmployeeId.trim();
+    if (!empId) return [...DEFAULT_LEAVE_TYPES];
+    const set = new Set<string>();
+    for (const b of balances) {
+      if (b.employeeId === empId && b.leaveType) set.add(String(b.leaveType).trim().toUpperCase());
+    }
+    const list = Array.from(set).filter(Boolean).sort();
+    return list.length ? list : [...DEFAULT_LEAVE_TYPES];
+  }, [balances, effectiveEmployeeId]);
+
+  const selectedBalance = useMemo((): LeaveBalanceRow | null => {
+    const empId = effectiveEmployeeId.trim();
+    const lt = newLeaveType.trim().toUpperCase();
+    if (!empId || !lt) return null;
+    return balances.find((b) => b.employeeId === empId && String(b.leaveType).trim().toUpperCase() === lt) ?? null;
+  }, [balances, effectiveEmployeeId, newLeaveType]);
+
+  const requestedDays = useMemo(() => {
+    if (!newFrom || !newTo) return 0;
+    return inclusiveCalendarDays(newFrom, newTo);
+  }, [newFrom, newTo]);
+
+  useEffect(() => {
+    if (!newOpen) return;
+    if (isAdmin && !newEmployeeId && employees.length > 0) {
+      setNewEmployeeId(employees[0]!.id);
+    }
+  }, [newOpen, isAdmin, newEmployeeId, employees]);
+
+  useEffect(() => {
+    if (!newOpen) return;
+    const lt = newLeaveType.trim().toUpperCase();
+    if (!lt || !leaveTypesForEmployee.includes(lt)) {
+      setNewLeaveType(leaveTypesForEmployee[0] ?? "EL");
+    }
+  }, [newOpen, leaveTypesForEmployee, newLeaveType]);
+
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
       const res = await fetch("/api/hr/leaves", {
@@ -384,7 +448,31 @@ export default function LeaveRequests() {
             )}
             <div className="space-y-1">
               <Label>Leave type</Label>
-              <Input value={newLeaveType} onChange={(e) => setNewLeaveType(e.target.value)} placeholder="EL, CL, ML…" />
+              <Select value={newLeaveType.trim().toUpperCase() || (leaveTypesForEmployee[0] ?? "EL")} onValueChange={setNewLeaveType}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select leave type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {leaveTypesForEmployee.map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground pt-1">
+                <span>
+                  Balance:{" "}
+                  <span className="font-medium text-foreground">
+                    {selectedBalance ? `${Number(selectedBalance.balanceDays ?? 0)} days` : "Not configured"}
+                  </span>
+                </span>
+                {requestedDays > 0 && (
+                  <span>
+                    Requested: <span className="font-medium text-foreground">{requestedDays} days</span>
+                  </span>
+                )}
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
@@ -426,7 +514,7 @@ export default function LeaveRequests() {
                 }
                 createMutation.mutate({
                   employeeId,
-                  leaveType: newLeaveType.trim() || "EL",
+                  leaveType: newLeaveType.trim().toUpperCase() || "EL",
                   fromDate: newFrom,
                   toDate: newTo,
                   reason: newReason.trim() || null,

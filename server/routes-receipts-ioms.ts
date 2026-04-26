@@ -168,6 +168,8 @@ export async function createIomsReceipt(params: {
   payerName?: string;
   payerType?: string;
   payerRefId?: string;
+  /** FR-AST-014 phase-1: grace period transaction flag (licence expired but within window). */
+  isGracePeriod?: boolean;
   amount: number;
   cgst?: number;
   sgst?: number;
@@ -195,6 +197,7 @@ export async function createIomsReceipt(params: {
     payerName: params.payerName ?? null,
     payerType: params.payerType ?? null,
     payerRefId: params.payerRefId ?? null,
+    isGracePeriod: Boolean(params.isGracePeriod),
     amount: params.amount,
     cgst: params.cgst ?? 0,
     sgst: params.sgst ?? 0,

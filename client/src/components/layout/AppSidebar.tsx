@@ -130,6 +130,12 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
       { title: 'Fee Collection', icon: Wallet, href: '/market-fee', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Import/Export', icon: ArrowLeftRight, href: '/market-fee/entry', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Returns', icon: ClipboardList, href: '/market-fee/returns', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Monthly returns (M-04)', icon: ClipboardList, href: '/market/returns', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Fee statement (M-04)', icon: Banknote, href: '/market/fee-statement', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Reports (M-04)', icon: BarChart3, href: '/market/reports', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Daily prices (M-04)', icon: BarChart3, href: '/market/daily-prices', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Advance ledger (M-04)', icon: Wallet, href: '/market/advance-ledger', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Commodity reports (M-04)', icon: BarChart3, href: '/market/commodity-reports', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Commodities (M-04)', icon: Package, href: '/market/commodities', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Fee rates (M-04)', icon: Percent, href: '/market/fee-rates', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Farmers (M-04)', icon: Users, href: '/market/farmers', requirePermission: { module: 'M-04', action: 'Read' } },
@@ -142,6 +148,7 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
     items: [
       { title: 'Inward', icon: LogIn, href: '/checkpost/inward', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Outward', icon: Send, href: '/checkpost/outward', requirePermission: { module: 'M-04', action: 'Read' } },
+      { title: 'Stock returns', icon: ArrowLeftRight, href: '/checkpost/stock-returns', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Exit permits', icon: FileCheck, href: '/checkpost/exit-permits', requirePermission: { module: 'M-04', action: 'Read' } },
       { title: 'Bank deposits', icon: Banknote, href: '/checkpost/bank-deposits', requirePermission: { module: 'M-04', action: 'Read' } },
     ]

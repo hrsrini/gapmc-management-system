@@ -4,6 +4,14 @@
  */
 export const SYSTEM_CONFIG_DEFAULTS = {
   market_fee_percent: "1.00",
+  /** M-04 / FR-AST-014 (phase-1): transaction window end date (ISO). After this date, transactions are hard-blocked when licence is expired. */
+  market_transaction_window_end_iso: "2026-04-30",
+  /** M-04: statutory deadline day of month for filing prior month return (default 7). */
+  market_return_deadline_day: "7",
+  /** M-04: penal interest rate % p.a. for late filing (simple daily; default 18% p.a.). */
+  market_return_interest_percent_per_annum: "18",
+  /** US-M04-004: warn when advance balance drops below this INR. */
+  market_fee_advance_min_threshold_inr: "2000",
   msp_rate: "10.00",
   admin_charges: "0.00",
   licence_fee: "300.00",
@@ -98,6 +106,10 @@ export type SystemConfigKey = keyof typeof SYSTEM_CONFIG_DEFAULTS;
 /** Stable field order for Admin Config UI and server validation. */
 export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "market_fee_percent",
+  "market_transaction_window_end_iso",
+  "market_return_deadline_day",
+  "market_return_interest_percent_per_annum",
+  "market_fee_advance_min_threshold_inr",
   "msp_rate",
   "admin_charges",
   "licence_fee",
@@ -142,6 +154,10 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
 
 export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   market_fee_percent: "Market Fee %",
+  market_transaction_window_end_iso: "M-04: licence expiry transaction window end date (ISO)",
+  market_return_deadline_day: "M-04 Returns: deadline day of month (1–28; default 7)",
+  market_return_interest_percent_per_annum: "M-04 Returns: late interest % p.a. (simple daily; default 18)",
+  market_fee_advance_min_threshold_inr: "M-04 Advance: low-balance threshold (INR; default 2000)",
   msp_rate: "MSP Rate",
   admin_charges: "Admin Charges",
   licence_fee: "Licence Fee",

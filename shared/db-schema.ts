@@ -325,6 +325,17 @@ export const iomsRevenueHeadLedgerMap = gapmc.table("ioms_revenue_head_ledger_ma
   tallyLedgerId: text("tally_ledger_id").notNull(),
 });
 
+/** Atomic sequence for Market monthly return acknowledgement refs (per yard + year). */
+export const marketReturnAckSequence = gapmc.table(
+  "market_return_ack_sequence",
+  {
+    yardId: text("yard_id").notNull(),
+    year: integer("year").notNull(),
+    lastSeq: integer("last_seq").default(0).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.yardId, t.year] })],
+);
+
 // ----- M-05: Receipts Online (central engine) -----
 export const receiptSequence = gapmc.table(
   "receipt_sequence",
@@ -357,6 +368,8 @@ export const iomsReceipts = gapmc.table("ioms_receipts", {
   payerName: text("payer_name"),
   payerType: text("payer_type"),
   payerRefId: text("payer_ref_id"),
+  /** FR-AST-014 phase-1: grace period transaction flag (e.g., licence expired but within window). */
+  isGracePeriod: boolean("is_grace_period").default(false),
   amount: doublePrecision("amount").notNull(),
   cgst: doublePrecision("cgst").default(0),
   sgst: doublePrecision("sgst").default(0),
@@ -903,6 +916,51 @@ export const marketFeeRates = gapmc.table("market_fee_rates", {
   yardId: text("yard_id"),
 });
 
+/** US-M04-003: daily official prices per commodity per yard (derived from arrivals). */
+export const marketDailyPrices = gapmc.table("market_daily_prices", {
+  id: text("id").primaryKey(),
+  yardId: text("yard_id").notNull(),
+  date: text("date").notNull(), // YYYY-MM-DD
+  commodityId: text("commodity_id").notNull(),
+  minPriceInrPerUnit: doublePrecision("min_price_inr_per_unit").notNull(),
+  maxPriceInrPerUnit: doublePrecision("max_price_inr_per_unit").notNull(),
+  modalPriceInrPerUnit: doublePrecision("modal_price_inr_per_unit").notNull(),
+  sampleCount: integer("sample_count").default(0).notNull(),
+  totalQty: doublePrecision("total_qty").default(0).notNull(),
+  generatedAt: text("generated_at"),
+  generatedBy: text("generated_by"),
+});
+
+/** US-M04-004: market fee advance deposit / adjustment ledger. */
+export const marketFeeLedger = gapmc.table("market_fee_ledger", {
+  id: text("id").primaryKey(),
+  traderLicenceId: text("trader_licence_id").notNull(),
+  yardId: text("yard_id").notNull(),
+  entryDate: text("entry_date").notNull(), // YYYY-MM-DD
+  entryType: text("entry_type").notNull(), // Deposit | Adjustment | Refund
+  /** +ve credit (deposit), -ve debit (adjustment/refund outflow). */
+  amountInr: doublePrecision("amount_inr").notNull(),
+  /** Optional linked receipt (M-05). */
+  receiptId: text("receipt_id"),
+  /** Optional: link back to source record (purchase transaction id etc). */
+  sourceModule: text("source_module"),
+  sourceRecordId: text("source_record_id"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+/** US-M04-007: stored report snapshots (for HO + export + audit). */
+export const marketCommodityReportSnapshots = gapmc.table("market_commodity_report_snapshots", {
+  id: text("id").primaryKey(),
+  reportKind: text("report_kind").notNull(), // Weekly | Fortnight | Monthly | Custom
+  yardId: text("yard_id"), // null = all scoped/HO
+  from: text("from").notNull(), // YYYY-MM-DD
+  to: text("to").notNull(), // YYYY-MM-DD
+  rowsJson: jsonb("rows_json").$type<unknown[]>().notNull(),
+  generatedAt: text("generated_at").notNull(),
+  generatedBy: text("generated_by"),
+});
+
 export const farmers = gapmc.table("farmers", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -932,6 +990,8 @@ export const purchaseTransactions = gapmc.table("purchase_transactions", {
   purchaseType: text("purchase_type").notNull(),
   grade: text("grade"),
   transactionDate: text("transaction_date").notNull(),
+  /** FR-AST-014 phase-1: grace period transaction flag. */
+  isGracePeriod: boolean("is_grace_period").default(false),
   status: text("status").notNull(),
   receiptId: text("receipt_id"),
   doUser: text("do_user"),
@@ -957,8 +1017,12 @@ export const checkPostInward = gapmc.table("check_post_inward", {
   fromState: text("from_state"),
   toState: text("to_state"),
   totalCharges: doublePrecision("total_charges"),
+  /** Phase-1 linkage: MarketFee receipt (M-05) for this inward entry. */
+  receiptId: text("receipt_id"),
   encodedData: text("encoded_data"),
   entryDate: text("entry_date").notNull(),
+  /** FR-AST-014 phase-1: grace period transaction flag. */
+  isGracePeriod: boolean("is_grace_period").default(false),
   officerId: text("officer_id"),
   status: text("status").notNull(), // Draft | Verified
 });
@@ -1003,6 +1067,49 @@ export const checkPostBankDeposits = gapmc.table("check_post_bank_deposits", {
   narration: text("narration"),
   status: text("status").notNull(), // Recorded | Verified
   verifiedBy: text("verified_by"),
+});
+
+/** M-04 Monthly market returns (FR-MKT-013/014/015): one per trader per period. */
+export const marketMonthlyReturns = gapmc.table("market_monthly_returns", {
+  id: text("id").primaryKey(),
+  /** Track A linkage: trader licence id (entity scope for returns). */
+  traderLicenceId: text("trader_licence_id").notNull(),
+  /** YYYY-MM (month), or YYYY-Qn (quarter) if quarterly is enabled later. */
+  period: text("period").notNull(),
+  /** Draft | Submitted | Verified | Approved */
+  status: text("status").notNull().default("Draft"),
+  /** Acknowledgement reference number generated on submit. */
+  acknowledgementRef: text("ack_ref").unique(),
+  /** Self | Official (filed by authorised official on behalf). */
+  filingMode: text("filing_mode").default("Self"),
+  filedByUserId: text("filed_by_user_id"),
+  /** Step-2 computed totals for convenience (derived from line rows but stored for display). */
+  totalPurchaseValueInr: doublePrecision("total_purchase_value_inr").default(0),
+  totalMarketFeeInr: doublePrecision("total_market_fee_inr").default(0),
+  lateSubmissionFlag: boolean("late_submission_flag").default(false),
+  /** ISO date of statutory deadline for this period (defaults to 7th of next month). */
+  deadlineDate: text("deadline_date"),
+  /** Days late at time of submission (0 when on/before deadline). */
+  daysLate: integer("days_late").default(0),
+  /** Computed simple daily interest for late filing (INR). */
+  interestAmountInr: doublePrecision("interest_amount_inr").default(0),
+  submittedAt: text("submitted_at"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+/** Line items per commodity for a monthly return. */
+export const marketMonthlyReturnLines = gapmc.table("market_monthly_return_lines", {
+  id: text("id").primaryKey(),
+  returnId: text("return_id").notNull(),
+  commodityId: text("commodity_id").notNull(),
+  openingQty: doublePrecision("opening_qty").default(0),
+  /** Total purchase qty/value auto-filled from yard + checkpost transactions for the period. */
+  purchaseQty: doublePrecision("purchase_qty").default(0),
+  purchaseValueInr: doublePrecision("purchase_value_inr").default(0),
+  /** User-entered sales qty; closing auto-computed as opening + purchase - sales. */
+  salesQty: doublePrecision("sales_qty").default(0),
+  closingQty: doublePrecision("closing_qty").default(0),
 });
 
 // ----- M-06: Payment Voucher Management -----

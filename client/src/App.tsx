@@ -68,10 +68,17 @@ import MarketTransactions from "@/pages/market/MarketTransactions";
 import FeeRatesList from "@/pages/market/FeeRatesList";
 import FarmersList from "@/pages/market/FarmersList";
 import MspSettingsList from "@/pages/market/MspSettingsList";
+import MarketReturns from "@/pages/market/MarketReturns";
+import MarketFeeStatement from "@/pages/market/MarketFeeStatement";
+import MarketCollectionReports from "@/pages/market/MarketCollectionReports";
+import MarketDailyPrices from "@/pages/market/MarketDailyPrices";
+import MarketAdvanceLedger from "@/pages/market/MarketAdvanceLedger";
+import MarketCommodityReports from "@/pages/market/MarketCommodityReports";
 import CheckPostInward from "@/pages/checkpost/CheckPostInward";
 import CheckPostOutward from "@/pages/checkpost/CheckPostOutward";
 import ExitPermitsList from "@/pages/checkpost/ExitPermitsList";
 import BankDepositsList from "@/pages/checkpost/BankDepositsList";
+import CheckPostStockReturns from "@/pages/checkpost/CheckPostStockReturns";
 import VouchersList from "@/pages/vouchers/VouchersList";
 import VoucherCreate from "@/pages/vouchers/VoucherCreate";
 import VoucherDetail from "@/pages/vouchers/VoucherDetail";
@@ -177,6 +184,24 @@ function Router() {
       <Route path="/market/commodities">
         <ProtectedRoute><RequirePermission module="M-04" action="Read"><CommoditiesList /></RequirePermission></ProtectedRoute>
       </Route>
+      <Route path="/market/returns">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketReturns /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/market/fee-statement">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketFeeStatement /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/market/reports">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketCollectionReports /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/market/daily-prices">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketDailyPrices /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/market/advance-ledger">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketAdvanceLedger /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/market/commodity-reports">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketCommodityReports /></RequirePermission></ProtectedRoute>
+      </Route>
       <Route path="/market/transactions">
         <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketTransactions /></RequirePermission></ProtectedRoute>
       </Route>
@@ -200,6 +225,9 @@ function Router() {
       </Route>
       <Route path="/checkpost/bank-deposits">
         <ProtectedRoute><RequirePermission module="M-04" action="Read"><BankDepositsList /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/checkpost/stock-returns">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><CheckPostStockReturns /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/vouchers">
         <ProtectedRoute><VouchersList /></ProtectedRoute>
