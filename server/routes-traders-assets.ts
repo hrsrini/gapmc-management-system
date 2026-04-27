@@ -980,6 +980,31 @@ export function registerTradersAssetsRoutes(app: Express) {
     }
   });
 
+  async function assertPremisesNotAlreadyAllocatedActive(params: { assetId: string; excludeEntityAllotmentId?: string; excludeAssetAllotmentId?: string }) {
+    const assetId = params.assetId;
+    const activeEntityAllotments = await db
+      .select({ id: entityAllotments.id })
+      .from(entityAllotments)
+      .where(and(eq(entityAllotments.assetId, assetId), eq(entityAllotments.status, "Active")));
+    const activeAssetAllotments = await db
+      .select({ id: assetAllotments.id })
+      .from(assetAllotments)
+      .where(and(eq(assetAllotments.assetId, assetId), eq(assetAllotments.status, "Active")));
+
+    const entityConflicts = activeEntityAllotments
+      .map((r) => r.id)
+      .filter((id) => !params.excludeEntityAllotmentId || id !== params.excludeEntityAllotmentId);
+    const traderConflicts = activeAssetAllotments
+      .map((r) => r.id)
+      .filter((id) => !params.excludeAssetAllotmentId || id !== params.excludeAssetAllotmentId);
+
+    return {
+      ok: entityConflicts.length === 0 && traderConflicts.length === 0,
+      entityConflicts,
+      traderConflicts,
+    };
+  }
+
   app.post("/api/ioms/entity-allotments", async (req, res) => {
     try {
       const body = req.body;
@@ -991,6 +1016,22 @@ export function registerTradersAssetsRoutes(app: Express) {
       const [assetRow] = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
       if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
       if (!yardInScope(req, assetRow.yardId)) return sendApiError(res, 403, "ASSET_YARD_ACCESS_DENIED", "You do not have access to this asset's yard");
+
+      // BR-PRE-023: one active allocation per premises (asset) across all allocation tables.
+      const nextStatus = String(body.status ?? "Active");
+      if (nextStatus === "Active") {
+        const check = await assertPremisesNotAlreadyAllocatedActive({ assetId });
+        if (!check.ok) {
+          return sendApiError(
+            res,
+            400,
+            "PREMISES_ALREADY_ALLOCATED",
+            "Cannot allocate: another Active allocation already exists for this premises.",
+            { assetId, entityAllotments: check.entityConflicts, traderAllotments: check.traderConflicts },
+          );
+        }
+      }
+
       const id = nanoid();
       await db.insert(entityAllotments).values({
         id,
@@ -999,7 +1040,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         allotteeName: String(body.allotteeName ?? ""),
         fromDate: String(body.fromDate ?? ""),
         toDate: String(body.toDate ?? ""),
-        status: String(body.status ?? "Active"),
+        status: nextStatus,
         securityDeposit: body.securityDeposit != null ? Number(body.securityDeposit) : null,
         doUser: body.doUser ? String(body.doUser) : null,
         daUser: body.daUser ? String(body.daUser) : null,
@@ -2121,6 +2162,22 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
       if (!yardInScope(req, assetRow.yardId))
         return sendApiError(res, 403, "ASSET_YARD_ACCESS_DENIED", "You do not have access to this asset's yard");
+
+      // BR-PRE-023: one active allocation per premises (asset) across all allocation tables.
+      const nextStatus = String(body.status ?? "Active");
+      if (nextStatus === "Active") {
+        const check = await assertPremisesNotAlreadyAllocatedActive({ assetId: aid });
+        if (!check.ok) {
+          return sendApiError(
+            res,
+            400,
+            "PREMISES_ALREADY_ALLOCATED",
+            "Cannot allocate: another Active allocation already exists for this premises.",
+            { assetId: aid, entityAllotments: check.entityConflicts, traderAllotments: check.traderConflicts },
+          );
+        }
+      }
+
       const id = nanoid();
       await db.insert(assetAllotments).values({
         id,
@@ -2129,7 +2186,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         allotteeName: String(body.allotteeName ?? ""),
         fromDate: String(body.fromDate ?? ""),
         toDate: String(body.toDate ?? ""),
-        status: String(body.status ?? "Active"),
+        status: nextStatus,
         securityDeposit: body.securityDeposit != null ? Number(body.securityDeposit) : null,
         doUser: body.doUser ? String(body.doUser) : null,
         daUser: body.daUser ? String(body.daUser) : null,
@@ -2157,6 +2214,22 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (k === "securityDeposit") updates.securityDeposit = body[k] == null ? null : Number(body[k]);
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
+
+      // BR-PRE-023: prevent switching to Active when another active allocation exists for this premises.
+      const resultingStatus = (updates.status !== undefined ? String(updates.status) : existingAllot.status) ?? "Active";
+      if (resultingStatus === "Active") {
+        const check = await assertPremisesNotAlreadyAllocatedActive({ assetId: existingAllot.assetId, excludeAssetAllotmentId: id });
+        if (!check.ok) {
+          return sendApiError(
+            res,
+            400,
+            "PREMISES_ALREADY_ALLOCATED",
+            "Cannot set allocation to Active: another Active allocation already exists for this premises.",
+            { assetId: existingAllot.assetId, entityAllotments: check.entityConflicts, traderAllotments: check.traderConflicts },
+          );
+        }
+      }
+
       const seg = assertRecordDoDvDaSeparation(req.user, {
         doUser: updates.doUser !== undefined ? (updates.doUser as string | null) : existingAllot.doUser,
         daUser: updates.daUser !== undefined ? (updates.daUser as string | null) : existingAllot.daUser,
