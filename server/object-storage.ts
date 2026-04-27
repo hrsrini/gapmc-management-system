@@ -49,13 +49,30 @@ export interface UploadBlobStore {
   exists(key: string): Promise<boolean>;
 }
 
+// When bundled to CJS for production (`dist/index.cjs`), Node provides `__filename`.
+// In ESM dev, `__filename` is not defined.
+declare const __filename: string | undefined;
+
 /** Application / repo root for resolving `uploads/` (override when deployment layout differs). */
 export function resolveProjectRootDir(): string {
   const env = (process.env.GAPMC_PROJECT_ROOT ?? "").trim();
   if (env) {
     return path.isAbsolute(env) ? env : path.resolve(process.cwd(), env);
   }
-  const thisFile = fileURLToPath(import.meta.url);
+  // `dist/index.cjs` is built as CJS; `import.meta.url` becomes undefined at runtime.
+  // Use `__filename` when available, otherwise fall back to `import.meta.url`.
+  const cjsFile = typeof __filename === "string" ? __filename : null;
+  const thisFile =
+    cjsFile ??
+    (() => {
+      try {
+        // In ESM dev, this works.
+        return fileURLToPath(import.meta.url);
+      } catch {
+        // As a last resort, align with current working dir.
+        return path.join(process.cwd(), "server", "object-storage.ts");
+      }
+    })();
   return path.join(path.dirname(thisFile), "..");
 }
 
