@@ -8,13 +8,14 @@ export function employeeDocumentBlobKey(employeeId: string, storedFileName: stri
 /** Stored names are `nanoid + ext`; reject path traversal and odd names. */
 export function isAllowedEmployeeDocumentFileName(name: string): boolean {
   const base = path.basename(name);
-  return base === name && /^[A-Za-z0-9_-]{8,32}\.(pdf|png|jpg|jpeg)$/i.test(base);
+  return base === name && /^[A-Za-z0-9_-]{8,32}\.(pdf|png|jpg|jpeg|webp)$/i.test(base);
 }
 
-export function extFromEmployeeDocumentMime(mime: string): ".pdf" | ".png" | ".jpg" | null {
+export function extFromEmployeeDocumentMime(mime: string): ".pdf" | ".png" | ".jpg" | ".webp" | null {
   if (mime === "application/pdf") return ".pdf";
   if (mime === "image/png") return ".png";
   if (mime === "image/jpeg") return ".jpg";
+  if (mime === "image/webp") return ".webp";
   return null;
 }
 
@@ -23,6 +24,7 @@ export function contentTypeForEmployeeDocument(fileName: string): string {
   if (lower.endsWith(".pdf")) return "application/pdf";
   if (lower.endsWith(".png")) return "image/png";
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
   return "application/octet-stream";
 }
 

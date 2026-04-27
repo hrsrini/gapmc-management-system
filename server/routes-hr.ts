@@ -144,7 +144,7 @@ export function registerHrRoutes(app: Express) {
 
       const ext = extFromEmployeeDocumentMime(file.mimetype);
       if (!ext) {
-        return sendApiError(res, 400, "HR_EMP_DOC_TYPE", "Only PDF/JPG/PNG documents are allowed.");
+        return sendApiError(res, 400, "HR_EMP_DOC_TYPE", "Only PDF/JPG/PNG/WebP documents are allowed.");
       }
 
       const docType = req.body?.docType != null && String(req.body.docType).trim() !== "" ? String(req.body.docType).trim() : "Document";

@@ -298,6 +298,39 @@ export default function HrEmployeeForm() {
 
   const [submitting, setSubmitting] = useState(false);
 
+  async function uploadEmployeePhotoAndGetUrl(employeeId: string, file: File): Promise<string> {
+    const empSeg = encodeURIComponent(employeeId);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("docType", "Photo");
+    const up = await fetch(`/api/hr/employees/${empSeg}/documents`, {
+      method: "POST",
+      credentials: "include",
+      body: fd,
+    });
+    if (!up.ok) {
+      const err = await up.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error ?? up.statusText);
+    }
+    const uploaded = (await up.json()) as { id: string };
+    const docSeg = encodeURIComponent(uploaded.id);
+    return `${window.location.origin}/api/hr/employees/${empSeg}/documents/${docSeg}/download`;
+  }
+
+  async function updateEmployeeById(employeeId: string, body: Record<string, unknown>): Promise<void> {
+    const empSeg = encodeURIComponent(employeeId);
+    const res = await fetch(`/api/hr/employees/${empSeg}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error ?? res.statusText);
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     // Photo validation (SRS): <= 500 KB, >= 200x200 px (only when uploading a file).
@@ -427,7 +460,27 @@ export default function HrEmployeeForm() {
     }
 
     if (isEdit) {
-      updateMutation.mutate(payload);
+      setSubmitting(true);
+      try {
+        // If photo selected on edit, upload + set photoUrl in the same update.
+        if (photoFile) {
+          const photoDownloadUrl = await uploadEmployeePhotoAndGetUrl(String(id), photoFile);
+          payload.photoUrl = photoDownloadUrl;
+        }
+        await updateMutation.mutateAsync(payload);
+        queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/hr/employees", id] });
+        toast({ title: "Employee updated" });
+        setLocation(`/hr/employees/${id}`);
+      } catch (err) {
+        toast({
+          title: "Update failed",
+          description: err instanceof Error ? err.message : "Unknown error",
+          variant: "destructive",
+        });
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
 
@@ -438,23 +491,10 @@ export default function HrEmployeeForm() {
 
       // If a photo file was selected, store it as an employee document (Photo) and set employee.photoUrl to the download URL.
       if (photoFile) {
-        const empSeg = encodeURIComponent(emp.id);
-        const fd = new FormData();
-        fd.append("file", photoFile);
-        fd.append("docType", "Photo");
-        const up = await fetch(`/api/hr/employees/${empSeg}/documents`, {
-          method: "POST",
-          credentials: "include",
-          body: fd,
-        });
-        if (!up.ok) {
-          const err = await up.json().catch(() => ({}));
-          throw new Error((err as { error?: string }).error ?? up.statusText);
-        }
-        const uploaded = (await up.json()) as { id: string };
-        const docSeg = encodeURIComponent(uploaded.id);
-        const photoDownloadUrl = `${window.location.origin}/api/hr/employees/${empSeg}/documents/${docSeg}/download`;
-        await updateMutation.mutateAsync({ photoUrl: photoDownloadUrl });
+        const photoDownloadUrl = await uploadEmployeePhotoAndGetUrl(emp.id, photoFile);
+        // IMPORTANT: use the newly created employee id, not the current route param (which is "new").
+        await updateEmployeeById(emp.id, { photoUrl: photoDownloadUrl });
+        queryClient.invalidateQueries({ queryKey: ["/api/hr/employees", emp.id] });
       }
 
       if (enableLoginOnCreate && canM10Create) {
@@ -607,6 +647,21 @@ export default function HrEmployeeForm() {
                     {photoPickPreviewUrl ? (
                       <div className="rounded-md border bg-muted/20 p-2 w-fit">
                         <img src={photoPickPreviewUrl} alt="" className="max-h-40 max-w-full object-contain rounded" />
+                      </div>
+                    ) : null}
+                    {!photoPickPreviewUrl && photoUrl ? (
+                      <div className="rounded-md border bg-muted/20 p-2 w-fit">
+                        <p className="text-xs text-muted-foreground mb-2">Current photo</p>
+                        <img
+                          src={photoUrl}
+                          alt=""
+                          className="max-h-40 max-w-full object-contain rounded"
+                          onError={(e) => {
+                            // If URL is invalid/expired, avoid broken image icon
+                            (e.currentTarget as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                        <p className="text-xs text-muted-foreground mt-2 break-all">{photoUrl}</p>
                       </div>
                     ) : null}
                     <p className="text-xs text-muted-foreground">

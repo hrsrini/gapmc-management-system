@@ -1,10 +1,13 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Building2, AlertCircle } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
+import { Building2, AlertCircle, Plus } from "lucide-react";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
@@ -20,7 +23,7 @@ interface Asset {
 }
 
 const columns: ReportTableColumn[] = [
-  { key: "assetId", header: "Asset ID" },
+  { key: "_assetId", header: "Asset ID", sortField: "assetId" },
   { key: "yardName", header: "Yard" },
   { key: "assetType", header: "Type" },
   { key: "complexName", header: "Complex" },
@@ -30,6 +33,9 @@ const columns: ReportTableColumn[] = [
 ];
 
 export default function AssetList() {
+  const { can } = useAuth();
+  const canCreate = can("M-02", "Create");
+  const canUpdate = can("M-02", "Update");
   const { data: assets, isLoading, isError } = useQuery<Asset[]>({
     queryKey: ["/api/ioms/assets"],
   });
@@ -44,6 +50,13 @@ export default function AssetList() {
       return {
         id: a.id,
         assetId: a.assetId,
+        _assetId: canUpdate ? (
+          <Link href={`/assets/${a.id}/edit`} className="text-primary hover:underline font-mono text-sm">
+            {a.assetId}
+          </Link>
+        ) : (
+          <span className="font-mono text-sm">{a.assetId}</span>
+        ),
         yardName: yardById[a.yardId] ?? a.yardId,
         assetType: a.assetType,
         complexName: a.complexName ?? "—",
@@ -53,7 +66,7 @@ export default function AssetList() {
         _status: <Badge variant={active ? "default" : "secondary"}>{active ? "Active" : "Inactive"}</Badge>,
       };
     });
-  }, [assets, yardById]);
+  }, [assets, yardById, canUpdate]);
 
   if (isError) {
     return (
@@ -72,11 +85,23 @@ export default function AssetList() {
     <AppShell breadcrumbs={[{ label: "Traders & Assets", href: "/assets" }, { label: "Assets" }]}>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Building2 className="h-5 w-5" />
-            Asset Register (M-02)
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">Shops, godowns, offices — [LOC]/[TYPE]-[NNN].</p>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Building2 className="h-5 w-5" />
+                Asset Register (M-02)
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">Shops, godowns, offices — [LOC]/[TYPE]-[NNN].</p>
+            </div>
+            {canCreate && (
+              <Button asChild>
+                <Link href="/assets/new">
+                  <Plus className="h-4 w-4 mr-1" />
+                  Register premises
+                </Link>
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (

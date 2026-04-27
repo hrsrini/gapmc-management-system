@@ -57,6 +57,7 @@ import TraderBlockingLog from "@/pages/traders/TraderBlockingLog";
 import AssetList from "@/pages/assets/AssetList";
 import AssetsVacant from "@/pages/assets/AssetsVacant";
 import AssetAllotments from "@/pages/assets/AssetAllotments";
+import AssetForm from "@/pages/assets/AssetForm";
 import IomsRentInvoices from "@/pages/rent/IomsRentInvoices";
 import IomsRentInvoiceDetail from "@/pages/rent/IomsRentInvoiceDetail";
 import IomsRentInvoiceForm from "@/pages/rent/IomsRentInvoiceForm";
@@ -452,6 +453,12 @@ function Router() {
       </Route>
       <Route path="/assets/vacant">
         <ProtectedRoute><AssetsVacant /></ProtectedRoute>
+      </Route>
+      <Route path="/assets/new">
+        <ProtectedRoute><RequirePermission module="M-02" action="Create"><AssetForm /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/assets/:id/edit">
+        <ProtectedRoute><RequirePermission module="M-02" action="Update"><AssetForm /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/assets">
         <ProtectedRoute><AssetList /></ProtectedRoute>

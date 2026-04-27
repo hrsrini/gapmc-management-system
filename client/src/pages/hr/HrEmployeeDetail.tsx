@@ -777,10 +777,10 @@ export default function HrEmployeeDetail() {
                           </Select>
                         </div>
                         <div className="space-y-2">
-                          <Label>File (PDF/JPG/PNG, max 5 MB)</Label>
+                          <Label>File (PDF/JPG/PNG/WebP, max 5 MB)</Label>
                           <Input
                             type="file"
-                            accept="application/pdf,image/png,image/jpeg"
+                            accept="application/pdf,image/png,image/jpeg,image/webp"
                             onChange={(e) => setDocFile(e.target.files?.[0] ?? null)}
                           />
                           {docFile ? (
