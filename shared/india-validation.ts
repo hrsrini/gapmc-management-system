@@ -46,3 +46,35 @@ export function isValidIfscFormat(raw: string): boolean {
   const t = normalizeIfscInput(raw);
   return t.length > 0 && INDIAN_IFSC_RE.test(t);
 }
+
+/** Indian PAN: 5 letters + 4 digits + 1 letter (e.g. ABCDE1234F). */
+export const INDIAN_PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+
+export function normalizePanInput(raw: string): string {
+  return String(raw ?? "").trim().toUpperCase().replace(/\s/g, "").slice(0, 10);
+}
+
+export function isValidPanFormat(raw: string): boolean {
+  const t = normalizePanInput(raw);
+  return t.length === 10 && INDIAN_PAN_RE.test(t);
+}
+
+/**
+ * Returns the first mismatch index (0..9) for the PAN pattern template AAAAA9999A.
+ * Returns null when the provided value is fully valid.
+ */
+export function panFirstMismatchIndex(raw: string): number | null {
+  const t = normalizePanInput(raw);
+  if (t.length === 0) return null;
+  const template = "AAAAA9999A";
+  const n = Math.min(t.length, 10);
+  for (let i = 0; i < n; i++) {
+    const want = template[i]!;
+    const ch = t[i]!;
+    const ok = want === "A" ? /^[A-Z]$/.test(ch) : /^[0-9]$/.test(ch);
+    if (!ok) return i;
+  }
+  // If length is 10 but regex fails (shouldn't happen given checks above), highlight last char.
+  if (t.length === 10 && !INDIAN_PAN_RE.test(t)) return 9;
+  return null;
+}

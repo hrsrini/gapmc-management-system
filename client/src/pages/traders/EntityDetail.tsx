@@ -18,6 +18,8 @@ import { unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { isTrackBGovtSubType, trackBBillingProfileHint, trackBShortBillingLabel } from "@shared/track-b-entity";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
+import { PanInput } from "@/components/inputs/PanInput";
+import { checkPanUniqueness } from "@/lib/panUniqueness";
 import {
   Dialog,
   DialogContent,
@@ -340,7 +342,7 @@ export default function EntityDetail() {
                   </div>
                   <div className="space-y-1">
                     <Label>PAN</Label>
-                    <Input value={editPan} onChange={(e) => setEditPan(e.target.value)} placeholder="Optional" />
+                    <PanInput value={editPan} onChange={setEditPan} onBlurCheckUniqueness={checkPanUniqueness} />
                   </div>
                   <div className="space-y-1 md:col-span-2">
                     <Label>GSTIN</Label>

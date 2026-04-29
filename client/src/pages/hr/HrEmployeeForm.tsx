@@ -29,6 +29,8 @@ import {
   parseIndianMobile10Digits,
   sanitizeMobile10Input,
 } from "@shared/india-validation";
+import { PanInput } from "@/components/inputs/PanInput";
+import { checkPanUniqueness } from "@/lib/panUniqueness";
 import { getPasswordPolicyBrUsr10FirstViolation, passwordPolicyBrUsr10Hint } from "@shared/password-policy-br-usr-10";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 
@@ -788,7 +790,10 @@ export default function HrEmployeeForm() {
                       autoComplete="off"
                     />
                   </div>
-                  <div><Label>PAN</Label><Input value={pan} onChange={(e) => setPan(e.target.value)} /></div>
+                  <div className="space-y-1">
+                    <Label>PAN</Label>
+                    <PanInput value={pan} onChange={setPan} onBlurCheckUniqueness={checkPanUniqueness} />
+                  </div>
                   <div><Label>Date of birth</Label><Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} /></div>
                   <div>
                     <Label>Mobile</Label>

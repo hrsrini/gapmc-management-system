@@ -41,6 +41,8 @@ import {
   assertPersonalEmailFormat,
   normalizeAadhaarMasked,
 } from "./hr-employee-rules";
+import { INDIAN_PAN_RE, normalizePanInput } from "@shared/india-validation";
+import { isPanTakenAcrossActiveMasters } from "./pan-uniqueness";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import {
   TRACKB_SUBTYPES,
@@ -247,6 +249,13 @@ export function registerTradersAssetsRoutes(app: Express) {
       const body = req.body;
       const yardId = String(body.yardId ?? "");
       if (!yardInScope(req, yardId)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      const panNorm = body.pan != null && String(body.pan).trim() !== "" ? normalizePanInput(String(body.pan)) : null;
+      if (panNorm && (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm))) {
+        return sendApiError(res, 400, "ENTITY_PAN_FORMAT", "PAN must match ABCDE1234F.");
+      }
+      if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm }))) {
+        return sendApiError(res, 400, "ENTITY_PAN_DUPLICATE", "PAN is already used by another active record.");
+      }
       const id = nanoid();
       const code = body.entityCode ? String(body.entityCode) : null;
       const track = String(body.track ?? "TrackB");
@@ -262,7 +271,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         subType,
         name: String(body.name ?? ""),
         yardId,
-        pan: body.pan ? String(body.pan) : null,
+        pan: panNorm,
         gstin: body.gstin ? String(body.gstin) : null,
         mobile: body.mobile ? normalizeMobile10(String(body.mobile)) : null,
         email: body.email ? String(body.email).trim().toLowerCase() : null,
@@ -292,8 +301,22 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (body[k] === undefined) return;
         let v: string | null = body[k] == null ? null : String(body[k]);
         if (v && k === "email") v = v.trim().toLowerCase();
-        updates[k] = v;
+        if (k === "pan") {
+          const p = v != null && v.trim() !== "" ? normalizePanInput(v) : null;
+          updates[k] = p;
+        } else {
+          updates[k] = v;
+        }
       });
+      if (updates.pan != null && String(updates.pan).trim() !== "") {
+        const p = String(updates.pan);
+        if (p.length !== 10 || !INDIAN_PAN_RE.test(p)) {
+          return sendApiError(res, 400, "ENTITY_PAN_FORMAT", "PAN must match ABCDE1234F.");
+        }
+        if (await isPanTakenAcrossActiveMasters({ panUpper: p, excludeEntityId: id })) {
+          return sendApiError(res, 400, "ENTITY_PAN_DUPLICATE", "PAN is already used by another active record.");
+        }
+      }
       if (body.track !== undefined) {
         const track = String(body.track);
         if (track !== "TrackB") return sendApiError(res, 400, "ENTITY_TRACK_INVALID", "Only TrackB entities are supported");
@@ -914,6 +937,13 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!yardInScope(req, yardId)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
       const name = String(body.name ?? "").trim();
       if (!name) return sendApiError(res, 400, "ADHOC_NAME_REQUIRED", "name is required");
+      const panNorm = body.pan != null && String(body.pan).trim() !== "" ? normalizePanInput(String(body.pan)) : null;
+      if (panNorm && (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm))) {
+        return sendApiError(res, 400, "ADHOC_PAN_FORMAT", "PAN must match ABCDE1234F.");
+      }
+      if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm }))) {
+        return sendApiError(res, 400, "ADHOC_PAN_DUPLICATE", "PAN is already used by another active record.");
+      }
 
       const id = nanoid();
       const ts = now();
@@ -922,7 +952,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         entityCode: body.entityCode ? String(body.entityCode) : null,
         name,
         yardId,
-        pan: body.pan ? String(body.pan) : null,
+        pan: panNorm,
         gstin: body.gstin ? String(body.gstin) : null,
         mobile: body.mobile ? normalizeMobile10(String(body.mobile)) : null,
         email: body.email ? String(body.email).trim().toLowerCase() : null,
@@ -1538,6 +1568,13 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (pendErr) return sendApiError(res, 400, pendErr.code, pendErr.message);
       }
       const id = nanoid();
+      const panNorm = body.pan != null && String(body.pan).trim() !== "" ? normalizePanInput(String(body.pan)) : null;
+      if (panNorm && (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm))) {
+        return sendApiError(res, 400, "LICENCE_PAN_FORMAT", "PAN must match ABCDE1234F.");
+      }
+      if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm }))) {
+        return sendApiError(res, 400, "LICENCE_PAN_DUPLICATE", "PAN is already used by another active record.");
+      }
       const sys = await getMergedSystemConfig();
       const feeFromBody =
         body.feeAmount != null && String(body.feeAmount).trim() !== "" ? Number(body.feeAmount) : null;
@@ -1556,7 +1593,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         email: emailNorm,
         address: body.address ? String(body.address) : null,
         aadhaarToken: aadhaarNorm,
-        pan: body.pan ? String(body.pan) : null,
+        pan: panNorm,
         gstin: body.gstin ? String(body.gstin) : null,
         feeAmount,
         receiptId: body.receiptId ? String(body.receiptId) : null,
@@ -1682,6 +1719,16 @@ export function registerTradersAssetsRoutes(app: Express) {
           const p = parseOptionalHttpUrl(body[k]);
           if (!p.ok) return sendApiError(res, 400, "LICENCE_BM_DOC_URL", p.message);
           updates.bmFormDocUrl = p.value;
+        } else if (k === "pan") {
+          const raw = body[k];
+          const panNorm = raw == null || String(raw).trim() === "" ? null : normalizePanInput(String(raw));
+          if (panNorm && (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm))) {
+            return sendApiError(res, 400, "LICENCE_PAN_FORMAT", "PAN must match ABCDE1234F.");
+          }
+          if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm, excludeTraderLicenceId: id }))) {
+            return sendApiError(res, 400, "LICENCE_PAN_DUPLICATE", "PAN is already used by another active record.");
+          }
+          updates.pan = panNorm;
         } else updates[k] = body[k] == null ? null : String(body[k]);
       }
       if (body.isBlocked !== undefined) updates.isBlocked = Boolean(body.isBlocked);

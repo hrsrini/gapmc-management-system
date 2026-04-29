@@ -30,6 +30,8 @@ import { Link } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { trackBShortBillingLabel } from "@shared/track-b-entity";
 import { sanitizeMobile10Input } from "@shared/india-validation";
+import { PanInput } from "@/components/inputs/PanInput";
+import { checkPanUniqueness } from "@/lib/panUniqueness";
 
 interface Entity {
   id: string;
@@ -285,7 +287,7 @@ export default function Entities() {
             </div>
             <div className="space-y-1">
               <Label>PAN</Label>
-              <Input value={pan} onChange={(e) => setPan(e.target.value)} placeholder="Optional" />
+              <PanInput value={pan} onChange={setPan} onBlurCheckUniqueness={checkPanUniqueness} />
             </div>
             <div className="space-y-1 md:col-span-2">
               <Label>GSTIN</Label>

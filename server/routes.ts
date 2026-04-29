@@ -24,6 +24,8 @@ import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermission
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import { agreementDocuments, agreements as agreementsTable, yards } from "@shared/db-schema";
+import { INDIAN_PAN_RE, normalizePanInput } from "@shared/india-validation";
+import { isPanTakenAcrossActiveMasters } from "./pan-uniqueness";
 import { 
   insertTraderSchema, 
   insertInvoiceSchema, 
@@ -333,6 +335,27 @@ export async function registerRoutes(
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch yards");
+    }
+  });
+
+  /**
+   * PAN uniqueness check (UI onBlur).
+   * Rule: unique across active employees + active entities (TrackA licences, TrackB entities, ad-hoc).
+   */
+  app.get("/api/identity/pan/check", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      const pan = normalizePanInput(String(req.query.pan ?? ""));
+      if (!pan) return sendApiError(res, 400, "PAN_REQUIRED", "pan is required");
+      if (pan.length !== 10 || !INDIAN_PAN_RE.test(pan)) {
+        return sendApiError(res, 400, "PAN_FORMAT", "PAN must match ABCDE1234F.");
+      }
+      const taken = await isPanTakenAcrossActiveMasters({ panUpper: pan });
+      if (taken) return res.json({ ok: false, message: "PAN is already used by another active record." });
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to check PAN");
     }
   });
 

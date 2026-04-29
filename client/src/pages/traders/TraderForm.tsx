@@ -26,6 +26,8 @@ import {
   parseIndianMobile10Digits,
   sanitizeMobile10Input,
 } from '@shared/india-validation';
+import { PanInput } from '@/components/inputs/PanInput';
+import { checkPanUniqueness } from '@/lib/panUniqueness';
 import { Badge } from '@/components/ui/badge';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Trader } from '@shared/schema';
@@ -388,12 +390,12 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
               </div>
               <div className="space-y-2">
                 <Label htmlFor="pan">PAN Card Number *</Label>
-                <Input
+                <PanInput
                   id="pan"
                   value={pan}
-                  onChange={(e) => setPan(e.target.value.toUpperCase())}
-                  placeholder="ABCDE1234F"
-                  data-testid="input-pan"
+                  onChange={setPan}
+                  required
+                  onBlurCheckUniqueness={checkPanUniqueness}
                 />
               </div>
               <div className="space-y-2">
