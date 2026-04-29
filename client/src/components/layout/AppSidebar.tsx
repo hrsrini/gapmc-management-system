@@ -53,6 +53,7 @@ import {
   ShieldAlert,
   Bug,
   BookMarked,
+  Ruler,
 } from 'lucide-react';
 
 type MenuItem = {
@@ -221,6 +222,7 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
       { title: 'Permission matrix', icon: Grid3X3, href: '/admin/permissions' },
       { title: 'SLA config', icon: Clock, href: '/admin/sla-config' },
       { title: 'Finance mappings', icon: BookMarked, href: '/admin/finance-mappings' },
+      { title: 'Units master', icon: Ruler, href: '/admin/units' },
     ]
   },
 ];

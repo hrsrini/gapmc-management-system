@@ -914,11 +914,23 @@ export const creditNotes = gapmc.table("credit_notes", {
 });
 
 // ----- M-04: Market Fee & Commodities -----
+/** Master list of quantity units (Kilogram, Nos, Liter, …). Managed under Admin → Units. */
+export const measurementUnits = gapmc.table("measurement_units", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull().unique(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: text("created_at"),
+});
+
 export const commodities = gapmc.table("commodities", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   variety: text("variety"),
+  /** @deprecated Prefer unitId + measurement_units; kept for legacy rows until backfilled. */
   unit: text("unit"),
+  /** FK to gapmc.measurement_units.id when set; API resolves display `unit` label from master. */
+  unitId: text("unit_id"),
   gradeType: text("grade_type"),
   isActive: boolean("is_active").default(true),
 });

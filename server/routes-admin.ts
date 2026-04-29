@@ -4,7 +4,7 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import multer from "multer";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, asc, and, sql, count } from "drizzle-orm";
 import { db } from "./db";
 import {
   yards,
@@ -19,6 +19,8 @@ import {
   rolePermissions,
   expenditureHeads,
   tallyLedgers,
+  measurementUnits,
+  commodities,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import {
@@ -671,6 +673,108 @@ export function registerAdminRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to remove permission from role");
+    }
+  });
+
+  // ----- Measurement units (M-04 master; Admin CRUD) -----
+  app.get("/api/admin/measurement-units", async (_req, res) => {
+    try {
+      const list = await db
+        .select()
+        .from(measurementUnits)
+        .orderBy(asc(measurementUnits.sortOrder), asc(measurementUnits.name));
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch measurement units");
+    }
+  });
+
+  app.post("/api/admin/measurement-units", async (req, res) => {
+    try {
+      const name = String(req.body?.name ?? "").trim();
+      if (!name) return sendApiError(res, 400, "ADMIN_UNIT_NAME_REQUIRED", "name is required");
+      const sortOrder = Number(req.body?.sortOrder ?? 0);
+      const isActive = req.body?.isActive !== undefined ? Boolean(req.body.isActive) : true;
+      const id = nanoid();
+      await db.insert(measurementUnits).values({
+        id,
+        name,
+        sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
+        isActive,
+        createdAt: now(),
+      });
+      const [row] = await db.select().from(measurementUnits).where(eq(measurementUnits.id, id));
+      writeAuditLog(req, { module: "M-10", action: "CreateMeasurementUnit", recordId: id, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.status(201).json(row);
+    } catch (e: unknown) {
+      const code = e && typeof e === "object" && "code" in e ? (e as { code?: string }).code : "";
+      if (code === "23505") {
+        return sendApiError(res, 409, "ADMIN_UNIT_NAME_DUPLICATE", "A unit with this name already exists");
+      }
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create measurement unit");
+    }
+  });
+
+  app.put("/api/admin/measurement-units/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const [existing] = await db.select().from(measurementUnits).where(eq(measurementUnits.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "ADMIN_UNIT_NOT_FOUND", "Not found");
+      const body = req.body;
+      const updates: Record<string, unknown> = {};
+      if (body.name !== undefined) {
+        const name = String(body.name ?? "").trim();
+        if (!name) return sendApiError(res, 400, "ADMIN_UNIT_NAME_REQUIRED", "name cannot be empty");
+        updates.name = name;
+      }
+      if (body.sortOrder !== undefined) {
+        const n = Number(body.sortOrder);
+        updates.sortOrder = Number.isFinite(n) ? n : 0;
+      }
+      if (body.isActive !== undefined) updates.isActive = Boolean(body.isActive);
+      if (Object.keys(updates).length > 0) {
+        await db.update(measurementUnits).set(updates as Record<string, string | number | boolean>).where(eq(measurementUnits.id, id));
+      }
+      const [row] = await db.select().from(measurementUnits).where(eq(measurementUnits.id, id));
+      if (!row) return sendApiError(res, 404, "ADMIN_UNIT_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "M-10", action: "UpdateMeasurementUnit", recordId: id, beforeValue: existing, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.json(row);
+    } catch (e: unknown) {
+      const code = e && typeof e === "object" && "code" in e ? (e as { code?: string }).code : "";
+      if (code === "23505") {
+        return sendApiError(res, 409, "ADMIN_UNIT_NAME_DUPLICATE", "A unit with this name already exists");
+      }
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update measurement unit");
+    }
+  });
+
+  app.delete("/api/admin/measurement-units/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const [existing] = await db.select().from(measurementUnits).where(eq(measurementUnits.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "ADMIN_UNIT_NOT_FOUND", "Not found");
+      const [{ c: n }] = await db
+        .select({ c: count() })
+        .from(commodities)
+        .where(eq(commodities.unitId, id));
+      if (Number(n) > 0) {
+        return sendApiError(res, 409, "ADMIN_UNIT_IN_USE", "This unit is assigned to one or more commodities; deactivate it instead of deleting.");
+      }
+      await db.delete(measurementUnits).where(eq(measurementUnits.id, id));
+      writeAuditLog(req, { module: "M-10", action: "DeleteMeasurementUnit", recordId: id, beforeValue: existing }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.status(204).send();
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete measurement unit");
     }
   });
 

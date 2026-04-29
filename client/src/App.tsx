@@ -37,6 +37,7 @@ import AdminAudit from "@/pages/admin/AdminAudit";
 import AdminPermissionMatrix from "@/pages/admin/AdminPermissionMatrix";
 import AdminSlaConfig from "@/pages/admin/AdminSlaConfig";
 import AdminFinanceMappings from "@/pages/admin/AdminFinanceMappings";
+import AdminMeasurementUnits from "@/pages/admin/AdminMeasurementUnits";
 import HrEmployees from "@/pages/hr/HrEmployees";
 import HrEmployeeDetail from "@/pages/hr/HrEmployeeDetail";
 import HrEmployeeForm from "@/pages/hr/HrEmployeeForm";
@@ -378,6 +379,9 @@ function Router() {
       </Route>
       <Route path="/admin/finance-mappings">
         <AdminRoute><AdminFinanceMappings /></AdminRoute>
+      </Route>
+      <Route path="/admin/units">
+        <AdminRoute><AdminMeasurementUnits /></AdminRoute>
       </Route>
       <Route path="/hr/employees/new">
         <ProtectedRoute><RequirePermission module="M-01" action="Create"><HrEmployeeForm /></RequirePermission></ProtectedRoute>

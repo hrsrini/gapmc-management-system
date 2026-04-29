@@ -265,6 +265,7 @@ export function getModuleForPath(path: string): string | null {
     return "M-02";
   if (
     path.startsWith("/api/ioms/commodities") ||
+    path.startsWith("/api/ioms/measurement-units") ||
     path.startsWith("/api/ioms/market") ||
     path.startsWith("/api/ioms/farmers") ||
     path.startsWith("/api/ioms/checkpost")

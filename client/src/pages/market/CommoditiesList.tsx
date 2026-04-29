@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
@@ -18,9 +19,17 @@ interface Commodity {
   id: string;
   name: string;
   variety?: string | null;
+  unitId?: string | null;
   unit?: string | null;
   gradeType?: string | null;
   isActive?: boolean;
+}
+
+interface MeasurementUnit {
+  id: string;
+  name: string;
+  sortOrder: number;
+  isActive: boolean;
 }
 
 export default function CommoditiesList() {
@@ -34,12 +43,16 @@ export default function CommoditiesList() {
   const [editId, setEditId] = useState<string>("");
   const [name, setName] = useState("");
   const [variety, setVariety] = useState("");
-  const [unit, setUnit] = useState("");
+  const [unitId, setUnitId] = useState("");
   const [gradeType, setGradeType] = useState("");
   const [isActive, setIsActive] = useState(true);
 
   const { data: list, isLoading, isError } = useQuery<Commodity[]>({
     queryKey: ["/api/ioms/commodities"],
+  });
+
+  const { data: units = [] } = useQuery<MeasurementUnit[]>({
+    queryKey: ["/api/ioms/measurement-units"],
   });
 
   const createMutation = useMutation({
@@ -48,7 +61,7 @@ export default function CommoditiesList() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ name, variety, unit, gradeType, isActive }),
+        body: JSON.stringify({ name, variety, unitId, gradeType, isActive }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
@@ -60,7 +73,7 @@ export default function CommoditiesList() {
       setCreateOpen(false);
       setName("");
       setVariety("");
-      setUnit("");
+      setUnitId("");
       setGradeType("");
       setIsActive(true);
     },
@@ -73,7 +86,7 @@ export default function CommoditiesList() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ name, variety, unit, gradeType, isActive }),
+        body: JSON.stringify({ name, variety, unitId, gradeType, isActive }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
@@ -88,15 +101,28 @@ export default function CommoditiesList() {
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
 
-  const openEdit = useCallback((c: Commodity) => {
-    setEditId(c.id);
-    setName(c.name ?? "");
-    setVariety(c.variety ?? "");
-    setUnit(c.unit ?? "");
-    setGradeType(c.gradeType ?? "");
-    setIsActive(c.isActive !== false);
-    setEditOpen(true);
-  }, []);
+  const openEdit = useCallback(
+    (c: Commodity) => {
+      setEditId(c.id);
+      setName(c.name ?? "");
+      setVariety(c.variety ?? "");
+      let uid = c.unitId ?? "";
+      if (!uid && c.unit?.trim()) {
+        const t = c.unit.trim().toLowerCase();
+        const match =
+          units.find((u) => u.name.toLowerCase() === t) ||
+          (["kg", "kgs", "kilogram", "kilograms"].includes(t) ? units.find((u) => u.id === "m04-unit-kilogram") : undefined) ||
+          (["no", "nos", "number", "numbers", "nos."].includes(t) ? units.find((u) => u.id === "m04-unit-nos") : undefined) ||
+          (["l", "ltr", "liter", "litre", "liters", "litres"].includes(t) ? units.find((u) => u.id === "m04-unit-liter") : undefined);
+        if (match) uid = match.id;
+      }
+      setUnitId(uid);
+      setGradeType(c.gradeType ?? "");
+      setIsActive(c.isActive !== false);
+      setEditOpen(true);
+    },
+    [units],
+  );
 
   const columns = useMemo((): ReportTableColumn[] => {
     const base: ReportTableColumn[] = [
@@ -180,7 +206,21 @@ export default function CommoditiesList() {
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
                       <Label>Unit</Label>
-                      <Input value={unit} onChange={(e) => setUnit(e.target.value)} />
+                      <Select value={unitId || undefined} onValueChange={setUnitId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select unit" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {units.map((u) => (
+                            <SelectItem key={u.id} value={u.id}>
+                              {u.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Manage list under Admin → <span className="font-medium">Units master</span>.
+                      </p>
                     </div>
                     <div className="space-y-1">
                       <Label>Grade type</Label>
@@ -200,7 +240,10 @@ export default function CommoditiesList() {
                     <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createMutation.isPending}>
                       Cancel
                     </Button>
-                    <Button disabled={!name.trim() || createMutation.isPending} onClick={() => createMutation.mutate()}>
+                    <Button
+                      disabled={!name.trim() || !unitId.trim() || createMutation.isPending}
+                      onClick={() => createMutation.mutate()}
+                    >
                       {createMutation.isPending ? "Creating..." : "Create"}
                     </Button>
                   </div>
@@ -242,7 +285,18 @@ export default function CommoditiesList() {
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <Label>Unit</Label>
-                <Input value={unit} onChange={(e) => setUnit(e.target.value)} />
+                <Select value={unitId || undefined} onValueChange={setUnitId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select unit" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {units.map((u) => (
+                      <SelectItem key={u.id} value={u.id}>
+                        {u.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1">
                 <Label>Grade type</Label>
@@ -262,7 +316,10 @@ export default function CommoditiesList() {
               <Button variant="outline" onClick={() => setEditOpen(false)} disabled={updateMutation.isPending}>
                 Cancel
               </Button>
-              <Button disabled={!name.trim() || updateMutation.isPending} onClick={() => updateMutation.mutate()}>
+              <Button
+                disabled={!name.trim() || !unitId.trim() || updateMutation.isPending}
+                onClick={() => updateMutation.mutate()}
+              >
                 {updateMutation.isPending ? "Saving..." : "Save"}
               </Button>
             </div>

@@ -5,10 +5,11 @@
  * Does not touch existing gapmc.market_fees (live table).
  */
 import type { Express, Response } from "express";
-import { eq, desc, and, or, inArray, sql, gte, lte, lt, isNull } from "drizzle-orm";
+import { eq, desc, asc, and, or, inArray, sql, gte, lte, lt, isNull } from "drizzle-orm";
 import { db } from "./db";
 import {
   commodities,
+  measurementUnits,
   marketFeeRates,
   farmers,
   purchaseTransactions,
@@ -1108,10 +1109,75 @@ export function registerMarketIomsRoutes(app: Express) {
     }
   });
 
+  // ----- Measurement units (read: M-04; CRUD under /api/admin/measurement-units) -----
+  app.get("/api/ioms/measurement-units", async (_req, res) => {
+    try {
+      const list = await db
+        .select()
+        .from(measurementUnits)
+        .where(eq(measurementUnits.isActive, true))
+        .orderBy(asc(measurementUnits.sortOrder), asc(measurementUnits.name));
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch measurement units");
+    }
+  });
+
+  async function resolveCommodityRow(id: string) {
+    const [r] = await db
+      .select({
+        id: commodities.id,
+        name: commodities.name,
+        variety: commodities.variety,
+        unitId: commodities.unitId,
+        unitLegacy: commodities.unit,
+        gradeType: commodities.gradeType,
+        isActive: commodities.isActive,
+        unitName: measurementUnits.name,
+      })
+      .from(commodities)
+      .leftJoin(measurementUnits, eq(commodities.unitId, measurementUnits.id))
+      .where(eq(commodities.id, id))
+      .limit(1);
+    if (!r) return null;
+    return {
+      id: r.id,
+      name: r.name,
+      variety: r.variety,
+      unitId: r.unitId ?? null,
+      unit: r.unitName ?? r.unitLegacy ?? null,
+      gradeType: r.gradeType,
+      isActive: r.isActive !== false,
+    };
+  }
+
   // ----- Commodities -----
   app.get("/api/ioms/commodities", async (_req, res) => {
     try {
-      const list = await db.select().from(commodities).orderBy(commodities.name);
+      const rows = await db
+        .select({
+          id: commodities.id,
+          name: commodities.name,
+          variety: commodities.variety,
+          unitId: commodities.unitId,
+          unitLegacy: commodities.unit,
+          gradeType: commodities.gradeType,
+          isActive: commodities.isActive,
+          unitName: measurementUnits.name,
+        })
+        .from(commodities)
+        .leftJoin(measurementUnits, eq(commodities.unitId, measurementUnits.id))
+        .orderBy(commodities.name);
+      const list = rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        variety: r.variety,
+        unitId: r.unitId ?? null,
+        unit: r.unitName ?? r.unitLegacy ?? null,
+        gradeType: r.gradeType,
+        isActive: r.isActive !== false,
+      }));
       res.json(list);
     } catch (e) {
       console.error(e);
@@ -1122,16 +1188,25 @@ export function registerMarketIomsRoutes(app: Express) {
   app.post("/api/ioms/commodities", async (req, res) => {
     try {
       const body = req.body;
+      const unitId = String(body.unitId ?? "").trim();
+      if (!unitId) {
+        return sendApiError(res, 400, "IOMS_COMMODITY_UNIT_REQUIRED", "unitId is required (choose a unit from the master list)");
+      }
+      const [mu] = await db.select().from(measurementUnits).where(eq(measurementUnits.id, unitId)).limit(1);
+      if (!mu || !mu.isActive) {
+        return sendApiError(res, 400, "IOMS_COMMODITY_UNIT_INVALID", "Invalid or inactive measurement unit");
+      }
       const id = nanoid();
       await db.insert(commodities).values({
         id,
         name: String(body.name ?? ""),
         variety: body.variety ? String(body.variety) : null,
-        unit: body.unit ? String(body.unit) : null,
+        unit: null,
+        unitId,
         gradeType: body.gradeType ? String(body.gradeType) : null,
         isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
       });
-      const [row] = await db.select().from(commodities).where(eq(commodities.id, id));
+      const row = await resolveCommodityRow(id);
       if (row) writeAuditLog(req, { module: "Market", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
@@ -1145,17 +1220,38 @@ export function registerMarketIomsRoutes(app: Express) {
       const id = req.params.id;
       const [existingCommodity] = await db.select().from(commodities).where(eq(commodities.id, id)).limit(1);
       if (!existingCommodity) return sendApiError(res, 404, "IOMS_COMMODITY_NOT_FOUND", "Not found");
+      const beforeResolved = await resolveCommodityRow(id);
       const body = req.body;
       const updates: Record<string, unknown> = {};
-      ["name", "variety", "unit", "gradeType", "isActive"].forEach((k) => {
+      if (body.unitId !== undefined) {
+        const unitId = String(body.unitId ?? "").trim();
+        if (!unitId) {
+          return sendApiError(res, 400, "IOMS_COMMODITY_UNIT_REQUIRED", "unitId is required (choose a unit from the master list)");
+        }
+        const [mu] = await db.select().from(measurementUnits).where(eq(measurementUnits.id, unitId)).limit(1);
+        if (!mu || !mu.isActive) {
+          return sendApiError(res, 400, "IOMS_COMMODITY_UNIT_INVALID", "Invalid or inactive measurement unit");
+        }
+        updates.unitId = unitId;
+        updates.unit = null;
+      }
+      ["name", "variety", "gradeType", "isActive"].forEach((k) => {
         if (body[k] === undefined) return;
         if (k === "isActive") updates.isActive = Boolean(body.isActive);
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
-      await db.update(commodities).set(updates as Record<string, string | boolean | null>).where(eq(commodities.id, id));
-      const [row] = await db.select().from(commodities).where(eq(commodities.id, id));
+      if (Object.keys(updates).length > 0) {
+        await db.update(commodities).set(updates as Record<string, string | boolean | null>).where(eq(commodities.id, id));
+      }
+      const row = await resolveCommodityRow(id);
       if (!row) return sendApiError(res, 404, "IOMS_COMMODITY_NOT_FOUND", "Not found");
-      writeAuditLog(req, { module: "Market", action: "Update", recordId: id, beforeValue: existingCommodity, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      writeAuditLog(req, {
+        module: "Market",
+        action: "Update",
+        recordId: id,
+        beforeValue: beforeResolved ?? existingCommodity,
+        afterValue: row,
+      }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {
       console.error(e);
