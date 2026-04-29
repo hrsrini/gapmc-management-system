@@ -78,3 +78,11 @@ export function panFirstMismatchIndex(raw: string): number | null {
   if (t.length === 10 && !INDIAN_PAN_RE.test(t)) return 9;
   return null;
 }
+
+/** H.2.2 — mask PAN in CSV / bulk exports (never emit full PAN). */
+export function maskPanForExport(pan: string | null | undefined): string {
+  const t = normalizePanInput(String(pan ?? ""));
+  if (t.length === 0) return "";
+  if (t.length !== 10 || !INDIAN_PAN_RE.test(t)) return "**********";
+  return `${t.slice(0, 2)}******${t.slice(8)}`;
+}

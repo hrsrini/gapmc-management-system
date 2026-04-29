@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
+import { and, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
-import { employees, traderLicences, entities, adHocEntities } from "@shared/db-schema";
+import { employees, traderLicences, entities, adHocEntities, traders } from "@shared/db-schema";
 
 const ACTIVE_EMPLOYEE_STATUSES = ["Active", "Draft", "Submitted", "Recommended"] as const;
 const ACTIVE_ENTITY_STATUSES = ["Active", "Draft"] as const;
@@ -16,6 +16,7 @@ export async function isPanTakenAcrossActiveMasters(args: {
   excludeEntityId?: string | null;
   excludeAdHocEntityId?: string | null;
   excludeTraderLicenceId?: string | null;
+  excludeTraderId?: string | null;
 }): Promise<boolean> {
   const pan = args.panUpper.toUpperCase();
 
@@ -48,6 +49,14 @@ export async function isPanTakenAcrossActiveMasters(args: {
     const conds: any[] = [panEq(traderLicences.pan, pan), inArray(traderLicences.status, [...ACTIVE_LICENCE_STATUSES])];
     if (args.excludeTraderLicenceId) conds.push(ne(traderLicences.id, args.excludeTraderLicenceId));
     const rows = await db.select({ id: traderLicences.id }).from(traderLicences).where(and(...conds)).limit(1);
+    if (rows.length) return true;
+  }
+
+  // Legacy gapmc.traders (M-04 / rent flows)
+  {
+    const conds: any[] = [panEq(traders.pan, pan), inArray(traders.status, ["Active", "Pending"])];
+    if (args.excludeTraderId) conds.push(ne(traders.id, args.excludeTraderId));
+    const rows = await db.select({ id: traders.id }).from(traders).where(and(...conds)).limit(1);
     if (rows.length) return true;
   }
 

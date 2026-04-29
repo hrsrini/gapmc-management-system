@@ -30,7 +30,6 @@ import {
   sanitizeMobile10Input,
 } from "@shared/india-validation";
 import { PanInput } from "@/components/inputs/PanInput";
-import { checkPanUniqueness } from "@/lib/panUniqueness";
 import { getPasswordPolicyBrUsr10FirstViolation, passwordPolicyBrUsr10Hint } from "@shared/password-policy-br-usr-10";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 
@@ -792,7 +791,12 @@ export default function HrEmployeeForm() {
                   </div>
                   <div className="space-y-1">
                     <Label>PAN</Label>
-                    <PanInput value={pan} onChange={setPan} onBlurCheckUniqueness={checkPanUniqueness} />
+                    <PanInput
+                      id="hr-emp-pan"
+                      value={pan}
+                      onChange={setPan}
+                      uniquenessExcludes={isEdit && id ? { excludeEmployeeId: id } : undefined}
+                    />
                   </div>
                   <div><Label>Date of birth</Label><Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} /></div>
                   <div>

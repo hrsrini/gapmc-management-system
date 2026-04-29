@@ -350,7 +350,20 @@ export async function registerRoutes(
       if (pan.length !== 10 || !INDIAN_PAN_RE.test(pan)) {
         return sendApiError(res, 400, "PAN_FORMAT", "PAN must match ABCDE1234F.");
       }
-      const taken = await isPanTakenAcrossActiveMasters({ panUpper: pan });
+      const q = (k: string) => {
+        const v = req.query[k];
+        const s = Array.isArray(v) ? v[0] : v;
+        const t = s != null ? String(s).trim() : "";
+        return t === "" ? undefined : t;
+      };
+      const taken = await isPanTakenAcrossActiveMasters({
+        panUpper: pan,
+        excludeEmployeeId: q("excludeEmployeeId"),
+        excludeEntityId: q("excludeEntityId"),
+        excludeAdHocEntityId: q("excludeAdHocEntityId"),
+        excludeTraderLicenceId: q("excludeTraderLicenceId"),
+        excludeTraderId: q("excludeTraderId"),
+      });
       if (taken) return res.json({ ok: false, message: "PAN is already used by another active record." });
       return res.json({ ok: true });
     } catch (e) {
@@ -462,7 +475,14 @@ export async function registerRoutes(
   app.post("/api/traders", async (req, res) => {
     try {
       const validatedData = insertTraderSchema.parse(req.body);
-      const trader = await storage.createTrader(validatedData);
+      const panNorm = normalizePanInput(String(validatedData.pan ?? ""));
+      if (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm)) {
+        return sendApiError(res, 400, "TRADER_PAN_FORMAT", "PAN must match ABCDE1234F.");
+      }
+      if (await isPanTakenAcrossActiveMasters({ panUpper: panNorm })) {
+        return sendApiError(res, 400, "TRADER_PAN_DUPLICATE", "PAN is already used by another active record.");
+      }
+      const trader = await storage.createTrader({ ...validatedData, pan: panNorm });
       await storage.createActivityLog({
         action: 'Trader Registered',
         module: 'Traders',
@@ -483,6 +503,16 @@ export async function registerRoutes(
     try {
       const before = await storage.getTrader(req.params.id);
       const validatedData = updateTraderSchema.parse(req.body);
+      if (validatedData.pan !== undefined) {
+        const panNorm = normalizePanInput(String(validatedData.pan ?? ""));
+        if (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm)) {
+          return sendApiError(res, 400, "TRADER_PAN_FORMAT", "PAN must match ABCDE1234F.");
+        }
+        if (await isPanTakenAcrossActiveMasters({ panUpper: panNorm, excludeTraderId: req.params.id })) {
+          return sendApiError(res, 400, "TRADER_PAN_DUPLICATE", "PAN is already used by another active record.");
+        }
+        (validatedData as { pan?: string }).pan = panNorm;
+      }
       const trader = await storage.updateTrader(req.params.id, validatedData);
       if (!trader) return sendApiError(res, 404, "LEGACY_TRADER_NOT_FOUND", "Trader not found");
       writeAuditLog(req, { module: 'Traders', action: 'Update', recordId: req.params.id, beforeValue: before ?? undefined, afterValue: trader }).catch((e) => console.error('Audit log failed:', e));

@@ -31,7 +31,6 @@ import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 import { AuthenticatedBlobPreviewDialog } from "@/components/attachment/AuthenticatedBlobPreviewDialog";
 import { PanInput } from "@/components/inputs/PanInput";
-import { checkPanUniqueness } from "@/lib/panUniqueness";
 
 const LICENCE_TYPES = ["Associated", "Functionary", "Hamali", "Weighman", "AssistantTrader"] as const;
 
@@ -754,7 +753,12 @@ export default function TraderLicenceForm() {
               </div>
               <div className="space-y-2">
                 <Label>PAN</Label>
-                <PanInput value={pan} onChange={setPan} onBlurCheckUniqueness={checkPanUniqueness} />
+                <PanInput
+                  id="trader-licence-pan"
+                  value={pan}
+                  onChange={setPan}
+                  uniquenessExcludes={editId ? { excludeTraderLicenceId: editId } : undefined}
+                />
               </div>
               <div className="space-y-2 sm:col-span-2">
                 <Label>GSTIN</Label>

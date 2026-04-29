@@ -19,7 +19,6 @@ import { isTrackBGovtSubType, trackBBillingProfileHint, trackBShortBillingLabel 
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { PanInput } from "@/components/inputs/PanInput";
-import { checkPanUniqueness } from "@/lib/panUniqueness";
 import {
   Dialog,
   DialogContent,
@@ -342,7 +341,12 @@ export default function EntityDetail() {
                   </div>
                   <div className="space-y-1">
                     <Label>PAN</Label>
-                    <PanInput value={editPan} onChange={setEditPan} onBlurCheckUniqueness={checkPanUniqueness} />
+                    <PanInput
+                      id="entity-edit-pan"
+                      value={editPan}
+                      onChange={setEditPan}
+                      uniquenessExcludes={id ? { excludeEntityId: id } : undefined}
+                    />
                   </div>
                   <div className="space-y-1 md:col-span-2">
                     <Label>GSTIN</Label>

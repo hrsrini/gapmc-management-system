@@ -32,6 +32,7 @@ import {
   commodities,
   ltcClaims,
 } from "@shared/db-schema";
+import { maskPanForExport } from "@shared/india-validation";
 
 function escapeCsvCell(val: unknown): string {
   if (val == null) return "";
@@ -570,6 +571,7 @@ export function registerReportsRoutes(app: Express) {
           "mobile",
           "workEmail",
           "personalEmail",
+          "panMasked",
           "dob",
           "retirementDate",
         ];
@@ -586,6 +588,7 @@ export function registerReportsRoutes(app: Express) {
           r.mobile,
           r.workEmail,
           r.personalEmail,
+          maskPanForExport(r.pan),
           r.dob,
           r.retirementDate,
         ]);

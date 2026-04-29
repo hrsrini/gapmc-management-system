@@ -20,7 +20,6 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Link } from "wouter";
 import { PanInput } from "@/components/inputs/PanInput";
-import { checkPanUniqueness } from "@/lib/panUniqueness";
 
 interface UnifiedEntityRow {
   id: string; // TA:<id> | TB:<id> | AH:<id>
@@ -192,9 +191,9 @@ export default function UnifiedEntities() {
             <div className="space-y-1">
               <Label>PAN</Label>
               <PanInput
+                id="unified-entity-create-pan"
                 value={draft.pan}
                 onChange={(v) => setDraft((s) => ({ ...s, pan: v }))}
-                onBlurCheckUniqueness={checkPanUniqueness}
               />
             </div>
             <div className="space-y-1">
