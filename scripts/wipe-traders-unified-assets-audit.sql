@@ -36,6 +36,45 @@ DELETE FROM gapmc.asset_allotments;
 DELETE FROM gapmc.entity_allotments;
 DELETE FROM gapmc.pre_receipts;
 
+-- M-04 / M-10 / M-05 rows that reference trader licences or unified entity ids (prevents FK failures; cleans orphans)
+DELETE FROM gapmc.market_monthly_return_lines;
+DELETE FROM gapmc.market_monthly_returns;
+DELETE FROM gapmc.market_fee_ledger;
+
+DELETE FROM gapmc.payment_gateway_log
+WHERE receipt_id IN (
+  SELECT id FROM gapmc.ioms_receipts
+  WHERE payer_type = 'TraderLicence'
+     OR payer_ref_id IN (SELECT id FROM gapmc.trader_licences)
+     OR (
+       unified_entity_id IS NOT NULL
+       AND (
+         unified_entity_id LIKE 'TA:%'
+         OR unified_entity_id LIKE 'TB:%'
+         OR unified_entity_id LIKE 'AH:%'
+       )
+     )
+);
+
+DELETE FROM gapmc.ioms_receipts
+WHERE payer_type = 'TraderLicence'
+   OR payer_ref_id IN (SELECT id FROM gapmc.trader_licences)
+   OR (
+     unified_entity_id IS NOT NULL
+     AND (
+       unified_entity_id LIKE 'TA:%'
+       OR unified_entity_id LIKE 'TB:%'
+       OR unified_entity_id LIKE 'AH:%'
+     )
+   );
+
+DELETE FROM gapmc.portal_users;
+
+UPDATE gapmc.check_post_inward SET trader_licence_id = NULL WHERE trader_licence_id IS NOT NULL;
+
+-- Break optional renewal parent links before bulk licence delete
+UPDATE gapmc.trader_licences SET parent_licence_id = NULL WHERE parent_licence_id IS NOT NULL;
+
 -- Unified / Track A licences
 DELETE FROM gapmc.trader_licences;
 DELETE FROM gapmc.entities;

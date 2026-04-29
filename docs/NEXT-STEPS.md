@@ -71,7 +71,7 @@ After sample data and current implementation, suggested next steps:
 
 18. **IOMS Rent / Receipts / HR / Ledger:** **Rent invoice detail** (`/rent/ioms/invoices/:id`) with Verify/Approve/Reject; **Receipt detail** (`/receipts/ioms/:id`); **Rent deposit ledger** (`/rent/ioms/ledger`); **HR Claims** (LTC + TA-DA) at `/hr/claims`; **Attendance** (`/hr/attendance`), **Timesheets** (`/hr/timesheets`).
 
-19. **Sample data:** The old bulk `db:seed-ioms-sample` script was removed from the repo (no automatic demo sidebar population). Use `db:seed-ioms-m10` for RBAC/admin bootstrap only. To clear legacy traders, unified entities, assets, related M-03 rows, and `audit_log`, see `scripts/wipe-traders-unified-assets-audit.sql` and `npm run db:wipe-traders-entities-audit-dry` / `db:wipe-traders-entities-audit` (review SQL first).
+19. **Sample data:** The old bulk `db:seed-ioms-sample` script was removed from the repo (no automatic demo sidebar population). Use `db:seed-ioms-m10` for RBAC/admin bootstrap only. To clear legacy traders, unified entities, assets, related M-03/M-04/M-05 rows, portal users for those entities, and `audit_log`, review `scripts/wipe-traders-unified-assets-audit.sql`, then run **`npm run db:wipe-traders-entities-audit`** to **commit** the wipe. **`npm run db:wipe-traders-entities-audit-dry`** runs the same statements but **rolls back** (no change) — use it only to verify the script runs without errors.
 
 20. **Work detail – Add bill:** Construction Work detail Bills tab has **Add bill** dialog (bill no, date, amount, cumulative paid, status); calls `POST /api/ioms/works/bills`.
 

@@ -19,7 +19,7 @@
     "db:push-safe": "npm run db:backup-data && npm run db:push",
     "db:create-gapmc": "tsx scripts/run-create-gapmc.ts",
     "db:seed-ioms-m10": "dotenv -e .env -- tsx scripts/seed-ioms-m10.ts",
-    "db:wipe-traders-entities-audit-dry": "node scripts/run-wipe-traders-entities-assets-audit.mjs",
+    "db:wipe-traders-entities-audit-dry": "cross-env DRY_RUN=1 node scripts/run-wipe-traders-entities-assets-audit.mjs",
     "db:wipe-traders-entities-audit": "cross-env COMMIT_WIPE=1 node scripts/run-wipe-traders-entities-assets-audit.mjs",
     "db:seed-tally-gst": "dotenv -e .env -- tsx scripts/seed-tally-gst-reference.ts",
     "db:backup-data": "dotenv -e .env -- tsx scripts/dump-db-data.ts",
