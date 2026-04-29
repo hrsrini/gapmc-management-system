@@ -37,24 +37,43 @@ DELETE FROM gapmc.entity_allotments;
 DELETE FROM gapmc.pre_receipts;
 
 -- M-04 / M-10 / M-05 rows that reference trader licences or unified entity ids (prevents FK failures; cleans orphans)
-DELETE FROM gapmc.market_monthly_return_lines;
-DELETE FROM gapmc.market_monthly_returns;
-DELETE FROM gapmc.market_fee_ledger;
+-- Some installs predate M-04 monthly-return tables — skip DELETE if relation missing.
+DO $wipe_opt$
+BEGIN
+  IF to_regclass('gapmc.market_monthly_return_lines') IS NOT NULL THEN
+    EXECUTE 'DELETE FROM gapmc.market_monthly_return_lines';
+  END IF;
+  IF to_regclass('gapmc.market_monthly_returns') IS NOT NULL THEN
+    EXECUTE 'DELETE FROM gapmc.market_monthly_returns';
+  END IF;
+  IF to_regclass('gapmc.market_fee_ledger') IS NOT NULL THEN
+    EXECUTE 'DELETE FROM gapmc.market_fee_ledger';
+  END IF;
+END
+$wipe_opt$;
 
-DELETE FROM gapmc.payment_gateway_log
-WHERE receipt_id IN (
-  SELECT id FROM gapmc.ioms_receipts
-  WHERE payer_type = 'TraderLicence'
-     OR payer_ref_id IN (SELECT id FROM gapmc.trader_licences)
-     OR (
-       unified_entity_id IS NOT NULL
-       AND (
-         unified_entity_id LIKE 'TA:%'
-         OR unified_entity_id LIKE 'TB:%'
-         OR unified_entity_id LIKE 'AH:%'
-       )
-     )
-);
+DO $wipe_pg$
+BEGIN
+  IF to_regclass('gapmc.payment_gateway_log') IS NOT NULL AND to_regclass('gapmc.ioms_receipts') IS NOT NULL THEN
+    EXECUTE $q$
+      DELETE FROM gapmc.payment_gateway_log
+      WHERE receipt_id IN (
+        SELECT id FROM gapmc.ioms_receipts
+        WHERE payer_type = 'TraderLicence'
+           OR payer_ref_id IN (SELECT id FROM gapmc.trader_licences)
+           OR (
+             unified_entity_id IS NOT NULL
+             AND (
+               unified_entity_id LIKE 'TA:%'
+               OR unified_entity_id LIKE 'TB:%'
+               OR unified_entity_id LIKE 'AH:%'
+             )
+           )
+      )
+    $q$;
+  END IF;
+END
+$wipe_pg$;
 
 DELETE FROM gapmc.ioms_receipts
 WHERE payer_type = 'TraderLicence'
@@ -68,7 +87,13 @@ WHERE payer_type = 'TraderLicence'
      )
    );
 
-DELETE FROM gapmc.portal_users;
+DO $wipe_portal$
+BEGIN
+  IF to_regclass('gapmc.portal_users') IS NOT NULL THEN
+    EXECUTE 'DELETE FROM gapmc.portal_users';
+  END IF;
+END
+$wipe_portal$;
 
 UPDATE gapmc.check_post_inward SET trader_licence_id = NULL WHERE trader_licence_id IS NOT NULL;
 
