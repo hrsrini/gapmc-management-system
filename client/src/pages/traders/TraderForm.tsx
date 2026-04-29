@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation } from 'wouter';
-import { useMutation } from '@tanstack/react-query';
+import { Link, useLocation } from 'wouter';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,8 +16,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { UserPlus, Save, X, Check } from 'lucide-react';
-import { COMMODITIES } from '@/data/yards';
+import { UserPlus, Save, X, Check, AlertCircle } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Skeleton } from '@/components/ui/skeleton';
 import { apiYardToLegacyYardId, legacyYardIdToApiYardId } from '@/lib/legacyYardMatch';
 import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
 import {
@@ -30,6 +31,15 @@ import { PanInput } from '@/components/inputs/PanInput';
 import { Badge } from '@/components/ui/badge';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import type { Trader } from '@shared/schema';
+
+interface IomsCommodityRow {
+  id: string;
+  name: string;
+  variety?: string | null;
+  unit?: string | null;
+  gradeType?: string | null;
+  isActive?: boolean | null;
+}
 
 interface TraderFormProps {
   traderId?: string;
@@ -65,6 +75,32 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
   const [selectedCommodities, setSelectedCommodities] = useState<string[]>(initialData?.commodities ?? []);
 
   const { data: yards = [], isLoading: yardsLoading } = useScopedActiveYards();
+
+  const {
+    data: iomsCommodities = [],
+    isLoading: commoditiesLoading,
+    isError: commoditiesError,
+  } = useQuery<IomsCommodityRow[]>({
+    queryKey: ['/api/ioms/commodities'],
+  });
+
+  const activeCommodities = useMemo(() => {
+    return (iomsCommodities ?? [])
+      .filter((c) => c.isActive !== false)
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [iomsCommodities]);
+
+  const masterNames = useMemo(() => new Set(activeCommodities.map((c) => c.name)), [activeCommodities]);
+
+  const legacySelectedNames = useMemo(
+    () => selectedCommodities.filter((n) => !masterNames.has(n)),
+    [selectedCommodities, masterNames],
+  );
+
+  const removeLegacyName = (name: string) => {
+    setSelectedCommodities((prev) => prev.filter((c) => c !== name));
+  };
 
   const yardOptions = useMemo(
     () => yards.filter((y) => String(y.type ?? '').toLowerCase() === 'yard'),
@@ -176,6 +212,16 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
       return;
     }
 
+    const cleanedCommodities = selectedCommodities.filter((n) => masterNames.has(n));
+    if (activeCommodities.length > 0 && cleanedCommodities.length === 0) {
+      toast({
+        title: 'Validation Error',
+        description: 'Select at least one commodity from the M-04 master list (Purpose / Commodities to deal).',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     const payload: Record<string, unknown> = {
       name,
       firmName: firmName || undefined,
@@ -197,7 +243,12 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
       premises: premises || 'Stall 1',
       premisesType: premisesType as 'Stall' | 'Godown' | 'Shop',
       registrationType: registrationType as 'Temporary' | 'Permanent',
-      commodities: selectedCommodities.length > 0 ? selectedCommodities : ['General'],
+      commodities:
+        activeCommodities.length > 0
+          ? cleanedCommodities
+          : selectedCommodities.length > 0
+            ? selectedCommodities
+            : ['General'],
       status: isDraft ? 'Pending' : 'Active',
       rentAmount: initialData?.rentAmount ?? 5000,
       securityDeposit: initialData?.securityDeposit ?? 10000,
@@ -529,20 +580,75 @@ export default function TraderForm({ traderId, initialData }: TraderFormProps = 
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Purpose/Commodities to Deal</Label>
-              <div className="flex flex-wrap gap-2">
-                {COMMODITIES.map((commodity) => (
-                  <Badge
-                    key={commodity.name}
-                    variant={selectedCommodities.includes(commodity.name) ? 'default' : 'outline'}
-                    className="cursor-pointer"
-                    onClick={() => toggleCommodity(commodity.name)}
-                    data-testid={`badge-commodity-${commodity.name.toLowerCase()}`}
-                  >
-                    {commodity.name}
-                  </Badge>
-                ))}
-              </div>
+              <Label>Purpose/Commodities to deal</Label>
+              <p className="text-xs text-muted-foreground">
+                Options come from <span className="font-medium text-foreground">IOMS M-04 → Commodities</span> (active
+                rows only).{' '}
+                <Link href="/market/commodities" className="text-primary underline-offset-2 hover:underline">
+                  Open commodity master
+                </Link>
+                .
+              </p>
+              {commoditiesError ? (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Could not load commodities</AlertTitle>
+                  <AlertDescription>You may lack M-04 Read permission, or the server failed. Retry after refreshing.</AlertDescription>
+                </Alert>
+              ) : commoditiesLoading ? (
+                <div className="flex flex-wrap gap-2">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <Skeleton key={i} className="h-7 w-20 rounded-full" />
+                  ))}
+                </div>
+              ) : activeCommodities.length === 0 ? (
+                <Alert>
+                  <AlertTitle>No active commodities in M-04</AlertTitle>
+                  <AlertDescription>
+                    Add commodities under{' '}
+                    <Link href="/market/commodities" className="font-medium text-primary underline-offset-2 hover:underline">
+                      Market → Commodities
+                    </Link>{' '}
+                    first. Until then, traders are saved with a generic <span className="font-mono">General</span>{' '}
+                    purpose if none are selected.
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {activeCommodities.map((commodity) => (
+                    <Badge
+                      key={commodity.id}
+                      variant={selectedCommodities.includes(commodity.name) ? 'default' : 'outline'}
+                      className="cursor-pointer"
+                      onClick={() => toggleCommodity(commodity.name)}
+                      data-testid={`badge-commodity-${commodity.name.toLowerCase().replace(/\s+/g, '-')}`}
+                      title={[commodity.variety, commodity.unit].filter(Boolean).join(' · ') || undefined}
+                    >
+                      {commodity.name}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              {legacySelectedNames.length > 0 ? (
+                <div className="space-y-1.5 pt-1">
+                  <p className="text-xs text-amber-800 dark:text-amber-200">
+                    Stored values not in the current M-04 master (click to remove):
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {legacySelectedNames.map((name) => (
+                      <Badge
+                        key={name}
+                        variant="secondary"
+                        className="cursor-pointer border-amber-500/50"
+                        onClick={() => removeLegacyName(name)}
+                        data-testid={`badge-commodity-legacy-${name.toLowerCase().replace(/\s+/g, '-')}`}
+                      >
+                        {name} ×
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </CardContent>
         </Card>
