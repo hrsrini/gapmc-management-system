@@ -80,7 +80,7 @@ TP-UAT-006,UAT,Journey HR separation,User Acceptance,P1,HR Admin,Test employee u
 TP-UAT-007,UAT,Journey public citizen,User Acceptance,P2,External,Valid receipt; verify enabled in env,"1) Open verify URL from QR 2) Print PDF",Trust but verify experience; if verify disabled by env skip or expect blocked API,,,,,uat_business,,
 TP-UAT-008,UAT,Sign-off matrix,User Acceptance,P0,Product owner,N/A,"1) Mark modules signed off in tracker 2) Attach evidence links",Completed column in test management tool,,,,,uat_business,,
 TP-DB-001,Data,Schema verify,Smoke,P1,DevOps,.env set,"1) npm run db:verify-schema",Required columns and optional land triggers reported,,,,,implemented_ready_sit,,
-TP-DB-002,Data,Seed smoke,Smoke,P1,DevOps,Empty DB,"1) db:push 2) seed-ioms-m10 3) seed-ioms-sample",App navigable; role users login,,,,,implemented_ready_sit,,
+TP-DB-002,Data,Seed smoke,Smoke,P1,DevOps,Empty DB,"1) db:push 2) seed-ioms-m10",App navigable; role users login,,,,,implemented_ready_sit,,
 TP-OQ-001,Open items,Document trace,Process,P1,BA,N/A,"1) Map failed tests to SRS-OPEN-ITEMS-CLIENT.md 2) Log client decision",Traceability maintained,,,,,implemented_ready_sit,,
 TP-OQ-002,Open items,CGEGIS,Deferred,P3,N/A,N/A,N/A,Not in scope — exclude UAT,,Open: CGEGIS,,,pending_not_in_scope,,
 TP-OQ-003,Open items,Data retention jobs,Deferred,P3,N/A,N/A,N/A,Not built — exclude until §16 confirmed,,Open: retention periods,,,pending_not_in_scope,,

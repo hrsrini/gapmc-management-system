@@ -38,7 +38,7 @@
 | 32, 33, 35 | Salary split, doc storage, expenditure head source | **Pending** |
 | 34 | Advance recovery from payroll | **Out of scope** — no automated recovery in Staff/Payroll (M-06). |
 | 36 | Budget / limits per head per yard per year | **Pending** (client cell blank in latest sheet). |
-| 37 | **3** vehicles seed. | `scripts/seed-ioms-sample-data.ts` seeds three vehicles when DB empty. |
+| 37 | **3** vehicles seed. | Bulk IOMS sample seed script was removed; add fleet data via the app or dedicated scripts if needed. |
 | 38 | **Drivers** role for trips. | Seeded role (see `seed-ioms-m10`). |
 | 39–40 | Fuel and maintenance model | **Pending** |
 | 41 | Depreciation **manual** for first release. | Fixed assets support manual book value. |

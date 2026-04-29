@@ -63,7 +63,6 @@ export class MemStorage implements IStorage {
   private agreements: Map<string, Agreement>;
   private stockReturns: Map<string, StockReturn>;
   private activityLogs: Map<string, ActivityLog>;
-  private seeded: boolean = false;
 
   constructor() {
     this.traders = new Map();
@@ -252,43 +251,8 @@ export class MemStorage implements IStorage {
     return newLog;
   }
 
-  // Seed initial data
   async seedData(): Promise<void> {
-    if (this.seeded) return;
-    this.seeded = true;
-
-    // Seed traders
-    const traders: Trader[] = [
-      { id: 'TRD001', assetId: 'MARG-2024-001', name: 'Ramesh Naik', firmName: 'Naik Traders', type: 'Firm', mobile: '9822001001', email: 'ramesh@naiktraders.com', aadhaar: '1234-5678-9012', pan: 'ABCPN1234A', gst: '30ABCPN1234A1Z5', yardId: 1, yardName: 'Margao Main Yard', premises: 'Stall 14', premisesType: 'Stall', registrationType: 'Permanent', commodities: ['Vegetables', 'Fruits'], status: 'Active', agreementStart: '2024-01-01', agreementEnd: '2026-12-31', rentAmount: 5000, securityDeposit: 25000 },
-      { id: 'TRD002', assetId: 'MARG-2024-002', name: 'Priya Desai', firmName: 'Desai & Sons', type: 'Firm', mobile: '9822001002', email: 'priya@desaisns.com', aadhaar: '2345-6789-0123', pan: 'BCQPD2345B', gst: '30BCQPD2345B1Z6', yardId: 1, yardName: 'Margao Main Yard', premises: 'Godown 5', premisesType: 'Godown', registrationType: 'Permanent', commodities: ['Rice', 'Wheat'], status: 'Active', agreementStart: '2024-03-01', agreementEnd: '2027-02-28', rentAmount: 8000, securityDeposit: 40000 },
-      { id: 'TRD003', assetId: 'POND-2024-001', name: 'Santosh Kamat', firmName: 'Kamat Vegetables', type: 'Individual', mobile: '9822001003', email: 'santosh.kamat@gmail.com', aadhaar: '3456-7890-1234', pan: 'CDRPK3456C', yardId: 2, yardName: 'Ponda Market Sub Yard', premises: 'Stall 7', premisesType: 'Stall', registrationType: 'Temporary', commodities: ['Vegetables'], status: 'Active', agreementStart: '2025-01-01', agreementEnd: '2025-12-31', rentAmount: 3000, securityDeposit: 15000 },
-      { id: 'TRD004', assetId: 'MAPU-2024-001', name: 'Fatima Shaikh', firmName: 'Shaikh Fruits', type: 'Firm', mobile: '9822001004', email: 'fatima.shaikh@shaikhfruits.com', aadhaar: '4567-8901-2345', pan: 'DESPF4567D', gst: '30DESPF4567D1Z7', yardId: 4, yardName: 'Mapusa Market Sub Yard', premises: 'Stall 12', premisesType: 'Stall', registrationType: 'Permanent', commodities: ['Fruits', 'Coconut'], status: 'Active', agreementStart: '2023-06-01', agreementEnd: '2026-05-31', rentAmount: 4500, securityDeposit: 22500 },
-      { id: 'TRD005', assetId: 'MARG-2024-003', name: 'Vijay Shetty', firmName: 'Shetty Trading Co', type: 'Pvt Ltd', mobile: '9822001005', email: 'vijay@shettytrading.com', aadhaar: '5678-9012-3456', pan: 'EFGPV5678E', gst: '30EFGPV5678E1Z8', yardId: 1, yardName: 'Margao Main Yard', premises: 'Godown 8', premisesType: 'Godown', registrationType: 'Permanent', commodities: ['Cashew', 'Spices'], status: 'Active', agreementStart: '2024-04-01', agreementEnd: '2027-03-31', rentAmount: 12000, securityDeposit: 60000 },
-    ];
-    traders.forEach(t => this.traders.set(t.id, t));
-
-    // Seed invoices
-    const invoices: Invoice[] = [
-      { id: 'INV-2026-0001', traderId: 'TRD001', traderName: 'Ramesh Naik', premises: 'Stall 14', yard: 'Margao Main Yard', yardId: 1, month: 'January 2026', invoiceDate: '2026-01-05', baseRent: 5000, cgst: 450, sgst: 450, interest: 0, total: 5900, tdsApplicable: false, tdsAmount: 0, status: 'Paid' },
-      { id: 'INV-2026-0002', traderId: 'TRD002', traderName: 'Priya Desai', premises: 'Godown 5', yard: 'Margao Main Yard', yardId: 1, month: 'January 2026', invoiceDate: '2026-01-05', baseRent: 8000, cgst: 720, sgst: 720, interest: 0, total: 9440, tdsApplicable: true, tdsAmount: 800, status: 'Pending' },
-      { id: 'INV-2026-0003', traderId: 'TRD003', traderName: 'Santosh Kamat', premises: 'Stall 7', yard: 'Ponda Market Sub Yard', yardId: 2, month: 'January 2026', invoiceDate: '2026-01-06', baseRent: 3000, cgst: 270, sgst: 270, interest: 150, total: 3690, tdsApplicable: false, tdsAmount: 0, status: 'Overdue' },
-    ];
-    invoices.forEach(i => this.invoices.set(i.id, i));
-
-    // Seed receipts
-    const receipts: Receipt[] = [
-      { id: 'REC-2026-0001', receiptNo: 'REC-2026-0001', receiptDate: '2026-01-10', type: 'Rent', traderId: 'TRD001', traderName: 'Ramesh Naik', head: 'Rent', amount: 5000, cgst: 450, sgst: 450, total: 5900, paymentMode: 'Online', transactionRef: 'UTR123456789', yardId: 1, yardName: 'Margao Main Yard', issuedBy: 'Super Admin', status: 'Active' },
-      { id: 'REC-2026-0002', receiptNo: 'REC-2026-0002', receiptDate: '2026-01-12', type: 'Rent', traderId: 'TRD004', traderName: 'Fatima Shaikh', head: 'Rent', amount: 4500, cgst: 405, sgst: 405, total: 5310, paymentMode: 'Cash', yardId: 4, yardName: 'Mapusa Market Sub Yard', issuedBy: 'Super Admin', status: 'Active' },
-    ];
-    receipts.forEach(r => this.receipts.set(r.id, r));
-
-    // Seed activity logs
-    const logs: ActivityLog[] = [
-      { id: '1', action: 'Invoice Generated', module: 'Rent/Tax', user: 'Super Admin', timestamp: new Date().toISOString() },
-      { id: '2', action: 'Receipt Created', module: 'Receipts', user: 'Super Admin', timestamp: new Date(Date.now() - 3600000).toISOString() },
-      { id: '3', action: 'Trader Registered', module: 'Traders', user: 'Super Admin', timestamp: new Date(Date.now() - 86400000).toISOString() },
-    ];
-    logs.forEach(l => this.activityLogs.set(l.id, l));
+    /** Intentionally empty: no demo traders, invoices, receipts, or activity rows (matches DbStorage). */
   }
 }
 

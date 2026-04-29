@@ -151,7 +151,7 @@ export default function IomsReceiptReconciliation() {
                   </div>
                 </div>
                 <div className="p-3 rounded-md border bg-background">
-                  <div className="text-xs text-muted-foreground">Unmatched logs (sample)</div>
+                  <div className="text-xs text-muted-foreground">Unmatched logs (preview)</div>
                   <div className="text-2xl font-semibold flex items-center gap-2">
                     <XCircle className="h-5 w-5 text-destructive" />
                     {data.unmatchedLogs.length}
