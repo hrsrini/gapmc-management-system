@@ -23,13 +23,25 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   Plus,
   Eye,
   Printer,
   XCircle,
+  Trash2,
   Receipt as ReceiptIcon,
   AlertCircle,
   RefreshCcw,
+  Loader2,
 } from 'lucide-react';
 import { legacyRowMatchesSelectedApiYard } from '@/lib/legacyYardMatch';
 import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
@@ -62,9 +74,11 @@ export default function ReceiptList() {
   const { toast } = useToast();
   const { can } = useAuth();
   const canCreate = can('M-05', 'Create');
+  const canDelete = can('M-05', 'Delete');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
   const [viewReceipt, setViewReceipt] = useState<Receipt | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Receipt | null>(null);
   const [autoPrint, setAutoPrint] = useState(false);
 
   useEffect(() => {
@@ -90,6 +104,19 @@ export default function ReceiptList() {
     },
     onError: () => {
       toast({ title: 'Error', description: 'Failed to void receipt', variant: 'destructive' });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest('DELETE', `/api/receipts/${id}`),
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/receipts'] });
+      setDeleteTarget((t) => (t?.id === id ? null : t));
+      if (viewReceipt?.id === id) setViewReceipt(null);
+      toast({ title: 'Receipt deleted', description: 'The receipt record was removed.' });
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to delete receipt', variant: 'destructive' });
     },
   });
 
@@ -160,14 +187,28 @@ export default function ReceiptList() {
               onClick={() => voidMutation.mutate(receipt.id)}
               disabled={voidMutation.isPending}
               data-testid={`button-void-${receipt.id}`}
+              aria-label="Void receipt"
             >
               <XCircle className="h-4 w-4" />
+            </Button>
+          )}
+          {canDelete && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-destructive"
+              onClick={() => setDeleteTarget(receipt)}
+              disabled={deleteMutation.isPending}
+              data-testid={`button-delete-${receipt.id}`}
+              aria-label="Delete receipt"
+            >
+              <Trash2 className="h-4 w-4" />
             </Button>
           )}
         </div>
       ),
     }));
-  }, [filteredReceipts, voidMutation]);
+  }, [filteredReceipts, voidMutation, canDelete, deleteMutation.isPending]);
 
   const filterKey = `${selectedYard}|${selectedType}`;
 
@@ -270,6 +311,33 @@ export default function ReceiptList() {
             )}
           </CardContent>
         </Card>
+
+        <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete receipt permanently?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {deleteTarget
+                  ? `This removes ${deleteTarget.receiptNo} from the register. This cannot be undone (unlike voiding).`
+                  : null}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={deleteMutation.isPending}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+                }}
+              >
+                {deleteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         <Dialog open={!!viewReceipt} onOpenChange={(open) => !open && setViewReceipt(null)}>
           <DialogContent className="max-w-lg receipt-print-content">

@@ -18,7 +18,7 @@ import { ClientDataGrid } from '@/components/reports/ClientDataGrid';
 import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { ClipboardList, Save, Send, AlertCircle, Database } from 'lucide-react';
+import { ClipboardList, Save, Send, AlertCircle } from 'lucide-react';
 import { COMMODITIES } from '@/data/yards';
 import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
@@ -45,24 +45,6 @@ export default function Returns() {
 
   const { data: submittedReturns = [], isLoading: returnsLoading } = useQuery<StockReturn[]>({
     queryKey: ['/api/stockreturns'],
-  });
-
-  const seedSampleMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch('/api/seed-sample-stock-returns', { method: 'POST', credentials: 'include' });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || res.statusText || 'Failed to load sample data');
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/stockreturns'] });
-      toast({ title: 'Sample data loaded', description: 'Sample stock returns have been added.' });
-    },
-    onError: (err: Error) => {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
-    },
   });
 
   const createMutation = useMutation({
@@ -246,25 +228,15 @@ export default function Returns() {
         <Card>
           <CardHeader>
             <CardTitle>Submitted returns</CardTitle>
-            <CardDescription>Previously submitted stock returns (sample and your entries)</CardDescription>
+            <CardDescription>Previously submitted stock returns</CardDescription>
           </CardHeader>
           <CardContent>
             {returnsLoading ? (
               <Skeleton className="h-24 w-full" />
             ) : submittedReturns.length === 0 ? (
-              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 py-4">
-                <p className="text-sm text-muted-foreground">No submitted returns yet. Submit one using the form below, or load sample data.</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => seedSampleMutation.mutate()}
-                  disabled={seedSampleMutation.isPending}
-                  data-testid="button-load-sample-returns"
-                >
-                  <Database className="h-4 w-4 mr-2" />
-                  {seedSampleMutation.isPending ? 'Loading…' : 'Load sample data'}
-                </Button>
-              </div>
+              <p className="text-sm text-muted-foreground py-4">
+                No submitted returns yet. Submit one using the form below.
+              </p>
             ) : (
               <ClientDataGrid
                 columns={submittedReturnColumns}

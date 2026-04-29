@@ -458,49 +458,5 @@ export class DbStorage implements IStorage {
     }
     }
 
-    const [{ value: stockReturnCount }] = await db.select({ value: count() }).from(stockReturnsTable);
-    if (Number(stockReturnCount ?? 0) === 0) {
-      const sampleStockReturns: InsertStockReturn[] = [
-        {
-          traderId: "TRD001",
-          traderName: "Ramesh Naik",
-          period: "2026-01",
-          commodity: "Vegetables",
-          openingBalance: 100,
-          locallyProcured: 50,
-          purchasedFromTrader: 20,
-          sales: 120,
-          closingBalance: 50,
-          status: "Submitted",
-        },
-        {
-          traderId: "TRD001",
-          traderName: "Ramesh Naik",
-          period: "2026-01",
-          commodity: "Fruits",
-          openingBalance: 80,
-          locallyProcured: 40,
-          purchasedFromTrader: 15,
-          sales: 90,
-          closingBalance: 45,
-          status: "Submitted",
-        },
-        {
-          traderId: "TRD003",
-          traderName: "Santosh Kamat",
-          period: "2026-01",
-          commodity: "Vegetables",
-          openingBalance: 60,
-          locallyProcured: 30,
-          purchasedFromTrader: 10,
-          sales: 70,
-          closingBalance: 30,
-          status: "Submitted",
-        },
-      ];
-      for (const sr of sampleStockReturns) {
-        await this.createStockReturn(sr);
-      }
-    }
   }
 }

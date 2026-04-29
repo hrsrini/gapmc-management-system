@@ -829,31 +829,6 @@ export async function registerRoutes(
     }
   });
 
-  const sampleStockReturns = [
-    { traderId: "TRD001", traderName: "Ramesh Naik", period: "2026-01", commodity: "Vegetables", openingBalance: 100, locallyProcured: 50, purchasedFromTrader: 20, sales: 120, closingBalance: 50, status: "Submitted" as const },
-    { traderId: "TRD001", traderName: "Ramesh Naik", period: "2026-01", commodity: "Fruits", openingBalance: 80, locallyProcured: 40, purchasedFromTrader: 15, sales: 90, closingBalance: 45, status: "Submitted" as const },
-    { traderId: "TRD003", traderName: "Santosh Kamat", period: "2026-01", commodity: "Vegetables", openingBalance: 60, locallyProcured: 30, purchasedFromTrader: 10, sales: 70, closingBalance: 30, status: "Submitted" as const },
-  ];
-
-  app.post("/api/seed-sample-stock-returns", async (_req, res) => {
-    try {
-      const existing = await storage.getStockReturns();
-      if (existing.length > 0) {
-        return res.status(200).json({ message: "Sample data already exists", count: existing.length });
-      }
-      const created = [];
-      for (const sr of sampleStockReturns) {
-        const one = await storage.createStockReturn(sr);
-        created.push(one);
-      }
-      res.status(201).json({ message: "Sample stock returns added", created: created.length });
-    } catch (error) {
-      console.error("Seed sample stock returns error:", error);
-      const msg = error instanceof Error ? error.message : "Failed to seed sample data";
-      sendApiError(res, 500, "INTERNAL_ERROR", msg);
-    }
-  });
-
   app.post("/api/stockreturns", async (req, res) => {
     try {
       const parsed = bulkStockReturnSchema.safeParse(req.body);
