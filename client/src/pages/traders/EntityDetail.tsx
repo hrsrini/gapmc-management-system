@@ -56,6 +56,9 @@ interface AssetRef {
   id: string;
   assetId: string;
 }
+interface VacantAssetRow {
+  asset: AssetRef;
+}
 interface Allotment {
   id: string;
   assetId: string;
@@ -101,7 +104,8 @@ export default function EntityDetail() {
       return res.json();
     },
   });
-  const { data: assets = [] } = useQuery<AssetRef[]>({ queryKey: ["/api/ioms/assets"] });
+  const { data: vacantRows = [] } = useQuery<VacantAssetRow[]>({ queryKey: ["/api/ioms/assets/vacant"] });
+  const assets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
   const assetDisplayById = useMemo(() => Object.fromEntries(assets.map((a) => [a.id, a.assetId])), [assets]);
 
   const [open, setOpen] = useState(false);

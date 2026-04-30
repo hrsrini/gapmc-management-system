@@ -45,6 +45,9 @@ interface Asset {
   yardId: string;
   assetType: string;
 }
+interface VacantAssetRow {
+  asset: Asset;
+}
 interface Licence {
   id: string;
   licenceNo?: string | null;
@@ -91,12 +94,15 @@ export default function AssetAllotments() {
     },
   });
   const { data: assets = [] } = useQuery<Asset[]>({ queryKey: ["/api/ioms/assets"] });
+  const { data: vacantRows = [] } = useQuery<VacantAssetRow[]>({ queryKey: ["/api/ioms/assets/vacant"] });
   const { data: licences = [] } = useQuery<Licence[]>({ queryKey: ["/api/ioms/traders/licences"] });
 
   const assetDisplayMap = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
   assets.forEach((a) => {
     assetDisplayMap[a.assetId] = a.assetId;
   });
+
+  const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
 
   const licenceDisplayById = Object.fromEntries(
     licences.map((l) => [l.id, `${l.licenceNo ?? l.id} — ${l.firmName}`]),
@@ -211,8 +217,8 @@ export default function AssetAllotments() {
                     <Select value={assetId} onValueChange={setAssetId} required>
                       <SelectTrigger><SelectValue placeholder="Select asset" /></SelectTrigger>
                       <SelectContent>
-                        {assets.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>{a.assetId} ({a.yardId})</SelectItem>
+                        {vacantAssets.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>{a.assetId}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>

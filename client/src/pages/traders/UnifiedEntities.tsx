@@ -38,7 +38,7 @@ interface UnifiedEntityRow {
 const columns: ReportTableColumn[] = [
   { key: "kind", header: "Type", sortField: "kind" },
   { key: "name", header: "Name" },
-  { key: "yardId", header: "Yard" },
+  { key: "yardDisplay", header: "Yard", sortField: "yardId" },
   { key: "status", header: "Status", sortField: "status" },
   { key: "mobile", header: "Mobile" },
   { key: "pan", header: "PAN" },
@@ -65,6 +65,11 @@ export default function UnifiedEntities() {
   const params = new URLSearchParams();
   if (q.trim()) params.set("q", q.trim());
   const url = params.toString() ? `/api/ioms/unified-entities?${params.toString()}` : "/api/ioms/unified-entities";
+
+  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ["/api/yards"],
+  });
+  const yardById = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, y.name])), [yards]);
 
   const { data: list = [], isLoading, isError } = useQuery<UnifiedEntityRow[]>({
     queryKey: [url],
@@ -102,6 +107,7 @@ export default function UnifiedEntities() {
   const rows = useMemo(() => {
     return (list ?? []).map((r) => ({
       ...r,
+      yardDisplay: yardById[r.yardId] ?? r.yardId ?? "—",
       status: r.status ?? "—",
       mobile: r.mobile ?? "—",
       pan: r.pan ?? "—",
@@ -115,7 +121,7 @@ export default function UnifiedEntities() {
         </Button>
       ),
     })) as Record<string, unknown>[];
-  }, [list]);
+  }, [list, yardById]);
 
   if (isError) {
     return (
@@ -156,7 +162,7 @@ export default function UnifiedEntities() {
             <ClientDataGrid
               columns={columns}
               sourceRows={rows}
-              searchKeys={["name", "id", "kind", "yardId", "mobile", "pan", "gstin", "status"]}
+              searchKeys={["name", "id", "kind", "yardDisplay", "yardId", "mobile", "pan", "gstin", "status"]}
               searchPlaceholder="Filter…"
               defaultSortKey="name"
               defaultSortDir="asc"
