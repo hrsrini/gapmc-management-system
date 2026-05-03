@@ -130,7 +130,7 @@ export default function RentInvoiceForm({ invoiceId, initialData }: RentInvoiceF
             title: isDraft ? 'Draft Saved' : 'Invoice Updated',
             description: isDraft ? 'Invoice draft updated' : 'Invoice has been updated successfully',
           });
-          setLocation('/rent');
+          setLocation('/rent/legacy');
         },
       });
     } else {
@@ -140,7 +140,7 @@ export default function RentInvoiceForm({ invoiceId, initialData }: RentInvoiceF
             title: isDraft ? 'Draft Saved' : 'Invoice Generated',
             description: isDraft ? 'Invoice saved as draft' : 'Invoice has been generated successfully',
           });
-          setLocation('/rent');
+          setLocation('/rent/legacy');
         },
       });
     }
@@ -150,7 +150,7 @@ export default function RentInvoiceForm({ invoiceId, initialData }: RentInvoiceF
 
   if (isError) {
     return (
-      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: isEdit ? 'Edit Invoice' : 'Create Invoice' }]}>
+      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent/ioms' }, { label: 'Legacy invoices', href: '/rent/legacy' }, { label: isEdit ? 'Edit Invoice' : 'Create Invoice' }]}>
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
@@ -162,7 +162,7 @@ export default function RentInvoiceForm({ invoiceId, initialData }: RentInvoiceF
   }
 
   return (
-    <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: isEdit ? 'Edit Invoice' : 'Create Invoice' }]}>
+    <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent/ioms' }, { label: 'Legacy invoices', href: '/rent/legacy' }, { label: isEdit ? 'Edit Invoice' : 'Create Invoice' }]}>
       <div className="space-y-6 max-w-4xl">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -329,7 +329,7 @@ export default function RentInvoiceForm({ invoiceId, initialData }: RentInvoiceF
         </Card>
 
         <div className="flex flex-col sm:flex-row gap-3 justify-end">
-          <Button variant="outline" onClick={() => setLocation('/rent')} data-testid="button-cancel">
+          <Button variant="outline" onClick={() => setLocation('/rent/legacy')} data-testid="button-cancel">
             <X className="h-4 w-4 mr-2" />
             Cancel
           </Button>

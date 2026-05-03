@@ -24,7 +24,7 @@ function RentInvoiceEditPageInner() {
 
   if (!id) {
     return (
-      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: 'Edit Invoice' }]}>
+      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent/ioms' }, { label: 'Edit Invoice' }]}>
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
@@ -37,7 +37,7 @@ function RentInvoiceEditPageInner() {
 
   if (isLoading) {
     return (
-      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: 'Edit Invoice' }]}>
+      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent/ioms' }, { label: 'Edit Invoice' }]}>
         <div className="space-y-4">
           <Skeleton className="h-8 w-64" />
           <Skeleton className="h-64 w-full" />
@@ -48,7 +48,7 @@ function RentInvoiceEditPageInner() {
 
   if (isError || !invoice) {
     return (
-      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: 'Edit Invoice' }]}>
+      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent/ioms' }, { label: 'Edit Invoice' }]}>
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />

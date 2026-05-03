@@ -378,7 +378,7 @@ export default function RentReports() {
 
   if (invoicesError || yardsError) {
     return (
-      <AppShell breadcrumbs={[{ label: "Rent & Tax", href: "/rent" }, { label: "Reports" }]}>
+      <AppShell breadcrumbs={[{ label: "Rent & Tax", href: "/rent/ioms" }, { label: "Reports" }]}>
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center gap-3">
             <AlertCircle className="h-5 w-5 text-destructive" />
@@ -390,7 +390,7 @@ export default function RentReports() {
   }
 
   return (
-    <AppShell breadcrumbs={[{ label: "Rent & Tax", href: "/rent" }, { label: "Reports" }]}>
+    <AppShell breadcrumbs={[{ label: "Rent & Tax", href: "/rent/ioms" }, { label: "Reports" }]}>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">

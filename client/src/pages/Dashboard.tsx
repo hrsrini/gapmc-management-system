@@ -39,7 +39,7 @@ const quickActions: {
   {
     title: 'Rent/Tax Module',
     description: 'Manage rent invoices and GST',
-    href: '/rent',
+    href: '/rent/ioms',
     icon: FileText,
     color: 'text-primary',
     module: 'M-03',

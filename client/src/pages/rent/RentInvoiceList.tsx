@@ -16,6 +16,7 @@ import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Plus, Eye, Pencil, Trash2, FileText, AlertCircle, RefreshCcw } from 'lucide-react';
 import { legacyRowMatchesSelectedApiYard } from '@/lib/legacyYardMatch';
 import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
@@ -157,7 +158,7 @@ export default function RentInvoiceList() {
 
   if (isError) {
     return (
-      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: 'Invoices' }]}>
+      <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent/ioms' }, { label: 'Legacy invoices' }]}>
         <Card className="bg-destructive/10 border-destructive/20">
           <CardContent className="p-6 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -175,15 +176,27 @@ export default function RentInvoiceList() {
   }
 
   return (
-    <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent' }, { label: 'Invoices' }]}>
+    <AppShell breadcrumbs={[{ label: 'Rent & Tax', href: '/rent/ioms' }, { label: 'Legacy invoices' }]}>
       <div className="space-y-6">
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Legacy invoice register</AlertTitle>
+          <AlertDescription>
+            This grid reads the pre-IOMS <span className="font-mono text-xs">invoices</span> table. M-03 rent invoices
+            (allotments, drafts, approvals) live under{' '}
+            <Link href="/rent/ioms" className="font-medium underline underline-offset-2">
+              Rent invoices (IOMS)
+            </Link>
+            .
+          </AlertDescription>
+        </Alert>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <FileText className="h-6 w-6 text-primary" />
-              Rent/Tax Invoices
+              Legacy rent/tax invoices
             </h1>
-            <p className="text-muted-foreground">Manage rent and tax invoices</p>
+            <p className="text-muted-foreground">Older Rent &amp; Tax rows only — not IOMS M-03</p>
           </div>
           {canCreate && (
             <Button asChild data-testid="button-create-invoice">

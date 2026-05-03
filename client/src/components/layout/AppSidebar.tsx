@@ -95,9 +95,9 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
   {
     group: 'Rent & Tax',
     items: [
-      { title: 'Invoices', icon: FileText, href: '/rent', requirePermission: { module: 'M-03', action: 'Read' } },
+      { title: 'Invoices', icon: FileText, href: '/rent/ioms', requirePermission: { module: 'M-03', action: 'Read' } },
       { title: 'Reports', icon: BarChart3, href: '/rent/reports', requirePermission: { module: 'M-03', action: 'Read' } },
-      { title: 'IOMS Rent (M-03)', icon: FileText, href: '/rent/ioms', requirePermission: { module: 'M-03', action: 'Read' } },
+      { title: 'Legacy rent invoices', icon: FileText, href: '/rent/legacy', requirePermission: { module: 'M-03', action: 'Read' } },
       { title: 'Credit Notes (M-03)', icon: StickyNote, href: '/rent/ioms/credit-notes', requirePermission: { module: 'M-03', action: 'Read' } },
       { title: 'Rent deposit ledger', icon: BookOpen, href: '/rent/ioms/ledger', requirePermission: { module: 'M-03', action: 'Read' } },
       { title: 'Rent revisions', icon: CalendarDays, href: '/rent/ioms/revisions', requirePermission: { module: 'M-03', action: 'Read' } },
