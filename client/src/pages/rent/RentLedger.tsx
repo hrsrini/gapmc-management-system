@@ -3,8 +3,6 @@ import { useSearchParams } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BookOpen, AlertCircle, Receipt } from "lucide-react";
 import { Link } from "wouter";
@@ -64,9 +62,18 @@ const columns: ReportTableColumn[] = [
 
 export default function RentLedger() {
   const [searchParams] = useSearchParams();
-  const [tenantLicenceId, setTenantLicenceId] = useState("");
-  const [unifiedEntityIdFilter, setUnifiedEntityIdFilter] = useState("");
-  const [assetId, setAssetId] = useState("");
+  const unifiedEntityFromUrl = searchParams.get("unifiedEntityId")?.trim() ?? "";
+  const tenantLicenceFromUrl = searchParams.get("tenantLicenceId")?.trim() ?? "";
+  const assetIdFromUrl = searchParams.get("assetId")?.trim() ?? "";
+
+  const ledgerApiUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    if (unifiedEntityFromUrl) params.set("unifiedEntityId", unifiedEntityFromUrl);
+    else if (tenantLicenceFromUrl) params.set("tenantLicenceId", tenantLicenceFromUrl);
+    if (assetIdFromUrl) params.set("assetId", assetIdFromUrl);
+    return params.toString() ? `/api/ioms/rent/ledger?${params.toString()}` : "/api/ioms/rent/ledger";
+  }, [unifiedEntityFromUrl, tenantLicenceFromUrl, assetIdFromUrl]);
+
   const [tableParams, setTableParams] = useState<ReportPagedParams>({
     page: 1,
     pageSize: 25,
@@ -79,29 +86,18 @@ export default function RentLedger() {
     setTableParams((s) => ({ ...s, ...next }));
   }, []);
 
-  useEffect(() => {
-    const u = searchParams.get("unifiedEntityId")?.trim() ?? "";
-    if (u) setUnifiedEntityIdFilter(u);
-  }, [searchParams]);
-
-  const params = new URLSearchParams();
-  if (unifiedEntityIdFilter.trim()) params.set("unifiedEntityId", unifiedEntityIdFilter.trim());
-  else if (tenantLicenceId.trim()) params.set("tenantLicenceId", tenantLicenceId.trim());
-  if (assetId.trim()) params.set("assetId", assetId.trim());
-  const url = params.toString() ? `/api/ioms/rent/ledger?${params.toString()}` : "/api/ioms/rent/ledger";
-
   const receiptParams = new URLSearchParams();
-  if (unifiedEntityIdFilter.trim()) receiptParams.set("unifiedEntityId", unifiedEntityIdFilter.trim());
-  else if (tenantLicenceId.trim()) receiptParams.set("tenantLicenceId", tenantLicenceId.trim());
+  if (unifiedEntityFromUrl) receiptParams.set("unifiedEntityId", unifiedEntityFromUrl);
+  else if (tenantLicenceFromUrl) receiptParams.set("tenantLicenceId", tenantLicenceFromUrl);
   const traderReceiptsUrl = receiptParams.toString()
     ? `/api/ioms/rent/ledger/trader-receipts?${receiptParams.toString()}`
     : "";
 
   useEffect(() => {
     setTableParams((p) => ({ ...p, page: 1 }));
-  }, [url]);
+  }, [ledgerApiUrl]);
 
-  const { data: list = [], isLoading, isError } = useQuery<LedgerEntry[]>({ queryKey: [url] });
+  const { data: list = [], isLoading, isError } = useQuery<LedgerEntry[]>({ queryKey: [ledgerApiUrl] });
   const { data: traderReceipts = [], isLoading: traderReceiptsLoading } = useQuery<TraderReceiptRow[]>({
     queryKey: [traderReceiptsUrl],
     enabled: Boolean(traderReceiptsUrl),
@@ -189,46 +185,11 @@ export default function RentLedger() {
             Rent deposit ledger (M-03)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Per tenant per asset — opening balance, rent, interest, collections. Filters use the same identifiers the
-            API expects (Track A unified key and internal ids). The grid shows a readable firm name under unified entity
-            and licence number or internal licence id under tenant. When filtered, a second panel lists other IOMS
-            receipts for that payer ref.
+            Per tenant per asset — opening balance, rent, interest, collections. Use the table search to find rows by
+            date, licence, firm, asset code, type, or invoice. Opening this page from a receipt or trader licence may
+            include <span className="font-mono">unifiedEntityId</span> in the URL to narrow rows; when that applies, a
+            second panel lists other IOMS receipts for the same payer ref.
           </p>
-          <div className="flex flex-wrap gap-4 pt-2">
-            <div className="space-y-1">
-              <Label htmlFor="ledger-filter-ue">Unified entity</Label>
-              <Input
-                id="ledger-filter-ue"
-                className="w-[260px] font-mono text-xs"
-                placeholder="e.g. TA:…"
-                value={unifiedEntityIdFilter}
-                onChange={(e) => setUnifiedEntityIdFilter(e.target.value)}
-                title="Track A unified id: TA: plus the trader_licences.id value (same ref as tenant column when no manual licence no)."
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ledger-filter-tlic">Tenant licence</Label>
-              <Input
-                id="ledger-filter-tlic"
-                className="w-[220px] font-mono text-xs"
-                placeholder="trader_licences.id"
-                value={tenantLicenceId}
-                onChange={(e) => setTenantLicenceId(e.target.value)}
-                title="Internal licence record id (nanoid), not the firm name shown in the table."
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ledger-filter-asset">Asset</Label>
-              <Input
-                id="ledger-filter-asset"
-                className="w-[220px] font-mono text-xs"
-                placeholder="assets.id (internal)"
-                value={assetId}
-                onChange={(e) => setAssetId(e.target.value)}
-                title="Internal asset row id. The table “Asset” column shows the public asset code (e.g. Y-SQ/STALL-002)."
-              />
-            </div>
-          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
