@@ -31,9 +31,17 @@ export function mimeForReceiptLogoPath(filePathOrKey: string): string {
 }
 
 export async function readUploadedReceiptLogoBuffer(): Promise<Buffer | null> {
-  const key = await getActiveReceiptLogoKey();
-  if (!key) return null;
-  return getUploadBlobStore().get(key);
+  try {
+    const key = await getActiveReceiptLogoKey();
+    if (!key) return null;
+    const buf = await getUploadBlobStore().get(key);
+    if (!buf?.length) return null;
+    return buf;
+  } catch (e) {
+    /* S3/network errors must not block receipt PDFs */
+    console.warn("[receipt-logo] read skipped", e);
+    return null;
+  }
 }
 
 export async function writeReceiptLogoUpload(buffer: Buffer, mime: string): Promise<void> {

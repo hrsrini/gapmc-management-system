@@ -21,7 +21,7 @@ import { applyPaymentGatewayCallback } from "./payment-gateway-callback";
 import { isPaymentWebhookHmacMandatory, verifyPaymentWebhookHmac } from "./payment-webhook-hmac";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-interest";
-import { getM03RentReceiptArrearsDisclosure } from "./rent-receipt-arrears";
+import { getM03RentReceiptArrearsDisclosure, type RentReceiptArrearsDisclosure } from "./rent-receipt-arrears";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 
 async function dishonourRecomputationHint(
@@ -412,7 +412,12 @@ export function registerReceiptsIomsRoutes(app: Express) {
       const verifyBase =
         (process.env.PUBLIC_APP_URL && process.env.PUBLIC_APP_URL.replace(/\/$/, "")) ||
         `${req.protocol}://${req.get("host") || "localhost"}`;
-      const arrearsDisclosure = await getM03RentReceiptArrearsDisclosure(row);
+      let arrearsDisclosure: RentReceiptArrearsDisclosure | null = null;
+      try {
+        arrearsDisclosure = await getM03RentReceiptArrearsDisclosure(row);
+      } catch (e) {
+        console.warn("IOMS receipt PDF: arrears disclosure skipped", req.params.id, e);
+      }
       const pdf = await buildIomsReceiptPdf({
         receipt: row,
         yardName: yard?.name ?? null,

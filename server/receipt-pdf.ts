@@ -99,12 +99,23 @@ export async function buildIomsReceiptPdf(params: {
   const printMode = (process.env.RECEIPT_PDF_PRINT_MODE ?? "full").trim().toLowerCase();
   const bodyOnly = printMode === "body-only" || printMode === "preprinted";
   const signatoryName = process.env.RECEIPT_PDF_SIGNATORY_NAME?.trim();
-  const { default: PDFDocument } = await import("pdfkit");
+  const pdfkitMod = await import("pdfkit").catch((e) => {
+    console.error("[receipt-pdf] pdfkit module load failed", e);
+    throw e;
+  });
+  const PDFDocument = pdfkitMod.default;
   const verifyUrl = `${verifyBaseUrl.replace(/\/$/, "")}/verify/${encodeURIComponent(receipt.receiptNo)}`;
-  const [qrPng, logoBuf] = await Promise.all([
-    QRCode.toBuffer(verifyUrl, { type: "png", margin: 1, width: 200 }),
-    bodyOnly ? Promise.resolve(null as Buffer | null) : loadOptionalReceiptLogo(),
-  ]);
+  let qrPng: Buffer;
+  let logoBuf: Buffer | null;
+  try {
+    [qrPng, logoBuf] = await Promise.all([
+      QRCode.toBuffer(verifyUrl, { type: "png", margin: 1, width: 200 }),
+      bodyOnly ? Promise.resolve(null as Buffer | null) : loadOptionalReceiptLogo(),
+    ]);
+  } catch (e) {
+    console.error("[receipt-pdf] QR or logo preparation failed", e);
+    throw e;
+  }
 
   const doc = new PDFDocument({ margin: 48, size: "A4" });
   const chunks: Buffer[] = [];
@@ -132,20 +143,25 @@ export async function buildIomsReceiptPdf(params: {
         .fontSize(44)
         .fillColor("#d1d5db")
         .opacity(0.35)
-        .text(String(duplicateLabel).slice(0, 40), 0, doc.page.height / 2 - 40, { align: "center" })
+        .text(pdfSafeText(String(duplicateLabel).slice(0, 40)), 0, doc.page.height / 2 - 40, { align: "center" })
         .opacity(1)
         .restore();
       doc.moveDown(0.2);
     }
 
     if (!bodyOnly) {
-      doc.fontSize(18).text("Goa Agricultural Produce and Livestock Marketing Board (GAPLMB)", { align: "center" });
+      doc
+        .fontSize(18)
+        .text(pdfSafeText("Goa Agricultural Produce and Livestock Marketing Board (GAPLMB)"), { align: "center" });
       doc.moveDown(0.25);
-      doc.fontSize(11).fillColor("#444").text("Integrated Online Management System - Receipt", { align: "center" });
+      doc
+        .fontSize(11)
+        .fillColor("#444")
+        .text(pdfSafeText("Integrated Online Management System - Receipt"), { align: "center" });
       doc.fillColor("#000");
       doc.moveDown(1.2);
     } else {
-      doc.fontSize(12).text("Receipt (body)", { align: "left" });
+      doc.fontSize(12).text(pdfSafeText("Receipt (body)"), { align: "left" });
       doc.moveDown(0.6);
     }
     doc.fontSize(10).text(pdfSafeText(`Yard / location: ${yardName ?? receipt.yardId}`));
@@ -165,12 +181,12 @@ export async function buildIomsReceiptPdf(params: {
       doc.fillColor("#000");
     }
     doc.moveDown(0.6);
-    doc.fontSize(11).text("Payer", { underline: true });
+    doc.fontSize(11).text(pdfSafeText("Payer"), { underline: true });
     doc.fontSize(10).text(pdfSafeText(payerDisplayName));
     if (receipt.payerType) doc.text(pdfSafeText(`Type: ${receipt.payerType}`));
     if (unifiedEntityPdfLine) doc.text(pdfSafeText(`Unified entity: ${unifiedEntityPdfLine}`));
     doc.moveDown(0.8);
-    doc.fontSize(11).text("Amounts (INR)", { underline: true });
+    doc.fontSize(11).text(pdfSafeText("Amounts (INR)"), { underline: true });
     doc.fontSize(10);
     doc.text(pdfSafeText(`Revenue head: ${receipt.revenueHead}`));
     doc.text(`Base amount: Rs.${Number(receipt.amount ?? 0).toFixed(2)}`);
@@ -209,7 +225,7 @@ export async function buildIomsReceiptPdf(params: {
     if (receipt.bankName) doc.text(pdfSafeText(`Bank: ${receipt.bankName}`));
     if (receipt.gatewayRef) doc.text(pdfSafeText(`Reference: ${receipt.gatewayRef}`));
     doc.moveDown(1);
-    doc.fontSize(9).fillColor("#555").text("Verify this receipt (QR):", { continued: false });
+    doc.fontSize(9).fillColor("#555").text(pdfSafeText("Verify this receipt (QR):"), { continued: false });
     doc.fillColor("#000");
     try {
       doc.image(qrPng, { fit: [120, 120] });
@@ -217,7 +233,12 @@ export async function buildIomsReceiptPdf(params: {
       doc.fontSize(9).text("(QR image unavailable)");
     }
     doc.moveDown(0.3);
-    doc.fontSize(8).fillColor("#666").text(pdfSafeText(verifyUrl), { link: verifyUrl, underline: true });
+    const verifyLine = pdfSafeText(verifyUrl);
+    try {
+      doc.fontSize(8).fillColor("#666").text(verifyLine, { link: verifyUrl, underline: true });
+    } catch {
+      doc.fontSize(8).fillColor("#666").text(verifyLine);
+    }
     doc.fillColor("#000");
     doc.moveDown(1);
     if (signatoryName) {
