@@ -895,26 +895,31 @@ export function registerRentIomsRoutes(app: Express) {
       const tenantIds = Array.from(
         new Set(list.map((r) => String(r.tenantLicenceId ?? "").trim()).filter(Boolean)),
       );
+      /** Firm name for unified-entity column; licence no / id for tenant column (avoid duplicating firm in both). */
       const firmByLicenceId = new Map<string, string>();
+      const licenceNoById = new Map<string, string | null>();
       if (tenantIds.length > 0) {
         const licRows = await db
-          .select({ id: traderLicences.id, firmName: traderLicences.firmName })
+          .select({ id: traderLicences.id, firmName: traderLicences.firmName, licenceNo: traderLicences.licenceNo })
           .from(traderLicences)
           .where(inArray(traderLicences.id, tenantIds));
         for (const l of licRows) {
           firmByLicenceId.set(l.id, String(l.firmName ?? "").trim() || l.id);
+          const no = l.licenceNo != null ? String(l.licenceNo).trim() : "";
+          licenceNoById.set(l.id, no || null);
         }
       }
       const enriched = list.map((row) => {
         const tid = String(row.tenantLicenceId ?? "").trim();
         const firm = tid ? (firmByLicenceId.get(tid) ?? null) : null;
+        const licNo = tid ? licenceNoById.get(tid) ?? null : null;
         const ue = String(row.unifiedEntityId ?? "").trim();
         const parsed = ue ? parseUnifiedEntityId(ue) : null;
         const unifiedEntityDisplayName =
           parsed?.kind === "TA"
             ? (firmByLicenceId.get(parsed.refId) ?? firm ?? ue) || tid || "—"
             : ue || (firm ?? tid) || "—";
-        const tenantLicenceDisplayName = (firm ?? tid) || "—";
+        const tenantLicenceDisplayName = (licNo ?? tid) || "—";
         return { ...row, unifiedEntityDisplayName, tenantLicenceDisplayName };
       });
       res.json(enriched);

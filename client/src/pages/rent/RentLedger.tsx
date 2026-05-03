@@ -52,8 +52,8 @@ interface TraderReceiptRow {
 
 const columns: ReportTableColumn[] = [
   { key: "entryDate", header: "Entry date" },
-  { key: "tenantLicenceDisplay", header: "Tenant licence" },
-  { key: "unifiedEntityDisplay", header: "Unified entity" },
+  { key: "tenantLicenceDisplay", header: "Tenant licence (no. / id)" },
+  { key: "unifiedEntityDisplay", header: "Unified entity (name)" },
   { key: "assetDisplay", header: "Asset" },
   { key: "entryType", header: "Type" },
   { key: "_debit", header: "Debit", sortField: "debit" },
@@ -120,7 +120,7 @@ export default function RentLedger() {
       id: e.id,
       entryDate: e.entryDate.slice(0, 10),
       tenantLicenceId: e.tenantLicenceId,
-      tenantLicenceDisplay: e.tenantLicenceDisplayName?.trim() || e.tenantLicenceId,
+      tenantLicenceDisplay: e.tenantLicenceDisplayName?.trim() || e.tenantLicenceId || "—",
       unifiedEntityId: e.unifiedEntityId?.trim() ? e.unifiedEntityId : "—",
       unifiedEntityDisplay:
         e.unifiedEntityDisplayName?.trim() ||
@@ -189,36 +189,43 @@ export default function RentLedger() {
             Rent deposit ledger (M-03)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Per tenant per asset — opening balance, rent, interest, collections. When you filter by{" "}
-            <span className="font-mono">TA:…</span> or tenant licence id, a second panel lists other IOMS receipts (same
-            payer ref) for cross-check with market/licence fees — balances stay on deposit rows only.
+            Per tenant per asset — opening balance, rent, interest, collections. Filters use the same identifiers the
+            API expects (Track A unified key and internal ids). The grid shows a readable firm name under unified entity
+            and licence number or internal licence id under tenant. When filtered, a second panel lists other IOMS
+            receipts for that payer ref.
           </p>
           <div className="flex flex-wrap gap-4 pt-2">
             <div className="space-y-1">
-              <Label>Unified entity (TA:…)</Label>
+              <Label htmlFor="ledger-filter-ue">Unified entity</Label>
               <Input
-                className="w-[220px] font-mono text-xs"
+                id="ledger-filter-ue"
+                className="w-[260px] font-mono text-xs"
                 placeholder="e.g. TA:…"
                 value={unifiedEntityIdFilter}
                 onChange={(e) => setUnifiedEntityIdFilter(e.target.value)}
+                title="Track A unified id: TA: plus the trader_licences.id value (same ref as tenant column when no manual licence no)."
               />
             </div>
             <div className="space-y-1">
-              <Label>Tenant licence ID</Label>
+              <Label htmlFor="ledger-filter-tlic">Tenant licence</Label>
               <Input
-                className="w-[200px]"
-                placeholder="Filter by tenant (if no TA:…)"
+                id="ledger-filter-tlic"
+                className="w-[220px] font-mono text-xs"
+                placeholder="trader_licences.id"
                 value={tenantLicenceId}
                 onChange={(e) => setTenantLicenceId(e.target.value)}
+                title="Internal licence record id (nanoid), not the firm name shown in the table."
               />
             </div>
             <div className="space-y-1">
-              <Label>Asset ID</Label>
+              <Label htmlFor="ledger-filter-asset">Asset</Label>
               <Input
-                className="w-[200px]"
-                placeholder="Filter by asset"
+                id="ledger-filter-asset"
+                className="w-[220px] font-mono text-xs"
+                placeholder="assets.id (internal)"
                 value={assetId}
                 onChange={(e) => setAssetId(e.target.value)}
+                title="Internal asset row id. The table “Asset” column shows the public asset code (e.g. Y-SQ/STALL-002)."
               />
             </div>
           </div>
@@ -234,7 +241,7 @@ export default function RentLedger() {
               params={tableParams}
               onParamsChange={mergeParams}
               isLoading={false}
-              searchPlaceholder="Search by date, tenant, asset, type, amounts, invoice/receipt…"
+              searchPlaceholder="Search date, licence no/id, firm name, TA id, asset code, type, amounts, invoice…"
             />
           )}
         </CardContent>
