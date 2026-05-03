@@ -271,7 +271,39 @@ export function registerReceiptsIomsRoutes(app: Express) {
         .orderBy(desc(iomsReceipts.createdAt))
         .limit(Math.min(Number(limit) || 100, 500));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
-      res.json(await attachPayerDisplayNames(list));
+      const enriched = await attachPayerDisplayNames(list);
+      const m03InvoiceIds = Array.from(
+        new Set(
+          enriched
+            .filter((r) => (r.sourceModule ?? "").trim() === "M-03" && (r.sourceRecordId ?? "").trim())
+            .map((r) => String(r.sourceRecordId).trim()),
+        ),
+      );
+      if (m03InvoiceIds.length === 0) {
+        res.json(enriched);
+        return;
+      }
+      const invRows = await db
+        .select({
+          id: rentInvoices.id,
+          invoiceNo: rentInvoices.invoiceNo,
+          periodMonth: rentInvoices.periodMonth,
+        })
+        .from(rentInvoices)
+        .where(inArray(rentInvoices.id, m03InvoiceIds));
+      const invById = new Map(invRows.map((x) => [x.id, x]));
+      res.json(
+        enriched.map((r) => {
+          if ((r.sourceModule ?? "").trim() !== "M-03" || !(r.sourceRecordId ?? "").trim()) return r;
+          const inv = invById.get(String(r.sourceRecordId).trim());
+          if (!inv) return r;
+          return {
+            ...r,
+            sourceInvoiceNo: inv.invoiceNo ?? null,
+            sourceInvoicePeriodMonth: inv.periodMonth ?? null,
+          };
+        }),
+      );
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipts");

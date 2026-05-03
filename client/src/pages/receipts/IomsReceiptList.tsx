@@ -18,6 +18,22 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { Receipt, AlertCircle, ExternalLink } from "lucide-react";
+function formatReceiptSource(r: {
+  sourceModule: string | null;
+  sourceRecordId?: string | null;
+  sourceInvoiceNo?: string | null;
+  sourceInvoicePeriodMonth?: string | null;
+}): string {
+  const mod = (r.sourceModule ?? "").trim();
+  if (!mod) return "—";
+  if (mod === "M-03" && r.sourceInvoiceNo?.trim()) {
+    const inv = r.sourceInvoiceNo.trim();
+    const pm = r.sourceInvoicePeriodMonth?.trim();
+    return pm ? `${mod} · ${inv} (${pm})` : `${mod} · ${inv}`;
+  }
+  return [mod, (r.sourceRecordId ?? "").trim()].filter(Boolean).join(" ") || "—";
+}
+
 const REVENUE_HEADS = [
   "Rent",
   "GSTInvoice",
@@ -40,6 +56,9 @@ interface IomsReceipt {
   paymentMode: string;
   status: string;
   sourceModule: string | null;
+  sourceRecordId?: string | null;
+  sourceInvoiceNo?: string | null;
+  sourceInvoicePeriodMonth?: string | null;
   createdAt: string;
 }
 
@@ -63,6 +82,7 @@ export default function IomsReceiptList() {
     (): ReportTableColumn[] => [
       { key: "_receiptNo", header: "Receipt No", sortField: "receiptNo" },
       { key: "revenueHead", header: "Revenue head" },
+      { key: "_source", header: "Source" },
       { key: "payerName", header: "Payer" },
       { key: "_total", header: "Amount", sortField: "totalAmount" },
       { key: "paymentMode", header: "Mode" },
@@ -83,6 +103,8 @@ export default function IomsReceiptList() {
         </Link>
       ),
       revenueHead: r.revenueHead,
+      _source: formatReceiptSource(r),
+      sourceLabel: formatReceiptSource(r),
       payerName: (r.payerDisplayName ?? r.payerName)?.trim() || "—",
       totalAmount: r.totalAmount,
       _total: `₹${Number(r.totalAmount).toLocaleString("en-IN")}`,
@@ -166,7 +188,7 @@ export default function IomsReceiptList() {
             <ClientDataGrid
               columns={receiptColumns}
               sourceRows={receiptRows}
-              searchKeys={["receiptNo", "revenueHead", "payerName", "paymentMode", "status"]}
+              searchKeys={["receiptNo", "revenueHead", "sourceLabel", "payerName", "paymentMode", "status"]}
               defaultSortKey="createdAt"
               defaultSortDir="desc"
               emptyMessage="No IOMS receipts yet. Receipts are created by other modules (M-02, M-03, M-04, M-06, M-08)."
