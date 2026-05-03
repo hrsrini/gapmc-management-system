@@ -33,6 +33,8 @@ interface IomsReceipt {
   yardId: string;
   revenueHead: string;
   payerName: string | null;
+  /** Server-resolved label (firm / entity name) when stored payerName was an id. */
+  payerDisplayName?: string | null;
   amount: number;
   totalAmount: number;
   paymentMode: string;
@@ -81,7 +83,7 @@ export default function IomsReceiptList() {
         </Link>
       ),
       revenueHead: r.revenueHead,
-      payerName: r.payerName ?? "—",
+      payerName: (r.payerDisplayName ?? r.payerName)?.trim() || "—",
       totalAmount: r.totalAmount,
       _total: `₹${Number(r.totalAmount).toLocaleString("en-IN")}`,
       paymentMode: r.paymentMode,

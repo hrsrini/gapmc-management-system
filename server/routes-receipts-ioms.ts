@@ -8,6 +8,7 @@ import QRCode from "qrcode";
 import { db } from "./db";
 import { yards, receiptSequence, iomsReceipts, paymentGatewayLog, rentInvoices } from "@shared/db-schema";
 import { buildIomsReceiptPdf } from "./receipt-pdf";
+import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
 import {
   recordChequeDishonourLedgerForM03Receipt,
   recordRentCollectionForM03Receipt,
@@ -270,7 +271,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
         .orderBy(desc(iomsReceipts.createdAt))
         .limit(Math.min(Number(limit) || 100, 500));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
-      res.json(list);
+      res.json(await attachPayerDisplayNames(list));
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipts");
@@ -473,7 +474,8 @@ export function registerReceiptsIomsRoutes(app: Express) {
         return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       }
       const rentArrearsDisclosure = await getM03RentReceiptArrearsDisclosure(row);
-      res.json(rentArrearsDisclosure ? { ...row, rentArrearsDisclosure } : row);
+      const [enriched] = await attachPayerDisplayNames([row]);
+      res.json(rentArrearsDisclosure ? { ...enriched, rentArrearsDisclosure } : enriched);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipt");
@@ -663,8 +665,9 @@ export function registerReceiptsIomsRoutes(app: Express) {
                 description: `Bank charge reference after rent receipt dishonour (${row.receiptNo ?? id}); post per finance.`,
               }).toString()
             : "";
+        const [enrichedRev] = await attachPayerDisplayNames([row]);
         return res.json({
-          ...row,
+          ...enrichedRev,
           dishonourReason: dishonourReason ?? null,
           rentRecomputationNote,
           rentDishonourScaffold:
@@ -677,10 +680,11 @@ export function registerReceiptsIomsRoutes(app: Express) {
               : undefined,
         });
       }
+      const [enrichedPatch] = await attachPayerDisplayNames([row]);
       if (rentDepositLedgerNotice) {
-        return res.json({ ...row, rentDepositLedgerNotice });
+        return res.json({ ...enrichedPatch, rentDepositLedgerNotice });
       }
-      res.json(row);
+      res.json(enrichedPatch);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update receipt");
@@ -789,7 +793,8 @@ export function registerReceiptsIomsRoutes(app: Express) {
         },
       }).catch((e) => console.error("Audit log failed:", e));
 
-      res.json(result.receiptAfter);
+      const [enrichedSim] = await attachPayerDisplayNames([result.receiptAfter]);
+      res.json(enrichedSim);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to simulate payment callback");
@@ -847,7 +852,8 @@ export function registerReceiptsIomsRoutes(app: Express) {
         { ip: getRequestClientIp(req) },
       ).catch((e) => console.error("Audit log failed:", e));
 
-      res.json(result.receiptAfter);
+      const [enrichedCb] = await attachPayerDisplayNames([result.receiptAfter]);
+      res.json(enrichedCb);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to process callback");

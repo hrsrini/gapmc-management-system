@@ -33,6 +33,7 @@ import {
   ltcClaims,
 } from "@shared/db-schema";
 import { maskPanForExport } from "@shared/india-validation";
+import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
 
 function escapeCsvCell(val: unknown): string {
   if (val == null) return "";
@@ -462,6 +463,7 @@ export function registerReportsRoutes(app: Express) {
 
       const base = db.select().from(iomsReceipts).orderBy(desc(iomsReceipts.createdAt));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
+      const listWithPayer = await attachPayerDisplayNames(list);
 
       if (format === "csv") {
         const headers = [
@@ -477,12 +479,12 @@ export function registerReportsRoutes(app: Express) {
           "status",
           "createdAt",
         ];
-        const rows = list.map((r) => [
+        const rows = listWithPayer.map((r) => [
           r.id,
           r.receiptNo,
           r.yardId,
           r.revenueHead,
-          r.payerName,
+          r.payerDisplayName,
           r.unifiedEntityId,
           r.amount,
           r.totalAmount,
@@ -526,17 +528,18 @@ export function registerReportsRoutes(app: Express) {
           pageSize === "all"
             ? await dataQ
             : await dataQ.limit(pageSize).offset((page - 1) * pageSize);
-        return res.json({ total, page, pageSize, rows });
+        const rowsWithPayer = await attachPayerDisplayNames(rows);
+        return res.json({ total, page, pageSize, rows: rowsWithPayer });
       }
 
       const summary = {
-        count: list.length,
-        totalAmount: list.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0),
-        byStatus: list.reduce((acc, r) => {
+        count: listWithPayer.length,
+        totalAmount: listWithPayer.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0),
+        byStatus: listWithPayer.reduce((acc, r) => {
           acc[r.status] = (acc[r.status] ?? 0) + 1;
           return acc;
         }, {} as Record<string, number>),
-        rows: list,
+        rows: listWithPayer,
       };
       res.json(summary);
     } catch (e) {

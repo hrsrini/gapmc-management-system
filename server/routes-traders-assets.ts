@@ -614,10 +614,15 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       const createdBy = req.user?.id ?? "system";
       const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
+      const [tenantLicPay] = await db
+        .select({ firmName: traderLicences.firmName })
+        .from(traderLicences)
+        .where(eq(traderLicences.id, inv.tenantLicenceId))
+        .limit(1);
       const created = await createIomsReceipt({
         yardId: inv.yardId,
         revenueHead,
-        payerName: inv.tenantLicenceId,
+        payerName: (tenantLicPay?.firmName?.trim() && tenantLicPay.firmName) || inv.tenantLicenceId,
         payerType: "TenantLicence",
         payerRefId: inv.tenantLicenceId,
         amount: payAmount,
@@ -703,10 +708,15 @@ export function registerTradersAssetsRoutes(app: Express) {
         }
 
         const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
+        const [tenantLicOnline] = await db
+          .select({ firmName: traderLicences.firmName })
+          .from(traderLicences)
+          .where(eq(traderLicences.id, inv.tenantLicenceId))
+          .limit(1);
         const created = await createIomsReceipt({
           yardId: inv.yardId,
           revenueHead,
-          payerName: inv.tenantLicenceId,
+          payerName: (tenantLicOnline?.firmName?.trim() && tenantLicOnline.firmName) || inv.tenantLicenceId,
           payerType: "TenantLicence",
           payerRefId: inv.tenantLicenceId,
           amount: payAmount,
@@ -757,10 +767,15 @@ export function registerTradersAssetsRoutes(app: Express) {
             outstanding,
           });
         }
+        const [licOnlineMkt] = await db
+          .select({ firmName: traderLicences.firmName })
+          .from(traderLicences)
+          .where(eq(traderLicences.id, String(pt.traderLicenceId ?? "")))
+          .limit(1);
         const created = await createIomsReceipt({
           yardId: pt.yardId,
           revenueHead: "MarketFee",
-          payerName: String(pt.traderLicenceId ?? ""),
+          payerName: (licOnlineMkt?.firmName?.trim() && licOnlineMkt.firmName) || String(pt.traderLicenceId ?? ""),
           payerType: "TraderLicence",
           payerRefId: String(pt.traderLicenceId ?? ""),
           amount: payAmount,

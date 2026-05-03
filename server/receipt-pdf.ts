@@ -8,8 +8,17 @@ import QRCode from "qrcode";
 import type { InferSelectModel } from "drizzle-orm";
 import { iomsReceipts } from "@shared/db-schema";
 import { readUploadedReceiptLogoBuffer } from "./receipt-logo-storage";
+import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
+
+/** PDFKit built-in fonts use WinAnsi; rupee sign and em dash often throw at render time. */
+function pdfSafeText(s: string): string {
+  return String(s ?? "")
+    .replace(/\u20b9/g, "Rs.")
+    .replace(/\u2014/g, "-")
+    .replace(/\u2013/g, "-");
+}
 
 export type ReceiptPdfArrearsDisclosure = {
   approxInterestInr: number;
@@ -59,6 +68,13 @@ export async function buildIomsReceiptPdf(params: {
   duplicateLabel?: string | null;
 }): Promise<Buffer> {
   const { receipt, yardName, verifyBaseUrl, arrearsDisclosure, duplicateLabel } = params;
+  let payerDisplayName: string;
+  try {
+    const enriched = await attachPayerDisplayNames([receipt]);
+    payerDisplayName = enriched[0]?.payerDisplayName ?? String(receipt.payerName ?? receipt.payerRefId ?? "—");
+  } catch {
+    payerDisplayName = String(receipt.payerName ?? receipt.payerRefId ?? "—");
+  }
   const printMode = (process.env.RECEIPT_PDF_PRINT_MODE ?? "full").trim().toLowerCase();
   const bodyOnly = printMode === "body-only" || printMode === "preprinted";
   const signatoryName = process.env.RECEIPT_PDF_SIGNATORY_NAME?.trim();
@@ -100,17 +116,17 @@ export async function buildIomsReceiptPdf(params: {
     if (!bodyOnly) {
       doc.fontSize(18).text("Goa Agricultural Produce and Livestock Marketing Board (GAPLMB)", { align: "center" });
       doc.moveDown(0.25);
-      doc.fontSize(11).fillColor("#444").text("Integrated Online Management System — Receipt", { align: "center" });
+      doc.fontSize(11).fillColor("#444").text("Integrated Online Management System - Receipt", { align: "center" });
       doc.fillColor("#000");
       doc.moveDown(1.2);
     } else {
       doc.fontSize(12).text("Receipt (body)", { align: "left" });
       doc.moveDown(0.6);
     }
-    doc.fontSize(10).text(`Yard / location: ${yardName ?? receipt.yardId}`);
-    doc.text(`Receipt no.: ${receipt.receiptNo}`);
-    doc.text(`Date: ${String(receipt.createdAt ?? "").slice(0, 19).replace("T", " ")}`);
-    doc.text(`Status: ${receipt.status}`);
+    doc.fontSize(10).text(pdfSafeText(`Yard / location: ${yardName ?? receipt.yardId}`));
+    doc.text(pdfSafeText(`Receipt no.: ${receipt.receiptNo}`));
+    doc.text(pdfSafeText(`Date: ${String(receipt.createdAt ?? "").slice(0, 19).replace("T", " ")}`));
+    doc.text(pdfSafeText(`Status: ${receipt.status}`));
     if ((receipt as { isGracePeriod?: boolean | null }).isGracePeriod) {
       doc
         .moveDown(0.25)
@@ -121,25 +137,27 @@ export async function buildIomsReceiptPdf(params: {
     }
     doc.moveDown(0.6);
     doc.fontSize(11).text("Payer", { underline: true });
-    doc.fontSize(10).text(receipt.payerName ?? receipt.payerRefId ?? "—");
-    if (receipt.payerType) doc.text(`Type: ${receipt.payerType}`);
-    if (receipt.unifiedEntityId) doc.text(`Unified entity: ${receipt.unifiedEntityId}`);
+    doc.fontSize(10).text(pdfSafeText(payerDisplayName));
+    if (receipt.payerType) doc.text(pdfSafeText(`Type: ${receipt.payerType}`));
+    if (receipt.unifiedEntityId) doc.text(pdfSafeText(`Unified entity: ${receipt.unifiedEntityId}`));
     doc.moveDown(0.8);
     doc.fontSize(11).text("Amounts (INR)", { underline: true });
     doc.fontSize(10);
-    doc.text(`Revenue head: ${receipt.revenueHead}`);
-    doc.text(`Base amount: ₹${Number(receipt.amount ?? 0).toFixed(2)}`);
+    doc.text(pdfSafeText(`Revenue head: ${receipt.revenueHead}`));
+    doc.text(`Base amount: Rs.${Number(receipt.amount ?? 0).toFixed(2)}`);
     if (Number(receipt.cgst ?? 0) > 0 || Number(receipt.sgst ?? 0) > 0) {
-      doc.text(`CGST: ₹${Number(receipt.cgst ?? 0).toFixed(2)}   SGST: ₹${Number(receipt.sgst ?? 0).toFixed(2)}`);
+      doc.text(`CGST: Rs.${Number(receipt.cgst ?? 0).toFixed(2)}   SGST: Rs.${Number(receipt.sgst ?? 0).toFixed(2)}`);
     }
-    doc.fontSize(12).text(`Total: ₹${Number(receipt.totalAmount ?? 0).toFixed(2)}`, { continued: false });
+    doc.fontSize(12).text(`Total: Rs.${Number(receipt.totalAmount ?? 0).toFixed(2)}`, { continued: false });
     doc.moveDown(0.35);
     const tds = Number(receipt.tdsAmount ?? 0);
     if (tds > 0) {
       doc
         .fontSize(9)
         .fillColor("#444")
-        .text(`TDS u/s 194-I (on rent component): ₹${tds.toFixed(2)} — shown for statutory disclosure; total above is gross invoice amount.`);
+        .text(
+          `TDS u/s 194-I (on rent component): Rs.${tds.toFixed(2)} - shown for statutory disclosure; total above is gross invoice amount.`,
+        );
       doc.fillColor("#000");
     }
     if (arrearsDisclosure) {
@@ -148,15 +166,15 @@ export async function buildIomsReceiptPdf(params: {
         .fontSize(9)
         .fillColor("#444")
         .text(
-          `Arrears interest (after prior dishonour, ${arrearsDisclosure.overdueDays} day(s) from due ${arrearsDisclosure.dueDateIso} to ${arrearsDisclosure.asOfIso} at ${arrearsDisclosure.ratePercentPerAnnum}% p.a. on ₹${arrearsDisclosure.principalInr.toFixed(2)}): approx ₹${arrearsDisclosure.approxInterestInr.toFixed(2)} — not included in total above.`,
+          `Arrears interest (after prior dishonour, ${arrearsDisclosure.overdueDays} day(s) from due ${arrearsDisclosure.dueDateIso} to ${arrearsDisclosure.asOfIso} at ${arrearsDisclosure.ratePercentPerAnnum}% p.a. on Rs.${arrearsDisclosure.principalInr.toFixed(2)}): approx Rs.${arrearsDisclosure.approxInterestInr.toFixed(2)} - not included in total above.`,
         );
       doc.fillColor("#000");
     }
     doc.moveDown(0.4);
-    doc.fontSize(10).text(`Payment mode: ${receipt.paymentMode}`);
-    if (receipt.chequeNo) doc.text(`Cheque no.: ${receipt.chequeNo}`);
-    if (receipt.bankName) doc.text(`Bank: ${receipt.bankName}`);
-    if (receipt.gatewayRef) doc.text(`Reference: ${receipt.gatewayRef}`);
+    doc.fontSize(10).text(pdfSafeText(`Payment mode: ${receipt.paymentMode}`));
+    if (receipt.chequeNo) doc.text(pdfSafeText(`Cheque no.: ${receipt.chequeNo}`));
+    if (receipt.bankName) doc.text(pdfSafeText(`Bank: ${receipt.bankName}`));
+    if (receipt.gatewayRef) doc.text(pdfSafeText(`Reference: ${receipt.gatewayRef}`));
     doc.moveDown(1);
     doc.fontSize(9).fillColor("#555").text("Verify this receipt (QR):", { continued: false });
     doc.fillColor("#000");

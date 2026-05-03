@@ -62,6 +62,9 @@ export default function PreReceiptDetail() {
 
   const { data: entities = [] } = useQuery<EntityRef[]>({ queryKey: ["/api/ioms/entities"] });
   const { data: receipts = [] } = useQuery<ReceiptRef[]>({ queryKey: ["/api/ioms/receipts"] });
+  const { data: yards = [] } = useQuery<Array<{ id: string; name?: string | null; code?: string | null }>>({
+    queryKey: ["/api/yards"],
+  });
 
   const entityLabelById = useMemo(
     () => Object.fromEntries(entities.map((e) => [e.id, `${e.entityCode ?? e.id} — ${e.name}`])),
@@ -71,6 +74,13 @@ export default function PreReceiptDetail() {
     () => Object.fromEntries(receipts.map((r) => [r.id, r.receiptNo])),
     [receipts],
   );
+  const yardLabelById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const y of yards) {
+      m[y.id] = (y.name?.trim() || y.code?.trim() || y.id) as string;
+    }
+    return m;
+  }, [yards]);
 
   const [status, setStatus] = useState<string>("Issued");
   const [settledReceiptId, setSettledReceiptId] = useState<string>("");
@@ -146,7 +156,7 @@ export default function PreReceiptDetail() {
               <span className="text-muted-foreground">Entity:</span> {entityLabelById[row.entityId] ?? row.entityId}
             </div>
             <div>
-              <span className="text-muted-foreground">Yard:</span> {row.yardId}
+              <span className="text-muted-foreground">Yard:</span> {yardLabelById[row.yardId] ?? row.yardId}
             </div>
             <div>
               <span className="text-muted-foreground">Amount:</span> ₹{Number(row.amount ?? 0).toLocaleString()}

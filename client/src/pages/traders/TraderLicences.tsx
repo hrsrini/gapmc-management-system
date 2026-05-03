@@ -72,7 +72,6 @@ export default function TraderLicences() {
 
   const columns = useMemo(
     () => [
-      { key: "_licenceLink", header: "Licence no.", sortField: "licenceNo" },
       { key: "_firmLink", header: "Firm", sortField: "firmName" },
       { key: "licenceType", header: "Type" },
       { key: "yardDisplay", header: "Yard", sortField: "yardId" },
@@ -88,11 +87,6 @@ export default function TraderLicences() {
       const id = l.id;
       return {
         id,
-        _licenceLink: (
-          <Link href={`/traders/licences/${id}`} className="text-primary hover:underline font-mono text-sm">
-            {l.licenceNo ?? id}
-          </Link>
-        ),
         _firmLink: (
           <Link href={`/traders/licences/${id}`} className="text-primary hover:underline">
             {l.firmName}

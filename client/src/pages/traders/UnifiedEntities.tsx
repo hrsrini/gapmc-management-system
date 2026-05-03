@@ -18,6 +18,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Link } from "wouter";
 import { PanInput } from "@/components/inputs/PanInput";
 
@@ -66,10 +73,24 @@ export default function UnifiedEntities() {
   if (q.trim()) params.set("q", q.trim());
   const url = params.toString() ? `/api/ioms/unified-entities?${params.toString()}` : "/api/ioms/unified-entities";
 
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
+  const { data: yards = [] } = useQuery<Array<{ id: string; name: string; code?: string | null; type?: string | null }>>({
     queryKey: ["/api/yards"],
   });
-  const yardById = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, y.name])), [yards]);
+  const yardOptions = useMemo(
+    () =>
+      yards
+        .filter((y) => String(y.type ?? "").toLowerCase() === "yard")
+        .slice()
+        .sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })),
+    [yards],
+  );
+  const yardById = useMemo(
+    () =>
+      Object.fromEntries(
+        yards.map((y) => [y.id, ((y.name?.trim() || y.code?.trim() || y.id) as string)] as const),
+      ),
+    [yards],
+  );
 
   const { data: list = [], isLoading, isError } = useQuery<UnifiedEntityRow[]>({
     queryKey: [url],
@@ -182,9 +203,24 @@ export default function UnifiedEntities() {
               <Label>Name</Label>
               <Input value={draft.name} onChange={(e) => setDraft((s) => ({ ...s, name: e.target.value }))} />
             </div>
-            <div className="space-y-1">
-              <Label>Yard ID</Label>
-              <Input value={draft.yardId} onChange={(e) => setDraft((s) => ({ ...s, yardId: e.target.value }))} />
+            <div className="space-y-1 md:col-span-2">
+              <Label>Yard *</Label>
+              <Select
+                value={draft.yardId || "__none__"}
+                onValueChange={(v) => setDraft((s) => ({ ...s, yardId: v === "__none__" ? "" : v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select yard" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Select…</SelectItem>
+                  {yardOptions.map((y) => (
+                    <SelectItem key={y.id} value={y.id}>
+                      {(y.name?.trim() || y.code?.trim() || y.id) as string}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label>Mobile</Label>

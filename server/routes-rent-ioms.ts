@@ -731,11 +731,16 @@ export function registerRentIomsRoutes(app: Express) {
         if (!receiptRow) {
           const createdBy = req.user?.id ?? "system";
           const revenueHead = row.isGovtEntity ? "GSTInvoice" : "Rent";
+          const [tenantLic] = await db
+            .select({ firmName: traderLicences.firmName })
+            .from(traderLicences)
+            .where(eq(traderLicences.id, row.tenantLicenceId))
+            .limit(1);
 
           const created = await createIomsReceipt({
             yardId: row.yardId,
             revenueHead,
-            payerName: row.tenantLicenceId,
+            payerName: (tenantLic?.firmName?.trim() && tenantLic.firmName) || row.tenantLicenceId,
             payerType: "TenantLicence",
             payerRefId: row.tenantLicenceId,
             amount: Number(row.rentAmount ?? 0) + Number(nonGstSum || 0),

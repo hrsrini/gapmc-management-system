@@ -83,6 +83,13 @@ export default function MarketReturns() {
   const { data: licences = [], isLoading: licLoading } = useQuery<TraderLicenceRef[]>({
     queryKey: ["/api/ioms/traders/licences"],
   });
+  const { data: commodities = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ["/api/ioms/commodities"],
+  });
+  const commodityNameById = useMemo(
+    () => new Map(commodities.map((c) => [c.id, c.name] as const)),
+    [commodities],
+  );
 
   const licenceLabelById = useMemo(() => {
     return Object.fromEntries(
@@ -338,7 +345,7 @@ export default function MarketReturns() {
                     <TableBody>
                       {linesWithSales.map((l) => (
                         <TableRow key={l.commodityId}>
-                          <TableCell className="font-mono text-xs">{l.commodityId}</TableCell>
+                          <TableCell>{commodityNameById.get(l.commodityId) ?? l.commodityId}</TableCell>
                           <TableCell className="text-right">{Number(l.openingQty ?? 0)}</TableCell>
                           <TableCell className="text-right">{Number(l.purchaseQty ?? 0)}</TableCell>
                           <TableCell className="text-right">{Number(l.purchaseValueInr ?? 0).toLocaleString()}</TableCell>

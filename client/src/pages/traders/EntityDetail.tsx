@@ -95,6 +95,16 @@ export default function EntityDetail() {
   const { data: subtypes } = useQuery<EntitySubtypeRef>({
     queryKey: ["/api/ioms/reference/entity-subtypes"],
   });
+  const { data: yards = [] } = useQuery<Array<{ id: string; name?: string | null; code?: string | null }>>({
+    queryKey: ["/api/yards"],
+  });
+  const yardDisplayName = useMemo(() => {
+    if (!entity?.yardId) return "—";
+    const y = yards.find((x) => x.id === entity.yardId);
+    if (!y) return entity.yardId;
+    return (y.name?.trim() || y.code?.trim() || y.id) as string;
+  }, [yards, entity?.yardId]);
+
   const { data: allotments = [] } = useQuery<Allotment[]>({
     queryKey: [id ? `/api/ioms/entity-allotments?entityId=${encodeURIComponent(id)}` : ""],
     enabled: !!id,
@@ -253,7 +263,7 @@ export default function EntityDetail() {
                 <div><span className="text-muted-foreground">Entity ID:</span> {entity.entityCode ?? entity.id}</div>
                 <div><span className="text-muted-foreground">Track:</span> {entity.track}</div>
                 <div><span className="text-muted-foreground">Sub-type:</span> {entity.subType ?? "—"}</div>
-                <div><span className="text-muted-foreground">Yard:</span> {entity.yardId}</div>
+                <div><span className="text-muted-foreground">Yard:</span> {yardDisplayName}</div>
                 <div><span className="text-muted-foreground">Mobile:</span> {entity.mobile ?? "—"}</div>
                 <div><span className="text-muted-foreground">Status:</span> {entity.status}</div>
                 <div><span className="text-muted-foreground">PAN:</span> {entity.pan ?? "—"}</div>

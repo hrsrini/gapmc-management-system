@@ -542,7 +542,7 @@ export default function TraderLicenceForm() {
                     <SelectItem value="__none__">Select…</SelectItem>
                     {yardOptions.map((y) => (
                       <SelectItem key={y.id} value={y.id}>
-                        {y.code ? `${y.code} — ${y.name}` : y.name}
+                        {(y.name?.trim() || y.code?.trim() || y.id) as string}
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -11,6 +11,8 @@ import QRCode from "qrcode";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { formatDisplayDateTime } from "@/lib/dateFormat";
+import { fetchApiGet } from "@/lib/queryClient";
+import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -32,6 +34,7 @@ interface IomsReceipt {
   yardId: string;
   revenueHead: string;
   payerName?: string | null;
+  payerDisplayName?: string | null;
   payerType?: string | null;
   payerRefId?: string | null;
   amount: number;
@@ -78,6 +81,50 @@ export default function IomsReceiptDetail() {
     queryKey: ["/api/yards"],
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+
+  const taLicenceId = useMemo(() => {
+    if (!receipt) return null as string | null;
+    const t = (receipt.payerType ?? "").trim();
+    if ((t === "TraderLicence" || t === "TenantLicence") && receipt.payerRefId?.trim()) {
+      return receipt.payerRefId.trim();
+    }
+    const u = receipt.unifiedEntityId ? parseUnifiedEntityId(receipt.unifiedEntityId) : null;
+    if (u?.kind === "TA") return u.refId;
+    return null;
+  }, [receipt]);
+
+  const tbEntityId = useMemo(() => {
+    if (!receipt?.unifiedEntityId) return null as string | null;
+    const u = parseUnifiedEntityId(receipt.unifiedEntityId);
+    return u?.kind === "TB" ? u.refId : null;
+  }, [receipt?.unifiedEntityId]);
+
+  const { data: taLicence } = useQuery({
+    queryKey: ["/api/ioms/traders/licences/detail", taLicenceId],
+    queryFn: () => fetchApiGet<{ firmName: string }>(`/api/ioms/traders/licences/${taLicenceId}`),
+    enabled: Boolean(taLicenceId),
+  });
+
+  const { data: tbEntity } = useQuery({
+    queryKey: ["/api/ioms/entities/detail", tbEntityId],
+    queryFn: () => fetchApiGet<{ name: string }>(`/api/ioms/entities/${tbEntityId}`),
+    enabled: Boolean(tbEntityId),
+  });
+
+  const payerResolvedLabel = useMemo(() => {
+    if (!receipt) return "—";
+    if (taLicence?.firmName?.trim()) return taLicence.firmName.trim();
+    return (receipt.payerDisplayName ?? receipt.payerName)?.trim() || "—";
+  }, [receipt, taLicence?.firmName]);
+
+  const unifiedEntityResolvedLabel = useMemo(() => {
+    if (!receipt?.unifiedEntityId) return null as string | null;
+    const raw = receipt.unifiedEntityId.trim();
+    const u = parseUnifiedEntityId(raw);
+    if (u?.kind === "TA" && taLicence?.firmName?.trim()) return `${raw} (${taLicence.firmName.trim()})`;
+    if (u?.kind === "TB" && tbEntity?.name?.trim()) return `${raw} (${tbEntity.name.trim()})`;
+    return raw;
+  }, [receipt?.unifiedEntityId, taLicence?.firmName, tbEntity?.name]);
 
   const canMockPay = can("M-05", "Create");
   const canUpdate = can("M-05", "Update");
@@ -358,7 +405,7 @@ export default function IomsReceiptDetail() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[receipt.yardId] ?? receipt.yardId}</div>
             <div><span className="text-muted-foreground">Revenue head</span><br />{receipt.revenueHead}</div>
-            <div><span className="text-muted-foreground">Payer</span><br />{receipt.payerName ?? "—"}</div>
+            <div><span className="text-muted-foreground">Payer</span><br />{payerResolvedLabel}</div>
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant={receipt.status === "Paid" ? "default" : "secondary"}>{receipt.status}</Badge></div>
             <div><span className="text-muted-foreground">Amount</span><br />₹{receipt.amount.toLocaleString()}</div>
             <div><span className="text-muted-foreground">CGST / SGST</span><br />₹{(receipt.cgst ?? 0).toLocaleString()} / ₹{(receipt.sgst ?? 0).toLocaleString()}</div>
@@ -371,7 +418,7 @@ export default function IomsReceiptDetail() {
               <div className="md:col-span-2">
                 <span className="text-muted-foreground">Unified entity</span>
                 <br />
-                <span className="font-mono text-xs">{receipt.unifiedEntityId}</span>
+                <span className="font-mono text-xs break-all">{unifiedEntityResolvedLabel ?? receipt.unifiedEntityId}</span>
               </div>
             ) : null}
             <div><span className="text-muted-foreground">Created</span><br />{formatDisplayDateTime(receipt.createdAt)} by {receipt.createdBy}</div>

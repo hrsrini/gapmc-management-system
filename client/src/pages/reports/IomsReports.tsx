@@ -85,7 +85,7 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
     case "rent":
       return [
         { key: "invoiceNo", header: "Invoice no." },
-        { key: "yardId", header: "Yard" },
+        { key: "yardName", header: "Yard", sortField: "yardId" },
         { key: "periodMonth", header: "Period" },
         { key: "assetId", header: "Asset" },
         { key: "rentAmount", header: "Rent" },
@@ -95,7 +95,7 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
     case "voucher":
       return [
         { key: "voucherNo", header: "Voucher no." },
-        { key: "yardId", header: "Yard" },
+        { key: "yardName", header: "Yard", sortField: "yardId" },
         { key: "voucherType", header: "Type" },
         { key: "payeeName", header: "Payee" },
         { key: "amount", header: "Amount" },
@@ -105,9 +105,9 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
     case "receipt":
       return [
         { key: "receiptNo", header: "Receipt no." },
-        { key: "yardId", header: "Yard" },
+        { key: "yardName", header: "Yard", sortField: "yardId" },
         { key: "revenueHead", header: "Head" },
-        { key: "payerName", header: "Payer" },
+        { key: "payerDisplayName", header: "Payer", sortField: "payerName" },
         { key: "totalAmount", header: "Total" },
         { key: "paymentMode", header: "Mode" },
         { key: "status", header: "Status" },
@@ -120,7 +120,7 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
         { key: "surname", header: "Surname" },
         { key: "designation", header: "Designation" },
         { key: "joiningDate", header: "Joining" },
-        { key: "yardId", header: "Yard" },
+        { key: "yardName", header: "Yard", sortField: "yardId" },
         { key: "mobile", header: "Mobile" },
         { key: "status", header: "Status" },
       ];
@@ -130,7 +130,7 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
         { key: "firmName", header: "Firm / trader name" },
         { key: "licenceType", header: "Type" },
         { key: "mobile", header: "Mobile" },
-        { key: "yardId", header: "Yard" },
+        { key: "yardName", header: "Yard", sortField: "yardId" },
         { key: "validTo", header: "Valid to" },
         { key: "status", header: "Status" },
       ];
@@ -241,6 +241,29 @@ export default function IomsReports() {
   });
 
   const previewColumns = useMemo(() => columnsForKind(previewKind), [previewKind]);
+
+  const yardLabelById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const y of yards) {
+      m.set(y.id, (y.name?.trim() || y.code?.trim() || y.id) as string);
+    }
+    return m;
+  }, [yards]);
+
+  const previewRows = useMemo((): Record<string, unknown>[] => {
+    const rows = pagedData?.rows ?? [];
+    return rows.map((r) => {
+      const raw = r.yardId;
+      const id = raw != null && raw !== "" ? String(raw) : "";
+      const yardName = id ? (yardLabelById.get(id) ?? id) : "—";
+      const out: Record<string, unknown> = { ...r, yardName };
+      if (previewKind === "receipt") {
+        const pr = r as { payerDisplayName?: string | null; payerName?: string | null };
+        out.payerDisplayName = (pr.payerDisplayName ?? pr.payerName)?.trim() || "—";
+      }
+      return out;
+    });
+  }, [pagedData?.rows, yardLabelById, previewKind]);
 
   const downloadTallyExportCsv = async (layout: "legacy" | "srs") => {
     try {
@@ -455,7 +478,7 @@ export default function IomsReports() {
             ) : (
               <ReportDataTable
                 columns={previewColumns}
-                rows={(pagedData?.rows ?? []) as Record<string, unknown>[]}
+                rows={previewRows}
                 total={pagedData?.total ?? 0}
                 params={tableParams}
                 onParamsChange={mergeTableParams}
