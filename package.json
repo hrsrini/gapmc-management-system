@@ -50,6 +50,7 @@
     "db:apply-m02-unified-entities-rent-revisions": "dotenv -e .env -- tsx scripts/apply-m02-unified-entities-rent-revisions.ts",
     "db:apply-m02-licence-renewal-parent": "dotenv -e .env -- tsx scripts/apply-m02-licence-renewal-parent.ts",
     "db:apply-m03-rent-revision-workflow": "dotenv -e .env -- tsx scripts/apply-m03-rent-revision-workflow.ts",
+    "db:backfill-rent-invoice-numbers": "dotenv -e .env -- tsx scripts/backfill-rent-invoice-numbers.ts",
     "db:apply-ioms-receipt-unified-entity-id": "dotenv -e .env -- tsx scripts/apply-ioms-receipt-unified-entity-id.ts",
     "db:apply-sr15-unified-entity-backfill": "dotenv -e .env -- tsx scripts/apply-sr15-unified-entity-backfill.ts",
     "db:apply-m02-bm-bk-licence-fields": "dotenv -e .env -- tsx scripts/apply-m02-bm-bk-licence-fields.ts",

@@ -6,7 +6,17 @@
 import type { Express, Request } from "express";
 import { eq, desc, and, inArray, gte, lte, or, isNull } from "drizzle-orm";
 import { db } from "./db";
-import { rentInvoices, rentDepositLedger, creditNotes, iomsReceipts, traderLicences, rentRevisionOverrides, assetAllotments, assets } from "@shared/db-schema";
+import {
+  rentInvoices,
+  rentDepositLedger,
+  creditNotes,
+  iomsReceipts,
+  traderLicences,
+  rentRevisionOverrides,
+  assetAllotments,
+  assets,
+  yards,
+} from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import {
   canCreateRentInvoice,
@@ -31,6 +41,7 @@ import { parseUnifiedEntityId, unifiedEntityIdFromTrackA } from "@shared/unified
 import { normalizeRentRevisionBasis, yearMonthMinusOne } from "@shared/rent-revision-basis";
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
 import { rentPeriodMonthEndIso } from "./rent-interest";
+import { formatRentInvoiceNo } from "./rent-invoice-number";
 
 function currentYearMonthUtc(): string {
   const d = new Date();
@@ -197,7 +208,6 @@ export function registerRentIomsRoutes(app: Express) {
         return sendApiError(res, 403, "RENT_INVOICE_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
       const id = nanoid();
-      const now = new Date().toISOString();
       const tenantLicenceId = String(body.tenantLicenceId ?? "");
       let rentAmount = Number(body.rentAmount ?? 0);
       const nonGst = parseNonGstCharges((body as Record<string, unknown>).nonGstCharges);
@@ -251,6 +261,11 @@ export function registerRentIomsRoutes(app: Express) {
           totalAmount = rentAmount + nonGst.sum + cgst + sgst;
         }
       }
+      let invoiceNo = body.invoiceNo ? String(body.invoiceNo).trim() : "";
+      if (!invoiceNo) {
+        const [y] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, yardId)).limit(1);
+        invoiceNo = formatRentInvoiceNo(y?.code, periodMonth, id);
+      }
       await db.insert(rentInvoices).values({
         id,
         allotmentId,
@@ -267,7 +282,7 @@ export function registerRentIomsRoutes(app: Express) {
         tdsAmount: tdsRes.tdsAmount,
         status: "Draft",
         isGovtEntity,
-        invoiceNo: body.invoiceNo ? String(body.invoiceNo) : null,
+        invoiceNo,
         doUser: req.user?.id ?? null,
         dvUser: null,
         daUser: null,
@@ -711,6 +726,19 @@ export function registerRentIomsRoutes(app: Express) {
         }
         updates.tdsApplicable = tdsRes.tdsApplicable;
         updates.tdsAmount = tdsRes.tdsAmount;
+      }
+
+      const mergedInvoiceNo =
+        updates.invoiceNo !== undefined
+          ? String(updates.invoiceNo ?? "").trim() || null
+          : String(existing.invoiceNo ?? "").trim() || null;
+      if (
+        !mergedInvoiceNo &&
+        statusChange &&
+        ["Verified", "Approved", "Paid", "Overdue"].includes(String(newStatus))
+      ) {
+        const [y] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, existing.yardId)).limit(1);
+        updates.invoiceNo = formatRentInvoiceNo(y?.code, existing.periodMonth, id);
       }
 
       await db.update(rentInvoices).set(updates as Record<string, string | number | boolean | null>).where(eq(rentInvoices.id, id));

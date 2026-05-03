@@ -5,7 +5,8 @@
  */
 import { eq, and, desc, gte, lte } from "drizzle-orm";
 import { db } from "./db";
-import { assetAllotments, assets, rentInvoices } from "@shared/db-schema";
+import { assetAllotments, assets, rentInvoices, yards } from "@shared/db-schema";
+import { formatRentInvoiceNo } from "./rent-invoice-number";
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
 import { nanoid } from "nanoid";
 import { writeAuditLogSystem } from "./audit";
@@ -46,6 +47,8 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
 
   const assetRows = await db.select({ assetId: assets.assetId, yardId: assets.yardId }).from(assets);
   const yardByAssetId = Object.fromEntries(assetRows.map((a) => [a.assetId, a.yardId]));
+  const yardCodeRows = await db.select({ id: yards.id, code: yards.code }).from(yards);
+  const yardCodeById = new Map(yardCodeRows.map((y) => [y.id, y.code]));
 
   const existingByAllotment = await db
     .select({ allotmentId: rentInvoices.allotmentId })
@@ -89,6 +92,7 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
     const tdsAmount = "error" in tdsRes ? 0 : tdsRes.tdsAmount;
 
     const id = nanoid();
+    const invoiceNo = formatRentInvoiceNo(yardCodeById.get(yardId), periodMonth, id);
     await db.insert(rentInvoices).values({
       id,
       allotmentId: allotment.id,
@@ -105,7 +109,7 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
       tdsApplicable,
       tdsAmount,
       status: "Draft",
-      invoiceNo: null,
+      invoiceNo,
       doUser: null,
       dvUser: null,
       daUser: null,
