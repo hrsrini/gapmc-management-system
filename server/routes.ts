@@ -24,6 +24,7 @@ import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermission
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import { agreementDocuments, agreements as agreementsTable, yards } from "@shared/db-schema";
+import { fetchIomsReceiptsMappedToLegacy, fetchSingleIomsReceiptAsLegacy, isIomsReceiptId } from "./legacy-receipt-merge";
 import { INDIAN_PAN_RE, normalizePanInput } from "@shared/india-validation";
 import { isPanTakenAcrossActiveMasters } from "./pan-uniqueness";
 import { 
@@ -605,11 +606,16 @@ export async function registerRoutes(
     }
   });
 
-  // Receipts
+  // Receipts (legacy register + IOMS M-05 receipts for unified "All Receipts" list)
   app.get("/api/receipts", async (req, res) => {
     try {
-      const receipts = await storage.getReceipts();
-      res.json(receipts);
+      const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+      const legacy = await storage.getReceipts();
+      const fromIoms = await fetchIomsReceiptsMappedToLegacy(scopedIds);
+      const merged = [...legacy, ...fromIoms].sort((a, b) =>
+        String(b.receiptDate ?? "").localeCompare(String(a.receiptDate ?? "")),
+      );
+      res.json(merged);
     } catch (error) {
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipts");
     }
@@ -618,8 +624,10 @@ export async function registerRoutes(
   app.get("/api/receipts/:id", async (req, res) => {
     try {
       const receipt = await storage.getReceipt(req.params.id);
-      if (!receipt) return sendApiError(res, 404, "LEGACY_RECEIPT_NOT_FOUND", "Receipt not found");
-      res.json(receipt);
+      if (receipt) return res.json(receipt);
+      const iomsAsLegacy = await fetchSingleIomsReceiptAsLegacy(req.params.id);
+      if (iomsAsLegacy) return res.json(iomsAsLegacy);
+      return sendApiError(res, 404, "LEGACY_RECEIPT_NOT_FOUND", "Receipt not found");
     } catch (error) {
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipt");
     }
@@ -647,6 +655,14 @@ export async function registerRoutes(
 
   app.put("/api/receipts/:id", async (req, res) => {
     try {
+      if (await isIomsReceiptId(req.params.id)) {
+        return sendApiError(
+          res,
+          400,
+          "RECEIPT_IOMS_USE_M05",
+          "This is an IOMS (M-05) receipt. Void or update it from Receipts → IOMS receipt detail, not the legacy register.",
+        );
+      }
       const validatedData = updateReceiptSchema.parse(req.body);
       const before = await storage.getReceipt(req.params.id);
       const receipt = await storage.updateReceipt(req.params.id, validatedData);
@@ -663,6 +679,14 @@ export async function registerRoutes(
 
   app.delete("/api/receipts/:id", async (req, res) => {
     try {
+      if (await isIomsReceiptId(req.params.id)) {
+        return sendApiError(
+          res,
+          400,
+          "RECEIPT_IOMS_USE_M05",
+          "This is an IOMS (M-05) receipt. It cannot be deleted from the legacy All Receipts screen.",
+        );
+      }
       const before = await storage.getReceipt(req.params.id);
       const deleted = await storage.deleteReceipt(req.params.id);
       if (!deleted) return sendApiError(res, 404, "LEGACY_RECEIPT_NOT_FOUND", "Receipt not found");

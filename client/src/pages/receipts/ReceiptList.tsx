@@ -58,8 +58,12 @@ const typeColors: Record<string, string> = {
   Other: 'bg-muted text-muted-foreground border-muted',
 };
 
+function isIomsUnifiedReceiptNo(receiptNo: string): boolean {
+  return String(receiptNo ?? '').startsWith('GAPLMB/');
+}
+
 const receiptColumns: ReportTableColumn[] = [
-  { key: 'receiptNo', header: 'Receipt No' },
+  { key: '_receiptNo', header: 'Receipt No', sortField: 'receiptNo' },
   { key: 'receiptDate', header: 'Date' },
   { key: '_type', header: 'Type', sortField: 'type' },
   { key: 'traderName', header: 'Trader' },
@@ -137,6 +141,13 @@ export default function ReceiptList() {
     return filteredReceipts.map((receipt) => ({
       id: receipt.id,
       receiptNo: receipt.receiptNo,
+      _receiptNo: isIomsUnifiedReceiptNo(receipt.receiptNo) ? (
+        <Link href={`/receipts/ioms/${receipt.id}`} className="text-primary hover:underline font-mono text-sm">
+          {receipt.receiptNo}
+        </Link>
+      ) : (
+        <span className="font-mono text-sm">{receipt.receiptNo}</span>
+      ),
       receiptDate:
         typeof receipt.receiptDate === 'string'
           ? receipt.receiptDate.slice(0, 10)
@@ -179,7 +190,7 @@ export default function ReceiptList() {
           >
             <Printer className="h-4 w-4" />
           </Button>
-          {receipt.status === 'Active' && (
+          {receipt.status === 'Active' && !isIomsUnifiedReceiptNo(receipt.receiptNo) && (
             <Button
               variant="ghost"
               size="icon"
@@ -192,7 +203,7 @@ export default function ReceiptList() {
               <XCircle className="h-4 w-4" />
             </Button>
           )}
-          {canDelete && (
+          {canDelete && !isIomsUnifiedReceiptNo(receipt.receiptNo) && (
             <Button
               variant="ghost"
               size="icon"
