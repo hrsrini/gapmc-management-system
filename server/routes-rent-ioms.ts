@@ -891,7 +891,33 @@ export function registerRentIomsRoutes(app: Express) {
         list = list.filter((r) => r.tenantLicenceId === tenantLicenceId);
       }
       if (assetId) list = list.filter((r) => r.assetId === assetId);
-      res.json(list);
+
+      const tenantIds = Array.from(
+        new Set(list.map((r) => String(r.tenantLicenceId ?? "").trim()).filter(Boolean)),
+      );
+      const firmByLicenceId = new Map<string, string>();
+      if (tenantIds.length > 0) {
+        const licRows = await db
+          .select({ id: traderLicences.id, firmName: traderLicences.firmName })
+          .from(traderLicences)
+          .where(inArray(traderLicences.id, tenantIds));
+        for (const l of licRows) {
+          firmByLicenceId.set(l.id, String(l.firmName ?? "").trim() || l.id);
+        }
+      }
+      const enriched = list.map((row) => {
+        const tid = String(row.tenantLicenceId ?? "").trim();
+        const firm = tid ? (firmByLicenceId.get(tid) ?? null) : null;
+        const ue = String(row.unifiedEntityId ?? "").trim();
+        const parsed = ue ? parseUnifiedEntityId(ue) : null;
+        const unifiedEntityDisplayName =
+          parsed?.kind === "TA"
+            ? (firmByLicenceId.get(parsed.refId) ?? firm ?? ue) || tid || "—"
+            : ue || (firm ?? tid) || "—";
+        const tenantLicenceDisplayName = (firm ?? tid) || "—";
+        return { ...row, unifiedEntityDisplayName, tenantLicenceDisplayName };
+      });
+      res.json(enriched);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch ledger");

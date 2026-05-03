@@ -18,7 +18,9 @@ import { sliceClientReport } from "@/lib/clientReportSlice";
 interface LedgerEntry {
   id: string;
   tenantLicenceId: string;
+  tenantLicenceDisplayName?: string | null;
   unifiedEntityId?: string | null;
+  unifiedEntityDisplayName?: string | null;
   assetId: string;
   entryDate: string;
   entryType: string;
@@ -50,8 +52,8 @@ interface TraderReceiptRow {
 
 const columns: ReportTableColumn[] = [
   { key: "entryDate", header: "Entry date" },
-  { key: "tenantLicenceId", header: "Tenant licence" },
-  { key: "unifiedEntityId", header: "Unified entity" },
+  { key: "tenantLicenceDisplay", header: "Tenant licence" },
+  { key: "unifiedEntityDisplay", header: "Unified entity" },
   { key: "assetDisplay", header: "Asset" },
   { key: "entryType", header: "Type" },
   { key: "_debit", header: "Debit", sortField: "debit" },
@@ -118,7 +120,11 @@ export default function RentLedger() {
       id: e.id,
       entryDate: e.entryDate.slice(0, 10),
       tenantLicenceId: e.tenantLicenceId,
+      tenantLicenceDisplay: e.tenantLicenceDisplayName?.trim() || e.tenantLicenceId,
       unifiedEntityId: e.unifiedEntityId?.trim() ? e.unifiedEntityId : "—",
+      unifiedEntityDisplay:
+        e.unifiedEntityDisplayName?.trim() ||
+        (e.unifiedEntityId?.trim() ? e.unifiedEntityId : "—"),
       assetDisplay: assetLabelById[e.assetId] ?? e.assetId,
       entryType: e.entryType,
       debit: e.debit,
@@ -139,7 +145,9 @@ export default function RentLedger() {
       sliceClientReport(sourceRows, tableParams, [
         "entryDate",
         "tenantLicenceId",
+        "tenantLicenceDisplay",
         "unifiedEntityId",
+        "unifiedEntityDisplay",
         "assetDisplay",
         "entryType",
         "debit",
