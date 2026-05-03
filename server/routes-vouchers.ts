@@ -29,6 +29,7 @@ import {
   unlinkVoucherAttachmentIfExists,
   writeVoucherAttachmentBuffer,
 } from "./voucher-attachment-storage";
+import { loadPdfDocumentConstructor } from "./pdfkit-loader";
 
 const MAX_VOUCHER_ATTACHMENTS = 20;
 
@@ -269,7 +270,7 @@ export function registerVoucherRoutes(app: Express) {
       }
 
       if (fmt === "pdf") {
-        const { default: PDFDocument } = await import("pdfkit");
+        const PDFDocument = await loadPdfDocumentConstructor();
         const doc = new PDFDocument({ margin: 50 });
         const chunks: Buffer[] = [];
         doc.on("data", (c: Buffer) => chunks.push(c));

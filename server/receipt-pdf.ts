@@ -9,6 +9,7 @@ import type { InferSelectModel } from "drizzle-orm";
 import { iomsReceipts } from "@shared/db-schema";
 import { readUploadedReceiptLogoBuffer } from "./receipt-logo-storage";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
+import { loadPdfDocumentConstructor } from "./pdfkit-loader";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
 
@@ -99,11 +100,10 @@ export async function buildIomsReceiptPdf(params: {
   const printMode = (process.env.RECEIPT_PDF_PRINT_MODE ?? "full").trim().toLowerCase();
   const bodyOnly = printMode === "body-only" || printMode === "preprinted";
   const signatoryName = process.env.RECEIPT_PDF_SIGNATORY_NAME?.trim();
-  const pdfkitMod = await import("pdfkit").catch((e) => {
+  const PDFDocument = await loadPdfDocumentConstructor().catch((e) => {
     console.error("[receipt-pdf] pdfkit module load failed", e);
     throw e;
   });
-  const PDFDocument = pdfkitMod.default;
   const verifyUrl = `${verifyBaseUrl.replace(/\/$/, "")}/verify/${encodeURIComponent(receipt.receiptNo)}`;
   let qrPng: Buffer;
   let logoBuf: Buffer | null;

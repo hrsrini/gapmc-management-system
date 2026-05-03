@@ -1,5 +1,6 @@
 import type { InferSelectModel } from "drizzle-orm";
 import { marketMonthlyReturns, marketMonthlyReturnLines } from "@shared/db-schema";
+import { loadPdfDocumentConstructor } from "./pdfkit-loader";
 
 type ReturnRow = InferSelectModel<typeof marketMonthlyReturns>;
 type LineRow = InferSelectModel<typeof marketMonthlyReturnLines>;
@@ -11,7 +12,7 @@ export async function buildMarketReturnPdf(params: {
   traderLabel: string;
 }): Promise<Buffer> {
   const { ret, lines, yardLabel, traderLabel } = params;
-  const { default: PDFDocument } = await import("pdfkit");
+  const PDFDocument = await loadPdfDocumentConstructor();
 
   const doc = new PDFDocument({ margin: 48, size: "A4" });
   const chunks: Buffer[] = [];
