@@ -12,12 +12,27 @@ import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
 
-/** PDFKit built-in fonts use WinAnsi; rupee sign and em dash often throw at render time. */
+/** PDFKit built-in fonts use WinAnsi; rupee, smart quotes, em dash, and non-Latin1 glyphs often throw at render time. */
 function pdfSafeText(s: string): string {
-  return String(s ?? "")
+  let t = String(s ?? "")
     .replace(/\u20b9/g, "Rs.")
     .replace(/\u2014/g, "-")
-    .replace(/\u2013/g, "-");
+    .replace(/\u2013/g, "-")
+    .replace(/\u2019/g, "'")
+    .replace(/\u2018/g, "'")
+    .replace(/\u201c/g, '"')
+    .replace(/\u201d/g, '"')
+    .replace(/\u2026/g, "...")
+    .replace(/\u00a0/g, " ");
+  let out = "";
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i]!;
+    const code = c.charCodeAt(0);
+    if (code >= 0x20 && code <= 0x7e) out += c;
+    else if (code === 0x0a || code === 0x0d) out += c;
+    else out += "?";
+  }
+  return out;
 }
 
 export type ReceiptPdfArrearsDisclosure = {
@@ -69,12 +84,18 @@ export async function buildIomsReceiptPdf(params: {
 }): Promise<Buffer> {
   const { receipt, yardName, verifyBaseUrl, arrearsDisclosure, duplicateLabel } = params;
   let payerDisplayName: string;
+  let unifiedEntityDisplayName: string | null | undefined;
   try {
     const enriched = await attachPayerDisplayNames([receipt]);
-    payerDisplayName = enriched[0]?.payerDisplayName ?? String(receipt.payerName ?? receipt.payerRefId ?? "—");
+    const row0 = enriched[0];
+    payerDisplayName = row0?.payerDisplayName ?? String(receipt.payerName ?? receipt.payerRefId ?? "—");
+    unifiedEntityDisplayName = row0?.unifiedEntityDisplayName;
   } catch {
     payerDisplayName = String(receipt.payerName ?? receipt.payerRefId ?? "—");
+    unifiedEntityDisplayName = undefined;
   }
+  const unifiedEntityPdfLine =
+    (unifiedEntityDisplayName ?? receipt.unifiedEntityId)?.trim() || null;
   const printMode = (process.env.RECEIPT_PDF_PRINT_MODE ?? "full").trim().toLowerCase();
   const bodyOnly = printMode === "body-only" || printMode === "preprinted";
   const signatoryName = process.env.RECEIPT_PDF_SIGNATORY_NAME?.trim();
@@ -94,10 +115,14 @@ export async function buildIomsReceiptPdf(params: {
     doc.on("error", reject);
 
     if (!bodyOnly && logoBuf) {
-      const logoW = 132;
-      const x = (doc.page.width - logoW) / 2;
-      doc.image(logoBuf, x, doc.y, { width: logoW });
-      doc.moveDown(2.2);
+      try {
+        const logoW = 132;
+        const x = (doc.page.width - logoW) / 2;
+        doc.image(logoBuf, x, doc.y, { width: logoW });
+        doc.moveDown(2.2);
+      } catch {
+        /* unsupported or corrupt logo buffer — continue without image */
+      }
     }
 
     if (duplicateLabel) {
@@ -132,14 +157,18 @@ export async function buildIomsReceiptPdf(params: {
         .moveDown(0.25)
         .fontSize(9)
         .fillColor("#b45309")
-        .text("Grace period transaction: licence renewal required before transaction window end date (see policy).");
+        .text(
+          pdfSafeText(
+            "Grace period transaction: licence renewal required before transaction window end date (see policy).",
+          ),
+        );
       doc.fillColor("#000");
     }
     doc.moveDown(0.6);
     doc.fontSize(11).text("Payer", { underline: true });
     doc.fontSize(10).text(pdfSafeText(payerDisplayName));
     if (receipt.payerType) doc.text(pdfSafeText(`Type: ${receipt.payerType}`));
-    if (receipt.unifiedEntityId) doc.text(pdfSafeText(`Unified entity: ${receipt.unifiedEntityId}`));
+    if (unifiedEntityPdfLine) doc.text(pdfSafeText(`Unified entity: ${unifiedEntityPdfLine}`));
     doc.moveDown(0.8);
     doc.fontSize(11).text("Amounts (INR)", { underline: true });
     doc.fontSize(10);
@@ -156,7 +185,9 @@ export async function buildIomsReceiptPdf(params: {
         .fontSize(9)
         .fillColor("#444")
         .text(
-          `TDS u/s 194-I (on rent component): Rs.${tds.toFixed(2)} - shown for statutory disclosure; total above is gross invoice amount.`,
+          pdfSafeText(
+            `TDS u/s 194-I (on rent component): Rs.${tds.toFixed(2)} - shown for statutory disclosure; total above is gross invoice amount.`,
+          ),
         );
       doc.fillColor("#000");
     }
@@ -166,7 +197,9 @@ export async function buildIomsReceiptPdf(params: {
         .fontSize(9)
         .fillColor("#444")
         .text(
-          `Arrears interest (after prior dishonour, ${arrearsDisclosure.overdueDays} day(s) from due ${arrearsDisclosure.dueDateIso} to ${arrearsDisclosure.asOfIso} at ${arrearsDisclosure.ratePercentPerAnnum}% p.a. on Rs.${arrearsDisclosure.principalInr.toFixed(2)}): approx Rs.${arrearsDisclosure.approxInterestInr.toFixed(2)} - not included in total above.`,
+          pdfSafeText(
+            `Arrears interest (after prior dishonour, ${arrearsDisclosure.overdueDays} day(s) from due ${arrearsDisclosure.dueDateIso} to ${arrearsDisclosure.asOfIso} at ${arrearsDisclosure.ratePercentPerAnnum}% p.a. on Rs.${arrearsDisclosure.principalInr.toFixed(2)}): approx Rs.${arrearsDisclosure.approxInterestInr.toFixed(2)} - not included in total above.`,
+          ),
         );
       doc.fillColor("#000");
     }
@@ -178,18 +211,25 @@ export async function buildIomsReceiptPdf(params: {
     doc.moveDown(1);
     doc.fontSize(9).fillColor("#555").text("Verify this receipt (QR):", { continued: false });
     doc.fillColor("#000");
-    doc.image(qrPng, { fit: [120, 120] });
+    try {
+      doc.image(qrPng, { fit: [120, 120] });
+    } catch {
+      doc.fontSize(9).text("(QR image unavailable)");
+    }
     doc.moveDown(0.3);
-    doc.fontSize(8).fillColor("#666").text(verifyUrl, { link: verifyUrl, underline: true });
+    doc.fontSize(8).fillColor("#666").text(pdfSafeText(verifyUrl), { link: verifyUrl, underline: true });
     doc.fillColor("#000");
     doc.moveDown(1);
     if (signatoryName) {
-      doc.fontSize(9).text(`Authorised signatory: ${signatoryName}`, { align: "right" });
+      doc.fontSize(9).text(pdfSafeText(`Authorised signatory: ${signatoryName}`), { align: "right" });
       doc.moveDown(0.5);
     }
-    doc.fontSize(8).text("This document was generated by the IOMS server. For queries, contact GAPLMB accounts.", {
-      align: "center",
-    });
+    doc.fontSize(8).text(
+      pdfSafeText("This document was generated by the IOMS server. For queries, contact GAPLMB accounts."),
+      {
+        align: "center",
+      },
+    );
     doc.end();
   });
 

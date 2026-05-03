@@ -10,7 +10,11 @@ export type PayerDisplayFields = {
   unifiedEntityId?: string | null;
 };
 
-export type WithPayerDisplayName = { payerDisplayName: string };
+export type WithPayerDisplayName = {
+  payerDisplayName: string;
+  /** When `unifiedEntityId` is set: friendly label (e.g. Track A: firm) or raw id if unresolved. */
+  unifiedEntityDisplayName?: string | null;
+};
 
 function addUnifiedRefIds(raw: string | null | undefined, traderIds: Set<string>, entityIds: Set<string>, adHocIds: Set<string>) {
   const u = parseUnifiedEntityId(String(raw ?? "").trim());
@@ -148,6 +152,17 @@ export async function attachPayerDisplayNames<T extends PayerDisplayFields>(
     } else {
       payerDisplayName = "—";
     }
-    return { ...r, payerDisplayName };
+
+    let unifiedEntityDisplayName: string | null = null;
+    if (ueRaw) {
+      const u = parseUnifiedEntityId(ueRaw);
+      const resolved = resolveFromUnifiedString(ueRaw);
+      if (u?.kind === "TA" && resolved) unifiedEntityDisplayName = `Track A: ${resolved}`;
+      else if (u?.kind === "TB" && resolved) unifiedEntityDisplayName = `Track B: ${resolved}`;
+      else if (u?.kind === "AH" && resolved) unifiedEntityDisplayName = `Ad hoc: ${resolved}`;
+      else unifiedEntityDisplayName = ueRaw;
+    }
+
+    return { ...r, payerDisplayName, ...(ueRaw ? { unifiedEntityDisplayName } : {}) };
   });
 }

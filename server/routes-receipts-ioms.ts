@@ -6,7 +6,7 @@ import type { Express, Request } from "express";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import QRCode from "qrcode";
 import { db } from "./db";
-import { yards, receiptSequence, iomsReceipts, paymentGatewayLog, rentInvoices } from "@shared/db-schema";
+import { yards, receiptSequence, iomsReceipts, paymentGatewayLog, rentInvoices, users } from "@shared/db-schema";
 import { buildIomsReceiptPdf } from "./receipt-pdf";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
 import {
@@ -425,7 +425,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
       res.setHeader("Content-Disposition", `attachment; filename="receipt-${safeName}.pdf"`);
       res.send(pdf);
     } catch (e) {
-      console.error(e);
+      console.error("IOMS receipt PDF failed", req.params.id, e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate receipt PDF");
     }
   });
@@ -475,7 +475,32 @@ export function registerReceiptsIomsRoutes(app: Express) {
       }
       const rentArrearsDisclosure = await getM03RentReceiptArrearsDisclosure(row);
       const [enriched] = await attachPayerDisplayNames([row]);
-      res.json(rentArrearsDisclosure ? { ...enriched, rentArrearsDisclosure } : enriched);
+      let payload: Record<string, unknown> = rentArrearsDisclosure
+        ? { ...enriched, rentArrearsDisclosure }
+        : { ...enriched };
+      if (row.createdBy) {
+        const [u] = await db
+          .select({ name: users.name })
+          .from(users)
+          .where(eq(users.id, row.createdBy))
+          .limit(1);
+        if (u?.name) payload = { ...payload, createdByName: u.name };
+      }
+      if (row.sourceModule === "M-03" && row.sourceRecordId) {
+        const [inv] = await db
+          .select({ invoiceNo: rentInvoices.invoiceNo, periodMonth: rentInvoices.periodMonth })
+          .from(rentInvoices)
+          .where(eq(rentInvoices.id, row.sourceRecordId))
+          .limit(1);
+        if (inv) {
+          payload = {
+            ...payload,
+            sourceInvoiceNo: inv.invoiceNo ?? null,
+            sourceInvoicePeriodMonth: inv.periodMonth ?? null,
+          };
+        }
+      }
+      res.json(payload);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipt");

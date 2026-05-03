@@ -48,11 +48,15 @@ interface IomsReceipt {
   chequeDate?: string | null;
   sourceModule?: string | null;
   sourceRecordId?: string | null;
+  sourceInvoiceNo?: string | null;
+  sourceInvoicePeriodMonth?: string | null;
   unifiedEntityId?: string | null;
+  unifiedEntityDisplayName?: string | null;
   qrCodeUrl?: string | null;
   pdfUrl?: string | null;
   status: string;
   createdBy: string;
+  createdByName?: string | null;
   createdAt: string;
   rentArrearsDisclosure?: RentArrearsDisclosure | null;
   dishonourReason?: string | null;
@@ -93,22 +97,10 @@ export default function IomsReceiptDetail() {
     return null;
   }, [receipt]);
 
-  const tbEntityId = useMemo(() => {
-    if (!receipt?.unifiedEntityId) return null as string | null;
-    const u = parseUnifiedEntityId(receipt.unifiedEntityId);
-    return u?.kind === "TB" ? u.refId : null;
-  }, [receipt?.unifiedEntityId]);
-
   const { data: taLicence } = useQuery({
     queryKey: ["/api/ioms/traders/licences/detail", taLicenceId],
     queryFn: () => fetchApiGet<{ firmName: string }>(`/api/ioms/traders/licences/${taLicenceId}`),
     enabled: Boolean(taLicenceId),
-  });
-
-  const { data: tbEntity } = useQuery({
-    queryKey: ["/api/ioms/entities/detail", tbEntityId],
-    queryFn: () => fetchApiGet<{ name: string }>(`/api/ioms/entities/${tbEntityId}`),
-    enabled: Boolean(tbEntityId),
   });
 
   const payerResolvedLabel = useMemo(() => {
@@ -119,12 +111,20 @@ export default function IomsReceiptDetail() {
 
   const unifiedEntityResolvedLabel = useMemo(() => {
     if (!receipt?.unifiedEntityId) return null as string | null;
-    const raw = receipt.unifiedEntityId.trim();
-    const u = parseUnifiedEntityId(raw);
-    if (u?.kind === "TA" && taLicence?.firmName?.trim()) return `${raw} (${taLicence.firmName.trim()})`;
-    if (u?.kind === "TB" && tbEntity?.name?.trim()) return `${raw} (${tbEntity.name.trim()})`;
-    return raw;
-  }, [receipt?.unifiedEntityId, taLicence?.firmName, tbEntity?.name]);
+    if (receipt.unifiedEntityDisplayName?.trim()) return receipt.unifiedEntityDisplayName.trim();
+    return receipt.unifiedEntityId.trim();
+  }, [receipt?.unifiedEntityId, receipt?.unifiedEntityDisplayName]);
+
+  const sourceLabel = useMemo(() => {
+    if (!receipt?.sourceModule) return "";
+    const mod = receipt.sourceModule.trim();
+    if (mod === "M-03" && receipt.sourceInvoiceNo?.trim()) {
+      const inv = receipt.sourceInvoiceNo.trim();
+      const pm = receipt.sourceInvoicePeriodMonth?.trim();
+      return pm ? `${mod} · ${inv} (${pm})` : `${mod} · ${inv}`;
+    }
+    return [mod, receipt.sourceRecordId?.trim()].filter(Boolean).join(" ");
+  }, [receipt?.sourceModule, receipt?.sourceRecordId, receipt?.sourceInvoiceNo, receipt?.sourceInvoicePeriodMonth]);
 
   const canMockPay = can("M-05", "Create");
   const canUpdate = can("M-05", "Update");
@@ -413,15 +413,19 @@ export default function IomsReceiptDetail() {
             <div><span className="text-muted-foreground">Payment mode</span><br />{receipt.paymentMode}</div>
             {receipt.gatewayRef && <div><span className="text-muted-foreground">Gateway ref</span><br />{receipt.gatewayRef}</div>}
             {receipt.chequeNo && <div><span className="text-muted-foreground">Cheque no</span><br />{receipt.chequeNo} {receipt.bankName ? `(${receipt.bankName})` : ""}</div>}
-            {receipt.sourceModule && <div><span className="text-muted-foreground">Source</span><br />{receipt.sourceModule} {receipt.sourceRecordId ?? ""}</div>}
+            {receipt.sourceModule && <div><span className="text-muted-foreground">Source</span><br />{sourceLabel}</div>}
             {receipt.unifiedEntityId ? (
               <div className="md:col-span-2">
                 <span className="text-muted-foreground">Unified entity</span>
                 <br />
-                <span className="font-mono text-xs break-all">{unifiedEntityResolvedLabel ?? receipt.unifiedEntityId}</span>
+                <span className="text-sm break-words">{unifiedEntityResolvedLabel ?? receipt.unifiedEntityId}</span>
               </div>
             ) : null}
-            <div><span className="text-muted-foreground">Created</span><br />{formatDisplayDateTime(receipt.createdAt)} by {receipt.createdBy}</div>
+            <div>
+              <span className="text-muted-foreground">Created</span>
+              <br />
+              {formatDisplayDateTime(receipt.createdAt)} by {receipt.createdByName?.trim() || receipt.createdBy}
+            </div>
             {canMockPay && receipt.status === "Pending" && (
               <div className="md:col-span-2">
                 <span className="text-muted-foreground">Payment (Mock)</span>
