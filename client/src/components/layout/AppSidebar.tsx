@@ -106,7 +106,7 @@ const menuItems: { group: string; adminOnly?: boolean; items: MenuItem[] }[] = [
   {
     group: 'Traders',
     items: [
-      { title: 'Trader Directory', icon: Users, href: '/traders', requirePermission: { module: 'M-02', action: 'Read' } },
+      { title: 'Trader Directory', icon: Users, href: '/traders/licences', requirePermission: { module: 'M-02', action: 'Read' } },
       { title: 'Agreements', icon: FileSignature, href: '/traders/agreements', requirePermission: { module: 'M-02', action: 'Read' } },
       { title: 'Licences (IOMS M-02)', icon: FileCheck, href: '/traders/licences', requirePermission: { module: 'M-02', action: 'Read' } },
       { title: 'Functionary registrations (BM)', icon: FileCheck, href: '/traders/functionaries', requirePermission: { module: 'M-02', action: 'Read' } },

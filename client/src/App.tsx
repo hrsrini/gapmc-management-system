@@ -167,6 +167,10 @@ function Router() {
         <ProtectedRoute><RequirePermission module="M-03" action="Read"><IomsCreditNotes /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/traders">
+        {/* Legacy trader directory table is often empty in IOMS-only deployments. */}
+        <ProtectedRoute><TraderLicences /></ProtectedRoute>
+      </Route>
+      <Route path="/traders/legacy-directory">
         <ProtectedRoute><TraderList /></ProtectedRoute>
       </Route>
       <Route path="/traders/new">
