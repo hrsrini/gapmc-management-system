@@ -44,6 +44,7 @@ import {
 import { INDIAN_PAN_RE, normalizePanInput } from "@shared/india-validation";
 import { isPanTakenAcrossActiveMasters } from "./pan-uniqueness";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
+import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
 import {
   TRACKB_SUBTYPES,
   normalizeTrackBSubType,
@@ -51,8 +52,11 @@ import {
   TRACKB_NON_GOV_DUES_API_HINT,
 } from "@shared/track-b-entity";
 import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
+import { normalizePremisesStatus } from "@shared/premises-allocation";
 import { hasPermission } from "./auth";
 import { routeParamString } from "./route-params";
+import { registerEntityAllotmentRoutes } from "./entity-allotment-routes";
+import { assertPremisesNotAlreadyAllocatedActive } from "./premises-allocation-guard";
 import {
   writeTraderBmFormBuffer,
   readTraderBmFormBuffer,
@@ -146,6 +150,7 @@ function yardInScope(req: Request, yardId: string): boolean {
 }
 
 export function registerTradersAssetsRoutes(app: Express) {
+  registerEntityAllotmentRoutes(app);
   const now = () => new Date().toISOString();
 
   const bmFormUpload = multer({
@@ -614,17 +619,13 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       const createdBy = req.user?.id ?? "system";
       const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
-      const [tenantLicPay] = await db
-        .select({ firmName: traderLicences.firmName })
-        .from(traderLicences)
-        .where(eq(traderLicences.id, inv.tenantLicenceId))
-        .limit(1);
+      const payer = await resolveRentInvoiceCounterparty(inv);
       const created = await createIomsReceipt({
         yardId: inv.yardId,
         revenueHead,
-        payerName: (tenantLicPay?.firmName?.trim() && tenantLicPay.firmName) || inv.tenantLicenceId,
-        payerType: "TenantLicence",
-        payerRefId: inv.tenantLicenceId,
+        payerName: payer.payerName,
+        payerType: payer.payerType,
+        payerRefId: payer.payerRefId,
         amount: payAmount,
         cgst: 0,
         sgst: 0,
@@ -632,7 +633,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         paymentMode: "Cash",
         sourceModule: "M-03",
         sourceRecordId: inv.id,
-        unifiedEntityId: unifiedEntityIdFromTrackA(inv.tenantLicenceId),
+        unifiedEntityId: payer.unifiedEntityId,
         createdBy,
       });
 
@@ -708,17 +709,13 @@ export function registerTradersAssetsRoutes(app: Express) {
         }
 
         const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
-        const [tenantLicOnline] = await db
-          .select({ firmName: traderLicences.firmName })
-          .from(traderLicences)
-          .where(eq(traderLicences.id, inv.tenantLicenceId))
-          .limit(1);
+        const payer = await resolveRentInvoiceCounterparty(inv);
         const created = await createIomsReceipt({
           yardId: inv.yardId,
           revenueHead,
-          payerName: (tenantLicOnline?.firmName?.trim() && tenantLicOnline.firmName) || inv.tenantLicenceId,
-          payerType: "TenantLicence",
-          payerRefId: inv.tenantLicenceId,
+          payerName: payer.payerName,
+          payerType: payer.payerType,
+          payerRefId: payer.payerRefId,
           amount: payAmount,
           cgst: 0,
           sgst: 0,
@@ -726,7 +723,7 @@ export function registerTradersAssetsRoutes(app: Express) {
           paymentMode: "Online",
           sourceModule: "M-03",
           sourceRecordId: inv.id,
-          unifiedEntityId: unifiedEntityIdFromTrackA(inv.tenantLicenceId),
+          unifiedEntityId: payer.unifiedEntityId,
           createdBy,
         });
         return res.status(201).json({ receiptId: created.id, receiptNo: created.receiptNo, kind: "rent" });
@@ -1007,95 +1004,6 @@ export function registerTradersAssetsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to resolve unified entity");
-    }
-  });
-
-  // ----- Track B entity allotments -----
-  app.get("/api/ioms/entity-allotments", async (req, res) => {
-    try {
-      const entityId = req.query.entityId as string | undefined;
-      const assetId = req.query.assetId as string | undefined;
-      let list = await db.select().from(entityAllotments).orderBy(desc(entityAllotments.fromDate));
-      if (entityId) list = list.filter((r) => r.entityId === entityId);
-      if (assetId) list = list.filter((r) => r.assetId === assetId);
-      res.json(list);
-    } catch (e) {
-      console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch entity allotments");
-    }
-  });
-
-  async function assertPremisesNotAlreadyAllocatedActive(params: { assetId: string; excludeEntityAllotmentId?: string; excludeAssetAllotmentId?: string }) {
-    const assetId = params.assetId;
-    const activeEntityAllotments = await db
-      .select({ id: entityAllotments.id })
-      .from(entityAllotments)
-      .where(and(eq(entityAllotments.assetId, assetId), eq(entityAllotments.status, "Active")));
-    const activeAssetAllotments = await db
-      .select({ id: assetAllotments.id })
-      .from(assetAllotments)
-      .where(and(eq(assetAllotments.assetId, assetId), eq(assetAllotments.status, "Active")));
-
-    const entityConflicts = activeEntityAllotments
-      .map((r) => r.id)
-      .filter((id) => !params.excludeEntityAllotmentId || id !== params.excludeEntityAllotmentId);
-    const traderConflicts = activeAssetAllotments
-      .map((r) => r.id)
-      .filter((id) => !params.excludeAssetAllotmentId || id !== params.excludeAssetAllotmentId);
-
-    return {
-      ok: entityConflicts.length === 0 && traderConflicts.length === 0,
-      entityConflicts,
-      traderConflicts,
-    };
-  }
-
-  app.post("/api/ioms/entity-allotments", async (req, res) => {
-    try {
-      const body = req.body;
-      const entityId = String(body.entityId ?? "");
-      const assetId = String(body.assetId ?? "");
-      const [ent] = await db.select().from(entities).where(eq(entities.id, entityId)).limit(1);
-      if (!ent) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
-      if (!yardInScope(req, ent.yardId)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this entity yard");
-      const [assetRow] = await db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
-      if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
-      if (!yardInScope(req, assetRow.yardId)) return sendApiError(res, 403, "ASSET_YARD_ACCESS_DENIED", "You do not have access to this asset's yard");
-
-      // BR-PRE-023: one active allocation per premises (asset) across all allocation tables.
-      const nextStatus = String(body.status ?? "Active");
-      if (nextStatus === "Active") {
-        const check = await assertPremisesNotAlreadyAllocatedActive({ assetId });
-        if (!check.ok) {
-          return sendApiError(
-            res,
-            400,
-            "PREMISES_ALREADY_ALLOCATED",
-            "Cannot allocate: another Active allocation already exists for this premises.",
-            { assetId, entityAllotments: check.entityConflicts, traderAllotments: check.traderConflicts },
-          );
-        }
-      }
-
-      const id = nanoid();
-      await db.insert(entityAllotments).values({
-        id,
-        assetId,
-        entityId,
-        allotteeName: String(body.allotteeName ?? ""),
-        fromDate: String(body.fromDate ?? ""),
-        toDate: String(body.toDate ?? ""),
-        status: nextStatus,
-        securityDeposit: body.securityDeposit != null ? Number(body.securityDeposit) : null,
-        doUser: body.doUser ? String(body.doUser) : null,
-        daUser: body.daUser ? String(body.daUser) : null,
-      });
-      const [row] = await db.select().from(entityAllotments).where(eq(entityAllotments.id, id));
-      if (row) writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
-      res.status(201).json(row);
-    } catch (e) {
-      console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create entity allotment");
     }
   });
 
@@ -2161,6 +2069,12 @@ export function registerTradersAssetsRoutes(app: Express) {
       const base = db.select().from(assets).orderBy(assets.assetId);
       const allAssets = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
       const allAllotments = await db.select().from(assetAllotments).orderBy(desc(assetAllotments.toDate));
+      const activeEntityByAsset = await db
+        .select({ assetId: entityAllotments.assetId })
+        .from(entityAllotments)
+        .where(eq(entityAllotments.status, "Active"));
+      const activeEntityOccupied = new Set(activeEntityByAsset.map((r) => r.assetId));
+
       const allInvoices = await db.select().from(rentInvoices).orderBy(desc(rentInvoices.periodMonth));
       const latestRentByAllotment: Record<string, number> = {};
       for (const inv of allInvoices) {
@@ -2182,6 +2096,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         const list = allotmentsByAsset.get(asset.id) ?? allotmentsByAsset.get(asset.assetId) ?? [];
         const latest = list[0];
         if (latest && latest.status === "Active") continue;
+        if (activeEntityOccupied.has(asset.id)) continue;
         const lastAllotment = latest
           ? { allotteeName: latest.allotteeName, toDate: latest.toDate, daUser: latest.daUser, id: latest.id }
           : null;
@@ -2338,6 +2253,12 @@ export function registerTradersAssetsRoutes(app: Express) {
         fileNumber: body.fileNumber ? String(body.fileNumber) : null,
         orderNumber: body.orderNumber ? String(body.orderNumber) : null,
         isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
+        premisesStatus: (() => {
+          const raw = (body as Record<string, unknown>).premisesStatus ?? (body as Record<string, unknown>).premises_status;
+          if (raw === undefined || raw === null) return "Active";
+          const n = normalizePremisesStatus(raw);
+          return n ?? "Active";
+        })(),
       });
       const [row] = await db.select().from(assets).where(eq(assets.id, id));
       if (row) writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -2359,13 +2280,30 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (body.yardId !== undefined && !yardInScope(req, newYard)) {
         return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
-      const allowed = ["assetId", "yardId", "assetType", "complexName", "area", "plinthAreaSqft", "value", "fileNumber", "orderNumber", "isActive"];
+      const allowed = [
+        "assetId",
+        "yardId",
+        "assetType",
+        "complexName",
+        "area",
+        "plinthAreaSqft",
+        "value",
+        "fileNumber",
+        "orderNumber",
+        "isActive",
+        "premisesStatus",
+        "premises_status",
+      ];
       const updates: Record<string, unknown> = {};
       for (const k of allowed) {
         if (body[k] === undefined) continue;
         if (k === "plinthAreaSqft" || k === "value") updates[k] = body[k] == null ? null : Number(body[k]);
         else if (k === "isActive") updates.isActive = Boolean(body.isActive);
-        else updates[k] = body[k] == null ? null : String(body[k]);
+        else if (k === "premisesStatus" || k === "premises_status") {
+          const n = normalizePremisesStatus(body[k]);
+          if (!n) continue;
+          updates.premisesStatus = n;
+        } else updates[k] = body[k] == null ? null : String(body[k]);
       }
       await db.update(assets).set(updates as Record<string, string | number | boolean | null>).where(eq(assets.id, id));
       const [row] = await db.select().from(assets).where(eq(assets.id, id));

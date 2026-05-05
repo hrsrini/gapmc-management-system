@@ -182,6 +182,67 @@ export function canTransitionRentRevision(
   return { allowed: false };
 }
 
+/** US-M02-003 entity premises allocation workflow: DO→DV→DA (Draft → Verified → Approved | Rejected). */
+const ENTITY_ALLOTMENT_APPROVAL_FLOW = {
+  Draft: ["Verified"],
+  Verified: ["Approved", "Rejected", "Draft"],
+  Approved: [],
+  Rejected: ["Draft"],
+} as const;
+
+export type EntityAllotmentApprovalStatus = keyof typeof ENTITY_ALLOTMENT_APPROVAL_FLOW;
+
+export function canCreateEntityAllotmentDraft(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, ADMIN]);
+}
+
+export function canEditDraftEntityAllotment(
+  user: AuthUser | undefined,
+  record: { approvalStatus: string; doUser?: string | null },
+): boolean {
+  if (!user) return false;
+  if (hasRole(user, ADMIN)) return true;
+  const st = String(record.approvalStatus ?? "Draft");
+  if (st !== "Draft" && st !== "Rejected") return false;
+  if (!hasAnyRole(user, [DO])) return false;
+  if (st === "Draft" && record.doUser && record.doUser !== user.id) return false;
+  return true;
+}
+
+export function canTransitionEntityAllotmentApproval(
+  user: AuthUser | undefined,
+  currentStatus: string,
+  newStatus: string,
+): { allowed: boolean; setDvUser?: boolean; setDaUser?: boolean } {
+  if (!user) return { allowed: false };
+  if (hasRole(user, ADMIN)) {
+    return {
+      allowed: true,
+      setDvUser: newStatus === "Verified",
+      setDaUser: newStatus === "Approved" || newStatus === "Rejected",
+    };
+  }
+  const allowed = ENTITY_ALLOTMENT_APPROVAL_FLOW[currentStatus as EntityAllotmentApprovalStatus];
+  if (!allowed || !allowed.includes(newStatus as never)) return { allowed: false };
+
+  if (currentStatus === "Draft" && newStatus === "Verified") {
+    return hasRole(user, DV) ? { allowed: true, setDvUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Approved") {
+    return hasRole(user, DA) ? { allowed: true, setDaUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Rejected") {
+    return hasRole(user, DA) ? { allowed: true, setDaUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Draft") {
+    return hasRole(user, DV) ? { allowed: true } : { allowed: false };
+  }
+  if (currentStatus === "Rejected" && newStatus === "Draft") {
+    return hasAnyRole(user, [DO]) ? { allowed: true } : { allowed: false };
+  }
+  return { allowed: false };
+}
+
 /** Payment voucher status flow: Draft/Submitted → Verified → Approved → Paid | Rejected */
 const VOUCHER_FLOW: Record<string, string[]> = {
   Draft: ["Submitted", "Verified"],

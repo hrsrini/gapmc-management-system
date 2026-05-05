@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -21,11 +21,15 @@ import { useToast } from "@/hooks/use-toast";
 import { FileText, ArrowLeft, ShieldCheck, CheckCircle, AlertCircle, SendHorizontal, Banknote, Ban, StickyNote } from "lucide-react";
 import { formatApiDateOrDateTime, formatYearMonthToDisplay } from "@/lib/dateFormat";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
+import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
+import { entityIdFromRentInvoice } from "./rent-allotments-ui";
 
 interface RentInvoice {
   id: string;
   invoiceNo?: string | null;
   allotmentId: string;
+  allotmentKind?: string | null;
+  entityId?: string | null;
   tenantLicenceId: string;
   assetId: string;
   yardId: string;
@@ -54,10 +58,6 @@ interface YardRef {
 interface AssetRef {
   id: string;
   assetId: string;
-}
-interface AllotmentRef {
-  id: string;
-  allotteeName?: string | null;
 }
 interface LicenceRef {
   id: string;
@@ -94,18 +94,20 @@ export default function IomsRentInvoiceDetail() {
   const { data: assets = [] } = useQuery<AssetRef[]>({
     queryKey: ["/api/ioms/assets"],
   });
-  const { data: allotments = [] } = useQuery<AllotmentRef[]>({
+  const { data: allotments = [] } = useQuery<AssetAllotmentRow[]>({
     queryKey: ["/api/ioms/asset-allotments"],
+  });
+  const { data: entityAllotments = [] } = useQuery<EntityAllotmentRow[]>({
+    queryKey: ["/api/ioms/entity-allotments"],
   });
   const { data: licences = [] } = useQuery<LicenceRef[]>({
     queryKey: ["/api/ioms/traders/licences"],
   });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
-  const assetById = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
-  const allotmentById = Object.fromEntries(allotments.map((a) => [a.id, a.allotteeName ? `${a.id} — ${a.allotteeName}` : a.id]));
-  const licenceById = Object.fromEntries(
-    licences.map((l) => [l.id, l.licenceNo ? `${l.licenceNo}${l.firmName ? ` — ${l.firmName}` : ""}` : (l.firmName ?? l.id)]),
-  );
+  const entityIdResolved = invoice ? entityIdFromRentInvoice(invoice) : null;
+  const { data: entityMaster } = useQuery<{ id: string; name: string; entityCode?: string | null }>({
+    queryKey: ["/api/ioms/entities", entityIdResolved],
+    enabled: Boolean(entityIdResolved),
+  });
 
   const [sendBackOpen, setSendBackOpen] = useState(false);
   const [returnRemarks, setReturnRemarks] = useState("");
@@ -118,6 +120,37 @@ export default function IomsRentInvoiceDetail() {
     enabled: !!id,
   });
   const creditNotesForInvoice = creditNoteList.filter((c) => c.invoiceId === id);
+
+  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const assetById = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
+  const licenceById = Object.fromEntries(
+    licences.map((l) => [l.id, l.licenceNo ? `${l.licenceNo}${l.firmName ? ` — ${l.firmName}` : ""}` : (l.firmName ?? l.id)]),
+  );
+
+  const allocationLabel = useMemo(() => {
+    if (!invoice) return "";
+    const eRow = entityAllotments.find((e) => e.id === invoice.allotmentId);
+    if (eRow) {
+      const ref = eRow.premisesRefNo?.trim();
+      return `${eRow.allotteeName}${ref ? ` · ${ref}` : ""} (Track B premises)`;
+    }
+    const aRow = allotments.find((a) => a.id === invoice.allotmentId);
+    if (aRow?.allotteeName) return `${aRow.id} — ${aRow.allotteeName} (trader allotment)`;
+    return invoice.allotmentId;
+  }, [invoice, entityAllotments, allotments]);
+
+  const tenantLabel = useMemo(() => {
+    if (!invoice) return "";
+    const tl = invoice.tenantLicenceId?.trim() ?? "";
+    if (tl.startsWith("TB:")) {
+      const ec = entityMaster?.entityCode?.trim();
+      const nm = entityMaster?.name?.trim();
+      if (nm || ec) return `${nm ?? ec ?? ""}${nm && ec && ec !== nm ? ` (${ec})` : ""} · ${tl}`;
+      return tl;
+    }
+    const lk = tl.startsWith("TA:") ? tl.slice(3) : tl;
+    return licenceById[lk] ?? tl;
+  }, [invoice, entityMaster, licenceById]);
 
   const statusMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -263,8 +296,12 @@ export default function IomsRentInvoiceDetail() {
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[invoice.yardId] ?? invoice.yardId}</div>
             <div><span className="text-muted-foreground">Period</span><br />{formatYearMonthToDisplay(invoice.periodMonth)}</div>
             <div><span className="text-muted-foreground">Asset</span><br />{assetById[invoice.assetId] ?? invoice.assetId}</div>
-            <div><span className="text-muted-foreground">Allotment</span><br />{allotmentById[invoice.allotmentId] ?? invoice.allotmentId}</div>
-            <div><span className="text-muted-foreground">Tenant licence</span><br />{licenceById[invoice.tenantLicenceId] ?? invoice.tenantLicenceId}</div>
+            <div><span className="text-muted-foreground">Allotment</span><br />{allocationLabel}</div>
+            <div>
+              <span className="text-muted-foreground">Tenant / counterparty</span>
+              <br />
+              {tenantLabel}
+            </div>
             <div>
               <span className="text-muted-foreground">Status</span>
               <br />

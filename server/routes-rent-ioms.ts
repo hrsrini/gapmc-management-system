@@ -12,8 +12,10 @@ import {
   creditNotes,
   iomsReceipts,
   traderLicences,
+  entities,
   rentRevisionOverrides,
   assetAllotments,
+  entityAllotments,
   assets,
   yards,
 } from "@shared/db-schema";
@@ -37,7 +39,8 @@ import { resolveRentInvoiceTdsFields } from "./rent-invoice-tds";
 import { isValidYearMonthYm } from "./rent-gstr1";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { recordRentCollectionForM03Receipt } from "./rent-deposit-ledger-from-receipt";
-import { parseUnifiedEntityId, unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
+import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
+import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
 import { normalizeRentRevisionBasis, yearMonthMinusOne } from "@shared/rent-revision-basis";
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
 import { rentPeriodMonthEndIso } from "./rent-interest";
@@ -46,6 +49,21 @@ import { formatRentInvoiceNo } from "./rent-invoice-number";
 function currentYearMonthUtc(): string {
   const d = new Date();
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+async function fetchYardScopeForAllotmentId(allotmentId: string): Promise<{ yardId: string } | null> {
+  const [aa] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, allotmentId)).limit(1);
+  const assetIdPk = aa?.assetId;
+  if (assetIdPk) {
+    const [ar] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, assetIdPk)).limit(1);
+    return ar ?? null;
+  }
+  const [ea] = await db.select().from(entityAllotments).where(eq(entityAllotments.id, allotmentId)).limit(1);
+  if (ea?.assetId) {
+    const [ar] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, ea.assetId)).limit(1);
+    return ar ?? null;
+  }
+  return null;
 }
 
 type NonGstChargeLine = { label: string; amount: number };
@@ -208,15 +226,32 @@ export function registerRentIomsRoutes(app: Express) {
         return sendApiError(res, 403, "RENT_INVOICE_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
       const id = nanoid();
-      const tenantLicenceId = String(body.tenantLicenceId ?? "");
+      let tenantLicenceId = String(body.tenantLicenceId ?? "");
       let rentAmount = Number(body.rentAmount ?? 0);
+      let allotmentKindInsert: string = String((body as Record<string, unknown>).allotmentKind ?? "").trim() || "TraderLicence";
+      let entityIdInsert: string | null = body.entityId ? String(body.entityId) : null;
       const nonGst = parseNonGstCharges((body as Record<string, unknown>).nonGstCharges);
       if (!nonGst.ok) return sendApiError(res, 400, "RENT_INVOICE_NON_GST_CHARGES", nonGst.error);
       let cgst = Number(body.cgst ?? 0);
       let sgst = Number(body.sgst ?? 0);
       let totalAmount = Number(body.totalAmount ?? 0);
       let isGovtEntity = Boolean(body.isGovtEntity ?? false);
-      const gstExempt = Boolean(tenantLicenceId && (await tenantLicenceIsGstExempt(tenantLicenceId)));
+      const allotmentIdPre = String((body as Record<string, unknown>).allotmentId ?? "").trim();
+      if (allotmentIdPre) {
+        const [ea] = await db.select().from(entityAllotments).where(eq(entityAllotments.id, allotmentIdPre)).limit(1);
+        if (ea?.approvalStatus === "Approved") {
+          if (!ea.agreementDocFile) {
+            return sendApiError(res, 400, "E-AST-011", "Scanned agreement is required before invoicing this Track B premises allocation.");
+          }
+          allotmentKindInsert = "Entity";
+          entityIdInsert = ea.entityId;
+          tenantLicenceId = unifiedEntityIdFromTrackB(ea.entityId);
+          isGovtEntity = !ea.gstApplicable;
+        }
+      }
+      const gstExempt = tenantLicenceId.startsWith("TB:")
+        ? isGovtEntity
+        : Boolean(tenantLicenceId && (await tenantLicenceIsGstExempt(tenantLicenceId)));
       if (gstExempt) {
         cgst = 0;
         sgst = 0;
@@ -269,6 +304,8 @@ export function registerRentIomsRoutes(app: Express) {
       await db.insert(rentInvoices).values({
         id,
         allotmentId,
+        allotmentKind: allotmentKindInsert,
+        entityId: entityIdInsert,
         tenantLicenceId,
         assetId: String(body.assetId ?? ""),
         yardId,
@@ -303,10 +340,8 @@ export function registerRentIomsRoutes(app: Express) {
     try {
       const allotmentId = routeParamString(req.params.allotmentId);
       const emRaw = req.query.effectiveMonth as string | undefined;
-      const [all] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, allotmentId)).limit(1);
-      if (!all) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
-      const [assetRow] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, all.assetId)).limit(1);
-      if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      const assetRow = await fetchYardScopeForAllotmentId(allotmentId);
+      if (!assetRow) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetRow.yardId)) {
         return sendApiError(res, 403, "RENT_CONTEXT_YARD_ACCESS_DENIED", "You do not have access to this yard");
@@ -368,12 +403,10 @@ export function registerRentIomsRoutes(app: Express) {
       if (!isValidYearMonthYm(effectiveMonth)) {
         return sendApiError(res, 400, "RENT_REV_MONTH", "effectiveMonth must be YYYY-MM");
       }
-      const [all] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, allotmentId)).limit(1);
-      if (!all) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
-      const [assetRow] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, all.assetId)).limit(1);
-      if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      const assetScope = await fetchYardScopeForAllotmentId(allotmentId);
+      if (!assetScope) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
       const scopedIds = req.scopedLocationIds;
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetRow.yardId)) {
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetScope.yardId)) {
         return sendApiError(res, 403, "RENT_REV_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
 
@@ -427,12 +460,10 @@ export function registerRentIomsRoutes(app: Express) {
       const body = req.body as Record<string, unknown>;
       const [existing] = await db.select().from(rentRevisionOverrides).where(eq(rentRevisionOverrides.id, id)).limit(1);
       if (!existing) return sendApiError(res, 404, "RENT_REV_NOT_FOUND", "Not found");
-      const [all] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, existing.allotmentId)).limit(1);
-      if (!all) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
-      const [assetRow] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, all.assetId)).limit(1);
-      if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      const assetScope = await fetchYardScopeForAllotmentId(existing.allotmentId);
+      if (!assetScope) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
       const scopedIds = req.scopedLocationIds;
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetRow.yardId)) {
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetScope.yardId)) {
         return sendApiError(res, 403, "RENT_REV_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
 
@@ -543,12 +574,10 @@ export function registerRentIomsRoutes(app: Express) {
       const id = routeParamString(req.params.id);
       const [existing] = await db.select().from(rentRevisionOverrides).where(eq(rentRevisionOverrides.id, id)).limit(1);
       if (!existing) return sendApiError(res, 404, "RENT_REV_NOT_FOUND", "Not found");
-      const [all] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, existing.allotmentId)).limit(1);
-      if (!all) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
-      const [assetRow] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, all.assetId)).limit(1);
-      if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      const assetScope = await fetchYardScopeForAllotmentId(existing.allotmentId);
+      if (!assetScope) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
       const scopedIds = req.scopedLocationIds;
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetRow.yardId)) {
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetScope.yardId)) {
         return sendApiError(res, 403, "RENT_REV_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
       const st = String(existing.status ?? "Draft");
@@ -759,18 +788,14 @@ export function registerRentIomsRoutes(app: Express) {
         if (!receiptRow) {
           const createdBy = req.user?.id ?? "system";
           const revenueHead = row.isGovtEntity ? "GSTInvoice" : "Rent";
-          const [tenantLic] = await db
-            .select({ firmName: traderLicences.firmName })
-            .from(traderLicences)
-            .where(eq(traderLicences.id, row.tenantLicenceId))
-            .limit(1);
+          const cp = await resolveRentInvoiceCounterparty(row);
 
           const created = await createIomsReceipt({
             yardId: row.yardId,
             revenueHead,
-            payerName: (tenantLic?.firmName?.trim() && tenantLic.firmName) || row.tenantLicenceId,
-            payerType: "TenantLicence",
-            payerRefId: row.tenantLicenceId,
+            payerName: cp.payerName,
+            payerType: cp.payerType,
+            payerRefId: cp.payerRefId,
             amount: Number(row.rentAmount ?? 0) + Number(nonGstSum || 0),
             cgst: row.cgst,
             sgst: row.sgst,
@@ -778,7 +803,7 @@ export function registerRentIomsRoutes(app: Express) {
             paymentMode: "Cash",
             sourceModule: "M-03",
             sourceRecordId: row.id,
-            unifiedEntityId: unifiedEntityIdFromTrackA(row.tenantLicenceId),
+            unifiedEntityId: cp.unifiedEntityId,
             createdBy,
           });
 
@@ -1115,6 +1140,7 @@ export function registerRentIomsRoutes(app: Express) {
           tenantLicenceId: rentInvoices.tenantLicenceId,
           assetId: rentInvoices.assetId,
           yardId: rentInvoices.yardId,
+          entityId: rentInvoices.entityId,
           rentAmount: rentInvoices.rentAmount,
           cgst: rentInvoices.cgst,
           sgst: rentInvoices.sgst,
@@ -1125,9 +1151,27 @@ export function registerRentIomsRoutes(app: Express) {
         .from(rentInvoices)
         .where(and(...conditions))
         .orderBy(desc(rentInvoices.periodMonth));
-      const tenantIds = Array.from(new Set(list.map((r) => r.tenantLicenceId)));
+
+      const traderLicenceKeyForGstr = (tenantLicenceId: string): string | null => {
+        const ue = parseUnifiedEntityId(tenantLicenceId);
+        if (ue?.kind === "TB") return null;
+        if (ue?.kind === "TA") return ue.refId.trim() || null;
+        const t = String(tenantLicenceId ?? "").trim();
+        return t || null;
+      };
+
+      const trackBEntityIdForGstrInvoice = (r: { tenantLicenceId: string; entityId: string | null }): string | null => {
+        const ue = parseUnifiedEntityId(r.tenantLicenceId);
+        if (ue?.kind === "TB") return ue.refId.trim() || null;
+        const eid = r.entityId != null ? String(r.entityId).trim() : "";
+        return eid || null;
+      };
+
+      const traderKeys = Array.from(
+        new Set(list.map((r) => traderLicenceKeyForGstr(r.tenantLicenceId)).filter((k): k is string => Boolean(k))),
+      );
       const tenantRows =
-        tenantIds.length > 0
+        traderKeys.length > 0
           ? await db
               .select({
                 id: traderLicences.id,
@@ -1135,18 +1179,52 @@ export function registerRentIomsRoutes(app: Express) {
                 isNonGstEntity: traderLicences.isNonGstEntity,
               })
               .from(traderLicences)
-              .where(inArray(traderLicences.id, tenantIds))
+              .where(inArray(traderLicences.id, traderKeys))
           : [];
       const tenantById = new Map(tenantRows.map((t) => [t.id, t]));
+
+      const entityIds = Array.from(
+        new Set(list.map((r) => trackBEntityIdForGstrInvoice(r)).filter((k): k is string => Boolean(k))),
+      );
+      const entityRows =
+        entityIds.length > 0
+          ? await db.select({ id: entities.id, gstin: entities.gstin }).from(entities).where(inArray(entities.id, entityIds))
+          : [];
+      const entityById = new Map(entityRows.map((e) => [e.id, e]));
+
       const gstin = process.env.GSTIN?.trim() || null;
       const supplies = list.map((r) => {
-        const tl = tenantById.get(r.tenantLicenceId);
+        const eid = trackBEntityIdForGstrInvoice(r);
+        if (eid) {
+          const ent = entityById.get(eid);
+          const rawGstin = ent?.gstin != null && String(ent.gstin).trim() ? String(ent.gstin).trim() : null;
+          return {
+            invoiceNo: r.invoiceNo ?? r.id,
+            periodMonth: r.periodMonth,
+            tenantLicenceId: r.tenantLicenceId,
+            counterpartyGstin: rawGstin,
+            counterpartyGstinSource: "trackBEntity" as const,
+            isNonGstEntity: false,
+            customerRef: r.tenantLicenceId,
+            assetId: r.assetId,
+            yardId: r.yardId,
+            taxableValue: r.rentAmount,
+            cgst: r.cgst,
+            sgst: r.sgst,
+            totalAmount: r.totalAmount,
+            tdsApplicable: r.tdsApplicable,
+            tdsAmount: r.tdsAmount,
+          };
+        }
+        const tKey = traderLicenceKeyForGstr(r.tenantLicenceId);
+        const tl = tKey ? tenantById.get(tKey) : undefined;
         const rawGstin = tl?.gstin != null && String(tl.gstin).trim() ? String(tl.gstin).trim() : null;
         return {
           invoiceNo: r.invoiceNo ?? r.id,
           periodMonth: r.periodMonth,
           tenantLicenceId: r.tenantLicenceId,
           counterpartyGstin: rawGstin,
+          counterpartyGstinSource: "traderLicence" as const,
           isNonGstEntity: Boolean(tl?.isNonGstEntity),
           customerRef: r.tenantLicenceId,
           assetId: r.assetId,

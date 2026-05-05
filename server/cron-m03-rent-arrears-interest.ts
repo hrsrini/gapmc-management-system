@@ -3,7 +3,7 @@
  * - Marks Approved invoices as Overdue when past period-month end and still outstanding.
  * - Posts incremental Interest debits: cumulative interest(due→today) minus sum of prior Interest debits for that invoice.
  */
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "./db";
@@ -11,10 +11,9 @@ import { iomsReceipts, rentDepositLedger, rentInvoices } from "@shared/db-schema
 import { writeAuditLogSystem } from "./audit";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-interest";
-import { unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
+import { latestRentDepositLedgerRowForInvoice, rentInvoiceLedgerScope } from "./rent-ledger-scope";
 
 type RentInvoiceRow = InferSelectModel<typeof rentInvoices>;
-type LedgerRow = InferSelectModel<typeof rentDepositLedger>;
 
 function nonGstChargesSum(json: string | null | undefined): number {
   if (json == null || String(json).trim() === "") return 0;
@@ -51,16 +50,6 @@ async function sumInterestPostedForInvoice(invoiceId: string): Promise<number> {
     .from(rentDepositLedger)
     .where(and(eq(rentDepositLedger.invoiceId, invoiceId), eq(rentDepositLedger.entryType, "Interest")));
   return Number(r?.s ?? 0);
-}
-
-async function latestLedgerRow(tenantLicenceId: string, assetId: string): Promise<LedgerRow | undefined> {
-  const rows = await db
-    .select()
-    .from(rentDepositLedger)
-    .where(and(eq(rentDepositLedger.tenantLicenceId, tenantLicenceId), eq(rentDepositLedger.assetId, assetId)))
-    .orderBy(desc(rentDepositLedger.entryDate), desc(rentDepositLedger.id))
-    .limit(1);
-  return rows[0];
 }
 
 function interestPrincipal(inv: RentInvoiceRow, outstanding: number): number {
@@ -136,15 +125,16 @@ export async function runM03RentArrearsInterest(): Promise<{
       continue;
     }
 
-    const prev = await latestLedgerRow(inv.tenantLicenceId, inv.assetId);
+    const prev = await latestRentDepositLedgerRowForInvoice(inv);
     const prevBal = prev != null ? Number(prev.balance ?? 0) : 0;
     const balance = prevBal + delta;
     const id = nanoid();
 
+    const intScope = rentInvoiceLedgerScope(inv);
     await db.insert(rentDepositLedger).values({
       id,
-      tenantLicenceId: inv.tenantLicenceId,
-      unifiedEntityId: unifiedEntityIdFromTrackA(inv.tenantLicenceId),
+      tenantLicenceId: intScope.ledgerTenantLicenceId,
+      unifiedEntityId: intScope.unifiedEntityId,
       assetId: inv.assetId,
       entryDate: asOfDate,
       entryType: "Interest",

@@ -48,6 +48,7 @@
     "db:apply-m02-trackb-entities": "dotenv -e .env -- tsx scripts/apply-m02-trackb-entities.ts",
     "db:apply-m02-pre-receipts": "dotenv -e .env -- tsx scripts/apply-m02-pre-receipts.ts",
     "db:apply-m02-unified-entities-rent-revisions": "dotenv -e .env -- tsx scripts/apply-m02-unified-entities-rent-revisions.ts",
+    "db:apply-m02-premises-allocation-us-m02-003": "dotenv -e .env -- tsx scripts/apply-m02-premises-allocation-us-m02-003.ts",
     "db:apply-m02-licence-renewal-parent": "dotenv -e .env -- tsx scripts/apply-m02-licence-renewal-parent.ts",
     "db:apply-m03-rent-revision-workflow": "dotenv -e .env -- tsx scripts/apply-m03-rent-revision-workflow.ts",
     "db:backfill-rent-invoice-numbers": "dotenv -e .env -- tsx scripts/backfill-rent-invoice-numbers.ts",

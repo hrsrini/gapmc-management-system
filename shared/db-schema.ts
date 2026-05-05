@@ -735,6 +735,8 @@ export const assets = gapmc.table("assets", {
   fileNumber: text("file_number"),
   orderNumber: text("order_number"),
   isActive: boolean("is_active").default(true),
+  /** US-M02-003 / E-PRE-004: Active | UnsafeForOccupation | Demolished */
+  premisesStatus: text("premises_status").default("Active").notNull(),
 });
 
 export const assetAllotments = gapmc.table("asset_allotments", {
@@ -792,10 +794,35 @@ export const entityAllotments = gapmc.table("entity_allotments", {
   allotteeName: text("allottee_name").notNull(),
   fromDate: text("from_date").notNull(),
   toDate: text("to_date").notNull(),
-  status: text("status").notNull(), // Active | Vacated
+  /** Pending | Active | Vacating | Vacated (tenancy lifecycle after workflow). */
+  status: text("status").notNull(),
   securityDeposit: doublePrecision("security_deposit"),
   doUser: text("do_user"),
+  dvUser: text("dv_user"),
   daUser: text("da_user"),
+  approvalStatus: text("approval_status").notNull().default("Draft"),
+  premisesRefNo: text("premises_ref_no"),
+  monthlyRent: doublePrecision("monthly_rent").notNull().default(0),
+  gstApplicable: boolean("gst_applicable").notNull().default(true),
+  gstLocked: boolean("gst_locked").notNull().default(false),
+  agreementType: text("agreement_type").notNull().default("RentalAgreement"),
+  agreementDocFile: text("agreement_doc_file"),
+  agreementDocUploadedAt: text("agreement_doc_uploaded_at"),
+  rentRevisionMode: text("rent_revision_mode").notNull().default("StandardConsecutiveRenewal"),
+  consecutiveRenewalCount: integer("consecutive_renewal_count").notNull().default(0),
+  verifiedAt: text("verified_at"),
+  approvedAt: text("approved_at"),
+  workflowRevisionCount: integer("workflow_revision_count").notNull().default(0),
+  dvReturnRemarks: text("dv_return_remarks"),
+  rejectionRemarks: text("rejection_remarks"),
+  agreementGapDaOverride: boolean("agreement_gap_da_override").notNull().default(false),
+  daGstOverride: boolean("da_gst_override").notNull().default(false),
+});
+
+/** US-M02-003: sequence for `[PREMISES-ID]-[YARD]-[NN]` premises ref nos. */
+export const premisesRefCounters = gapmc.table("premises_ref_counters", {
+  premisesKey: text("premises_key").primaryKey(),
+  lastNn: integer("last_nn").notNull().default(0),
 });
 
 /** M-02 Track B: Pre-receipts for govt entities (issued/dispatched/acknowledged/settled). */
@@ -840,7 +867,12 @@ export const rentInvoices = gapmc.table("rent_invoices", {
   id: text("id").primaryKey(),
   invoiceNo: text("invoice_no").unique(),
   allotmentId: text("allotment_id").notNull(),
+  /** Track A: trader licence id; Track B entity rent: unified `TB:<entity_id>` (US-M02-003). */
   tenantLicenceId: text("tenant_licence_id").notNull(),
+  /** TB entity id when allotment_kind is Entity (cron / M-03 for Track B allocations). */
+  entityId: text("entity_id"),
+  /** TraderLicence | Entity */
+  allotmentKind: text("allotment_kind").notNull().default("TraderLicence"),
   assetId: text("asset_id").notNull(),
   yardId: text("yard_id").notNull(),
   periodMonth: text("period_month").notNull(),
@@ -867,7 +899,7 @@ export const rentInvoices = gapmc.table("rent_invoices", {
 
 export const rentDepositLedger = gapmc.table("rent_deposit_ledger", {
   id: text("id").primaryKey(),
-  tenantLicenceId: text("tenant_licence_id").notNull(),
+  tenantLicenceId: text("tenant_licence_id"),
   /** Denormalized Track A unified id (`TA:<tenant_licence_id>`); rent ledger is tenant-licence scoped. */
   unifiedEntityId: text("unified_entity_id"),
   assetId: text("asset_id").notNull(),

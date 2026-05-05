@@ -55,6 +55,8 @@ export function gstr1CounterpartyGstinIssues(
     tenantLicenceId: string;
     counterpartyGstin: string | null;
     isNonGstEntity?: boolean | null;
+    /** Rent invoices: Track A licence vs Track B `TB:<entity_id>` counterparty. */
+    counterpartyGstinSource?: "traderLicence" | "trackBEntity";
   }[],
 ): string[] {
   const w: string[] = [];
@@ -62,9 +64,11 @@ export function gstr1CounterpartyGstinIssues(
     if (l.isNonGstEntity) continue;
     const raw = (l.counterpartyGstin ?? "").trim();
     if (!raw) {
-      w.push(
-        `Invoice ${l.invoiceNo}: tenant licence ${l.tenantLicenceId} has no GSTIN; set trader_licences.gstin for B2B ctin.`,
-      );
+      const detail =
+        l.counterpartyGstinSource === "trackBEntity"
+          ? `Track B entity ${l.tenantLicenceId} has no GSTIN; set gstin on the entity master (M-02) for B2B ctin.`
+          : `tenant licence ${l.tenantLicenceId} has no GSTIN; set trader_licences.gstin for B2B ctin.`;
+      w.push(`Invoice ${l.invoiceNo}: ${detail}`);
     } else if (!isPlausibleGstin(raw)) {
       w.push(`Invoice ${l.invoiceNo}: GSTIN "${raw}" failed basic structural validation.`);
     }
@@ -88,6 +92,7 @@ export type RentGstr1SupplyForDraft = {
   tenantLicenceId: string;
   /** Trader licence GSTIN when present (B2B counterparty). */
   counterpartyGstin: string | null;
+  counterpartyGstinSource?: "traderLicence" | "trackBEntity";
   /** Declared unregistered / non-GST tenant — ctin omitted in draft mapping. */
   isNonGstEntity?: boolean | null;
   customerRef: string | null;

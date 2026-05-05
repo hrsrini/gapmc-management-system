@@ -22,7 +22,9 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -30,6 +32,8 @@ import { useAuth } from "@/context/AuthContext";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { DEFAULT_RENT_REVISION_BASIS, type RentRevisionBasis } from "@shared/rent-revision-basis";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
+import { allotmentAssetIdByPk } from "./rent-allotments-ui";
 
 interface RevisionRow {
   id: string;
@@ -48,12 +52,6 @@ interface RevisionRow {
   dvReturnRemarks?: string | null;
   createdAt?: string | null;
   createdBy?: string | null;
-}
-interface AllotmentRef {
-  id: string;
-  assetId: string;
-  traderLicenceId: string;
-  status: string;
 }
 interface AssetRef {
   id: string;
@@ -77,7 +75,7 @@ const REVISION_BASIS_LABEL: Record<string, string> = {
 
 const columns: ReportTableColumn[] = [
   { key: "effectiveMonth", header: "Effective month", sortField: "effectiveMonth" },
-  { key: "allotmentId", header: "Allotment" },
+  { key: "allotmentDisplay", header: "Allotment", sortField: "allotmentSort" },
   { key: "assetLabel", header: "Asset" },
   { key: "_status", header: "Status" },
   { key: "_basis", header: "Basis" },
@@ -96,13 +94,30 @@ export default function RentRevisions() {
   const isAdmin = roles.includes("ADMIN");
 
   const { data: revisions = [], isLoading, isError } = useQuery<RevisionRow[]>({ queryKey: ["/api/ioms/rent/revisions"] });
-  const { data: allotments = [] } = useQuery<AllotmentRef[]>({ queryKey: ["/api/ioms/asset-allotments"] });
+  const { data: allotments = [] } = useQuery<AssetAllotmentRow[]>({ queryKey: ["/api/ioms/asset-allotments"] });
+  const { data: entityAllotments = [] } = useQuery<EntityAllotmentRow[]>({
+    queryKey: ["/api/ioms/entity-allotments"],
+  });
   const { data: assets = [] } = useQuery<AssetRef[]>({ queryKey: ["/api/ioms/assets"] });
   const { data: systemConfig = {} } = useQuery<Record<string, string>>({
     queryKey: ["/api/system/config"],
   });
   const assetLabelById = useMemo(() => Object.fromEntries(assets.map((a) => [a.id, a.assetId])), [assets]);
-  const allotmentById = useMemo(() => Object.fromEntries(allotments.map((a) => [a.id, a])), [allotments]);
+  const allotmentPkMap = useMemo(() => allotmentAssetIdByPk(allotments, entityAllotments), [allotments, entityAllotments]);
+
+  const pickableTrader = useMemo(() => allotments.filter((a) => a.status === "Active"), [allotments]);
+  const pickableEntity = useMemo(
+    () =>
+      entityAllotments.filter((e) => String(e.approvalStatus ?? "") === "Approved" && e.status === "Active"),
+    [entityAllotments],
+  );
+
+  const knownAllotmentIds = useMemo(() => {
+    const s = new Set<string>();
+    pickableTrader.forEach((a) => s.add(a.id));
+    pickableEntity.forEach((e) => s.add(e.id));
+    return s;
+  }, [pickableTrader, pickableEntity]);
 
   const [draft, setDraft] = useState({
     allotmentId: "",
@@ -118,6 +133,16 @@ export default function RentRevisions() {
   const percentPrefillApplied = useRef(false);
 
   const allotmentIdTrim = draft.allotmentId.trim();
+
+  const orphanAllotmentIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of revisions) {
+      if (!knownAllotmentIds.has(r.allotmentId)) s.add(r.allotmentId);
+    }
+    const typed = draft.allotmentId.trim();
+    if (typed && !knownAllotmentIds.has(typed)) s.add(typed);
+    return Array.from(s);
+  }, [revisions, knownAllotmentIds, draft.allotmentId]);
 
   useEffect(() => {
     if (percentPrefillApplied.current) return;
@@ -226,8 +251,9 @@ export default function RentRevisions() {
 
   const rows = useMemo((): Record<string, unknown>[] => {
     return (revisions ?? []).map((r) => {
-      const all = allotmentById[r.allotmentId];
-      const assetLabel = all ? (assetLabelById[all.assetId] ?? all.assetId) : "—";
+      const meta = allotmentPkMap.get(r.allotmentId);
+      const assetLabel = meta ? (assetLabelById[meta.assetId] ?? meta.assetId) : "—";
+      const allotmentDisplay = meta ? `${r.allotmentId} — ${meta.label}` : r.allotmentId;
       const st = String(r.status ?? "Draft");
       const isDraft = st === "Draft";
       const isVerified = st === "Verified";
@@ -257,6 +283,8 @@ export default function RentRevisions() {
       return {
         ...r,
         assetLabel,
+        allotmentDisplay,
+        allotmentSort: meta?.label ?? r.allotmentId,
         _status: statusBadge,
         _basis: REVISION_BASIS_LABEL[String(r.revisionBasis ?? "FixedMonthlyRent")] ?? String(r.revisionBasis ?? "—"),
         _rent: `₹${Number(r.rentAmount ?? 0).toLocaleString()}`,
@@ -317,7 +345,17 @@ export default function RentRevisions() {
         ),
       };
     });
-  }, [revisions, allotmentById, assetLabelById, deleteMutation, updateMutation, canVerify, canApprove, isAdmin, user?.id]);
+  }, [
+    revisions,
+    allotmentPkMap,
+    assetLabelById,
+    deleteMutation,
+    updateMutation,
+    canVerify,
+    canApprove,
+    isAdmin,
+    user?.id,
+  ]);
 
   if (isError) {
     return (
@@ -357,15 +395,55 @@ export default function RentRevisions() {
               approved <span className="font-mono">rent_amount</span> as INR/month. Baseline rent for an allotment matches
               invoice/cron resolution (GET{" "}
               <span className="font-mono">/api/ioms/rent/allotments/:id/rent-context</span>
-              ); you can apply a percentage to pre-fill the new rent.
+              ) for both trader and Track B premises allocation ids; you can apply a percentage to pre-fill the new rent.
             </span>
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-            <div className="space-y-1">
-              <Label>Allotment ID</Label>
-              <Input value={draft.allotmentId} onChange={(e) => setDraft((s) => ({ ...s, allotmentId: e.target.value }))} placeholder="asset_allotments.id" />
+            <div className="space-y-1 md:col-span-2">
+              <Label>Allotment</Label>
+              <Select
+                value={draft.allotmentId.trim() || undefined}
+                onValueChange={(v) => setDraft((s) => ({ ...s, allotmentId: v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select trader or Track B premises" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72 overflow-y-auto">
+                  {pickableTrader.length > 0 ? (
+                    <SelectGroup>
+                      <SelectLabel className="text-muted-foreground">Trader (Track A)</SelectLabel>
+                      {pickableTrader.map((a) => (
+                        <SelectItem key={`t-${a.id}`} value={a.id}>
+                          {a.allotteeName} — {a.assetId}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ) : null}
+                  {pickableEntity.length > 0 ? (
+                    <SelectGroup>
+                      <SelectLabel className="text-muted-foreground">Track B premises (approved)</SelectLabel>
+                      {pickableEntity.map((e) => (
+                        <SelectItem key={`e-${e.id}`} value={e.id}>
+                          {e.allotteeName} — {e.premisesRefNo?.trim() || e.assetId}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ) : null}
+                  {orphanAllotmentIds.map((oid) => (
+                    <SelectItem key={`o-${oid}`} value={oid}>
+                      Other / existing: {oid}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input
+                className="mt-1 font-mono text-xs h-8"
+                value={draft.allotmentId}
+                onChange={(e) => setDraft((s) => ({ ...s, allotmentId: e.target.value }))}
+                placeholder="Or paste allotment id directly"
+              />
             </div>
             <div className="space-y-1">
               <Label>Effective month</Label>
@@ -490,7 +568,15 @@ export default function RentRevisions() {
             <ClientDataGrid
               columns={columns}
               sourceRows={rows}
-              searchKeys={["effectiveMonth", "allotmentId", "remarks", "assetLabel", "status", "revisionBasis"]}
+              searchKeys={[
+                "effectiveMonth",
+                "allotmentId",
+                "allotmentDisplay",
+                "remarks",
+                "assetLabel",
+                "status",
+                "revisionBasis",
+              ]}
               searchPlaceholder="Search revisions…"
               defaultSortKey="effectiveMonth"
               defaultSortDir="desc"

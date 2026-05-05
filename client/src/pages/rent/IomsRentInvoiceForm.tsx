@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -9,29 +9,26 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, ArrowLeft, Loader2 } from "lucide-react";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
+import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
+import {
+  activeAssetAllotmentsInYard,
+  billableEntityAllotmentsInYard,
+} from "./rent-allotments-ui";
 
 interface Yard {
   id: string;
   name: string;
   code: string;
-}
-interface Allotment {
-  id: string;
-  assetId: string;
-  traderLicenceId: string;
-  allotteeName: string;
-  fromDate: string;
-  toDate: string;
-  status: string;
 }
 interface Asset {
   id: string;
@@ -40,13 +37,16 @@ interface Asset {
   assetType: string;
 }
 
+type Selection = "" | `trader:${string}` | `entity:${string}`;
+
 export default function IomsRentInvoiceForm() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   const [yardId, setYardId] = useState("");
-  const [allotmentId, setAllotmentId] = useState("");
+  /** Composite key so trader vs entity rows never collide in the picker. */
+  const [selection, setSelection] = useState<Selection>("");
   const [periodMonth, setPeriodMonth] = useState("");
   const [rentAmount, setRentAmount] = useState("");
   const [nonGstLabel, setNonGstLabel] = useState("Garbage / Premises");
@@ -56,11 +56,19 @@ export default function IomsRentInvoiceForm() {
   const [isGovtEntity, setIsGovtEntity] = useState(false);
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
-  const { data: allotments = [], isLoading: allotmentsLoading } = useQuery<Allotment[]>({
+  const { data: allotments = [], isLoading: allotmentsLoading } = useQuery<AssetAllotmentRow[]>({
     queryKey: ["/api/ioms/asset-allotments"],
     queryFn: async () => {
       const res = await fetch("/api/ioms/asset-allotments", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch allotments");
+      return res.json();
+    },
+  });
+  const { data: entityAllotments = [], isLoading: entityAllotmentsLoading } = useQuery<EntityAllotmentRow[]>({
+    queryKey: ["/api/ioms/entity-allotments"],
+    queryFn: async () => {
+      const res = await fetch("/api/ioms/entity-allotments", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch entity allotments");
       return res.json();
     },
   });
@@ -82,18 +90,51 @@ export default function IomsRentInvoiceForm() {
     return m;
   }, [assets]);
 
-  const allotmentsForYard = useMemo(() => {
-    if (!yardId) return allotments.filter((a) => a.status === "Active");
-    const yardAssetIds = new Set(assets.filter((a) => a.yardId === yardId).map((a) => a.assetId));
-    return allotments.filter((a) => a.status === "Active" && yardAssetIds.has(a.assetId));
-  }, [allotmentId, allotments, assets, yardId]);
+  const yardAssetIdSet = useMemo(() => {
+    if (!yardId) return null as Set<string> | null;
+    return new Set(assets.filter((a) => a.yardId === yardId).map((a) => a.assetId));
+  }, [assets, yardId]);
 
-  const selectedAllotment = useMemo(
-    () => allotments.find((a) => a.id === allotmentId),
-    [allotments, allotmentId]
-  );
-  const selectedAsset = selectedAllotment ? assetByAssetId[selectedAllotment.assetId] ?? assetByAssetId[selectedAllotment.assetId] : null;
+  const traderOptions = useMemo(() => {
+    if (!yardAssetIdSet) return allotments.filter((a) => a.status === "Active");
+    return activeAssetAllotmentsInYard(allotments, yardAssetIdSet);
+  }, [allotments, yardAssetIdSet]);
+
+  const entityOptions = useMemo(() => {
+    if (!yardAssetIdSet) {
+      return entityAllotments.filter(
+        (e) => String(e.approvalStatus ?? "") === "Approved" && e.status === "Active",
+      );
+    }
+    return billableEntityAllotmentsInYard(entityAllotments, yardAssetIdSet);
+  }, [entityAllotments, yardAssetIdSet]);
+
+  const selectedTrader = useMemo(() => {
+    if (!selection.startsWith("trader:")) return null;
+    const id = selection.slice("trader:".length);
+    return allotments.find((a) => a.id === id) ?? null;
+  }, [selection, allotments]);
+
+  const selectedEntity = useMemo(() => {
+    if (!selection.startsWith("entity:")) return null;
+    const id = selection.slice("entity:".length);
+    return entityAllotments.find((e) => e.id === id) ?? null;
+  }, [selection, entityAllotments]);
+
+  const selectedAsset = selectedTrader
+    ? assetByAssetId[selectedTrader.assetId] ?? null
+    : selectedEntity
+      ? assetByAssetId[selectedEntity.assetId] ?? null
+      : null;
   const resolvedYardId = selectedAsset?.yardId ?? yardId;
+  const isEntitySelection = Boolean(selectedEntity);
+
+  useEffect(() => {
+    if (!selectedEntity) return;
+    const mr = selectedEntity.monthlyRent;
+    if (mr == null || !Number.isFinite(Number(mr)) || Number(mr) <= 0) return;
+    setRentAmount((prev) => (String(prev).trim() === "" ? String(mr) : prev));
+  }, [selectedEntity?.id]);
 
   const rentNum = Number(rentAmount) || 0;
   const nonGstNum = Number(nonGstAmount) || 0;
@@ -121,10 +162,17 @@ export default function IomsRentInvoiceForm() {
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
 
+  const pickerLoading = allotmentsLoading || entityAllotmentsLoading;
+  const pickerEmpty = traderOptions.length === 0 && entityOptions.length === 0;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!allotmentId || !selectedAllotment || !resolvedYardId || !periodMonth.trim()) {
-      toast({ title: "Missing fields", description: "Select allotment and period, and ensure yard is set.", variant: "destructive" });
+    if (!selection || (!selectedTrader && !selectedEntity) || !resolvedYardId || !periodMonth.trim()) {
+      toast({
+        title: "Missing fields",
+        description: "Select an allotment (trader or Track B premises) and period; ensure yard is set.",
+        variant: "destructive",
+      });
       return;
     }
     if (rentNum < 0 || totalAmount < 0) {
@@ -135,18 +183,35 @@ export default function IomsRentInvoiceForm() {
       toast({ title: "Non-GST label missing", description: "Enter a label for non-GST charge line.", variant: "destructive" });
       return;
     }
-    createMutation.mutate({
+
+    const base: Record<string, unknown> = {
       yardId: resolvedYardId,
-      allotmentId: selectedAllotment.id,
-      tenantLicenceId: selectedAllotment.traderLicenceId,
-      assetId: selectedAllotment.assetId,
       periodMonth: periodMonth.trim(),
       rentAmount: rentNum,
       nonGstCharges: nonGstNum > 0 ? [{ label: nonGstLabel.trim(), amount: nonGstNum }] : [],
       cgst: cgstNum,
       sgst: sgstNum,
       totalAmount,
-      isGovtEntity: isGovtEntity,
+    };
+
+    if (selectedTrader) {
+      createMutation.mutate({
+        ...base,
+        allotmentId: selectedTrader.id,
+        tenantLicenceId: selectedTrader.traderLicenceId,
+        assetId: selectedTrader.assetId,
+        isGovtEntity,
+      });
+      return;
+    }
+
+    createMutation.mutate({
+      ...base,
+      allotmentId: selectedEntity!.id,
+      tenantLicenceId: "",
+      assetId: selectedEntity!.assetId,
+      /** Server derives GST / govt flags from the approved premises allocation row. */
+      isGovtEntity: false,
     });
   };
 
@@ -167,32 +232,71 @@ export default function IomsRentInvoiceForm() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Yard (filter)</Label>
-                <Select value={yardId || "all"} onValueChange={(v) => setYardId(v === "all" ? "" : v)}>
+                <Select
+                  value={yardId || "all"}
+                  onValueChange={(v) => {
+                    setYardId(v === "all" ? "" : v);
+                    setSelection("");
+                  }}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="All yards" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All yards</SelectItem>
                     {yards.map((y) => (
-                      <SelectItem key={y.id} value={y.id}>{y.name} ({y.code})</SelectItem>
+                      <SelectItem key={y.id} value={y.id}>
+                        {y.name} ({y.code})
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
                 <Label>Allotment *</Label>
-                <Select value={allotmentId} onValueChange={setAllotmentId} disabled={allotmentsLoading}>
+                <Select
+                  value={selection || undefined}
+                  onValueChange={(v) => setSelection(v as Selection)}
+                  disabled={pickerLoading}
+                >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select active allotment" />
+                    <SelectValue placeholder={pickerLoading ? "Loading…" : "Select allotment"} />
                   </SelectTrigger>
                   <SelectContent>
-                    {allotmentsForYard.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.allotteeName} — {a.assetId} ({formatYmdToDisplay(a.fromDate)} to {formatYmdToDisplay(a.toDate)})
-                      </SelectItem>
-                    ))}
+                    {pickerEmpty ? (
+                      <div className="px-2 py-3 text-sm text-muted-foreground">No billable allotments for this filter.</div>
+                    ) : (
+                      <>
+                        {traderOptions.length > 0 ? (
+                          <SelectGroup>
+                            <SelectLabel>Trader licence (Track A)</SelectLabel>
+                            {traderOptions.map((a) => (
+                              <SelectItem key={`trader:${a.id}`} value={`trader:${a.id}`}>
+                                {a.allotteeName} — {a.assetId} ({formatYmdToDisplay(a.fromDate)} to {formatYmdToDisplay(a.toDate)})
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        ) : null}
+                        {entityOptions.length > 0 ? (
+                          <SelectGroup>
+                            <SelectLabel>Track B premises (approved)</SelectLabel>
+                            {entityOptions.map((e) => (
+                              <SelectItem key={`entity:${e.id}`} value={`entity:${e.id}`}>
+                                {e.allotteeName} — {e.premisesRefNo?.trim() || e.assetId} (
+                                {formatYmdToDisplay(e.fromDate)} to {formatYmdToDisplay(e.toDate)})
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        ) : null}
+                      </>
+                    )}
                   </SelectContent>
                 </Select>
+                {isEntitySelection ? (
+                  <p className="text-xs text-muted-foreground">
+                    Tenant id, GST profile, and agreement checks follow the approved premises allocation on the server.
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -222,23 +326,11 @@ export default function IomsRentInvoiceForm() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>CGST (₹)</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  value={cgst}
-                  onChange={(e) => setCgst(e.target.value)}
-                />
+                <Input type="number" min={0} step={0.01} value={cgst} onChange={(e) => setCgst(e.target.value)} />
               </div>
               <div className="space-y-2">
                 <Label>SGST (₹)</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  value={sgst}
-                  onChange={(e) => setSgst(e.target.value)}
-                />
+                <Input type="number" min={0} step={0.01} value={sgst} onChange={(e) => setSgst(e.target.value)} />
               </div>
             </div>
 
@@ -270,8 +362,15 @@ export default function IomsRentInvoiceForm() {
             </div>
 
             <div className="flex items-center gap-2">
-              <Switch id="govt" checked={isGovtEntity} onCheckedChange={setIsGovtEntity} />
-              <Label htmlFor="govt">Govt entity (Pre-Receipt / Track B)</Label>
+              <Switch
+                id="govt"
+                checked={isGovtEntity}
+                onCheckedChange={setIsGovtEntity}
+                disabled={isEntitySelection}
+              />
+              <Label htmlFor="govt" className={isEntitySelection ? "text-muted-foreground" : undefined}>
+                Govt entity / pre-receipt-style exempt rent (Track A traders only)
+              </Label>
             </div>
 
             <div className="flex gap-2 pt-2">

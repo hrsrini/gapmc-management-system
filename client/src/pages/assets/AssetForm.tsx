@@ -16,6 +16,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { Building2, Loader2, AlertCircle } from "lucide-react";
+import { PREMISES_STATUS_VALUES } from "@shared/premises-allocation";
 
 interface Yard {
   id: string;
@@ -35,6 +36,7 @@ interface Asset {
   fileNumber?: string | null;
   orderNumber?: string | null;
   isActive?: boolean | null;
+  premisesStatus?: string | null;
 }
 
 const ASSET_TYPES = ["Shop", "Stall", "Godown", "Office", "Building"];
@@ -56,6 +58,7 @@ export default function AssetForm() {
   const [fileNumber, setFileNumber] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
   const [isActive, setIsActive] = useState(true);
+  const [premisesStatus, setPremisesStatus] = useState<string>("Active");
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
   const { data: existing, isError: assetError } = useQuery<Asset>({
@@ -80,6 +83,8 @@ export default function AssetForm() {
     setFileNumber(existing.fileNumber ?? "");
     setOrderNumber(existing.orderNumber ?? "");
     setIsActive(existing.isActive !== false);
+    const ps = String(existing.premisesStatus ?? "").trim();
+    setPremisesStatus(PREMISES_STATUS_VALUES.includes(ps as (typeof PREMISES_STATUS_VALUES)[number]) ? ps : "Active");
   }, [existing]);
 
   const createMutation = useMutation({
@@ -145,6 +150,7 @@ export default function AssetForm() {
       fileNumber: fileNumber.trim() || null,
       orderNumber: orderNumber.trim() || null,
       isActive,
+      premisesStatus,
     };
     if (isEdit) updateMutation.mutate(payload);
     else createMutation.mutate(payload);
@@ -246,6 +252,27 @@ export default function AssetForm() {
                 </Select>
               </div>
               <div className="space-y-2">
+                <Label>Premises status</Label>
+                <Select value={premisesStatus} onValueChange={setPremisesStatus}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PREMISES_STATUS_VALUES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s === "UnsafeForOccupation" ? "Unsafe for occupation" : s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Only <span className="font-medium text-foreground">Active</span> premises can receive a new allocation.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2 md:col-span-2">
                 <Label>Complex name</Label>
                 <Input value={complexName} onChange={(e) => setComplexName(e.target.value)} placeholder="Optional" />
               </div>

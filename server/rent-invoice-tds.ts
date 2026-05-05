@@ -1,9 +1,10 @@
 import { and, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { db } from "./db";
-import { rentInvoices, traderLicences } from "@shared/db-schema";
+import { rentInvoices, traderLicences, entities } from "@shared/db-schema";
 import type { SystemConfigKey } from "@shared/system-config-defaults";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { isValidYearMonthYm } from "./rent-gstr1";
+import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
@@ -57,6 +58,36 @@ export async function getTenantLicencePanNormalized(tenantLicenceId: string): Pr
   return p || null;
 }
 
+export async function getEntityPanNormalized(entityId: string): Promise<string | null> {
+  if (!entityId) return null;
+  const [row] = await db.select({ pan: entities.pan }).from(entities).where(eq(entities.id, entityId)).limit(1);
+  const p = row?.pan?.trim().toUpperCase();
+  return p || null;
+}
+
+export async function sumApprovedPaidRentYtdBeforeMonthForEntity(args: {
+  entityId: string;
+  fyStartYm: string;
+  periodMonthExclusive: string;
+  excludeInvoiceId?: string;
+}): Promise<number> {
+  if (!args.entityId) return 0;
+  const parts = [
+    eq(rentInvoices.entityId, args.entityId),
+    gte(rentInvoices.periodMonth, args.fyStartYm),
+    sql`${rentInvoices.periodMonth} < ${args.periodMonthExclusive}`,
+    inArray(rentInvoices.status, ["Approved", "Paid"]),
+  ];
+  if (args.excludeInvoiceId) parts.push(ne(rentInvoices.id, args.excludeInvoiceId));
+  const [r] = await db
+    .select({
+      s: sql<number>`coalesce(sum(${rentInvoices.rentAmount}), 0)::double precision`,
+    })
+    .from(rentInvoices)
+    .where(and(...parts));
+  return Number(r?.s ?? 0);
+}
+
 export function computeRentTdsForMonthlyInvoice(opts: {
   monthlyRent: number;
   priorYtdApprovedRentInFy: number;
@@ -108,6 +139,16 @@ export async function resolveRentInvoiceTdsFields(args: {
   /** When recomputing for an existing invoice, exclude it from YTD so prior months still count. */
   excludeInvoiceId?: string;
 }): Promise<{ tdsApplicable: boolean; tdsAmount: number } | { error: string }> {
+  const tb = parseUnifiedEntityId(args.tenantLicenceId);
+  if (tb?.kind === "TB") {
+    return resolveRentInvoiceTdsFieldsForEntity({
+      entityId: tb.refId,
+      rentAmount: args.rentAmount,
+      periodMonth: args.periodMonth,
+      isGstExemptTenant: args.isGstExemptTenant,
+      excludeInvoiceId: args.excludeInvoiceId,
+    });
+  }
   if (!isValidYearMonthYm(args.periodMonth)) {
     return { error: "periodMonth must be YYYY-MM for rent TDS (Indian FY cumulative)." };
   }
@@ -118,6 +159,39 @@ export async function resolveRentInvoiceTdsFields(args: {
   const fyStart = indianFyStartYmForPeriodMonth(args.periodMonth);
   const priorYtd = await sumApprovedPaidRentYtdBeforeMonth({
     tenantLicenceId: args.tenantLicenceId,
+    fyStartYm: fyStart,
+    periodMonthExclusive: args.periodMonth,
+    excludeInvoiceId: args.excludeInvoiceId,
+  });
+  const r = computeRentTdsForMonthlyInvoice({
+    monthlyRent: args.rentAmount,
+    priorYtdApprovedRentInFy: priorYtd,
+    isGstExemptTenant: args.isGstExemptTenant,
+    panFromLicence: pan,
+    annualThresholdInr: threshold,
+    tdsRatePercent: rate,
+  });
+  if (!r.ok) return { error: r.message };
+  return { tdsApplicable: r.tdsApplicable, tdsAmount: r.tdsAmount };
+}
+
+export async function resolveRentInvoiceTdsFieldsForEntity(args: {
+  entityId: string;
+  rentAmount: number;
+  periodMonth: string;
+  isGstExemptTenant: boolean;
+  excludeInvoiceId?: string;
+}): Promise<{ tdsApplicable: boolean; tdsAmount: number } | { error: string }> {
+  if (!isValidYearMonthYm(args.periodMonth)) {
+    return { error: "periodMonth must be YYYY-MM for rent TDS (Indian FY cumulative)." };
+  }
+  const cfg = await getMergedSystemConfig();
+  const threshold = parseSystemConfigNumber(cfg, THRESHOLD_KEY);
+  const rate = parseSystemConfigNumber(cfg, RATE_KEY);
+  const pan = await getEntityPanNormalized(args.entityId);
+  const fyStart = indianFyStartYmForPeriodMonth(args.periodMonth);
+  const priorYtd = await sumApprovedPaidRentYtdBeforeMonthForEntity({
+    entityId: args.entityId,
     fyStartYm: fyStart,
     periodMonthExclusive: args.periodMonth,
     excludeInvoiceId: args.excludeInvoiceId,

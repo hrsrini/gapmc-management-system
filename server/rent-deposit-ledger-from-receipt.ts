@@ -4,26 +4,15 @@
  *
  * Running balance rule (same as seed samples): `balance = previousBalance + debit - credit`.
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "./db";
 import { writeAuditLogSystem } from "./audit";
 import { iomsReceipts, rentDepositLedger, rentInvoices } from "@shared/db-schema";
-import { unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
+import { latestRentDepositLedgerRowForInvoice, rentInvoiceLedgerScope } from "./rent-ledger-scope";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
-type LedgerRow = InferSelectModel<typeof rentDepositLedger>;
-
-async function latestLedgerRow(tenantLicenceId: string, assetId: string): Promise<LedgerRow | undefined> {
-  const rows = await db
-    .select()
-    .from(rentDepositLedger)
-    .where(and(eq(rentDepositLedger.tenantLicenceId, tenantLicenceId), eq(rentDepositLedger.assetId, assetId)))
-    .orderBy(desc(rentDepositLedger.entryDate), desc(rentDepositLedger.id))
-    .limit(1);
-  return rows[0];
-}
 
 function isM03RentReceipt(r: ReceiptRow): boolean {
   return (
@@ -51,17 +40,18 @@ export async function recordRentCollectionForM03Receipt(r: ReceiptRow): Promise<
   const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, r.sourceRecordId!)).limit(1);
   if (!inv) return { message: "Rent deposit ledger: linked invoice not found; no Collection row posted." };
 
-  const prev = await latestLedgerRow(inv.tenantLicenceId, inv.assetId);
+  const prev = await latestRentDepositLedgerRowForInvoice(inv);
   const prevBal = prev != null ? Number(prev.balance ?? 0) : 0;
   const credit = Number(r.totalAmount ?? 0);
   const balance = prevBal - credit;
   const id = nanoid();
   const entryDate = new Date().toISOString().slice(0, 10);
 
+  const collectionScope = rentInvoiceLedgerScope(inv);
   await db.insert(rentDepositLedger).values({
     id,
-    tenantLicenceId: inv.tenantLicenceId,
-    unifiedEntityId: unifiedEntityIdFromTrackA(inv.tenantLicenceId),
+    tenantLicenceId: collectionScope.ledgerTenantLicenceId,
+    unifiedEntityId: collectionScope.unifiedEntityId,
     assetId: inv.assetId,
     entryDate,
     entryType: "Collection",
@@ -121,17 +111,18 @@ export async function recordChequeDishonourLedgerForM03Receipt(r: ReceiptRow): P
   const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, r.sourceRecordId!)).limit(1);
   if (!inv) return { message: "Rent deposit ledger: invoice missing; dishonour not posted." };
 
-  const prev = await latestLedgerRow(inv.tenantLicenceId, inv.assetId);
+  const prev = await latestRentDepositLedgerRowForInvoice(inv);
   const prevBal = prev != null ? Number(prev.balance ?? 0) : 0;
   const debit = Number(r.totalAmount ?? 0);
   const balance = prevBal + debit;
   const id = nanoid();
   const entryDate = new Date().toISOString().slice(0, 10);
 
+  const dishonourScope = rentInvoiceLedgerScope(inv);
   await db.insert(rentDepositLedger).values({
     id,
-    tenantLicenceId: inv.tenantLicenceId,
-    unifiedEntityId: unifiedEntityIdFromTrackA(inv.tenantLicenceId),
+    tenantLicenceId: dishonourScope.ledgerTenantLicenceId,
+    unifiedEntityId: dishonourScope.unifiedEntityId,
     assetId: inv.assetId,
     entryDate,
     entryType: "ChequeDishonour",
