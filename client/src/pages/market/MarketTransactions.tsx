@@ -21,8 +21,130 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { ApiUserError, readApiErrorEnvelope } from "@/lib/queryClient";
 import { ArrowRightLeft, AlertCircle, ShieldCheck, CheckCircle, Plus, SendHorizontal } from "lucide-react";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
+
+type ToastInvoker = (props: { title: string; description?: string; variant?: "destructive" }) => void;
+
+/** Maps M-04 market transaction API error codes (POST create/adjustment, PUT update/workflow) to actionable toast copy. */
+function toastM04TransactionMutationFailure(
+  toast: ToastInvoker,
+  code: string | undefined,
+  message: string,
+  fallbackTitle = "Could not save transaction",
+): void {
+  switch (code) {
+    case "PURCHASE_TX_NOT_FOUND":
+      toast({
+        title: "Purchase transaction not found",
+        description: `${message} Refresh the list, or confirm you still have access to this transaction's yard.`,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_STATUS_TRANSITION_DENIED":
+      toast({
+        title: "Status change not allowed",
+        description: `${message} DV verifies Draft → Verified; DA approves Verified → Approved. Use an account with the right role.`,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_DO_DV_DA_SEGREGATION":
+      toast({
+        title: "Workflow segregation",
+        description: message,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_DV_RETURN_INVALID":
+      toast({
+        title: "Return to Draft rejected",
+        description: `${message} DV must supply valid return remarks when sending Verified → Draft.`,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_DRAFT_EDIT_DENIED":
+      toast({
+        title: "Cannot edit this draft",
+        description: `${message} Sign in as Data Originator or Admin to edit draft transactions.`,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_QUANTITY_INVALID":
+    case "PURCHASE_TX_DECLARED_VALUE_INVALID":
+    case "PURCHASE_TX_WEIGHT_INVALID":
+    case "PURCHASE_TX_TRANSACTION_DATE_INVALID":
+    case "PURCHASE_TX_MARKET_FEE_PERCENT_INVALID":
+    case "PURCHASE_TX_MARKET_FEE_AMOUNT_INVALID":
+      toast({
+        title: "Invalid values",
+        description: message,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_TRADER_NOT_ACTIVE":
+      toast({
+        title: "Trader licence not active",
+        description: `${message} In Traders → Licences, approve or activate this licence until its status is Active, or choose another trader whose licence is already Active.`,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_TRADER_BLOCKED":
+      toast({
+        title: "Trader licence is blocked",
+        description: `${message} Resolve the block in Traders → Licences, or choose another licence.`,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_LICENCE_YARD_MISMATCH":
+      toast({
+        title: "Licence does not match this yard",
+        description: `${message} Pick a trader licence registered for the yard you selected.`,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_TRADER_OUTSIDE_VALIDITY":
+    case "E-AST-002":
+      toast({
+        title: "Licence date window",
+        description: `${message} Change the transaction date or renew/update the licence under Traders → Licences.`,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_FUTURE_DATE":
+      toast({
+        title: "Transaction date not allowed",
+        description: message,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_YARD_ACCESS_DENIED":
+      toast({
+        title: "No access to this yard",
+        description: message,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_LICENCE_NOT_FOUND":
+    case "PURCHASE_TX_COMMODITY_NOT_FOUND":
+      toast({
+        title: code === "PURCHASE_TX_COMMODITY_NOT_FOUND" ? "Commodity not found" : "Trader licence not found",
+        description: `${message} Refresh the page and choose a valid ${code === "PURCHASE_TX_COMMODITY_NOT_FOUND" ? "commodity" : "Active trader licence for this yard"}.`,
+        variant: "destructive",
+      });
+      return;
+    case "PURCHASE_TX_MARKET_FEE_PERCENT_MISMATCH":
+    case "PURCHASE_TX_MARKET_FEE_AMOUNT_MISMATCH":
+      toast({
+        title: "Market fee does not match current rates",
+        description: `${message} For edits, align declared value, fee %, and fee amount with the effective rate for that yard, commodity, and date.`,
+        variant: "destructive",
+      });
+      return;
+    default:
+      toast({ title: fallbackTitle, description: message, variant: "destructive" });
+  }
+}
 interface Transaction {
   id: string;
   transactionNo?: string | null;
@@ -77,8 +199,27 @@ export default function MarketTransactions() {
   const { data: commodities = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ["/api/ioms/commodities"],
   });
-  const { data: licences = [] } = useQuery<Array<{ id: string; firmName: string; licenceNo?: string | null }>>({
-    queryKey: ["/api/ioms/traders/licences"],
+  const yardForLicences = yardId.trim();
+  const {
+    data: licences = [],
+    isFetched: licencesFetched,
+    isFetching: licencesFetching,
+    isError: licencesQueryIsError,
+    error: licencesQueryError,
+  } = useQuery<Array<{ id: string; firmName: string; licenceNo?: string | null }>>({
+    queryKey: ["market-m04-active-licences", yardForLicences],
+    queryFn: async () => {
+      const u = new URL("/api/ioms/traders/licences", window.location.origin);
+      u.searchParams.set("yardId", yardForLicences);
+      u.searchParams.set("status", "Active");
+      const r = await fetch(u.toString(), { credentials: "include", headers: { Accept: "application/json" } });
+      if (!r.ok) {
+        const { message } = await readApiErrorEnvelope(r);
+        throw new Error(message);
+      }
+      return r.json() as Promise<Array<{ id: string; firmName: string; licenceNo?: string | null }>>;
+    },
+    enabled: Boolean(yardForLicences),
   });
   const { data: yards = [] } = useQuery<Array<{ id: string; name: string; code: string }>>({
     queryKey: ["/api/yards"],
@@ -129,6 +270,12 @@ export default function MarketTransactions() {
     if (!transactionDate.trim()) return "Transaction date is required.";
     if (!yardById.has(yardId.trim())) return "Yard ID is invalid or out of scope.";
     if (!commodityById.has(commodityId.trim())) return "Commodity ID is invalid.";
+    if (yardForLicences && licencesQueryIsError) {
+      return licencesQueryError instanceof Error ? licencesQueryError.message : "Could not load trader licences.";
+    }
+    if (yardForLicences && licencesFetched && !licencesFetching && licences.length === 0) {
+      return "No Active trader licences for this yard. Approve or activate a licence under Traders → Licences, then try again.";
+    }
     if (!licenceById.has(traderLicenceId.trim())) return "Trader licence ID is invalid.";
     const q = Number(quantity);
     if (Number.isNaN(q) || q <= 0) return "Quantity must be greater than 0.";
@@ -159,6 +306,12 @@ export default function MarketTransactions() {
     feePreviewIsError,
     feePreviewError,
     resolvedFeePercent,
+    yardForLicences,
+    licencesFetched,
+    licencesFetching,
+    licences.length,
+    licencesQueryIsError,
+    licencesQueryError,
   ]);
 
   const createMutation = useMutation({
@@ -185,8 +338,8 @@ export default function MarketTransactions() {
         credentials: "include",
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error ?? res.statusText);
+        const { message, code } = await readApiErrorEnvelope(res);
+        throw new ApiUserError(message, code);
       }
       return res.json();
     },
@@ -203,7 +356,11 @@ export default function MarketTransactions() {
       setPurchaseType("TraderPurchase");
       setTransactionDate(new Date().toISOString().slice(0, 10));
     },
-    onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : String(e);
+      const code = e instanceof ApiUserError ? e.code : undefined;
+      toastM04TransactionMutationFailure(toast, code, message, "Create failed");
+    },
   });
 
   const statusMutation = useMutation({
@@ -216,8 +373,8 @@ export default function MarketTransactions() {
         credentials: "include",
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error ?? res.statusText);
+        const { message, code } = await readApiErrorEnvelope(res);
+        throw new ApiUserError(message, code);
       }
       return res.json();
     },
@@ -229,8 +386,10 @@ export default function MarketTransactions() {
         setReturnDraftRemarks("");
       }
     },
-    onError: (e: Error) => {
-      toast({ title: "Update failed", description: e.message, variant: "destructive" });
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : String(e);
+      const code = e instanceof ApiUserError ? e.code : undefined;
+      toastM04TransactionMutationFailure(toast, code, message, "Update failed");
     },
   });
 
@@ -256,8 +415,8 @@ export default function MarketTransactions() {
         }),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error ?? res.statusText);
+        const { message, code } = await readApiErrorEnvelope(res);
+        throw new ApiUserError(message, code);
       }
       return res.json();
     },
@@ -270,7 +429,11 @@ export default function MarketTransactions() {
       setAdjustDeclared("");
       setAdjustQty("");
     },
-    onError: (e: Error) => toast({ title: "Adjustment failed", description: e.message, variant: "destructive" }),
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : String(e);
+      const code = e instanceof ApiUserError ? e.code : undefined;
+      toastM04TransactionMutationFailure(toast, code, message, "Adjustment failed");
+    },
   });
 
   function openAdjust(t: Transaction) {
@@ -435,7 +598,13 @@ export default function MarketTransactions() {
                   )}
                   <div className="space-y-1">
                     <Label>Yard</Label>
-                    <Select value={yardId || undefined} onValueChange={setYardId}>
+                    <Select
+                      value={yardId || undefined}
+                      onValueChange={(v) => {
+                        setYardId(v);
+                        setTraderLicenceId("");
+                      }}
+                    >
                       <SelectTrigger><SelectValue placeholder="Select yard" /></SelectTrigger>
                       <SelectContent>
                         {yards.map((y) => (
@@ -461,8 +630,18 @@ export default function MarketTransactions() {
                   </div>
                   <div className="space-y-1">
                     <Label>Trader licence</Label>
-                    <Select value={traderLicenceId || undefined} onValueChange={setTraderLicenceId}>
-                      <SelectTrigger><SelectValue placeholder="Select trader licence" /></SelectTrigger>
+                    <Select
+                      value={traderLicenceId || undefined}
+                      onValueChange={setTraderLicenceId}
+                      disabled={!yardForLicences}
+                    >
+                      <SelectTrigger>
+                        <SelectValue
+                          placeholder={
+                            yardForLicences ? "Select trader licence (Active only)" : "Select yard first"
+                          }
+                        />
+                      </SelectTrigger>
                       <SelectContent>
                         {licences.map((l) => (
                           <SelectItem key={l.id} value={l.id}>
@@ -471,6 +650,10 @@ export default function MarketTransactions() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Only licences with status Active for the selected yard are listed. Pending or inactive licences must be
+                      activated under Traders → Licences before purchases can be recorded.
+                    </p>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">

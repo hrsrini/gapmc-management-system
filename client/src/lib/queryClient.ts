@@ -15,18 +15,35 @@ function notify403(): void {
   }
 }
 
-/** Parse `{ error?: string }` from JSON API errors (e.g. `sendApiError`); fall back to body text. */
-export async function readApiErrorMessage(res: Response): Promise<string> {
+/** JSON body from `sendApiError` — machine code plus human `error` message. */
+export async function readApiErrorEnvelope(res: Response): Promise<{ message: string; code?: string }> {
   const text = (await res.text()) || res.statusText;
   const trimmed = text.trim();
-  if (!trimmed) return res.statusText;
+  if (!trimmed) return { message: res.statusText };
   try {
-    const j = JSON.parse(trimmed) as { error?: unknown };
-    if (typeof j.error === "string" && j.error.length > 0) return j.error;
+    const j = JSON.parse(trimmed) as { error?: unknown; code?: unknown };
+    const msg = typeof j.error === "string" && j.error.length > 0 ? j.error : trimmed;
+    const code = typeof j.code === "string" && j.code.length > 0 ? j.code : undefined;
+    return { message: msg, code };
   } catch {
-    /* not JSON */
+    return { message: trimmed };
   }
-  return trimmed;
+}
+
+/** Parse `{ error?: string }` from JSON API errors (e.g. `sendApiError`); fall back to body text. */
+export async function readApiErrorMessage(res: Response): Promise<string> {
+  const { message } = await readApiErrorEnvelope(res);
+  return message;
+}
+
+/** Non-OK API response wrapped as an Error, optionally carrying `code` from the JSON envelope. */
+export class ApiUserError extends Error {
+  readonly code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "ApiUserError";
+    this.code = code;
+  }
 }
 
 async function throwIfResNotOk(res: Response) {
