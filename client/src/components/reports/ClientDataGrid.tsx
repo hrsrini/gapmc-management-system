@@ -15,6 +15,12 @@ export interface ClientDataGridProps {
   emptyMessage?: string;
   /** When this value changes, the grid resets to page 1 (e.g. filters, query URL). */
   resetPageDependency?: unknown;
+  /**
+   * Layout mode:
+   * - scroll (default): table may overflow horizontally with synced scrollbars
+   * - fit: constrain to container width (no horizontal scroll; cells wrap/truncate)
+   */
+  layout?: "scroll" | "fit";
 }
 
 /**
@@ -33,6 +39,7 @@ export function ClientDataGrid({
   isLoading = false,
   emptyMessage,
   resetPageDependency,
+  layout = "scroll",
 }: ClientDataGridProps) {
   const [params, setParams] = useState<ReportPagedParams>({
     page: 1,
@@ -74,6 +81,7 @@ export function ClientDataGrid({
       isLoading={isLoading}
       searchPlaceholder={searchPlaceholder}
       emptyMessage={emptyMessage}
+      layout={layout}
     />
   );
 }

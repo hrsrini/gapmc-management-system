@@ -27,6 +27,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { KeyRound, AlertCircle, Plus, Loader2 } from "lucide-react";
+import { RENT_REVISION_MODES } from "@shared/premises-allocation";
 interface Allotment {
   id: string;
   assetId: string;
@@ -38,6 +39,9 @@ interface Allotment {
   securityDeposit?: number | null;
   doUser?: string | null;
   daUser?: string | null;
+  approvalStatus?: string | null;
+  monthlyRent?: number | null;
+  rentRevisionMode?: string | null;
 }
 interface Asset {
   id: string;
@@ -73,8 +77,10 @@ export default function AssetAllotments() {
   const [allotteeName, setAllotteeName] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const [status, setStatus] = useState("Active");
+  const [status, setStatus] = useState("Pending");
   const [securityDeposit, setSecurityDeposit] = useState("");
+  const [monthlyRent, setMonthlyRent] = useState("");
+  const [rentRevisionMode, setRentRevisionMode] = useState<string>("StandardConsecutiveRenewal");
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -149,9 +155,10 @@ export default function AssetAllotments() {
       setFromDate("");
       setToDate("");
       setSecurityDeposit("");
+      setMonthlyRent("");
       setAssetId("");
       setTraderLicenceId("");
-      setStatus("Active");
+      setStatus("Pending");
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
@@ -166,6 +173,9 @@ export default function AssetAllotments() {
       toDate: toDate || undefined,
       status,
       securityDeposit: securityDeposit ? Number(securityDeposit) : null,
+      monthlyRent: monthlyRent ? Number(monthlyRent) : undefined,
+      rentRevisionMode,
+      approvalStatus: "Draft",
     });
   };
 
@@ -238,11 +248,31 @@ export default function AssetAllotments() {
                     <div><Label>From date *</Label><Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} required /></div>
                     <div><Label>To date *</Label><Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} required /></div>
                   </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label>Monthly rent *</Label>
+                      <Input type="number" step="0.01" value={monthlyRent} onChange={(e) => setMonthlyRent(e.target.value)} required />
+                    </div>
+                    <div>
+                      <Label>Rent revision mode *</Label>
+                      <Select value={rentRevisionMode} onValueChange={setRentRevisionMode}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {RENT_REVISION_MODES.map((m) => (
+                            <SelectItem key={m} value={m}>
+                              {m === "StandardConsecutiveRenewal" ? "Standard" : "PWD Certificate"}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
                   <div><Label>Status</Label>
                     <Select value={status} onValueChange={setStatus}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="Active">Active</SelectItem>
+                        <SelectItem value="Pending">Pending</SelectItem>
+                        <SelectItem value="Active">Active (legacy)</SelectItem>
                         <SelectItem value="Vacated">Vacated</SelectItem>
                       </SelectContent>
                     </Select>

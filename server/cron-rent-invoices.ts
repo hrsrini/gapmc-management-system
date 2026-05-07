@@ -74,6 +74,20 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
       skipped += 1;
       continue;
     }
+    // US-M02-003: only generate rent invoices after DA approval + agreement upload.
+    if (String((allotment as unknown as { approvalStatus?: string }).approvalStatus ?? "Approved") !== "Approved") {
+      skipped += 1;
+      continue;
+    }
+    if (!(allotment as unknown as { agreementDocFile?: string | null }).agreementDocFile) {
+      skipped += 1;
+      continue;
+    }
+    const configuredRent = Number((allotment as unknown as { monthlyRent?: number | null }).monthlyRent ?? 0);
+    if (!Number.isFinite(configuredRent) || configuredRent <= 0.01) {
+      skipped += 1;
+      continue;
+    }
     const yardId = yardByAssetPk[allotment.assetId];
     if (!yardId) continue;
 

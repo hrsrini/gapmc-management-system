@@ -59,6 +59,70 @@ function sendHrRule(res: Response, e: unknown): boolean {
 }
 
 export function registerMarketIomsRoutes(app: Express) {
+  /**
+   * Lightweight runtime "migration" for newly introduced M-04 returns tables.
+   * In some deployments the DB may not yet have these tables; without this,
+   * the endpoints would throw and surface as 500s in the UI.
+   *
+   * This is additive-only (`CREATE ... IF NOT EXISTS`) to respect the no-data-loss policy.
+   */
+  let ensureMarketReturnsTablesPromise: Promise<void> | null = null;
+  function ensureMarketReturnsTables(): Promise<void> {
+    if (ensureMarketReturnsTablesPromise) return ensureMarketReturnsTablesPromise;
+    ensureMarketReturnsTablesPromise = (async () => {
+      await db.execute(sql`CREATE SCHEMA IF NOT EXISTS gapmc`);
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS gapmc.market_return_ack_sequence (
+          yard_id text NOT NULL,
+          year integer NOT NULL,
+          last_seq integer NOT NULL DEFAULT 0,
+          PRIMARY KEY (yard_id, year)
+        )
+      `);
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS gapmc.market_monthly_returns (
+          id text PRIMARY KEY,
+          trader_licence_id text NOT NULL,
+          period text NOT NULL,
+          status text NOT NULL DEFAULT 'Draft',
+          ack_ref text UNIQUE,
+          filing_mode text DEFAULT 'Self',
+          filed_by_user_id text,
+          total_purchase_value_inr double precision DEFAULT 0,
+          total_market_fee_inr double precision DEFAULT 0,
+          late_submission_flag boolean DEFAULT false,
+          deadline_date text,
+          days_late integer DEFAULT 0,
+          interest_amount_inr double precision DEFAULT 0,
+          submitted_at text,
+          created_at text,
+          updated_at text
+        )
+      `);
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS gapmc.market_monthly_return_lines (
+          id text PRIMARY KEY,
+          return_id text NOT NULL,
+          commodity_id text NOT NULL,
+          opening_qty double precision DEFAULT 0,
+          purchase_qty double precision DEFAULT 0,
+          purchase_value_inr double precision DEFAULT 0,
+          sales_qty double precision DEFAULT 0,
+          closing_qty double precision DEFAULT 0
+        )
+      `);
+    })();
+    return ensureMarketReturnsTablesPromise;
+  }
+
+  function isPgMissingRelation(e: unknown): boolean {
+    const any = e as { code?: unknown; message?: unknown };
+    const code = typeof any?.code === "string" ? any.code : "";
+    const msg = typeof any?.message === "string" ? any.message : "";
+    // 42P01 = undefined_table in Postgres
+    return code === "42P01" || /relation .* does not exist/i.test(msg);
+  }
+
   const isScopedCheckPost = (req: { scopedLocationIds?: string[] }, checkPostId: string) => {
     const scopedIds = req.scopedLocationIds;
     if (!checkPostId) return false;
@@ -227,22 +291,29 @@ export function registerMarketIomsRoutes(app: Express) {
     }
 
     // Opening balances: take latest submitted/approved return prior to this period.
-    const prior = await db
-      .select({
-        period: marketMonthlyReturns.period,
-        commodityId: marketMonthlyReturnLines.commodityId,
-        closingQty: marketMonthlyReturnLines.closingQty,
-      })
-      .from(marketMonthlyReturns)
-      .innerJoin(marketMonthlyReturnLines, eq(marketMonthlyReturnLines.returnId, marketMonthlyReturns.id))
-      .where(
-        and(
-          eq(marketMonthlyReturns.traderLicenceId, traderLicenceId),
-          inArray(marketMonthlyReturns.status, ["Submitted", "Verified", "Approved"]),
-          lt(marketMonthlyReturns.period, period),
-        ),
-      )
-      .orderBy(desc(marketMonthlyReturns.period));
+    let prior: Array<{ period: string; commodityId: string; closingQty: number | null }> = [];
+    try {
+      prior = await db
+        .select({
+          period: marketMonthlyReturns.period,
+          commodityId: marketMonthlyReturnLines.commodityId,
+          closingQty: marketMonthlyReturnLines.closingQty,
+        })
+        .from(marketMonthlyReturns)
+        .innerJoin(marketMonthlyReturnLines, eq(marketMonthlyReturnLines.returnId, marketMonthlyReturns.id))
+        .where(
+          and(
+            eq(marketMonthlyReturns.traderLicenceId, traderLicenceId),
+            inArray(marketMonthlyReturns.status, ["Submitted", "Verified", "Approved"]),
+            lt(marketMonthlyReturns.period, period),
+          ),
+        )
+        .orderBy(desc(marketMonthlyReturns.period));
+    } catch (e) {
+      // If the returns tables are not present yet in a restricted DB, we can still preview purchases.
+      if (!isPgMissingRelation(e)) throw e;
+      prior = [];
+    }
 
     const openingByCommodity = new Map<string, number>();
     for (const r of prior) {
@@ -2006,15 +2077,26 @@ export function registerMarketIomsRoutes(app: Express) {
   // ----- Monthly returns (wizard) -----
   app.get("/api/ioms/market/returns", async (req, res) => {
     try {
+      try {
+        await ensureMarketReturnsTables();
+      } catch {
+        // If the DB role cannot create tables, still attempt to read; if tables don't exist, return [] below.
+      }
       const traderLicenceId = String(req.query.traderLicenceId ?? "").trim();
       const period = String(req.query.period ?? "").trim();
-      const list = traderLicenceId
-        ? await db
-            .select()
-            .from(marketMonthlyReturns)
-            .where(eq(marketMonthlyReturns.traderLicenceId, traderLicenceId))
-            .orderBy(desc(marketMonthlyReturns.period))
-        : await db.select().from(marketMonthlyReturns).orderBy(desc(marketMonthlyReturns.period));
+      let list: typeof marketMonthlyReturns.$inferSelect[] = [];
+      try {
+        list = traderLicenceId
+          ? await db
+              .select()
+              .from(marketMonthlyReturns)
+              .where(eq(marketMonthlyReturns.traderLicenceId, traderLicenceId))
+              .orderBy(desc(marketMonthlyReturns.period))
+          : await db.select().from(marketMonthlyReturns).orderBy(desc(marketMonthlyReturns.period));
+      } catch (e) {
+        if (!isPgMissingRelation(e)) throw e;
+        list = [];
+      }
       const filtered = period ? list.filter((r) => r.period === period) : list;
       res.json(filtered);
     } catch (e) {
@@ -2026,6 +2108,11 @@ export function registerMarketIomsRoutes(app: Express) {
   /** Step-2 preview: aggregates purchases for trader+month; opening from prior closing. */
   app.get("/api/ioms/market/returns/preview", async (req, res) => {
     try {
+      try {
+        await ensureMarketReturnsTables();
+      } catch {
+        // Preview can still work without the returns tables (it derives purchases from transactions).
+      }
       const traderLicenceId = String(req.query.traderLicenceId ?? "").trim();
       const period = String(req.query.period ?? "").trim();
       if (!traderLicenceId || !period) {
@@ -2051,6 +2138,7 @@ export function registerMarketIomsRoutes(app: Express) {
 
   app.get("/api/ioms/market/returns/:id", async (req, res) => {
     try {
+      await ensureMarketReturnsTables();
       const id = String(req.params.id ?? "").trim();
       const [ret] = await db.select().from(marketMonthlyReturns).where(eq(marketMonthlyReturns.id, id)).limit(1);
       if (!ret) return sendApiError(res, 404, "MKT_RETURN_NOT_FOUND", "Return not found");
@@ -2070,6 +2158,7 @@ export function registerMarketIomsRoutes(app: Express) {
 
   app.get("/api/ioms/market/returns/:id/pdf", async (req, res) => {
     try {
+      await ensureMarketReturnsTables();
       const id = String(req.params.id ?? "").trim();
       const [ret] = await db.select().from(marketMonthlyReturns).where(eq(marketMonthlyReturns.id, id)).limit(1);
       if (!ret) return sendApiError(res, 404, "MKT_RETURN_NOT_FOUND", "Return not found");
@@ -2101,6 +2190,7 @@ export function registerMarketIomsRoutes(app: Express) {
    */
   app.post("/api/ioms/market/returns", async (req, res) => {
     try {
+      await ensureMarketReturnsTables();
       const body = req.body as Record<string, unknown>;
       const traderLicenceId = String(body.traderLicenceId ?? "").trim();
       const period = String(body.period ?? "").trim();

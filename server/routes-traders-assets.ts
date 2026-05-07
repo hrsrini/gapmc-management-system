@@ -52,11 +52,26 @@ import {
   TRACKB_NON_GOV_DUES_API_HINT,
 } from "@shared/track-b-entity";
 import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
-import { normalizePremisesStatus } from "@shared/premises-allocation";
+import {
+  inferAgreementTypeFromDates,
+  normalizeAgreementType,
+  normalizePremisesStatus,
+  normalizeRentRevisionMode,
+  roundedMoney2,
+  todayYmdUtc,
+  ymdBefore,
+} from "@shared/premises-allocation";
 import { hasPermission } from "./auth";
 import { routeParamString } from "./route-params";
 import { registerEntityAllotmentRoutes } from "./entity-allotment-routes";
 import { assertPremisesNotAlreadyAllocatedActive } from "./premises-allocation-guard";
+import {
+  contentTypeForAssetAllotmentAgreement,
+  extFromAssetAllotmentAgreementMime,
+  isAllowedAssetAllotmentAgreementFileName,
+  readAssetAllotmentAgreementBuffer,
+  writeAssetAllotmentAgreementBuffer,
+} from "./asset-allotment-agreement-storage";
 import {
   writeTraderBmFormBuffer,
   readTraderBmFormBuffer,
@@ -2131,6 +2146,72 @@ export function registerTradersAssetsRoutes(app: Express) {
     }
   });
 
+  // US-M02-003 gaps fix: scanned agreement PDF upload/download for trader (Track A) premises allocations.
+  const assetAgreementUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 20 * 1024 * 1024 },
+  });
+  function multerAssetAgreementSingle(req: Request, res: Response, next: NextFunction): void {
+    assetAgreementUpload.single("file")(req, res, (err: unknown) => {
+      const e = err as { code?: string; message?: string } | undefined;
+      if (e?.code === "LIMIT_FILE_SIZE") {
+        return sendApiError(res, 400, "E-AST-011", "Agreement PDF must be 20 MB or smaller.");
+      }
+      if (err) {
+        return sendApiError(res, 400, "AGREEMENT_UPLOAD_FAILED", e?.message || "Upload failed.");
+      }
+      next();
+    });
+  }
+
+  app.post("/api/ioms/asset-allotments/:id/agreement", multerAssetAgreementSingle, async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const [row] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, id)).limit(1);
+      if (!row) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Not found");
+      const [assetRow] = await db.select().from(assets).where(eq(assets.id, row.assetId)).limit(1);
+      if (!assetRow || !yardInScope(req, assetRow.yardId)) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Not found");
+      const appr = String(row.approvalStatus ?? "Draft");
+      if (!["Draft", "Rejected"].includes(appr)) {
+        return sendApiError(res, 400, "AGREEMENT_UPLOAD_STATE", "Agreement uploads are allowed only in Draft or Rejected status.");
+      }
+      const file = (req as unknown as { file?: { buffer: Buffer; mimetype: string } }).file;
+      if (!file) return sendApiError(res, 400, "AGREEMENT_FILE_REQUIRED", "Upload file required (field name: file)");
+      const ext = extFromAssetAllotmentAgreementMime(file.mimetype);
+      if (!ext) return sendApiError(res, 400, "AGREEMENT_FILE_TYPE", "Only PDF uploads are accepted for scanned agreements.");
+
+      const storedName = `agreement-${Date.now()}-${nanoid(10)}${ext}`;
+      if (!isAllowedAssetAllotmentAgreementFileName(storedName)) return sendApiError(res, 400, "AGREEMENT_FILE_NAME", "Internal file naming error.");
+      await writeAssetAllotmentAgreementBuffer(id, storedName, file.buffer);
+      await db.update(assetAllotments).set({ agreementDocFile: storedName, agreementDocUploadedAt: now() }).where(eq(assetAllotments.id, id));
+      const [fresh] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, id));
+      writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, afterValue: fresh }).catch((e) => console.error("Audit log failed:", e));
+      return res.json(fresh);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to upload agreement");
+    }
+  });
+
+  app.get("/api/ioms/asset-allotments/:id/agreement", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const [row] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, id)).limit(1);
+      if (!row?.agreementDocFile) return sendApiError(res, 404, "AGREEMENT_NOT_FOUND", "No agreement PDF recorded.");
+      const [assetRow] = await db.select().from(assets).where(eq(assets.id, row.assetId)).limit(1);
+      if (!assetRow || !yardInScope(req, assetRow.yardId)) return sendApiError(res, 404, "AGREEMENT_NOT_FOUND", "No agreement PDF.");
+      const buf = await readAssetAllotmentAgreementBuffer(id, row.agreementDocFile);
+      if (!buf) return sendApiError(res, 404, "AGREEMENT_BLOB_MISSING", "Stored PDF not found.");
+      const fn = encodeURIComponent(`${row.premisesRefNo || row.id}-agreement.pdf`);
+      res.setHeader("Content-Type", contentTypeForAssetAllotmentAgreement(row.agreementDocFile));
+      res.setHeader("Content-Disposition", `inline; filename="${fn}"`);
+      return res.send(buf);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read agreement PDF");
+    }
+  });
+
   app.post("/api/ioms/asset-allotments", async (req, res) => {
     try {
       const body = req.body;
@@ -2140,8 +2221,41 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!yardInScope(req, assetRow.yardId))
         return sendApiError(res, 403, "ASSET_YARD_ACCESS_DENIED", "You do not have access to this asset's yard");
 
+      const traderLicenceId = String(body.traderLicenceId ?? "").trim();
+      if (!traderLicenceId) return sendApiError(res, 400, "TRADER_LICENCE_REQUIRED", "traderLicenceId is required");
+      const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
+      if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
+      if (!yardInScope(req, lic.yardId)) return sendApiError(res, 403, "LICENCE_YARD_ACCESS_DENIED", "You do not have access to this licence yard");
+
+      // Validate agreement dates + finance fields (US-M02-003)
+      const fromDate = String(body.fromDate ?? "").trim();
+      const toDate = String(body.toDate ?? "").trim();
+      const ferr = ymdFieldError("Agreement from", fromDate, true);
+      if (ferr) return sendApiError(res, 400, "AGREEMENT_FROM", ferr);
+      const terr = ymdFieldError("Agreement to", toDate, true);
+      if (terr) return sendApiError(res, 400, "AGREEMENT_TO", terr);
+      if (fromDate > toDate) return sendApiError(res, 400, "AGREEMENT_RANGE", "Agreement To must be on or after Agreement From.");
+      const today = todayYmdUtc();
+      if (ymdBefore(fromDate, today)) {
+        return sendApiError(res, 400, "AGREEMENT_FROM_PAST", "Agreement From cannot be before today for a new allocation.");
+      }
+
+      const monthlyRent = Number((body as Record<string, unknown>).monthlyRent ?? (body as Record<string, unknown>).monthly_rent);
+      if (!Number.isFinite(monthlyRent) || monthlyRent <= 0) {
+        return sendApiError(res, 400, "MONTHLY_RENT", "Monthly rent must be greater than 0.");
+      }
+      const rr = normalizeRentRevisionMode((body as Record<string, unknown>).rentRevisionMode ?? (body as Record<string, unknown>).rent_revision_mode);
+      if (!rr) {
+        return sendApiError(res, 400, "RENT_REVISION_MODE", "Rent Revision Mode is required (StandardConsecutiveRenewal or PwdCertificate).");
+      }
+      let agreementType = inferAgreementTypeFromDates(fromDate, toDate);
+      const overridden = normalizeAgreementType((body as Record<string, unknown>).agreementType ?? (body as Record<string, unknown>).agreement_type);
+      if (overridden) agreementType = overridden;
+
+      const approvalStatus = String((body as Record<string, unknown>).approvalStatus ?? "Draft").trim() || "Draft";
+
       // BR-PRE-023: one active allocation per premises (asset) across all allocation tables.
-      const nextStatus = String(body.status ?? "Active");
+      const nextStatus = String(body.status ?? "Pending");
       if (nextStatus === "Active") {
         const check = await assertPremisesNotAlreadyAllocatedActive({ assetId: aid });
         if (!check.ok) {
@@ -2159,14 +2273,34 @@ export function registerTradersAssetsRoutes(app: Express) {
       await db.insert(assetAllotments).values({
         id,
         assetId: String(body.assetId ?? ""),
-        traderLicenceId: String(body.traderLicenceId ?? ""),
-        allotteeName: String(body.allotteeName ?? ""),
-        fromDate: String(body.fromDate ?? ""),
-        toDate: String(body.toDate ?? ""),
+        traderLicenceId,
+        allotteeName: String(body.allotteeName ?? "").trim(),
+        fromDate,
+        toDate,
         status: nextStatus,
         securityDeposit: body.securityDeposit != null ? Number(body.securityDeposit) : null,
-        doUser: body.doUser ? String(body.doUser) : null,
-        daUser: body.daUser ? String(body.daUser) : null,
+        doUser: req.user?.id ?? null,
+        dvUser: null,
+        daUser: null,
+        approvalStatus: approvalStatus as any,
+        premisesRefNo: null,
+        monthlyRent: roundedMoney2(monthlyRent),
+        gstApplicable: !Boolean((lic as unknown as { isNonGstEntity?: boolean | null }).isNonGstEntity),
+        gstLocked: false,
+        agreementType,
+        agreementDocFile: null,
+        agreementDocUploadedAt: null,
+        rentRevisionMode: rr,
+        consecutiveRenewalCount: Number.isFinite(Number((body as Record<string, unknown>).consecutiveRenewalCount))
+          ? Number((body as Record<string, unknown>).consecutiveRenewalCount)
+          : 0,
+        verifiedAt: null,
+        approvedAt: null,
+        workflowRevisionCount: 0,
+        dvReturnRemarks: null,
+        rejectionRemarks: null,
+        agreementGapDaOverride: false,
+        daGstOverride: false,
       });
       const [row] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, id));
       if (row) writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -2185,12 +2319,141 @@ export function registerTradersAssetsRoutes(app: Express) {
       const [assetRow] = await db.select().from(assets).where(eq(assets.id, existingAllot.assetId)).limit(1);
       if (!assetRow || !yardInScope(req, assetRow.yardId)) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Not found");
       const body = req.body;
+      const currentApproval = String(existingAllot.approvalStatus ?? "Draft");
+      const newApproval = body.approvalStatus !== undefined ? String(body.approvalStatus).trim() : null;
+
+      // Workflow transitions (DO→DV→DA)
+      if (newApproval && newApproval !== currentApproval) {
+        const transition = canTransitionEntityAllotmentApproval(req.user, currentApproval, newApproval);
+        if (!transition.allowed) {
+          return sendApiError(res, 403, "ALLOTMENT_STATUS_DENIED", `Cannot transition from ${currentApproval} to ${newApproval}.`);
+        }
+
+        const nextDv =
+          transition.setDvUser && newApproval === "Verified" ? req.user?.id ?? null : existingAllot.dvUser ?? null;
+        const nextDa =
+          transition.setDaUser && (newApproval === "Approved" || newApproval === "Rejected")
+            ? req.user?.id ?? null
+            : existingAllot.daUser ?? null;
+
+        const seg = assertSegregationDoDvDa(
+          req.user,
+          { doUser: existingAllot.doUser ?? null, dvUser: nextDv, daUser: nextDa },
+          transition,
+        );
+        if (!seg.ok) return sendApiError(res, 403, "ALLOTMENT_DO_DV_DA_SEGREGATION", seg.error);
+
+        if (currentApproval === "Draft" && newApproval === "Verified") {
+          if (!existingAllot.agreementDocFile)
+            return sendApiError(res, 400, "E-AST-011", "Notarised agreement PDF must be uploaded before DV verification.");
+        }
+
+        if (currentApproval === "Verified" && newApproval === "Draft") {
+          const remarks = body.dvReturnRemarks ? String(body.dvReturnRemarks).trim() : "";
+          if (remarks.length < 5) {
+            return sendApiError(res, 400, "DV_RETURN_REMARKS", "Return remarks (minimum 5 characters) required when verifier returns allocation to Draft.");
+          }
+        }
+
+        if (newApproval === "Approved") {
+          if (!existingAllot.agreementDocFile)
+            return sendApiError(res, 400, "E-AST-011", "Notarised agreement PDF is mandatory before DA approval.");
+
+          let premRef = existingAllot.premisesRefNo ?? null;
+          if (!premRef) {
+            const [yRow] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, assetRow.yardId)).limit(1);
+            const yc = String(yRow?.code ?? "YRD").trim().replace(/\s+/g, "") || "YRD";
+            const premisesKey = `${assetRow.assetId}|${yc}`;
+            const q = `
+              INSERT INTO gapmc.premises_ref_counters (premises_key, last_nn)
+              VALUES ($1, 1)
+              ON CONFLICT (premises_key) DO UPDATE
+              SET last_nn = gapmc.premises_ref_counters.last_nn + 1
+              RETURNING last_nn
+            `;
+            const resQ = await pool.query<{ last_nn: number }>(q, [premisesKey]);
+            const nn = Number(resQ.rows[0]?.last_nn ?? 1);
+            premRef = `${assetRow.assetId}-${yc}-${String(nn).padStart(2, "0")}`;
+          }
+
+          // BR-PRE-023: prevent setting to Active when another active allocation exists.
+          const check = await assertPremisesNotAlreadyAllocatedActive({ assetId: existingAllot.assetId, excludeAssetAllotmentId: id });
+          if (!check.ok) {
+            return sendApiError(
+              res,
+              400,
+              "PREMISES_ALREADY_ALLOCATED",
+              "Cannot set allocation to Active: another Active allocation already exists for this premises.",
+              { assetId: existingAllot.assetId, entityAllotments: check.entityConflicts, traderAllotments: check.traderConflicts },
+            );
+          }
+
+          await db
+            .update(assetAllotments)
+            .set({
+              approvalStatus: "Approved",
+              dvUser: existingAllot.dvUser,
+              verifiedAt: existingAllot.verifiedAt,
+              daUser: transition.setDaUser ? req.user?.id ?? null : existingAllot.daUser,
+              approvedAt: now(),
+              premisesRefNo: premRef,
+              gstLocked: true,
+              status: "Active",
+            })
+            .where(eq(assetAllotments.id, id));
+
+          const [after] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, id));
+          writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existingAllot, afterValue: after }).catch((e) =>
+            console.error(e),
+          );
+          return res.json(after);
+        }
+
+        const patchWorkflow: Record<string, unknown> = { approvalStatus: newApproval };
+        if (newApproval === "Verified") {
+          patchWorkflow.dvUser = transition.setDvUser ? req.user?.id ?? null : existingAllot.dvUser;
+          patchWorkflow.verifiedAt = now();
+        }
+        if (newApproval === "Rejected") {
+          patchWorkflow.daUser = transition.setDaUser ? req.user?.id ?? null : existingAllot.daUser;
+          patchWorkflow.rejectionRemarks = body.rejectionRemarks ? String(body.rejectionRemarks).trim() : null;
+        }
+        if (newApproval === "Draft" && currentApproval === "Rejected") {
+          patchWorkflow.workflowRevisionCount = Number(existingAllot.workflowRevisionCount ?? 0) + 1;
+        }
+        if (currentApproval === "Verified" && newApproval === "Draft") {
+          patchWorkflow.dvReturnRemarks = body.dvReturnRemarks ? String(body.dvReturnRemarks).trim() : null;
+          patchWorkflow.workflowRevisionCount = Number(existingAllot.workflowRevisionCount ?? 0) + 1;
+          patchWorkflow.dvUser = null;
+          patchWorkflow.verifiedAt = null;
+        }
+
+        await db.update(assetAllotments).set(patchWorkflow).where(eq(assetAllotments.id, id));
+        const [row] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, id));
+        if (!row) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Not found");
+        writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existingAllot, afterValue: row }).catch((e) =>
+          console.error("Audit log failed:", e),
+        );
+        return res.json(row);
+      }
+
+      const financeEditable = ["Draft", "Rejected"].includes(String(existingAllot.approvalStatus ?? ""));
       const updates: Record<string, unknown> = {};
-      ["allotteeName", "fromDate", "toDate", "status", "securityDeposit", "doUser", "daUser"].forEach((k) => {
+      ["allotteeName", "fromDate", "toDate", "status", "securityDeposit"].forEach((k) => {
         if (body[k] === undefined) return;
         if (k === "securityDeposit") updates.securityDeposit = body[k] == null ? null : Number(body[k]);
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
+      if (financeEditable) {
+        if ((body as Record<string, unknown>).monthlyRent !== undefined) {
+          updates.monthlyRent = roundedMoney2(Number((body as Record<string, unknown>).monthlyRent));
+        }
+        if ((body as Record<string, unknown>).rentRevisionMode !== undefined) {
+          const rr = normalizeRentRevisionMode((body as Record<string, unknown>).rentRevisionMode);
+          if (!rr) return sendApiError(res, 400, "RENT_REVISION_MODE", "Rent Revision Mode is required (StandardConsecutiveRenewal or PwdCertificate).");
+          updates.rentRevisionMode = rr;
+        }
+      }
 
       // BR-PRE-023: prevent switching to Active when another active allocation exists for this premises.
       const resultingStatus = (updates.status !== undefined ? String(updates.status) : existingAllot.status) ?? "Active";
@@ -2207,11 +2470,6 @@ export function registerTradersAssetsRoutes(app: Express) {
         }
       }
 
-      const seg = assertRecordDoDvDaSeparation(req.user, {
-        doUser: updates.doUser !== undefined ? (updates.doUser as string | null) : existingAllot.doUser,
-        daUser: updates.daUser !== undefined ? (updates.daUser as string | null) : existingAllot.daUser,
-      });
-      if (!seg.ok) return sendApiError(res, 403, "ALLOTMENT_DO_DV_DA_SEGREGATION", seg.error);
       await db.update(assetAllotments).set(updates as Record<string, string | number | null>).where(eq(assetAllotments.id, id));
       const [row] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, id));
       if (!row) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Not found");

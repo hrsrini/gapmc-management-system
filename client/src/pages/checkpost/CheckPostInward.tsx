@@ -443,29 +443,34 @@ export default function CheckPostInward() {
         </CardContent>
       </Card>
       <Dialog open={commodityDialogOpen} onOpenChange={setCommodityDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[min(960px,95vw)] max-w-[95vw] max-h-[90vh] overflow-y-auto overflow-x-hidden">
           <DialogHeader>
             <DialogTitle>Inward commodities — {selectedInwardId || "entry"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             {commodityAddError && <p className="text-sm text-destructive">{commodityAddError}</p>}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              <div className="space-y-1">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 min-w-0">
+              <div className="space-y-1 min-w-0">
                 <Label>Commodity ID</Label>
-                <Input list="commodities-list-inward-lines" value={commodityId} onChange={(e) => setCommodityId(e.target.value)} />
+                <Input
+                  className="w-full min-w-0"
+                  list="commodities-list-inward-lines"
+                  value={commodityId}
+                  onChange={(e) => setCommodityId(e.target.value)}
+                />
                 <datalist id="commodities-list-inward-lines">
                   {commodities.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
                 </datalist>
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1 min-w-0">
                 <Label>Unit</Label>
-                <Input value={commodityUnit} onChange={(e) => setCommodityUnit(e.target.value)} />
+                <Input className="w-full min-w-0" value={commodityUnit} onChange={(e) => setCommodityUnit(e.target.value)} />
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-              <div className="space-y-1"><Label>Quantity</Label><Input type="number" value={commodityQty} onChange={(e) => setCommodityQty(e.target.value)} /></div>
-              <div className="space-y-1"><Label>Value</Label><Input type="number" value={commodityValue} onChange={(e) => setCommodityValue(e.target.value)} /></div>
-              <div className="space-y-1"><Label>Market fee %</Label><Input type="number" value={commodityFeePercent} onChange={(e) => setCommodityFeePercent(e.target.value)} /></div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 min-w-0">
+              <div className="space-y-1 min-w-0"><Label>Quantity</Label><Input className="w-full min-w-0" type="number" value={commodityQty} onChange={(e) => setCommodityQty(e.target.value)} /></div>
+              <div className="space-y-1 min-w-0"><Label>Value</Label><Input className="w-full min-w-0" type="number" value={commodityValue} onChange={(e) => setCommodityValue(e.target.value)} /></div>
+              <div className="space-y-1 min-w-0"><Label>Market fee %</Label><Input className="w-full min-w-0" type="number" value={commodityFeePercent} onChange={(e) => setCommodityFeePercent(e.target.value)} /></div>
             </div>
             {commodityComputedFee != null && (
               <div className="space-y-1">
@@ -482,7 +487,7 @@ export default function CheckPostInward() {
                 {addCommodityMutation.isPending ? "Adding..." : "Add line"}
               </Button>
             </div>
-            <div className="border rounded-md p-1">
+            <div className="border rounded-md p-1 overflow-x-hidden">
               <ClientDataGrid
                 columns={commodityLineColumns}
                 sourceRows={commodityLineRows}
@@ -492,6 +497,7 @@ export default function CheckPostInward() {
                 isLoading={commodityLinesLoading}
                 emptyMessage="No commodity lines yet."
                 resetPageDependency={`${selectedInwardId}|${commodityLines.length}`}
+                layout="fit"
               />
             </div>
           </div>

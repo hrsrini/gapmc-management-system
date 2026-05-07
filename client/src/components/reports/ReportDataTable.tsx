@@ -45,6 +45,8 @@ interface ReportDataTableProps {
   searchPlaceholder?: string;
   debounceMs?: number;
   emptyMessage?: string;
+  /** See ClientDataGrid.layout */
+  layout?: "scroll" | "fit";
 }
 
 function cellContent(row: Record<string, unknown>, key: string): ReactNode {
@@ -77,6 +79,7 @@ export function ReportDataTable({
   searchPlaceholder = "Search…",
   debounceMs = 350,
   emptyMessage = "No records found",
+  layout = "scroll",
 }: ReportDataTableProps) {
   const [draftQ, setDraftQ] = useState(params.q);
   const topScrollRef = useRef<HTMLDivElement>(null);
@@ -192,21 +195,36 @@ export function ReportDataTable({
         </div>
       </div>
 
-      <div
-        ref={topScrollRef}
-        className="min-h-[20px] overflow-x-auto overflow-y-hidden border border-b-0 rounded-t-md border-border bg-muted/30"
-        style={{ scrollbarGutter: "stable" }}
-        onScroll={(e) => syncScroll(e.currentTarget)}
-      >
-        {spacer}
-      </div>
+      {layout === "scroll" ? (
+        <div
+          ref={topScrollRef}
+          className="min-h-[20px] overflow-x-auto overflow-y-hidden border border-b-0 rounded-t-md border-border bg-muted/30"
+          style={{ scrollbarGutter: "stable" }}
+          onScroll={(e) => syncScroll(e.currentTarget)}
+        >
+          {spacer}
+        </div>
+      ) : null}
 
       <div
         ref={mainScrollRef}
-        className="max-h-[min(70vh,640px)] overflow-auto scroll-smooth border-x border-b border-border rounded-b-md [overflow-scrolling:touch] overscroll-x-contain"
-        onScroll={(e) => syncScroll(e.currentTarget)}
+        className={
+          layout === "scroll"
+            ? "max-h-[min(70vh,640px)] overflow-auto scroll-smooth border-x border-b border-border rounded-b-md [overflow-scrolling:touch] overscroll-x-contain"
+            : "max-h-[min(70vh,640px)] overflow-y-auto overflow-x-hidden scroll-smooth border border-border rounded-md [overflow-scrolling:touch]"
+        }
+        onScroll={(e) => {
+          if (layout === "scroll") syncScroll(e.currentTarget);
+        }}
       >
-        <table ref={tableRef} className="w-full caption-bottom text-sm min-w-max border-collapse">
+        <table
+          ref={tableRef}
+          className={
+            layout === "scroll"
+              ? "w-full caption-bottom text-sm min-w-max border-collapse"
+              : "w-full table-fixed caption-bottom text-sm min-w-0 border-collapse"
+          }
+        >
           <thead className="sticky top-0 z-20 bg-background shadow-[0_1px_0_0_hsl(var(--border))]">
             <tr className="border-b">
               {columns.map((c) => {
@@ -215,7 +233,11 @@ export function ReportDataTable({
                 return (
                   <th
                     key={c.key}
-                    className="h-10 px-3 text-left align-middle font-medium text-muted-foreground whitespace-nowrap bg-background"
+                    className={
+                      layout === "scroll"
+                        ? "h-10 px-3 text-left align-middle font-medium text-muted-foreground whitespace-nowrap bg-background"
+                        : "h-10 px-3 text-left align-middle font-medium text-muted-foreground bg-background"
+                    }
                     aria-sort={
                       active ? (params.sortDir === "desc" ? "descending" : "ascending") : undefined
                     }
@@ -269,8 +291,13 @@ export function ReportDataTable({
               rows.map((row, i) => (
                 <tr key={String(row.id ?? i)} className="border-b transition-colors hover:bg-muted/50">
                   {columns.map((c) => (
-                    <td key={c.key} className="p-3 align-middle max-w-[320px]">
-                      <div className="truncate whitespace-nowrap">{cellContent(row, c.key)}</div>
+                    <td
+                      key={c.key}
+                      className={layout === "scroll" ? "p-3 align-middle max-w-[320px]" : "p-3 align-top"}
+                    >
+                      <div className={layout === "scroll" ? "truncate whitespace-nowrap" : "whitespace-normal break-words"}>
+                        {cellContent(row, c.key)}
+                      </div>
                     </td>
                   ))}
                 </tr>
