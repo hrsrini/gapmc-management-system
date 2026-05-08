@@ -5,8 +5,8 @@
  * Does not touch existing gapmc.market_fees (live table).
  */
 import type { Express, Response } from "express";
-import { eq, desc, asc, and, or, inArray, sql, gte, lte, lt, isNull } from "drizzle-orm";
-import { db } from "./db";
+import { eq, desc, asc, and, or, inArray, sql, gte, lte, lt, isNull, getTableColumns } from "drizzle-orm";
+import { db, pool } from "./db";
 import {
   commodities,
   measurementUnits,
@@ -48,7 +48,16 @@ import {
   marketFeePercentMatchesResolved,
   resolveMarketFeePercentForPurchase,
 } from "./market-fee-resolve";
+import { resolvePurchaseTransactionTraderRef, tradersRefEquivalent } from "./market-purchase-trader-resolve";
+import { generateNextPurchaseTransactionNo, persistAllocatedTransactionNoIfMissing, ensurePurchaseTransactionNoForRow } from "./market-purchase-transaction-no";
 import { buildMarketReturnPdf } from "./market-return-pdf";
+
+/** Trim; empty / whitespace → null so `??` does not keep bogus "" from joins. */
+function nzDisplayText(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const t = String(value).trim();
+  return t !== "" ? t : null;
+}
 
 function sendHrRule(res: Response, e: unknown): boolean {
   if (e instanceof HrEmployeeRuleError) {
@@ -1530,8 +1539,103 @@ export function registerMarketIomsRoutes(app: Express) {
       if (status) conditions.push(eq(purchaseTransactions.status, status));
       const parentTransactionId = req.query.parentTransactionId as string | undefined;
       if (parentTransactionId) conditions.push(eq(purchaseTransactions.parentTransactionId, parentTransactionId));
-      const base = db.select().from(purchaseTransactions).orderBy(desc(purchaseTransactions.transactionDate));
-      const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
+      const traderJoinCond = sql`(
+        ${traderLicences.id} = (
+          CASE
+            WHEN trim(${purchaseTransactions.traderLicenceId}::text) ILIKE 'TA:%'
+            THEN trim(substring(trim(${purchaseTransactions.traderLicenceId}::text) from 4))
+            ELSE trim(${purchaseTransactions.traderLicenceId}::text)
+          END
+        )
+        OR (
+          ${traderLicences.licenceNo} IS NOT NULL
+          AND trim(${traderLicences.licenceNo}) = trim(${purchaseTransactions.traderLicenceId}::text)
+        )
+        OR (
+          ${traderLicences.entityPublicCode} IS NOT NULL
+          AND trim(${traderLicences.entityPublicCode}) = trim(${purchaseTransactions.traderLicenceId}::text)
+        )
+      )`;
+
+      const txWithTrader = db
+        .select({
+          ...getTableColumns(purchaseTransactions),
+          _traderFirmName: traderLicences.firmName,
+          _traderLicenceNo: traderLicences.licenceNo,
+          _traderProvisionalNo: traderLicences.provisionalLicenceNo,
+          _traderEntityCode: traderLicences.entityPublicCode,
+        })
+        .from(purchaseTransactions)
+        .leftJoin(traderLicences, traderJoinCond)
+        .orderBy(desc(purchaseTransactions.transactionDate));
+      const rawRows = conditions.length > 0 ? await txWithTrader.where(and(...conditions)) : await txWithTrader;
+      const list = rawRows.map((row) => {
+        const { _traderFirmName, _traderLicenceNo, _traderProvisionalNo, _traderEntityCode, ...t } = row;
+        const finalNo =
+          _traderLicenceNo != null && String(_traderLicenceNo).trim() !== ""
+            ? String(_traderLicenceNo).trim()
+            : null;
+        const provNo =
+          _traderProvisionalNo != null && String(_traderProvisionalNo).trim() !== ""
+            ? String(_traderProvisionalNo).trim()
+            : null;
+        const entNo =
+          _traderEntityCode != null && String(_traderEntityCode).trim() !== ""
+            ? String(_traderEntityCode).trim()
+            : null;
+        const snapName = nzDisplayText(t.traderFirmNameSnapshot);
+        const snapLic = nzDisplayText(t.traderLicenceNoSnapshot);
+        const fromJoin = finalNo ?? provNo ?? entNo ?? null;
+        const traderFirmName = nzDisplayText(_traderFirmName) ?? snapName ?? null;
+        const traderLicenceNumber = nzDisplayText(fromJoin) ?? snapLic ?? null;
+        return {
+          ...t,
+          traderFirmName,
+          traderLicenceNumber,
+          traderProvisionalLicenceNo: provNo,
+          /** UI / legacy aliases */
+          traderName: traderFirmName,
+          licenceNo: traderLicenceNumber,
+        };
+      });
+
+      const resolveCache = new Map<string, Awaited<ReturnType<typeof resolvePurchaseTransactionTraderRef>> | null>();
+      for (const item of list) {
+        const key = String(item.traderLicenceId ?? "").trim();
+        if (!key) continue;
+        if (!resolveCache.has(key)) {
+          resolveCache.set(key, await resolvePurchaseTransactionTraderRef(key));
+        }
+        const r = resolveCache.get(key);
+        const nameFromRow = nzDisplayText(item.traderFirmName as string | null | undefined);
+        const licFromRow = nzDisplayText(item.traderLicenceNumber as string | null | undefined);
+        const nameFromR = r ? nzDisplayText(r.firmName) : null;
+        const licFromR = r ? nzDisplayText(r.licenceDisplay) : null;
+        const mergedName = nameFromRow ?? nameFromR ?? null;
+        const mergedLic = licFromRow ?? licFromR ?? null;
+        item.traderFirmName = mergedName;
+        item.traderLicenceNumber = mergedLic;
+        item.traderName = mergedName;
+        item.licenceNo = mergedLic;
+        Object.assign(item, { displayTraderName: mergedName, displayTraderLicence: mergedLic });
+      }
+
+      for (const item of list) {
+        if (nzDisplayText(item.transactionNo as string | null | undefined)) continue;
+        try {
+          const filled = await ensurePurchaseTransactionNoForRow({
+            id: String(item.id),
+            yardId: String(item.yardId),
+            transactionDate: String(item.transactionDate),
+          });
+          if (filled) {
+            (item as { transactionNo?: string | null }).transactionNo = filled;
+          }
+        } catch (e) {
+          console.error("M-04: ensurePurchaseTransactionNoForRow failed", (item as { id?: string }).id, e);
+        }
+      }
+
       res.json(list);
     } catch (e) {
       console.error(e);
@@ -1594,12 +1698,39 @@ export function registerMarketIomsRoutes(app: Express) {
         if (Number.isNaN(quantity) || quantity <= 0) {
           return sendApiError(res, 400, "PURCHASE_TX_QUANTITY_INVALID", "quantity must be greater than 0");
         }
+        const adjDateRaw = String(body.transactionDate ?? new Date().toISOString().slice(0, 10));
+        let adjTransactionDate: string;
+        try {
+          adjTransactionDate = assertIsoTransactionDate(adjDateRaw);
+        } catch {
+          return sendApiError(res, 400, "PURCHASE_TX_TRANSACTION_DATE_INVALID", "transactionDate must be YYYY-MM-DD");
+        }
+        const todayAdj = new Date().toISOString().slice(0, 10);
+        if (adjTransactionDate > todayAdj) {
+          return sendApiError(res, 400, "PURCHASE_TX_FUTURE_DATE", "Future-dated arrivals are not allowed.");
+        }
+        const resolvedParentTrader = await resolvePurchaseTransactionTraderRef(String(parent.traderLicenceId ?? ""));
+        if (!resolvedParentTrader) {
+          return sendApiError(
+            res,
+            400,
+            "PURCHASE_TX_PARENT_TRADER_UNRESOLVED",
+            "Original transaction trader reference could not be resolved; fix the parent row or trader master.",
+          );
+        }
+        const transactionNo = await generateNextPurchaseTransactionNo({
+          yardId: parent.yardId,
+          transactionDateIso: adjTransactionDate,
+        });
         const id = nanoid();
         await db.insert(purchaseTransactions).values({
           id,
+          transactionNo,
           yardId: parent.yardId,
           commodityId: parent.commodityId,
-          traderLicenceId: parent.traderLicenceId,
+          traderLicenceId: resolvedParentTrader.id,
+          traderFirmNameSnapshot: resolvedParentTrader.firmName,
+          traderLicenceNoSnapshot: resolvedParentTrader.licenceDisplay,
           quantity,
           unit: String(body.unit ?? parent.unit),
           weight: body.weight != null ? Number(body.weight) : parent.weight,
@@ -1608,7 +1739,7 @@ export function registerMarketIomsRoutes(app: Express) {
           marketFeeAmount,
           purchaseType: String(body.purchaseType ?? parent.purchaseType),
           grade: body.grade != null ? String(body.grade) : parent.grade,
-          transactionDate: String(body.transactionDate ?? new Date().toISOString().slice(0, 10)),
+          transactionDate: adjTransactionDate,
           status: "Draft",
           farmerId: body.farmerId != null ? String(body.farmerId) : parent.farmerId,
           receiptId: null,
@@ -1618,18 +1749,45 @@ export function registerMarketIomsRoutes(app: Express) {
           parentTransactionId,
           entryKind: "Adjustment",
         });
+        await persistAllocatedTransactionNoIfMissing(id, transactionNo);
         const [row] = await db.select().from(purchaseTransactions).where(eq(purchaseTransactions.id, id));
         if (row) {
           writeAuditLog(req, { module: "Market", action: "CreateAdjustment", recordId: id, afterValue: row }).catch((e) =>
             console.error("Audit log failed:", e),
           );
         }
-        return res.status(201).json(row);
+        if (!row) {
+          return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load created adjustment");
+        }
+        if (!nzDisplayText(row.transactionNo)) {
+          await pool.query(`UPDATE gapmc.purchase_transactions SET transaction_no = $1::text WHERE id = $2::text`, [
+            transactionNo,
+            row.id,
+          ]);
+          (row as { transactionNo: string | null }).transactionNo = transactionNo;
+        }
+        const adjName = nzDisplayText(row.traderFirmNameSnapshot) ?? nzDisplayText(resolvedParentTrader.firmName);
+        const adjLic = nzDisplayText(row.traderLicenceNoSnapshot) ?? nzDisplayText(resolvedParentTrader.licenceDisplay);
+        return res.status(201).json({
+          ...row,
+          transactionNo: nzDisplayText(row.transactionNo) ?? transactionNo,
+          traderFirmName: adjName,
+          traderLicenceNumber: adjLic,
+          traderName: adjName,
+          licenceNo: adjLic,
+          displayTraderName: adjName,
+          displayTraderLicence: adjLic,
+        });
       }
 
       const yardId = String(body.yardId ?? "");
       const commodityId = String(body.commodityId ?? "");
-      const traderLicenceId = String(body.traderLicenceId ?? "");
+      const traderRefRaw = String(body.traderLicenceId ?? "").trim();
+      const resolvedTrader = await resolvePurchaseTransactionTraderRef(traderRefRaw);
+      if (!resolvedTrader) {
+        return sendApiError(res, 404, "PURCHASE_TX_LICENCE_NOT_FOUND", "Trader licence not found");
+      }
+      const traderLicenceId = resolvedTrader.id;
       const quantity = Number(body.quantity ?? 0);
       const declaredValue = Number(body.declaredValue ?? 0);
       const transactionDateRaw = String(body.transactionDate ?? "");
@@ -1637,7 +1795,7 @@ export function registerMarketIomsRoutes(app: Express) {
       const purchaseType = String(body.purchaseType ?? "");
       const weight = body.weight != null ? Number(body.weight) : null;
 
-      if (!yardId || !commodityId || !traderLicenceId || !transactionDateRaw || !unit || !purchaseType) {
+      if (!yardId || !commodityId || !traderRefRaw || !transactionDateRaw || !unit || !purchaseType) {
         return sendApiError(
           res,
           400,
@@ -1783,11 +1941,15 @@ export function registerMarketIomsRoutes(app: Express) {
       }
 
       const id = nanoid();
+      const transactionNo = await generateNextPurchaseTransactionNo({ yardId, transactionDateIso: transactionDate });
       await db.insert(purchaseTransactions).values({
         id,
+        transactionNo,
         yardId,
         commodityId,
         traderLicenceId,
+        traderFirmNameSnapshot: resolvedTrader.firmName,
+        traderLicenceNoSnapshot: resolvedTrader.licenceDisplay,
         quantity,
         unit,
         declaredValue,
@@ -1807,11 +1969,33 @@ export function registerMarketIomsRoutes(app: Express) {
         parentTransactionId: null,
         entryKind: "Original",
       });
+      await persistAllocatedTransactionNoIfMissing(id, transactionNo);
       const [row] = await db.select().from(purchaseTransactions).where(eq(purchaseTransactions.id, id));
       if (row) {
         writeAuditLog(req, { module: "Market", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       }
-      res.status(201).json(row);
+      if (!row) {
+        return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load created transaction");
+      }
+      if (!nzDisplayText(row.transactionNo)) {
+        await pool.query(`UPDATE gapmc.purchase_transactions SET transaction_no = $1::text WHERE id = $2::text`, [
+          transactionNo,
+          row.id,
+        ]);
+        (row as { transactionNo: string | null }).transactionNo = transactionNo;
+      }
+      const createdName = nzDisplayText(row.traderFirmNameSnapshot) ?? nzDisplayText(resolvedTrader.firmName);
+      const createdLic = nzDisplayText(row.traderLicenceNoSnapshot) ?? nzDisplayText(resolvedTrader.licenceDisplay);
+      res.status(201).json({
+        ...row,
+        transactionNo: nzDisplayText(row.transactionNo) ?? transactionNo,
+        traderFirmName: createdName,
+        traderLicenceNumber: createdLic,
+        traderName: createdName,
+        licenceNo: createdLic,
+        displayTraderName: createdName,
+        displayTraderLicence: createdLic,
+      });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create transaction");
@@ -1910,6 +2094,88 @@ export function registerMarketIomsRoutes(app: Express) {
         return sendApiError(res, 400, "PURCHASE_TX_WEIGHT_INVALID", "weight must be a non-negative number");
       }
 
+      if (updates.traderLicenceId !== undefined) {
+        const rawNew = String(updates.traderLicenceId).trim();
+        const resolvedNew = await resolvePurchaseTransactionTraderRef(rawNew);
+        if (!resolvedNew) {
+          return sendApiError(res, 404, "PURCHASE_TX_LICENCE_NOT_FOUND", "Trader licence not found");
+        }
+        if (existing.status !== "Draft") {
+          const same = await tradersRefEquivalent(String(existing.traderLicenceId), rawNew);
+          if (!same) {
+            return sendApiError(res, 400, "PURCHASE_TX_TRADER_LOCKED", "Trader cannot be changed after Draft.");
+          }
+          updates.traderLicenceId = resolvedNew.id;
+          updates.traderFirmNameSnapshot = resolvedNew.firmName;
+          updates.traderLicenceNoSnapshot = resolvedNew.licenceDisplay;
+        } else {
+          const mergedYard = updates.yardId != null ? String(updates.yardId) : String(existing.yardId);
+          const mergedDateRaw =
+            updates.transactionDate != null ? String(updates.transactionDate) : String(existing.transactionDate);
+          let td: string;
+          try {
+            td = assertIsoTransactionDate(mergedDateRaw);
+          } catch {
+            return sendApiError(res, 400, "PURCHASE_TX_TRANSACTION_DATE_INVALID", "transactionDate must be YYYY-MM-DD");
+          }
+          const [licencePut] = await db
+            .select({
+              id: traderLicences.id,
+              yardId: traderLicences.yardId,
+              status: traderLicences.status,
+              isBlocked: traderLicences.isBlocked,
+              validFrom: traderLicences.validFrom,
+              validTo: traderLicences.validTo,
+            })
+            .from(traderLicences)
+            .where(eq(traderLicences.id, resolvedNew.id))
+            .limit(1);
+          if (!licencePut) return sendApiError(res, 404, "PURCHASE_TX_LICENCE_NOT_FOUND", "Trader licence not found");
+          if (licencePut.yardId && licencePut.yardId !== mergedYard) {
+            return sendApiError(
+              res,
+              400,
+              "PURCHASE_TX_LICENCE_YARD_MISMATCH",
+              "Trader licence belongs to a different yard",
+            );
+          }
+          if (licencePut.status !== "Active") {
+            return sendApiError(
+              res,
+              400,
+              "PURCHASE_TX_TRADER_NOT_ACTIVE",
+              `Trader licence must be Active for purchases (current status: ${licencePut.status}).`,
+            );
+          }
+          if (licencePut.isBlocked) {
+            return sendApiError(res, 400, "PURCHASE_TX_TRADER_BLOCKED", "Trader licence is blocked.");
+          }
+          const vfPut = licencePut.validFrom?.trim() ?? "";
+          const vtPut = licencePut.validTo?.trim() ?? "";
+          const isoPut = /^\d{4}-\d{2}-\d{2}$/;
+          if (vfPut && isoPut.test(vfPut) && vtPut && isoPut.test(vtPut)) {
+            if (td < vfPut) {
+              return sendApiError(
+                res,
+                400,
+                "PURCHASE_TX_TRADER_OUTSIDE_VALIDITY",
+                "Transaction date is outside the trader licence valid period.",
+              );
+            }
+          }
+          const windowEvalPut = await evaluateMarketFeeLicenceWindow({
+            licenceValidToIso: licencePut.validTo,
+            transactionDateIso: td,
+          });
+          if (!windowEvalPut.ok) {
+            return sendApiError(res, 400, windowEvalPut.code, windowEvalPut.message);
+          }
+          updates.traderLicenceId = resolvedNew.id;
+          updates.traderFirmNameSnapshot = resolvedNew.firmName;
+          updates.traderLicenceNoSnapshot = resolvedNew.licenceDisplay;
+        }
+      }
+
       const isDraftOriginal = existing.status === "Draft" && existing.entryKind === "Original";
       if (isDraftOriginal && (updates.marketFeePercent != null || updates.marketFeeAmount != null)) {
         const mergedYard = updates.yardId != null ? String(updates.yardId) : String(existing.yardId ?? "");
@@ -1954,6 +2220,32 @@ export function registerMarketIomsRoutes(app: Express) {
         }
       }
 
+      const blankExistingTxn =
+        existing.transactionNo == null || String(existing.transactionNo).trim() === "";
+      const blankUpdateTxn =
+        updates.transactionNo === undefined ||
+        updates.transactionNo === null ||
+        String(updates.transactionNo).trim() === "";
+      const needsTxnNo = blankExistingTxn && blankUpdateTxn;
+      const verifyOrApproveTransition =
+        statusChange && (newStatus === "Verified" || newStatus === "Approved");
+
+      if (needsTxnNo && (existing.status === "Draft" || verifyOrApproveTransition)) {
+        const mergedDateRaw =
+          updates.transactionDate != null ? String(updates.transactionDate) : String(existing.transactionDate ?? "");
+        let tdNo: string;
+        try {
+          tdNo = assertIsoTransactionDate(mergedDateRaw);
+        } catch {
+          return sendApiError(res, 400, "PURCHASE_TX_TRANSACTION_DATE_INVALID", "transactionDate must be YYYY-MM-DD");
+        }
+        const yid = updates.yardId != null ? String(updates.yardId) : String(existing.yardId);
+        updates.transactionNo = await generateNextPurchaseTransactionNo({
+          yardId: yid,
+          transactionDateIso: tdNo,
+        });
+      }
+
       if (transition?.setDvUser) updates.dvUser = req.user?.id ?? null;
       if (transition?.setDaUser) updates.daUser = req.user?.id ?? null;
       if (dvReturnRemarks !== null) {
@@ -1992,12 +2284,16 @@ export function registerMarketIomsRoutes(app: Express) {
               .from(traderLicences)
               .where(eq(traderLicences.id, responseRow.traderLicenceId))
               .limit(1);
+            const snapName =
+              responseRow.traderFirmNameSnapshot != null && String(responseRow.traderFirmNameSnapshot).trim() !== ""
+                ? String(responseRow.traderFirmNameSnapshot).trim()
+                : null;
 
             const createdBy = req.user?.id ?? "system";
             const created = await createIomsReceipt({
               yardId: responseRow.yardId,
               revenueHead: "MarketFee",
-              payerName: licence?.firmName ?? responseRow.traderLicenceId,
+              payerName: licence?.firmName ?? snapName ?? responseRow.traderLicenceId,
               payerType: "TraderLicence",
               payerRefId: responseRow.traderLicenceId,
               isGracePeriod: Boolean((responseRow as { isGracePeriod?: boolean | null }).isGracePeriod),

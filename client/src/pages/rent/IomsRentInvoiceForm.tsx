@@ -24,6 +24,8 @@ import {
   activeAssetAllotmentsInYard,
   billableEntityAllotmentsInYard,
 } from "./rent-allotments-ui";
+import { SYSTEM_CONFIG_DEFAULTS } from "@shared/system-config-defaults";
+import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
 
 interface Yard {
   id: string;
@@ -51,11 +53,12 @@ export default function IomsRentInvoiceForm() {
   const [rentAmount, setRentAmount] = useState("");
   const [nonGstLabel, setNonGstLabel] = useState("Garbage / Premises");
   const [nonGstAmount, setNonGstAmount] = useState("");
-  const [cgst, setCgst] = useState("");
-  const [sgst, setSgst] = useState("");
   const [isGovtEntity, setIsGovtEntity] = useState(false);
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  const { data: sysCfg } = useQuery<Record<string, string>>({
+    queryKey: ["/api/system/config"],
+  });
   const { data: allotments = [], isLoading: allotmentsLoading } = useQuery<AssetAllotmentRow[]>({
     queryKey: ["/api/ioms/asset-allotments"],
     queryFn: async () => {
@@ -138,9 +141,24 @@ export default function IomsRentInvoiceForm() {
 
   const rentNum = Number(rentAmount) || 0;
   const nonGstNum = Number(nonGstAmount) || 0;
-  const cgstNum = Number(cgst) || 0;
-  const sgstNum = Number(sgst) || 0;
-  const totalAmount = rentNum + nonGstNum + cgstNum + sgstNum;
+
+  const gstExemptPreview =
+    (selectedEntity != null && selectedEntity.gstApplicable === false) || (!isEntitySelection && isGovtEntity);
+
+  const rentCgstPct = (() => {
+    const n = parseFloat(String(sysCfg?.rent_invoice_cgst_percent ?? ""));
+    return Number.isFinite(n) && n >= 0 ? n : parseFloat(SYSTEM_CONFIG_DEFAULTS.rent_invoice_cgst_percent);
+  })();
+  const rentSgstPct = (() => {
+    const n = parseFloat(String(sysCfg?.rent_invoice_sgst_percent ?? ""));
+    return Number.isFinite(n) && n >= 0 ? n : parseFloat(SYSTEM_CONFIG_DEFAULTS.rent_invoice_sgst_percent);
+  })();
+
+  const { cgst: cgstNum, sgst: sgstNum } = useMemo(
+    () => computeRentInvoiceGstInr(rentNum, gstExemptPreview, rentCgstPct, rentSgstPct),
+    [rentNum, gstExemptPreview, rentCgstPct, rentSgstPct],
+  );
+  const totalAmount = rentInvoiceTotalInr(rentNum, nonGstNum, cgstNum, sgstNum);
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -325,14 +343,18 @@ export default function IomsRentInvoiceForm() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>CGST (₹)</Label>
-                <Input type="number" min={0} step={0.01} value={cgst} onChange={(e) => setCgst(e.target.value)} />
+                <Label>CGST (₹) @ {rentCgstPct}%</Label>
+                <Input type="text" readOnly className="bg-muted" value={cgstNum.toFixed(2)} />
               </div>
               <div className="space-y-2">
-                <Label>SGST (₹)</Label>
-                <Input type="number" min={0} step={0.01} value={sgst} onChange={(e) => setSgst(e.target.value)} />
+                <Label>SGST (₹) @ {rentSgstPct}%</Label>
+                <Input type="text" readOnly className="bg-muted" value={sgstNum.toFixed(2)} />
               </div>
             </div>
+            <p className="text-xs text-muted-foreground">
+              CGST and SGST are calculated from the rent amount using the M-03 rent invoice CGST/SGST percentages under
+              Admin → Config & PDF logo.
+            </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">

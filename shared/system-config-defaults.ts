@@ -25,6 +25,10 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   rent_tds_annual_threshold_inr: "240000",
   /** M-03: TDS % applied to monthly rent (pre-GST) when threshold exceeded and PAN valid. */
   rent_tds_rate_percent: "10",
+  /** M-03: CGST % on taxable monthly rent (pre-GST); default half of 18% GST. */
+  rent_invoice_cgst_percent: "9",
+  /** M-03: SGST % on taxable monthly rent (pre-GST); default half of 18% GST. */
+  rent_invoice_sgst_percent: "9",
   /** M-03 Sr.17: optional default % for “Adjust vs baseline” on rent revisions UI (0 = leave field empty). */
   rent_revision_suggested_percent: "0",
   /** M-08: when `true`, cron / HTTP AMC monthly bill job may create rows; Excel default is manual (`false`). */
@@ -130,6 +134,8 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "rent_arrears_interest_percent_per_annum",
   "rent_tds_annual_threshold_inr",
   "rent_tds_rate_percent",
+  "rent_invoice_cgst_percent",
+  "rent_invoice_sgst_percent",
   "rent_revision_suggested_percent",
   "amc_monthly_auto_generate",
   "fleet_maintenance_work_order_threshold_inr",
@@ -181,6 +187,8 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   rent_arrears_interest_percent_per_annum: "Rent arrears interest % p.a. (simple daily; dishonour hint)",
   rent_tds_annual_threshold_inr: "Rent TDS: annual threshold (INR; monthly rent × 12 vs this)",
   rent_tds_rate_percent: "Rent TDS: % on monthly rent when above threshold + valid PAN",
+  rent_invoice_cgst_percent: "M-03 Rent invoice: CGST % on taxable rent (pre-GST base; default 9)",
+  rent_invoice_sgst_percent: "M-03 Rent invoice: SGST % on taxable rent (pre-GST base; default 9)",
   rent_revision_suggested_percent:
     "Rent revision UI: default % vs baseline (0 = empty; pre-fills Adjust field on /rent/ioms/revisions)",
   amc_monthly_auto_generate: "AMC: allow auto monthly bill cron (true|false)",

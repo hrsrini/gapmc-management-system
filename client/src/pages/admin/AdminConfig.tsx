@@ -159,9 +159,9 @@ export default function AdminConfig() {
             System Config
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Default values used across the app (market fee %, MSP rate, admin charges, licence fee, rent interest %, dak
-            diary scope, data retention policy years). Changes apply to new fee rates, MSP rows, and licences when amounts
-            are omitted.             Authenticated users can read merged values via{" "}
+            Default values used across the app (market fee %, MSP rate, admin charges, licence fee, rent interest %, M-03
+            rent invoice CGST/SGST %, dak diary scope, data retention policy years). Changes apply to new fee rates, MSP
+            rows, licences when amounts are omitted, and rent GST calculations on legacy and IOMS rent flows.             Authenticated users can read merged values via{" "}
             <code className="text-xs bg-muted px-1 rounded">GET /api/system/config</code> (sensitive keys such as Aadhaar
             HMAC are omitted). Admins can run a read-only
             retention count snapshot via{" "}

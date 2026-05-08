@@ -5,8 +5,8 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import multer from "multer";
-import { eq, desc, and, inArray, sql, or, ilike, isNotNull, type InferSelectModel } from "drizzle-orm";
-import { db } from "./db";
+import { eq, desc, and, inArray, sql, or, ilike, isNotNull, ne, type InferSelectModel } from "drizzle-orm";
+import { db, pool } from "./db";
 import {
   traderLicences,
   assistantTraders,
@@ -19,6 +19,7 @@ import {
   traderStockOpenings,
   commodities,
   mspSettings,
+  yards,
   rentInvoices,
   iomsReceipts,
   adHocEntities,
@@ -29,7 +30,11 @@ import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config"
 import { writeAuditLog } from "./audit";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { tenantLicenceIsGstExempt } from "./gst-exempt";
-import { assertRecordDoDvDaSeparation } from "./workflow";
+import {
+  assertRecordDoDvDaSeparation,
+  assertSegregationDoDvDa,
+  canTransitionEntityAllotmentApproval,
+} from "./workflow";
 import { sendApiError } from "./api-errors";
 import { disablePortalAccessForUnifiedEntity } from "./routes-portal";
 import { parseReportPaging, parseReportSort, reportSearchPattern } from "./report-paging";
@@ -80,6 +85,29 @@ import {
   extFromBmFormMime,
   contentTypeForBmFormFile,
 } from "./trader-licence-bm-form-storage";
+import {
+  allocateTraderLicenceActivationIds,
+  formatProvisionalLicenceNo,
+  nextApplicationSerialTx,
+} from "./trader-licence-identity";
+
+const TRADER_LICENCE_MOBILE_DUP_STATUSES = ["Draft", "Pending", "Query", "Active"] as const;
+
+async function traderLicenceMobileInUse(mobileNorm: string, excludeLicenceId: string | null): Promise<boolean> {
+  const statusDup = inArray(traderLicences.status, [...TRADER_LICENCE_MOBILE_DUP_STATUSES]);
+  const hit = excludeLicenceId
+    ? await db
+        .select({ id: traderLicences.id })
+        .from(traderLicences)
+        .where(and(eq(traderLicences.mobile, mobileNorm), statusDup, ne(traderLicences.id, excludeLicenceId)))
+        .limit(1)
+    : await db
+        .select({ id: traderLicences.id })
+        .from(traderLicences)
+        .where(and(eq(traderLicences.mobile, mobileNorm), statusDup))
+        .limit(1);
+  return Boolean(hit[0]);
+}
 
 function ymdFieldError(label: string, v: string | null | undefined, required: boolean): string | null {
   if (v == null || String(v).trim() === "") return required ? `${label} is required.` : null;
@@ -114,6 +142,7 @@ function validateLicenceForPendingStatus(p: {
   characterCertIssuer: string | null | undefined;
   characterCertDate: string | null | undefined;
   renewalNoArrearsDeclared: boolean | null | undefined;
+  bmUndertakingAccepted?: boolean | null | undefined;
 }): { code: string; message: string } | null {
   const kind = String(p.applicationKind ?? "New").trim() || "New";
   if (kind === "Renewal" && p.renewalNoArrearsDeclared !== true) {
@@ -124,6 +153,12 @@ function validateLicenceForPendingStatus(p: {
     };
   }
   if (!traderLicenceUsesBmSupplement(p.licenceType)) return null;
+  if (p.bmUndertakingAccepted !== true) {
+    return {
+      code: "LICENCE_BM_UNDERTAKING",
+      message: "Confirm the Form BM undertaking before submitting this application for review.",
+    };
+  }
   if (!String(p.fatherSpouseName ?? "").trim()) {
     return { code: "LICENCE_BM_FATHER_SPOUSE", message: "Father / spouse name is required for this licence type (Form BM)." };
   }
@@ -164,13 +199,19 @@ function yardInScope(req: Request, yardId: string): boolean {
   return !scopedIds || scopedIds.length === 0 || scopedIds.includes(yardId);
 }
 
+/** ADMIN may access trader-licence rows across yards (e.g. list with allYards=1, cross-yard support). */
+function licenceYardAccessible(req: Request, yardId: string): boolean {
+  if (req.user?.roles.some((r) => r.tier === "ADMIN")) return true;
+  return yardInScope(req, yardId);
+}
+
 export function registerTradersAssetsRoutes(app: Express) {
   registerEntityAllotmentRoutes(app);
   const now = () => new Date().toISOString();
 
   const bmFormUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+    limits: { fileSize: 2 * 1024 * 1024, files: 1 },
     fileFilter(_req, file, cb) {
       if (extFromBmFormMime(file.mimetype)) return cb(null, true);
       cb(new Error("BM_FORM_MIME"));
@@ -185,7 +226,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         return sendApiError(res, 400, "BM_FORM_MIME", "Only PDF, PNG, or JPEG files are allowed.");
       }
       if (err && typeof err === "object" && (err as { code?: string }).code === "LIMIT_FILE_SIZE") {
-        return sendApiError(res, 400, "BM_FORM_TOO_LARGE", "File must be 10 MB or smaller.");
+        return sendApiError(res, 400, "BM_FORM_TOO_LARGE", "File must be 2 MB or smaller.");
       }
       console.error(err);
       return sendApiError(res, 400, "BM_FORM_UPLOAD_FAILED", msg);
@@ -473,7 +514,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (parsed.kind === "TA") {
         const tenantLicenceId = parsed.refId;
         const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, tenantLicenceId)).limit(1);
-        if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+        if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
 
         const invs = await db
           .select()
@@ -865,7 +906,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         .from(traderLicences)
         .where(eq(traderLicences.id, String(pt.traderLicenceId)))
         .limit(1);
-      if (!lic || !yardInScope(req, lic.yardId)) {
+      if (!lic || !licenceYardAccessible(req, lic.yardId)) {
         return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
       }
 
@@ -1005,7 +1046,7 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       if (parsed.kind === "TA") {
         const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, parsed.refId)).limit(1);
-        if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+        if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
         return res.json({ unifiedId, kind: "TrackA", refId: lic.id, record: lic });
       }
       if (parsed.kind === "TB") {
@@ -1172,9 +1213,13 @@ export function registerTradersAssetsRoutes(app: Express) {
               .filter(Boolean)
           : [];
       const paged = req.query.paged === "1";
+      const allYards = String(req.query.allYards ?? "").trim() === "1";
+      const isAdmin = Boolean(req.user?.roles.some((r) => r.tier === "ADMIN"));
       const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
       const conditions = [];
-      if (scopedIds && scopedIds.length > 0) conditions.push(inArray(traderLicences.yardId, scopedIds));
+      if (!(allYards && isAdmin) && scopedIds && scopedIds.length > 0) {
+        conditions.push(inArray(traderLicences.yardId, scopedIds));
+      }
       if (yardId) conditions.push(eq(traderLicences.yardId, yardId));
       if (status) conditions.push(eq(traderLicences.status, status));
       if (licenceTypes.length > 0) conditions.push(inArray(traderLicences.licenceType, licenceTypes));
@@ -1194,6 +1239,9 @@ export function registerTradersAssetsRoutes(app: Express) {
               ilike(traderLicences.email, pattern),
               ilike(traderLicences.licenceType, pattern),
               ilike(traderLicences.contactName, pattern),
+              ilike(traderLicences.provisionalLicenceNo, pattern),
+              ilike(traderLicences.applicationSerial, pattern),
+              ilike(traderLicences.entityPublicCode, pattern),
               sql`cast(${traderLicences.feeAmount} as text) ilike ${pattern}`,
             )!,
           );
@@ -1224,7 +1272,7 @@ export function registerTradersAssetsRoutes(app: Express) {
     try {
       const [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, req.params.id)).limit(1);
       if (!row) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
-      if (!yardInScope(req, row.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      if (!licenceYardAccessible(req, row.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       res.json(row);
     } catch (e) {
       console.error(e);
@@ -1240,7 +1288,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
       const id = routeParamString(req.params.id);
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
-      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       const fn = lic.bmFormDocFile ? String(lic.bmFormDocFile).trim() : "";
       if (!fn || !isAllowedBmFormFileName(fn)) {
         return sendApiError(res, 404, "BM_FORM_NOT_FOUND", "No BM supporting document file on this licence.");
@@ -1265,7 +1313,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
       const id = routeParamString(req.params.id);
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
-      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       if (!traderLicenceUsesBmSupplement(lic.licenceType)) {
         return sendApiError(res, 400, "BM_FORM_TYPE", "BM supporting documents apply only to functionary licence types.");
       }
@@ -1308,7 +1356,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
       const id = routeParamString(req.params.id);
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
-      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       if (!traderLicenceUsesBmSupplement(lic.licenceType)) {
         return sendApiError(res, 400, "BM_FORM_TYPE", "BM supporting documents apply only to functionary licence types.");
       }
@@ -1335,7 +1383,7 @@ export function registerTradersAssetsRoutes(app: Express) {
     try {
       const licenceId = req.params.licenceId;
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, licenceId)).limit(1);
-      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       const list = await db
         .select()
         .from(traderStockOpenings)
@@ -1352,7 +1400,7 @@ export function registerTradersAssetsRoutes(app: Express) {
     try {
       const licenceId = req.params.licenceId;
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, licenceId)).limit(1);
-      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       const body = req.body as Record<string, unknown>;
       const commodityId = String(body.commodityId ?? "");
       const unit = String(body.unit ?? "");
@@ -1392,7 +1440,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       const [existing] = await db.select().from(traderStockOpenings).where(eq(traderStockOpenings.id, openingId)).limit(1);
       if (!existing) return sendApiError(res, 404, "STOCK_OPENING_NOT_FOUND", "Not found");
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, existing.traderLicenceId)).limit(1);
-      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "STOCK_OPENING_NOT_FOUND", "Not found");
+      if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "STOCK_OPENING_NOT_FOUND", "Not found");
       const body = req.body as Record<string, unknown>;
       const updates: Record<string, unknown> = {};
       if (body.commodityId !== undefined) {
@@ -1425,7 +1473,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       const [existing] = await db.select().from(traderStockOpenings).where(eq(traderStockOpenings.id, openingId)).limit(1);
       if (!existing) return sendApiError(res, 404, "STOCK_OPENING_NOT_FOUND", "Not found");
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, existing.traderLicenceId)).limit(1);
-      if (!lic || !yardInScope(req, lic.yardId)) return sendApiError(res, 404, "STOCK_OPENING_NOT_FOUND", "Not found");
+      if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "STOCK_OPENING_NOT_FOUND", "Not found");
       await db.delete(traderStockOpenings).where(eq(traderStockOpenings.id, openingId));
       writeAuditLog(req, { module: "Traders", action: "Delete", recordId: openingId, beforeValue: existing }).catch((e) => console.error("Audit log failed:", e));
       res.status(204).send();
@@ -1439,7 +1487,7 @@ export function registerTradersAssetsRoutes(app: Express) {
     try {
       const body = req.body;
       const yid = String(body.yardId ?? "");
-      if (!yardInScope(req, yid)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      if (!licenceYardAccessible(req, yid)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
       if (!body.mobile || String(body.mobile).trim() === "") {
         return sendApiError(res, 400, "LICENCE_MOBILE_REQUIRED", "Mobile is required");
       }
@@ -1459,6 +1507,14 @@ export function registerTradersAssetsRoutes(app: Express) {
       } catch (e) {
         if (sendHrRule(res, e)) return;
         throw e;
+      }
+      if (await traderLicenceMobileInUse(mobileNorm, null)) {
+        return sendApiError(
+          res,
+          400,
+          "LICENCE_MOBILE_DUPLICATE",
+          "This mobile number is already used on another draft, in-review, or active trader licence.",
+        );
       }
       const licenceTypeStr = String(body.licenceType ?? "Associated");
       const applicationKindStr = body.applicationKind ? String(body.applicationKind) : "New";
@@ -1491,6 +1547,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         return sendApiError(res, 400, "LICENCE_BM_DOC_URL", bmDocRes.message);
       }
       const renewalDecl = Boolean(body.renewalNoArrearsDeclared ?? false);
+      const bmUndertakingAccepted = Boolean(body.bmUndertakingAccepted ?? false);
       const statusStr = String(body.status ?? "Draft");
       if (statusStr === "Pending") {
         const pendErr = validateLicenceForPendingStatus({
@@ -1502,6 +1559,7 @@ export function registerTradersAssetsRoutes(app: Express) {
           characterCertIssuer: charIss,
           characterCertDate: charDt,
           renewalNoArrearsDeclared: renewalDecl,
+          bmUndertakingAccepted,
         });
         if (pendErr) return sendApiError(res, 400, pendErr.code, pendErr.message);
       }
@@ -1517,47 +1575,69 @@ export function registerTradersAssetsRoutes(app: Express) {
       const feeFromBody =
         body.feeAmount != null && String(body.feeAmount).trim() !== "" ? Number(body.feeAmount) : null;
       const feeAmount = feeFromBody != null && !Number.isNaN(feeFromBody) ? feeFromBody : parseSystemConfigNumber(sys, "licence_fee");
-      await db.insert(traderLicences).values({
-        id,
-        firmName: String(body.firmName ?? ""),
-        yardId: String(body.yardId ?? ""),
-        mobile: mobileNorm,
-        licenceType: licenceTypeStr,
-        status: statusStr,
-        parentLicenceId: body.parentLicenceId ? String(body.parentLicenceId) : null,
-        applicationKind: applicationKindStr,
-        firmType: body.firmType ? String(body.firmType) : null,
-        contactName: body.contactName ? String(body.contactName) : null,
-        email: emailNorm,
-        address: body.address ? String(body.address) : null,
-        aadhaarToken: aadhaarNorm,
-        pan: panNorm,
-        gstin: body.gstin ? String(body.gstin) : null,
-        feeAmount,
-        receiptId: body.receiptId ? String(body.receiptId) : null,
-        validFrom: body.validFrom ? String(body.validFrom) : null,
-        validTo: body.validTo ? String(body.validTo) : null,
-        isBlocked: Boolean(body.isBlocked ?? false),
-        blockReason: body.blockReason ? String(body.blockReason) : null,
-        dvReturnRemarks: null,
-        workflowRevisionCount: 0,
-        govtGstExemptCategoryId: body.govtGstExemptCategoryId ? String(body.govtGstExemptCategoryId) : null,
-        isNonGstEntity: Boolean(body.isNonGstEntity ?? false),
-        fatherSpouseName: fatherSpouse,
-        dateOfBirth: dob,
-        emergencyContactMobile: emergencyNorm,
-        characterCertIssuer: charIss,
-        characterCertDate: charDt,
-        bmFormDocUrl: bmDocRes.value,
-        parentLicenceFeeSnapshot: null,
-        renewalNoArrearsDeclared: renewalDecl,
-        doUser: body.doUser ? String(body.doUser) : null,
-        dvUser: body.dvUser ? String(body.dvUser) : null,
-        daUser: body.daUser ? String(body.daUser) : null,
-        createdAt: now(),
-        updatedAt: now(),
+      const ts = now();
+      await db.transaction(async (tx) => {
+        let applicationSerial: string | null = null;
+        if (statusStr === "Pending") {
+          applicationSerial = await nextApplicationSerialTx(tx);
+        }
+        await tx.insert(traderLicences).values({
+          id,
+          firmName: String(body.firmName ?? ""),
+          yardId: String(body.yardId ?? ""),
+          mobile: mobileNorm,
+          licenceType: licenceTypeStr,
+          status: statusStr,
+          parentLicenceId: body.parentLicenceId ? String(body.parentLicenceId) : null,
+          applicationKind: applicationKindStr,
+          firmType: body.firmType ? String(body.firmType) : null,
+          contactName: body.contactName ? String(body.contactName) : null,
+          email: emailNorm,
+          address: body.address ? String(body.address) : null,
+          aadhaarToken: aadhaarNorm,
+          pan: panNorm,
+          gstin: body.gstin ? String(body.gstin) : null,
+          feeAmount,
+          receiptId: body.receiptId ? String(body.receiptId) : null,
+          validFrom: body.validFrom ? String(body.validFrom) : null,
+          validTo: body.validTo ? String(body.validTo) : null,
+          isBlocked: Boolean(body.isBlocked ?? false),
+          blockReason: body.blockReason ? String(body.blockReason) : null,
+          dvReturnRemarks: null,
+          workflowRevisionCount: 0,
+          govtGstExemptCategoryId: body.govtGstExemptCategoryId ? String(body.govtGstExemptCategoryId) : null,
+          isNonGstEntity: Boolean(body.isNonGstEntity ?? false),
+          fatherSpouseName: fatherSpouse,
+          dateOfBirth: dob,
+          emergencyContactMobile: emergencyNorm,
+          characterCertIssuer: charIss,
+          characterCertDate: charDt,
+          bmFormDocUrl: bmDocRes.value,
+          parentLicenceFeeSnapshot: null,
+          renewalNoArrearsDeclared: renewalDecl,
+          bmUndertakingAccepted,
+          provisionalLicenceNo: null,
+          applicationSerial,
+          entityPublicCode: null,
+          doUser: body.doUser ? String(body.doUser) : null,
+          dvUser: body.dvUser ? String(body.dvUser) : null,
+          daUser: body.daUser ? String(body.daUser) : null,
+          createdAt: ts,
+          updatedAt: ts,
+        });
       });
-      const [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, id));
+      let [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, id));
+      if (row?.receiptId != null && String(row.receiptId).trim() !== "" && !(row.provisionalLicenceNo != null && String(row.provisionalLicenceNo).trim() !== "")) {
+        const [yardRow] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, row.yardId)).limit(1);
+        await db
+          .update(traderLicences)
+          .set({
+            provisionalLicenceNo: formatProvisionalLicenceNo(String(yardRow?.code ?? row.yardId)),
+            updatedAt: now(),
+          })
+          .where(eq(traderLicences.id, id));
+        [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, id));
+      }
       if (row) writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
@@ -1573,7 +1653,7 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       const [existing] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
       if (!existing) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
-      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      if (!licenceYardAccessible(req, existing.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
 
       const issuedNo = existing.licenceNo != null && String(existing.licenceNo).trim() !== "";
       /** After licence number is issued, application data is frozen; these keys remain patchable (tax / operational). */
@@ -1598,7 +1678,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
 
       const newYardId = body.yardId !== undefined ? String(body.yardId) : existing.yardId;
-      if (body.yardId !== undefined && !yardInScope(req, newYardId)) {
+      if (body.yardId !== undefined && !licenceYardAccessible(req, newYardId)) {
         return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
 
@@ -1635,6 +1715,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         "characterCertDate",
         "bmFormDocUrl",
         "renewalNoArrearsDeclared",
+        "bmUndertakingAccepted",
       ];
       const allowed = issuedNo
         ? allowedAll.filter((k) => ISSUED_ALLOWED_BODY_KEYS.has(k))
@@ -1644,6 +1725,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (body[k] === undefined) continue;
         if (k === "feeAmount") updates.feeAmount = body[k] == null ? null : Number(body[k]);
         else if (k === "renewalNoArrearsDeclared") updates.renewalNoArrearsDeclared = Boolean(body[k]);
+        else if (k === "bmUndertakingAccepted") updates.bmUndertakingAccepted = Boolean(body[k]);
         else if (k === "emergencyContactMobile") {
           const raw = body[k];
           try {
@@ -1697,6 +1779,12 @@ export function registerTradersAssetsRoutes(app: Express) {
         updates.dvReturnRemarks = null;
       }
 
+      const hasAppSerial = existing.applicationSerial != null && String(existing.applicationSerial).trim() !== "";
+      if (mergedStatus === "Pending" && !hasAppSerial) {
+        const nextSer = await db.transaction(async (tx) => nextApplicationSerialTx(tx));
+        updates.applicationSerial = nextSer;
+      }
+
       if (mergedStatus === "Pending") {
         const mergedBmDoc =
           updates.bmFormDocUrl !== undefined ? (updates.bmFormDocUrl as string | null) : (existing.bmFormDocUrl ?? null);
@@ -1730,6 +1818,10 @@ export function registerTradersAssetsRoutes(app: Express) {
           updates.renewalNoArrearsDeclared !== undefined
             ? Boolean(updates.renewalNoArrearsDeclared)
             : Boolean(existing.renewalNoArrearsDeclared ?? false);
+        const mergedBmUnder =
+          updates.bmUndertakingAccepted !== undefined
+            ? Boolean(updates.bmUndertakingAccepted)
+            : Boolean(existing.bmUndertakingAccepted ?? false);
         const pendErr = validateLicenceForPendingStatus({
           licenceType: mergedType,
           applicationKind: mergedKind,
@@ -1739,6 +1831,7 @@ export function registerTradersAssetsRoutes(app: Express) {
           characterCertIssuer: mergedChar,
           characterCertDate: mergedCharD,
           renewalNoArrearsDeclared: mergedRenewalDecl,
+          bmUndertakingAccepted: mergedBmUnder,
         });
         if (pendErr) return sendApiError(res, 400, pendErr.code, pendErr.message);
       }
@@ -1763,6 +1856,42 @@ export function registerTradersAssetsRoutes(app: Express) {
       } catch (e) {
         if (sendHrRule(res, e)) return;
         throw e;
+      }
+
+      if (await traderLicenceMobileInUse(String(updates.mobile ?? existing.mobile), id)) {
+        return sendApiError(
+          res,
+          400,
+          "LICENCE_MOBILE_DUPLICATE",
+          "This mobile number is already used on another draft, in-review, or active trader licence.",
+        );
+      }
+
+      const mergedLicenceNo =
+        updates.licenceNo !== undefined ? (updates.licenceNo as string | null) : (existing.licenceNo ?? null);
+      const mergedEntityPublic =
+        updates.entityPublicCode !== undefined
+          ? (updates.entityPublicCode as string | null)
+          : (existing.entityPublicCode ?? null);
+      if (mergedStatus === "Active") {
+        const ids = await allocateTraderLicenceActivationIds({
+          existingLicenceNo: mergedLicenceNo,
+          existingEntityPublicCode: mergedEntityPublic,
+        });
+        if (!String(mergedLicenceNo ?? "").trim()) updates.licenceNo = ids.licenceNo;
+        if (!String(mergedEntityPublic ?? "").trim()) updates.entityPublicCode = ids.entityPublicCode;
+      }
+
+      const prevReceipt = existing.receiptId != null && String(existing.receiptId).trim() !== "";
+      const nextReceiptRaw =
+        updates.receiptId !== undefined ? (updates.receiptId as string | null) : (existing.receiptId ?? null);
+      const nextReceipt = nextReceiptRaw != null && String(nextReceiptRaw).trim() !== "" ? String(nextReceiptRaw).trim() : null;
+      const receiptJustSet = Boolean(nextReceipt) && !prevReceipt;
+      const provEmpty = !(existing.provisionalLicenceNo != null && String(existing.provisionalLicenceNo).trim() !== "");
+      if (receiptJustSet && provEmpty) {
+        const yidForProv = updates.yardId !== undefined ? String(updates.yardId) : existing.yardId;
+        const [yardRow] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, yidForProv)).limit(1);
+        updates.provisionalLicenceNo = formatProvisionalLicenceNo(String(yardRow?.code ?? yidForProv));
       }
 
       const mergedRoles = {
@@ -1824,7 +1953,13 @@ export function registerTradersAssetsRoutes(app: Express) {
             })();
 
         if (receiptToLink?.id) {
-          await db.update(traderLicences).set({ receiptId: receiptToLink.id }).where(eq(traderLicences.id, id));
+          const provMissing = !(row.provisionalLicenceNo != null && String(row.provisionalLicenceNo).trim() !== "");
+          const receiptPatch: Record<string, string | null> = { receiptId: receiptToLink.id, updatedAt: now() };
+          if (provMissing) {
+            const [yardRow] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, row.yardId)).limit(1);
+            receiptPatch.provisionalLicenceNo = formatProvisionalLicenceNo(String(yardRow?.code ?? row.yardId));
+          }
+          await db.update(traderLicences).set(receiptPatch).where(eq(traderLicences.id, id));
           const [updatedLicence] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
           if (updatedLicence) {
             writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existing, afterValue: updatedLicence }).catch((e) =>
@@ -1850,7 +1985,7 @@ export function registerTradersAssetsRoutes(app: Express) {
     try {
       const id = routeParamString(req.params.id);
       const [existing] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
-      if (!existing || !yardInScope(req, existing.yardId)) {
+      if (!existing || !licenceYardAccessible(req, existing.yardId)) {
         return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       }
       const issuedNo = existing.licenceNo != null && String(existing.licenceNo).trim() !== "";
@@ -1890,7 +2025,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       const body = req.body as Record<string, unknown>;
       const [existing] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
       if (!existing) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
-      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      if (!licenceYardAccessible(req, existing.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
 
       const issuedNo = existing.licenceNo != null && String(existing.licenceNo).trim() !== "";
       if (!issuedNo) {
@@ -1991,7 +2126,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
       if (primaryLicenceId) {
         const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, primaryLicenceId)).limit(1);
-        if (!lic || !yardInScope(req, lic.yardId)) return res.json([]);
+        if (!lic || !licenceYardAccessible(req, lic.yardId)) return res.json([]);
       }
       let list =
         primaryLicenceId != null && primaryLicenceId !== ""
@@ -2225,7 +2360,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!traderLicenceId) return sendApiError(res, 400, "TRADER_LICENCE_REQUIRED", "traderLicenceId is required");
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      if (!yardInScope(req, lic.yardId)) return sendApiError(res, 403, "LICENCE_YARD_ACCESS_DENIED", "You do not have access to this licence yard");
+      if (!licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 403, "LICENCE_YARD_ACCESS_DENIED", "You do not have access to this licence yard");
 
       // Validate agreement dates + finance fields (US-M02-003)
       const fromDate = String(body.fromDate ?? "").trim();
@@ -2581,7 +2716,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
       if (traderLicenceId) {
         const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
-        if (!lic || !yardInScope(req, lic.yardId)) return res.json([]);
+        if (!lic || !licenceYardAccessible(req, lic.yardId)) return res.json([]);
       }
       let list = traderLicenceId
         ? await db.select().from(traderBlockingLog).where(eq(traderBlockingLog.traderLicenceId, traderLicenceId)).orderBy(desc(traderBlockingLog.actionedAt))
@@ -2604,7 +2739,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       const lid = String(body.traderLicenceId ?? "");
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, lid)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
-      if (!yardInScope(req, lic.yardId))
+      if (!licenceYardAccessible(req, lic.yardId))
         return sendApiError(res, 403, "LICENCE_YARD_ACCESS_DENIED", "You do not have access to this licence's yard");
       const id = nanoid();
       await db.insert(traderBlockingLog).values({

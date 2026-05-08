@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { INDIAN_MOBILE_10_RE, isStrictAadhaar12Digits, isValidEmailFormat } from "./india-validation";
+import { MIN_RENT_INVOICE_AMOUNT_INR, RENT_INVOICE_ZERO_RENT_MSG } from "./rent-invoice-amount-validation";
 
 const traderMobileSchema = z
   .string()
@@ -84,8 +85,14 @@ export const invoiceSchema = z.object({
 });
 
 export type Invoice = z.infer<typeof invoiceSchema>;
-export const insertInvoiceSchema = invoiceSchema.omit({ id: true, createdAt: true, updatedAt: true });
+const invoiceInsertBaseSchema = invoiceSchema.omit({ id: true, createdAt: true, updatedAt: true });
+export const insertInvoiceSchema = invoiceInsertBaseSchema.refine((d) => d.baseRent > MIN_RENT_INVOICE_AMOUNT_INR, {
+  message: RENT_INVOICE_ZERO_RENT_MSG,
+  path: ["baseRent"],
+});
 export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
+/** Legacy invoice PATCH: partial fields (validation for positive amounts is applied in `routes.ts` after GST recompute). */
+export const updateInvoiceSchema = invoiceInsertBaseSchema.partial();
 
 // Receipt schema
 export const receiptSchema = z.object({

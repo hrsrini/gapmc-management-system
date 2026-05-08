@@ -73,6 +73,10 @@ interface Licence {
   bmFormDocFile?: string | null;
   parentLicenceFeeSnapshot?: number | null;
   renewalNoArrearsDeclared?: boolean | null;
+  provisionalLicenceNo?: string | null;
+  applicationSerial?: string | null;
+  entityPublicCode?: string | null;
+  bmUndertakingAccepted?: boolean | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -556,6 +560,21 @@ export default function TraderLicenceDetail() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="text-sm">
+              <span className="text-muted-foreground">Application serial</span>
+              <br />
+              <span className="font-mono">{licence.applicationSerial?.trim() || "—"}</span>
+            </div>
+            <div className="text-sm">
+              <span className="text-muted-foreground">Provisional licence ref.</span>
+              <br />
+              <span className="font-mono break-all">{licence.provisionalLicenceNo?.trim() || "—"}</span>
+            </div>
+            <div className="text-sm">
+              <span className="text-muted-foreground">Public entity code (ENT)</span>
+              <br />
+              <span className="font-mono">{licence.entityPublicCode?.trim() || "—"}</span>
+            </div>
             <div className="text-sm">
               <span className="text-muted-foreground">Application kind</span>
               <br />

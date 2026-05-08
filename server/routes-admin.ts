@@ -290,6 +290,17 @@ export function registerAdminRoutes(app: Express) {
             return sendApiError(res, 400, "ADMIN_CONFIG_RENT_TDS_RATE", "rent_tds_rate_percent must be between 0 and 40.");
           }
         }
+        if (key === "rent_invoice_cgst_percent" || key === "rent_invoice_sgst_percent") {
+          const n = parseFloat(value.trim());
+          if (!Number.isFinite(n) || n < 0 || n > 100) {
+            return sendApiError(
+              res,
+              400,
+              "ADMIN_CONFIG_RENT_GST_PERCENT",
+              "rent_invoice_cgst_percent and rent_invoice_sgst_percent must be between 0 and 100.",
+            );
+          }
+        }
         if (key === "amc_monthly_auto_generate") {
           const v = value.trim().toLowerCase();
           if (v !== "true" && v !== "false") {

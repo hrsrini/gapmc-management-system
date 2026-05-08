@@ -1,4 +1,6 @@
 import { useState, useMemo } from 'react';
+import { SYSTEM_CONFIG_DEFAULTS } from '@shared/system-config-defaults';
+import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from '@shared/rent-invoice-gst';
 import { useLocation } from 'wouter';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
@@ -44,14 +46,31 @@ export default function RentInvoiceForm({ invoiceId, initialData }: RentInvoiceF
   const { data: traders, isLoading, isError } = useQuery<Trader[]>({
     queryKey: ['/api/traders'],
   });
+  const { data: sysCfg } = useQuery<Record<string, string>>({
+    queryKey: ['/api/system/config'],
+  });
 
   const selectedTrader = useMemo(() => {
     return (traders ?? []).find(t => t.id === selectedTraderId);
   }, [traders, selectedTraderId]);
 
-  const cgst = useMemo(() => Math.round(baseRent * 0.09), [baseRent]);
-  const sgst = useMemo(() => Math.round(baseRent * 0.09), [baseRent]);
-  const total = useMemo(() => baseRent + cgst + sgst + interest - (tdsApplicable ? tdsAmount : 0), [baseRent, cgst, sgst, interest, tdsApplicable, tdsAmount]);
+  const rentCgstPct = useMemo(() => {
+    const n = parseFloat(String(sysCfg?.rent_invoice_cgst_percent ?? ''));
+    return Number.isFinite(n) && n >= 0 ? n : parseFloat(SYSTEM_CONFIG_DEFAULTS.rent_invoice_cgst_percent);
+  }, [sysCfg?.rent_invoice_cgst_percent]);
+  const rentSgstPct = useMemo(() => {
+    const n = parseFloat(String(sysCfg?.rent_invoice_sgst_percent ?? ''));
+    return Number.isFinite(n) && n >= 0 ? n : parseFloat(SYSTEM_CONFIG_DEFAULTS.rent_invoice_sgst_percent);
+  }, [sysCfg?.rent_invoice_sgst_percent]);
+
+  const { cgst, sgst } = useMemo(
+    () => computeRentInvoiceGstInr(baseRent, false, rentCgstPct, rentSgstPct),
+    [baseRent, rentCgstPct, rentSgstPct],
+  );
+  const total = useMemo(() => {
+    const rentPlusGst = rentInvoiceTotalInr(baseRent, 0, cgst, sgst);
+    return Math.round((rentPlusGst + interest - (tdsApplicable ? tdsAmount : 0)) * 100) / 100;
+  }, [baseRent, cgst, sgst, interest, tdsApplicable, tdsAmount]);
 
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest('POST', '/api/invoices', data),
@@ -264,12 +283,12 @@ export default function RentInvoiceForm({ invoiceId, initialData }: RentInvoiceF
                 />
               </div>
               <div className="space-y-2">
-                <Label>CGST @ 9% (₹)</Label>
-                <Input value={cgst} readOnly className="bg-muted" />
+                <Label>CGST @ {rentCgstPct}% (₹)</Label>
+                <Input value={cgst.toFixed(2)} readOnly className="bg-muted" />
               </div>
               <div className="space-y-2">
-                <Label>SGST @ 9% (₹)</Label>
-                <Input value={sgst} readOnly className="bg-muted" />
+                <Label>SGST @ {rentSgstPct}% (₹)</Label>
+                <Input value={sgst.toFixed(2)} readOnly className="bg-muted" />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="interest">Interest if any (₹)</Label>

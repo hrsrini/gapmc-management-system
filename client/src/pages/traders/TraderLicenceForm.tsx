@@ -66,6 +66,10 @@ interface LicenceRow {
   bmFormDocFile?: string | null;
   parentLicenceFeeSnapshot?: number | null;
   renewalNoArrearsDeclared?: boolean | null;
+  provisionalLicenceNo?: string | null;
+  applicationSerial?: string | null;
+  entityPublicCode?: string | null;
+  bmUndertakingAccepted?: boolean | null;
 }
 
 async function readApiError(res: Response): Promise<string> {
@@ -139,6 +143,7 @@ export default function TraderLicenceForm() {
   const [bmUploadedPreviewOpen, setBmUploadedPreviewOpen] = useState(false);
   const bmPendingPreviewUrl = useUploadFilePreview(bmPendingFile);
   const [renewalNoArrearsDeclared, setRenewalNoArrearsDeclared] = useState(false);
+  const [bmUndertakingAccepted, setBmUndertakingAccepted] = useState(false);
 
   const { data: licence, isLoading: licenceLoading } = useQuery<LicenceRow>({
     queryKey: ["/api/ioms/traders/licences", editId],
@@ -182,6 +187,7 @@ export default function TraderLicenceForm() {
     setCharacterCertDate(licence.characterCertDate?.slice(0, 10) ?? "");
     setBmFormDocUrl(licence.bmFormDocUrl ?? "");
     setRenewalNoArrearsDeclared(Boolean(licence.renewalNoArrearsDeclared));
+    setBmUndertakingAccepted(Boolean(licence.bmUndertakingAccepted));
   }, [licence]);
 
   const buildPayload = (status: "Draft" | "Pending"): Record<string, unknown> => {
@@ -215,6 +221,7 @@ export default function TraderLicenceForm() {
       characterCertDate: characterCertDate.trim() || null,
       bmFormDocUrl: bmParsed.ok ? bmParsed.value : null,
       renewalNoArrearsDeclared,
+      bmUndertakingAccepted,
     };
     if (isNew) {
       base.aadhaarToken = aTrim || null;
@@ -295,6 +302,14 @@ export default function TraderLicenceForm() {
           toast({
             title: "Form BM",
             description: "Character certificate issuing authority is required.",
+            variant: "destructive",
+          });
+          return false;
+        }
+        if (!bmUndertakingAccepted) {
+          toast({
+            title: "Form BM undertaking",
+            description: "Confirm the undertaking before submitting for review.",
             variant: "destructive",
           });
           return false;
@@ -500,6 +515,23 @@ export default function TraderLicenceForm() {
               </div>
             ) : null}
 
+            {!isNew && licence ? (
+              <div className="grid gap-3 sm:grid-cols-2 rounded-md border bg-muted/20 p-4 text-sm">
+                <div>
+                  <span className="text-muted-foreground block text-xs uppercase tracking-wide">Application serial</span>
+                  <span className="font-mono">{licence.applicationSerial?.trim() || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-xs uppercase tracking-wide">Provisional licence ref.</span>
+                  <span className="font-mono break-all">{licence.provisionalLicenceNo?.trim() || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-xs uppercase tracking-wide">Public entity code</span>
+                  <span className="font-mono">{licence.entityPublicCode?.trim() || "—"}</span>
+                </div>
+              </div>
+            ) : null}
+
             {applicationKind === "Renewal" ? (
               <div className="rounded-md border bg-muted/30 p-4 space-y-3">
                 <p className="text-sm font-medium">Form BK — Section 54 renewal</p>
@@ -601,6 +633,17 @@ export default function TraderLicenceForm() {
                       <Label>Character certificate — date</Label>
                       <Input type="date" value={characterCertDate} onChange={(e) => setCharacterCertDate(e.target.value)} />
                     </div>
+                    <div className="flex items-start gap-2 sm:col-span-2">
+                      <Checkbox
+                        id="bm-undertaking"
+                        checked={bmUndertakingAccepted}
+                        onCheckedChange={(c) => setBmUndertakingAccepted(c === true)}
+                      />
+                      <Label htmlFor="bm-undertaking" className="font-normal cursor-pointer leading-snug">
+                        I confirm the Form BM particulars are true and undertake to abide by applicable market rules
+                        (required to submit for review).
+                      </Label>
+                    </div>
                     <div className="space-y-2 sm:col-span-2">
                       <Label>Supporting document — URL (optional)</Label>
                       <Input
@@ -621,7 +664,7 @@ export default function TraderLicenceForm() {
                       <div className="space-y-2 sm:col-span-2">
                         <Label>Supporting document — file (optional)</Label>
                         <p className="text-xs text-muted-foreground">
-                          PDF, PNG, or JPEG, max 10 MB. Stored in the application blob store. Replaces any previous upload.
+                          PDF, PNG, or JPEG, max 2 MB. Stored in the application blob store. Replaces any previous upload.
                         </p>
                         {licence?.bmFormDocFile ? (
                           <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -679,7 +722,16 @@ export default function TraderLicenceForm() {
                               size="sm"
                               disabled={uploadBmMutation.isPending || !bmPendingFile}
                               onClick={() => {
-                                if (bmPendingFile) uploadBmMutation.mutate(bmPendingFile);
+                                if (!bmPendingFile) return;
+                                if (bmPendingFile.size > 2 * 1024 * 1024) {
+                                  toast({
+                                    title: "File too large",
+                                    description: "BM supporting document must be 2 MB or smaller.",
+                                    variant: "destructive",
+                                  });
+                                  return;
+                                }
+                                uploadBmMutation.mutate(bmPendingFile);
                               }}
                             >
                               {uploadBmMutation.isPending ? (

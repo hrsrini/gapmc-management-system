@@ -45,6 +45,16 @@ import { normalizeRentRevisionBasis, yearMonthMinusOne } from "@shared/rent-revi
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
 import { rentPeriodMonthEndIso } from "./rent-interest";
 import { formatRentInvoiceNo } from "./rent-invoice-number";
+import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
+import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
+import {
+  MIN_RENT_INVOICE_AMOUNT_INR,
+  rentInvoiceValidationErrorMessage,
+} from "@shared/rent-invoice-amount-validation";
+import {
+  findBlockingRentInvoiceForPremisesMonth,
+  RENT_INVOICE_PREMISES_MONTH_DUPLICATE_MESSAGE,
+} from "./rent-invoice-premises-month-uniqueness";
 
 function currentYearMonthUtc(): string {
   const d = new Date();
@@ -232,9 +242,9 @@ export function registerRentIomsRoutes(app: Express) {
       let entityIdInsert: string | null = body.entityId ? String(body.entityId) : null;
       const nonGst = parseNonGstCharges((body as Record<string, unknown>).nonGstCharges);
       if (!nonGst.ok) return sendApiError(res, 400, "RENT_INVOICE_NON_GST_CHARGES", nonGst.error);
-      let cgst = Number(body.cgst ?? 0);
-      let sgst = Number(body.sgst ?? 0);
-      let totalAmount = Number(body.totalAmount ?? 0);
+      let cgst = 0;
+      let sgst = 0;
+      let totalAmount = 0;
       let isGovtEntity = Boolean(body.isGovtEntity ?? false);
       const allotmentIdPre = String((body as Record<string, unknown>).allotmentId ?? "").trim();
       if (allotmentIdPre) {
@@ -253,9 +263,6 @@ export function registerRentIomsRoutes(app: Express) {
         ? isGovtEntity
         : Boolean(tenantLicenceId && (await tenantLicenceIsGstExempt(tenantLicenceId)));
       if (gstExempt) {
-        cgst = 0;
-        sgst = 0;
-        totalAmount = rentAmount + nonGst.sum;
         isGovtEntity = true;
       }
       const periodMonth = String(body.periodMonth ?? "").trim();
@@ -289,17 +296,34 @@ export function registerRentIomsRoutes(app: Express) {
           .limit(1);
         if (rev?.rentAmount != null && Number.isFinite(Number(rev.rentAmount))) {
           rentAmount = Number(rev.rentAmount);
-          if (gstExempt) {
-            cgst = 0;
-            sgst = 0;
-          }
-          totalAmount = rentAmount + nonGst.sum + cgst + sgst;
         }
+      }
+      const mergedCfg = await getMergedSystemConfig();
+      if (gstExempt) {
+        cgst = 0;
+        sgst = 0;
+        totalAmount = rentInvoiceTotalInr(rentAmount, nonGst.sum, 0, 0);
+      } else {
+        const cgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_cgst_percent");
+        const sgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_sgst_percent");
+        const g = computeRentInvoiceGstInr(rentAmount, false, cgstPct, sgstPct);
+        cgst = g.cgst;
+        sgst = g.sgst;
+        totalAmount = rentInvoiceTotalInr(rentAmount, nonGst.sum, cgst, sgst);
       }
       let invoiceNo = body.invoiceNo ? String(body.invoiceNo).trim() : "";
       if (!invoiceNo) {
         const [y] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, yardId)).limit(1);
         invoiceNo = formatRentInvoiceNo(y?.code, periodMonth, id);
+      }
+      const zeroMsg = rentInvoiceValidationErrorMessage(rentAmount, totalAmount);
+      if (zeroMsg) {
+        return sendApiError(res, 400, "RENT_INVOICE_ZERO_AMOUNT", zeroMsg);
+      }
+      const assetIdForInvoice = String(body.assetId ?? "").trim();
+      const premisesClash = await findBlockingRentInvoiceForPremisesMonth(assetIdForInvoice, periodMonth);
+      if (premisesClash) {
+        return sendApiError(res, 409, "RENT_INVOICE_PREMISES_MONTH_DUPLICATE", RENT_INVOICE_PREMISES_MONTH_DUPLICATE_MESSAGE);
       }
       await db.insert(rentInvoices).values({
         id,
@@ -307,14 +331,14 @@ export function registerRentIomsRoutes(app: Express) {
         allotmentKind: allotmentKindInsert,
         entityId: entityIdInsert,
         tenantLicenceId,
-        assetId: String(body.assetId ?? ""),
+        assetId: assetIdForInvoice,
         yardId,
         periodMonth,
         rentAmount,
         nonGstChargesJson: nonGst.json,
         cgst,
         sgst,
-        totalAmount: gstExempt ? rentAmount + nonGst.sum : (Number.isFinite(totalAmount) && totalAmount > 0 ? totalAmount : rentAmount + nonGst.sum + cgst + sgst),
+        totalAmount,
         tdsApplicable: tdsRes.tdsApplicable,
         tdsAmount: tdsRes.tdsAmount,
         status: "Draft",
@@ -399,6 +423,14 @@ export function registerRentIomsRoutes(app: Express) {
       const rentAmount = Number(body.rentAmount ?? NaN);
       if (!allotmentId || !effectiveMonth || !Number.isFinite(rentAmount)) {
         return sendApiError(res, 400, "RENT_REV_FIELDS", "allotmentId, effectiveMonth (YYYY-MM), rentAmount (number) required");
+      }
+      if (rentAmount <= MIN_RENT_INVOICE_AMOUNT_INR) {
+        return sendApiError(
+          res,
+          400,
+          "RENT_REV_ZERO_AMOUNT",
+          "Rent revision amount must be greater than zero.",
+        );
       }
       if (!isValidYearMonthYm(effectiveMonth)) {
         return sendApiError(res, 400, "RENT_REV_MONTH", "effectiveMonth must be YYYY-MM");
@@ -515,6 +547,14 @@ export function registerRentIomsRoutes(app: Express) {
         if (body.rentAmount !== undefined) {
           const ra = Number(body.rentAmount);
           if (!Number.isFinite(ra)) return sendApiError(res, 400, "RENT_REV_AMOUNT", "rentAmount must be a number");
+          if (ra <= MIN_RENT_INVOICE_AMOUNT_INR) {
+            return sendApiError(
+              res,
+              400,
+              "RENT_REV_ZERO_AMOUNT",
+              "Rent revision amount must be greater than zero.",
+            );
+          }
           updates.rentAmount = ra;
         }
         if (body.revisionBasis !== undefined) {
@@ -721,12 +761,25 @@ export function registerRentIomsRoutes(app: Express) {
       }
       const nonGstLines = parseNonGstCharges(rawNonGstMerge);
       const nonGstSum = nonGstLines.ok ? nonGstLines.sum : 0;
-      if (existing.status === "Draft" && !statusChange && finalTenant) {
-        if (await tenantLicenceIsGstExempt(finalTenant)) {
+      if (existing.status === "Draft" && !statusChange) {
+        const trackAExempt =
+          finalTenant && !String(finalTenant).startsWith("TB:")
+            ? await tenantLicenceIsGstExempt(finalTenant)
+            : false;
+        const gstExemptDraft = Boolean(trackAExempt || existing.isGovtEntity);
+        if (gstExemptDraft) {
           updates.cgst = 0;
           updates.sgst = 0;
-          updates.totalAmount = finalRent + nonGstSum;
-          updates.isGovtEntity = true;
+          updates.totalAmount = rentInvoiceTotalInr(finalRent, nonGstSum, 0, 0);
+          if (trackAExempt) updates.isGovtEntity = true;
+        } else {
+          const mergedPatch = await getMergedSystemConfig();
+          const cgstPct = parseSystemConfigNumber(mergedPatch, "rent_invoice_cgst_percent");
+          const sgstPct = parseSystemConfigNumber(mergedPatch, "rent_invoice_sgst_percent");
+          const g = computeRentInvoiceGstInr(finalRent, false, cgstPct, sgstPct);
+          updates.cgst = g.cgst;
+          updates.sgst = g.sgst;
+          updates.totalAmount = rentInvoiceTotalInr(finalRent, nonGstSum, g.cgst, g.sgst);
         }
       }
 
@@ -755,6 +808,30 @@ export function registerRentIomsRoutes(app: Express) {
         }
         updates.tdsApplicable = tdsRes.tdsApplicable;
         updates.tdsAmount = tdsRes.tdsAmount;
+      }
+
+      const mergedRentForValidation =
+        updates.rentAmount != null ? Number(updates.rentAmount) : Number(existing.rentAmount ?? 0);
+      const mergedTotalForValidation =
+        updates.totalAmount != null ? Number(updates.totalAmount) : Number(existing.totalAmount ?? 0);
+      if (effectiveStatus !== "Cancelled") {
+        const zeroPutMsg = rentInvoiceValidationErrorMessage(mergedRentForValidation, mergedTotalForValidation);
+        if (zeroPutMsg) {
+          return sendApiError(res, 400, "RENT_INVOICE_ZERO_AMOUNT", zeroPutMsg);
+        }
+      }
+
+      const mergedAssetIdPut =
+        updates.assetId !== undefined ? String(updates.assetId ?? "").trim() : String(existing.assetId ?? "").trim();
+      const mergedPeriodMonthPut =
+        updates.periodMonth !== undefined ? String(updates.periodMonth ?? "").trim() : String(existing.periodMonth ?? "").trim();
+      const mergedStatusPut =
+        updates.status !== undefined ? String(updates.status ?? "").trim() : String(existing.status ?? "").trim();
+      if (mergedStatusPut !== "Cancelled" && mergedAssetIdPut && mergedPeriodMonthPut) {
+        const clashPut = await findBlockingRentInvoiceForPremisesMonth(mergedAssetIdPut, mergedPeriodMonthPut, id);
+        if (clashPut) {
+          return sendApiError(res, 409, "RENT_INVOICE_PREMISES_MONTH_DUPLICATE", RENT_INVOICE_PREMISES_MONTH_DUPLICATE_MESSAGE);
+        }
       }
 
       const mergedInvoiceNo =

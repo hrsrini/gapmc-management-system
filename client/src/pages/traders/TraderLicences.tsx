@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { FileCheck, AlertCircle, UserPlus } from "lucide-react";
 import { ReportDataTable, type ReportPagedParams } from "@/components/reports/ReportDataTable";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { useAuth } from "@/context/AuthContext";
 
 interface Licence {
@@ -30,8 +32,10 @@ interface PagedResponse {
 }
 
 export default function TraderLicences() {
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const canCreate = can("M-02", "Create");
+  const isAdmin = Boolean(user?.roles?.some((r) => r.tier === "ADMIN"));
+  const [allYards, setAllYards] = useState(false);
   const [tableParams, setTableParams] = useState<ReportPagedParams>({
     page: 1,
     pageSize: 25,
@@ -53,8 +57,9 @@ export default function TraderLicences() {
       sort: tableParams.sortKey,
       sortDir: tableParams.sortDir,
     });
+    if (isAdmin && allYards) sp.set("allYards", "1");
     return `/api/ioms/traders/licences?${sp}`;
-  }, [tableParams]);
+  }, [tableParams, isAdmin, allYards]);
 
   const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ["/api/yards"],
@@ -152,7 +157,15 @@ export default function TraderLicences() {
             </Button>
           ) : null}
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          {isAdmin ? (
+            <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+              <Checkbox id="all-yards-licences" checked={allYards} onCheckedChange={(c) => setAllYards(c === true)} />
+              <Label htmlFor="all-yards-licences" className="text-sm font-normal cursor-pointer">
+                Show licences from all yards (admin)
+              </Label>
+            </div>
+          ) : null}
           <ReportDataTable
             columns={columns}
             rows={rowsForTable}

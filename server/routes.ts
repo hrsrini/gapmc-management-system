@@ -25,11 +25,14 @@ import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import { agreementDocuments, agreements as agreementsTable, yards } from "@shared/db-schema";
 import { fetchIomsReceiptsMappedToLegacy, fetchSingleIomsReceiptAsLegacy, isIomsReceiptId } from "./legacy-receipt-merge";
+import { computeLegacyInvoiceGstFields, computeLegacyRentReceiptGstFields } from "./legacy-rent-gst";
+import { rentInvoiceValidationErrorMessage } from "@shared/rent-invoice-amount-validation";
 import { INDIAN_PAN_RE, normalizePanInput } from "@shared/india-validation";
 import { isPanTakenAcrossActiveMasters } from "./pan-uniqueness";
 import { 
   insertTraderSchema, 
-  insertInvoiceSchema, 
+  insertInvoiceSchema,
+  updateInvoiceSchema,
   insertReceiptSchema, 
   insertMarketFeeSchema,
   insertAgreementSchema,
@@ -81,7 +84,6 @@ function formatStockReturnValidationError(zodError: z.ZodError): string {
 }
 
 const updateTraderSchema = insertTraderSchema.partial();
-const updateInvoiceSchema = insertInvoiceSchema.partial();
 const updateReceiptSchema = insertReceiptSchema.partial();
 const updateAgreementSchema = insertAgreementSchema.partial();
 
@@ -560,7 +562,18 @@ export async function registerRoutes(
 
   app.post("/api/invoices", async (req, res) => {
     try {
-      const validatedData = insertInvoiceSchema.parse(req.body);
+      const parsed = insertInvoiceSchema.parse(req.body);
+      const { cgst, sgst, total } = await computeLegacyInvoiceGstFields({
+        baseRent: parsed.baseRent,
+        interest: parsed.interest,
+        tdsApplicable: parsed.tdsApplicable,
+        tdsAmount: parsed.tdsAmount,
+      });
+      const validatedData = { ...parsed, cgst, sgst, total };
+      const legacyZero = rentInvoiceValidationErrorMessage(parsed.baseRent, total);
+      if (legacyZero) {
+        return sendApiError(res, 400, "LEGACY_INVOICE_ZERO_AMOUNT", legacyZero);
+      }
       const invoice = await storage.createInvoice(validatedData);
       await storage.createActivityLog({
         action: 'Invoice Generated',
@@ -581,7 +594,23 @@ export async function registerRoutes(
   app.put("/api/invoices/:id", async (req, res) => {
     try {
       const before = await storage.getInvoice(req.params.id);
-      const validatedData = updateInvoiceSchema.parse(req.body);
+      if (!before) return sendApiError(res, 404, "LEGACY_INVOICE_NOT_FOUND", "Invoice not found");
+      const parsed = updateInvoiceSchema.parse(req.body);
+      const baseRent = parsed.baseRent ?? before.baseRent;
+      const interest = parsed.interest ?? before.interest;
+      const tdsApplicable = parsed.tdsApplicable ?? before.tdsApplicable;
+      const tdsAmount = parsed.tdsAmount ?? before.tdsAmount;
+      const { cgst, sgst, total } = await computeLegacyInvoiceGstFields({
+        baseRent,
+        interest,
+        tdsApplicable,
+        tdsAmount,
+      });
+      const validatedData = { ...parsed, cgst, sgst, total };
+      const legacyPutZero = rentInvoiceValidationErrorMessage(baseRent, total);
+      if (legacyPutZero) {
+        return sendApiError(res, 400, "LEGACY_INVOICE_ZERO_AMOUNT", legacyPutZero);
+      }
       const invoice = await storage.updateInvoice(req.params.id, validatedData);
       if (!invoice) return sendApiError(res, 404, "LEGACY_INVOICE_NOT_FOUND", "Invoice not found");
       writeAuditLog(req, { module: 'Rent/Tax', action: 'Update', recordId: req.params.id, beforeValue: before ?? undefined, afterValue: invoice }).catch((e) => console.error('Audit log failed:', e));
@@ -635,7 +664,17 @@ export async function registerRoutes(
 
   app.post("/api/receipts", async (req, res) => {
     try {
-      const validatedData = insertReceiptSchema.parse(req.body);
+      const parsed = insertReceiptSchema.parse(req.body);
+      let validatedData = parsed;
+      if (parsed.type === "Rent") {
+        const { cgst, sgst, total } = await computeLegacyRentReceiptGstFields({
+          rentAmount: parsed.amount,
+          interestRent: parsed.interest ?? 0,
+          securityDeposit: parsed.securityDeposit ?? 0,
+          tdsRent: parsed.tdsAmount ?? 0,
+        });
+        validatedData = { ...parsed, cgst, sgst, total };
+      }
       const receipt = await storage.createReceipt(validatedData);
       await storage.createActivityLog({
         action: 'Receipt Created',
@@ -663,8 +702,24 @@ export async function registerRoutes(
           "This is an IOMS (M-05) receipt. Void or update it from Receipts → IOMS receipt detail, not the legacy register.",
         );
       }
-      const validatedData = updateReceiptSchema.parse(req.body);
       const before = await storage.getReceipt(req.params.id);
+      if (!before) return sendApiError(res, 404, "LEGACY_RECEIPT_NOT_FOUND", "Receipt not found");
+      const parsed = updateReceiptSchema.parse(req.body);
+      const effectiveType = parsed.type ?? before.type;
+      let validatedData = parsed;
+      if (effectiveType === "Rent") {
+        const amount = parsed.amount ?? before.amount;
+        const interestRent = parsed.interest ?? before.interest ?? 0;
+        const securityDeposit = parsed.securityDeposit ?? before.securityDeposit ?? 0;
+        const tdsRent = parsed.tdsAmount ?? before.tdsAmount ?? 0;
+        const { cgst, sgst, total } = await computeLegacyRentReceiptGstFields({
+          rentAmount: amount,
+          interestRent,
+          securityDeposit,
+          tdsRent,
+        });
+        validatedData = { ...parsed, cgst, sgst, total };
+      }
       const receipt = await storage.updateReceipt(req.params.id, validatedData);
       if (!receipt) return sendApiError(res, 404, "LEGACY_RECEIPT_NOT_FOUND", "Receipt not found");
       writeAuditLog(req, { module: 'Receipts', action: 'Update', recordId: req.params.id, beforeValue: before ?? undefined, afterValue: receipt }).catch((e) => console.error('Audit log failed:', e));

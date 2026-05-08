@@ -1,4 +1,6 @@
 import { useState, useMemo } from 'react';
+import { SYSTEM_CONFIG_DEFAULTS } from '@shared/system-config-defaults';
+import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from '@shared/rent-invoice-gst';
 import { useLocation } from 'wouter';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
@@ -41,8 +43,6 @@ export default function ReceiptForm() {
   const [otherHead, setOtherHead] = useState<string>('');
   
   const [rentAmount, setRentAmount] = useState<number>(0);
-  const [cgst, setCgst] = useState<number>(0);
-  const [sgst, setSgst] = useState<number>(0);
   const [interestRent, setInterestRent] = useState<number>(0);
   const [securityDeposit, setSecurityDeposit] = useState<number>(0);
   const [tdsRent, setTdsRent] = useState<number>(0);
@@ -64,15 +64,38 @@ export default function ReceiptForm() {
   const { data: traders, isLoading, isError } = useQuery<Trader[]>({
     queryKey: ['/api/traders'],
   });
+  const { data: sysCfg } = useQuery<Record<string, string>>({
+    queryKey: ['/api/system/config'],
+  });
 
   const selectedTrader = useMemo(() => {
     return (traders ?? []).find(t => t.id === selectedTraderId);
   }, [traders, selectedTraderId]);
 
+  const rentCgstPct = useMemo(() => {
+    const n = parseFloat(String(sysCfg?.rent_invoice_cgst_percent ?? ''));
+    return Number.isFinite(n) && n >= 0 ? n : parseFloat(SYSTEM_CONFIG_DEFAULTS.rent_invoice_cgst_percent);
+  }, [sysCfg?.rent_invoice_cgst_percent]);
+  const rentSgstPct = useMemo(() => {
+    const n = parseFloat(String(sysCfg?.rent_invoice_sgst_percent ?? ''));
+    return Number.isFinite(n) && n >= 0 ? n : parseFloat(SYSTEM_CONFIG_DEFAULTS.rent_invoice_sgst_percent);
+  }, [sysCfg?.rent_invoice_sgst_percent]);
+
+  const { cgst: rentCgst, sgst: rentSgst } = useMemo(
+    () => computeRentInvoiceGstInr(rentAmount, false, rentCgstPct, rentSgstPct),
+    [rentAmount, rentCgstPct, rentSgstPct],
+  );
+
   const total = useMemo(() => {
     switch (receiptType) {
-      case 'Rent':
-        return rentAmount + cgst + sgst + interestRent + securityDeposit - tdsRent;
+      case 'Rent': {
+        const t =
+          rentInvoiceTotalInr(rentAmount, 0, rentCgst, rentSgst) +
+          interestRent +
+          securityDeposit -
+          tdsRent;
+        return Math.round(t * 100) / 100;
+      }
       case 'Market Fee':
         return marketFeeAmount + interestMarketFee + otherMarketFee;
       case 'License Fee':
@@ -82,7 +105,7 @@ export default function ReceiptForm() {
       default:
         return 0;
     }
-  }, [receiptType, rentAmount, cgst, sgst, interestRent, securityDeposit, tdsRent, 
+  }, [receiptType, rentAmount, rentCgst, rentSgst, interestRent, securityDeposit, tdsRent, 
       marketFeeAmount, interestMarketFee, otherMarketFee,
       licenseFee, renewalFee, godownRegFee, licenseSecurityDeposit, upgradationFee, stationeryFee,
       otherAmount]);
@@ -143,8 +166,8 @@ export default function ReceiptForm() {
       traderName: selectedTrader.name,
       head: getHeadForType(),
       amount: getAmount(),
-      cgst: receiptType === 'Rent' ? cgst : undefined,
-      sgst: receiptType === 'Rent' ? sgst : undefined,
+      cgst: receiptType === 'Rent' ? rentCgst : undefined,
+      sgst: receiptType === 'Rent' ? rentSgst : undefined,
       interest: receiptType === 'Rent' ? interestRent : (receiptType === 'Market Fee' ? interestMarketFee : undefined),
       securityDeposit: receiptType === 'Rent' ? securityDeposit : (receiptType === 'License Fee' ? licenseSecurityDeposit : undefined),
       tdsAmount: receiptType === 'Rent' ? tdsRent : undefined,
@@ -171,8 +194,6 @@ export default function ReceiptForm() {
         } else {
           setSelectedTraderId('');
           setRentAmount(0);
-          setCgst(0);
-          setSgst(0);
           setInterestRent(0);
           setSecurityDeposit(0);
           setTdsRent(0);
@@ -279,12 +300,12 @@ export default function ReceiptForm() {
                   <Input type="number" value={rentAmount || ''} onChange={(e) => setRentAmount(parseInt(e.target.value, 10) || 0)} data-testid="input-rent" />
                 </div>
                 <div className="space-y-2">
-                  <Label>CGST (₹)</Label>
-                  <Input type="number" value={cgst || ''} onChange={(e) => setCgst(parseInt(e.target.value, 10) || 0)} data-testid="input-cgst" />
+                  <Label>CGST (₹) @ {rentCgstPct}%</Label>
+                  <Input type="text" readOnly className="bg-muted" value={rentCgst.toFixed(2)} data-testid="input-cgst" />
                 </div>
                 <div className="space-y-2">
-                  <Label>SGST (₹)</Label>
-                  <Input type="number" value={sgst || ''} onChange={(e) => setSgst(parseInt(e.target.value, 10) || 0)} data-testid="input-sgst" />
+                  <Label>SGST (₹) @ {rentSgstPct}%</Label>
+                  <Input type="text" readOnly className="bg-muted" value={rentSgst.toFixed(2)} data-testid="input-sgst" />
                 </div>
                 <div className="space-y-2">
                   <Label>Interest on Rent (₹)</Label>

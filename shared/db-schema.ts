@@ -352,6 +352,17 @@ export const marketReturnAckSequence = gapmc.table(
   (t) => [primaryKey({ columns: [t.yardId, t.year] })],
 );
 
+/** M-04: atomic sequence for purchase_transactions.transaction_no (per yard + Indian FY). */
+export const purchaseTransactionSequence = gapmc.table(
+  "purchase_transaction_sequence",
+  {
+    yardId: text("yard_id").notNull(),
+    financialYear: text("financial_year").notNull(),
+    lastSeq: integer("last_seq").default(0).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.yardId, t.financialYear] })],
+);
+
 // ----- M-05: Receipts Online (central engine) -----
 export const receiptSequence = gapmc.table(
   "receipt_sequence",
@@ -694,6 +705,14 @@ export const traderLicences = gapmc.table("trader_licences", {
   parentLicenceFeeSnapshot: doublePrecision("parent_licence_fee_snapshot"),
   /** Form BK: applicant declares no outstanding market / licence arrears on previous licence. */
   renewalNoArrearsDeclared: boolean("renewal_no_arrears_declared").default(false).notNull(),
+  /** US-M02-001: provisional ref before final numeric licence (BR-AST-60). */
+  provisionalLicenceNo: text("provisional_licence_no"),
+  /** US-M02-001: APP-YYYY-NNNN assigned on first submission to Pending. */
+  applicationSerial: text("application_serial"),
+  /** US-M02-001: ENT-YYYY-NNNNN public entity code on activation (BR-AST-01). */
+  entityPublicCode: text("entity_public_code"),
+  /** US-M02-001: Form BM undertaking accepted (required when submitting Pending for BM types). */
+  bmUndertakingAccepted: boolean("bm_undertaking_accepted").default(false).notNull(),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
@@ -1060,6 +1079,9 @@ export const purchaseTransactions = gapmc.table("purchase_transactions", {
   commodityId: text("commodity_id").notNull(),
   farmerId: text("farmer_id"),
   traderLicenceId: text("trader_licence_id").notNull(),
+  /** Denormalized at insert/update for list/receipts when FK value was non-id legacy. */
+  traderFirmNameSnapshot: text("trader_firm_name_snapshot"),
+  traderLicenceNoSnapshot: text("trader_licence_no_snapshot"),
   quantity: doublePrecision("quantity").notNull(),
   unit: text("unit").notNull(),
   weight: doublePrecision("weight"),

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { ApiUserError, readApiErrorEnvelope } from "@/lib/queryClient";
+import { ApiUserError, readApiErrorEnvelope, fetchApiGet } from "@/lib/queryClient";
 import { ArrowRightLeft, AlertCircle, ShieldCheck, CheckCircle, Plus, SendHorizontal } from "lucide-react";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 
@@ -151,6 +151,11 @@ interface Transaction {
   yardId: string;
   commodityId: string;
   traderLicenceId: string;
+  /** Joined from trader_licences for list display (API GET /transactions). */
+  traderFirmName?: string | null;
+  /** Issued numeric licence, or provisional ref when final number not yet issued. */
+  traderLicenceNumber?: string | null;
+  traderProvisionalLicenceNo?: string | null;
   quantity: number;
   unit: string;
   declaredValue: number;
@@ -162,6 +167,67 @@ interface Transaction {
   dvReturnRemarks?: string | null;
   parentTransactionId?: string | null;
   entryKind?: string | null;
+  /** API list aliases / joined fields */
+  traderName?: string | null;
+  licenceNo?: string | null;
+  traderFirmNameSnapshot?: string | null;
+  traderLicenceNoSnapshot?: string | null;
+  /** Server canonical display (GET/POST); prefer in UI. */
+  displayTraderName?: string | null;
+  displayTraderLicence?: string | null;
+}
+
+function firstNonEmpty(...vals: unknown[]): string {
+  for (const v of vals) {
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (s !== "") return s;
+  }
+  return "";
+}
+
+/** Normalize list payload so the grid always gets trader + txn fields (camel/snake/API variants). */
+function normalizeMarketTransactionList(raw: unknown): Transaction[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => {
+    const r = item as Record<string, unknown>;
+    const pick = (...keys: string[]): string | null => {
+      for (const k of keys) {
+        const v = r[k];
+        if (v != null && String(v).trim() !== "") return String(v).trim();
+      }
+      return null;
+    };
+    const base = item as Transaction;
+    const tf = firstNonEmpty(
+      pick("displayTraderName", "display_trader_name"),
+      pick("traderName", "traderFirmName", "trader_firm_name", "trader_name"),
+      pick("traderFirmNameSnapshot", "trader_firm_name_snapshot"),
+      base.traderFirmName,
+      base.traderName,
+      base.displayTraderName,
+    );
+    const tl = firstNonEmpty(
+      pick("displayTraderLicence", "display_trader_licence"),
+      pick("licenceNo", "traderLicenceNumber", "trader_licence_number", "licence_no"),
+      pick("traderLicenceNoSnapshot", "trader_licence_no_snapshot"),
+      base.traderLicenceNumber,
+      base.licenceNo,
+      base.displayTraderLicence,
+    );
+    const txMerged = firstNonEmpty(
+      pick("transactionNo", "transaction_no", "displayTransactionNo", "display_transaction_no"),
+      base.transactionNo != null && String(base.transactionNo).trim() !== ""
+        ? String(base.transactionNo).trim()
+        : null,
+    );
+    return {
+      ...base,
+      traderFirmName: tf || null,
+      traderLicenceNumber: tl || null,
+      transactionNo: txMerged || null,
+    };
+  });
 }
 
 export default function MarketTransactions() {
@@ -195,8 +261,41 @@ export default function MarketTransactions() {
 
   const { data: list, isLoading, isError } = useQuery<Transaction[]>({
     queryKey: ["/api/ioms/market/transactions"],
+    queryFn: async () => {
+      const raw = await fetchApiGet<unknown>("/api/ioms/market/transactions");
+      return normalizeMarketTransactionList(raw);
+    },
+    structuralSharing: false,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
-  const { data: commodities = [] } = useQuery<Array<{ id: string; name: string }>>({
+
+  type LicenceRow = {
+    id: string;
+    firmName: string;
+    licenceNo?: string | null;
+    provisionalLicenceNo?: string | null;
+    entityPublicCode?: string | null;
+  };
+  const { data: licenceListForGrid = [] } = useQuery<LicenceRow[]>({
+    queryKey: ["m04-market-tx-licence-lookup"],
+    queryFn: () => fetchApiGet<LicenceRow[]>("/api/ioms/traders/licences"),
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
+
+  const licenceDisplayById = useMemo(() => {
+    const m = new Map<string, { firm: string; lic: string }>();
+    for (const l of licenceListForGrid) {
+      const lic =
+        firstNonEmpty(l.licenceNo, l.provisionalLicenceNo, l.entityPublicCode) || "";
+      const firm = firstNonEmpty(l.firmName) || "";
+      m.set(String(l.id).trim(), { firm, lic });
+    }
+    return m;
+  }, [licenceListForGrid]);
+
+  const { data: commodities = [] } = useQuery<Array<{ id: string; name: string; unit?: string | null }>>({
     queryKey: ["/api/ioms/commodities"],
   });
   const yardForLicences = yardId.trim();
@@ -226,6 +325,13 @@ export default function MarketTransactions() {
   });
   const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y])), [yards]);
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
+
+  /** Unit is driven by the commodity master (read-only in the create form). */
+  useEffect(() => {
+    const c = commodityId.trim() ? commodityById.get(commodityId.trim()) : undefined;
+    const u = c?.unit != null && String(c.unit).trim() !== "" ? String(c.unit).trim() : "Quintal";
+    setUnit(u);
+  }, [commodityId, commodityById]);
   const licenceById = useMemo(() => new Map(licences.map((l) => [l.id, l])), [licences]);
 
   const feePreviewParamsReady =
@@ -345,6 +451,7 @@ export default function MarketTransactions() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/market/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["m04-market-tx-licence-lookup"] });
       toast({ title: "Transaction created", description: "Draft market transaction created." });
       setCreateOpen(false);
       setYardId("");
@@ -452,6 +559,8 @@ export default function MarketTransactions() {
       { key: "transactionNo", header: "Txn No" },
       { key: "transactionDate", header: "Date" },
       { key: "yardName", header: "Yard" },
+      { key: "traderName", header: "Trader name" },
+      { key: "traderLicenceNo", header: "Licence No." },
       { key: "commodityName", header: "Commodity" },
       { key: "qtyLabel", header: "Qty" },
       { key: "declaredValue", header: "Value" },
@@ -467,12 +576,48 @@ export default function MarketTransactions() {
     return (list ?? []).map((t) => {
       const yardName = yardById.get(t.yardId)?.name ?? t.yardId;
       const commodityName = commodityById.get(t.commodityId)?.name ?? t.commodityId;
+      const raw = t as unknown as Record<string, unknown>;
+      const master = licenceDisplayById.get(String(t.traderLicenceId ?? "").trim());
+      const firm = firstNonEmpty(
+        t.displayTraderName,
+        raw["display_trader_name"],
+        t.traderName,
+        t.traderFirmName,
+        raw["trader_name"],
+        raw["trader_firm_name"],
+        raw["traderFirmNameSnapshot"],
+        raw["trader_firm_name_snapshot"],
+        master?.firm,
+      );
+      const licNo = firstNonEmpty(
+        t.displayTraderLicence,
+        raw["display_trader_licence"],
+        t.licenceNo,
+        t.traderLicenceNumber,
+        raw["licence_no"],
+        raw["trader_licence_number"],
+        raw["traderLicenceNoSnapshot"],
+        raw["trader_licence_no_snapshot"],
+        master?.lic,
+      );
+      const provOnly = firstNonEmpty(t.traderProvisionalLicenceNo, raw["trader_provisional_licence_no"]);
+      const refForLabel = firstNonEmpty(licNo, provOnly);
+      const traderName = firm;
+      const traderLicenceNo = refForLabel;
       const kind = t.entryKind ?? "Original";
       return {
         id: t.id,
-        transactionNo: t.transactionNo ?? "—",
+        transactionNo:
+          firstNonEmpty(
+            t.transactionNo,
+            raw["transaction_no"],
+            raw["displayTransactionNo"],
+            raw["display_transaction_no"],
+          ) || "—",
         transactionDate: t.transactionDate,
         yardName,
+        traderName,
+        traderLicenceNo,
         commodityName,
         qtyLabel: `${t.quantity} ${t.unit}`,
         declaredValue: t.declaredValue,
@@ -543,6 +688,7 @@ export default function MarketTransactions() {
     list,
     yardById,
     commodityById,
+    licenceDisplayById,
     showTxnActions,
     canCreate,
     canVerify,
@@ -617,7 +763,16 @@ export default function MarketTransactions() {
                   </div>
                   <div className="space-y-1">
                     <Label>Commodity</Label>
-                    <Select value={commodityId || undefined} onValueChange={setCommodityId}>
+                    <Select
+                      value={commodityId || undefined}
+                      onValueChange={(id) => {
+                        setCommodityId(id);
+                        const c = commodityById.get(id);
+                        const nextUnit =
+                          c?.unit != null && String(c.unit).trim() !== "" ? String(c.unit).trim() : "Quintal";
+                        setUnit(nextUnit);
+                      }}
+                    >
                       <SelectTrigger><SelectValue placeholder="Select commodity" /></SelectTrigger>
                       <SelectContent>
                         {commodities.map((c) => (
@@ -662,7 +817,13 @@ export default function MarketTransactions() {
                     </div>
                     <div className="space-y-1">
                       <Label>Unit</Label>
-                      <Input value={unit} onChange={(e) => setUnit(e.target.value)} />
+                      <Input
+                        readOnly
+                        className="bg-muted"
+                        value={commodityId.trim() ? unit : "—"}
+                        title="Taken from the commodity master for the selected commodity"
+                      />
+                      <p className="text-xs text-muted-foreground">Set from commodity; not editable here.</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -729,6 +890,13 @@ export default function MarketTransactions() {
                 "transactionNo",
                 "transactionDate",
                 "yardName",
+                "traderName",
+                "traderFirmName",
+                "displayTraderName",
+                "traderLicenceNo",
+                "licenceNo",
+                "traderLicenceNumber",
+                "displayTraderLicence",
                 "commodityName",
                 "qtyLabel",
                 "declaredValue",

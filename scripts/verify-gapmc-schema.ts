@@ -10,6 +10,7 @@ const REQUIRED_TABLES = [
   "leave_requests",
   "employee_leave_balances",
   "purchase_transactions",
+  "purchase_transaction_sequence",
   "dak_escalations",
   "land_records",
   "users",
@@ -23,7 +24,11 @@ const COLUMN_CHECKS: { table: string; columns: string[] }[] = [
   },
   {
     table: "purchase_transactions",
-    columns: ["parent_transaction_id", "entry_kind"],
+    columns: ["parent_transaction_id", "entry_kind", "transaction_no"],
+  },
+  {
+    table: "purchase_transaction_sequence",
+    columns: ["yard_id", "financial_year", "last_seq"],
   },
   {
     table: "rent_invoices",

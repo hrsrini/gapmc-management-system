@@ -1,9 +1,11 @@
 /**
  * M-03 Rent invoice auto-generation: 1st of each month at 00:01.
  * For each active allotment, creates a Draft rent invoice for the current month if none exists (idempotent).
- * Rent amounts are copied from the latest invoice for the same allotment, or 0 if none.
+ * Resolved rent uses approved revision, else last invoice for the allotment, else allocation monthly rent.
+ * Rows with resolved rent/total at or below zero are skipped (no draft created).
+ * No second non-Cancelled invoice for the same asset (`asset_id`) and `period_month` (cron + API).
  */
-import { eq, and, desc, gte, lte } from "drizzle-orm";
+import { eq, and, gte, lte } from "drizzle-orm";
 import { db } from "./db";
 import { assetAllotments, assets, entities, entityAllotments, rentInvoices, yards } from "@shared/db-schema";
 import { formatRentInvoiceNo } from "./rent-invoice-number";
@@ -14,13 +16,10 @@ import { tenantLicenceIsGstExempt } from "./gst-exempt";
 import { resolveRentInvoiceTdsFields } from "./rent-invoice-tds";
 import { isTrackBGovtSubType } from "@shared/track-b-entity";
 import { unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
-
-function gstComponentsFromMonthlyRent(monthlyRent: number, gstApplicable: boolean): { cgst: number; sgst: number; total: number } {
-  const r = Number(monthlyRent);
-  if (!Number.isFinite(r) || r <= 0 || !gstApplicable) return { cgst: 0, sgst: 0, total: Math.max(0, r) };
-  const half = Math.round(r * 0.09 * 100) / 100;
-  return { cgst: half, sgst: half, total: Math.round((r + 2 * half) * 100) / 100 };
-}
+import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
+import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
+import { rentInvoiceAmountsInvalid } from "@shared/rent-invoice-amount-validation";
+import { findBlockingRentInvoiceForPremisesMonth } from "./rent-invoice-premises-month-uniqueness";
 
 function getFirstAndLastDayOfMonth(yyyy: number, mm: number): { first: string; last: string } {
   const first = `${yyyy}-${String(mm).padStart(2, "0")}-01`;
@@ -42,6 +41,9 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
   const mm = now.getMonth() + 1;
   const periodMonth = `${yyyy}-${String(mm).padStart(2, "0")}`;
   const { first: firstDay, last: lastDay } = getFirstAndLastDayOfMonth(yyyy, mm);
+  const mergedCfg = await getMergedSystemConfig();
+  const rentCgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_cgst_percent");
+  const rentSgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_sgst_percent");
 
   const activeAllotments = await db
     .select()
@@ -91,20 +93,19 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
     const yardId = yardByAssetPk[allotment.assetId];
     if (!yardId) continue;
 
-    const [lastInvoice] = await db
-      .select()
-      .from(rentInvoices)
-      .where(eq(rentInvoices.allotmentId, allotment.id))
-      .orderBy(desc(rentInvoices.periodMonth))
-      .limit(1);
-
     const { rentAmount } = await resolveRentForAllotmentPeriodMonth(allotment.id, periodMonth);
-    const cgst = lastInvoice?.cgst ?? 0;
-    const sgst = lastInvoice?.sgst ?? 0;
-    const totalAmount = lastInvoice?.totalAmount ?? rentAmount + cgst + sgst;
-    const isGovtEntity = lastInvoice?.isGovtEntity ?? false;
 
     const gstExempt = Boolean(allotment.traderLicenceId && (await tenantLicenceIsGstExempt(allotment.traderLicenceId)));
+    const isGovtEntity = gstExempt;
+    let cgst = 0;
+    let sgst = 0;
+    let totalAmount = rentAmount;
+    if (!gstExempt) {
+      const g = computeRentInvoiceGstInr(rentAmount, false, rentCgstPct, rentSgstPct);
+      cgst = g.cgst;
+      sgst = g.sgst;
+      totalAmount = rentInvoiceTotalInr(rentAmount, 0, cgst, sgst);
+    }
     const tdsRes = await resolveRentInvoiceTdsFields({
       tenantLicenceId: allotment.traderLicenceId,
       rentAmount,
@@ -113,6 +114,17 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
     });
     const tdsApplicable = "error" in tdsRes ? false : tdsRes.tdsApplicable;
     const tdsAmount = "error" in tdsRes ? 0 : tdsRes.tdsAmount;
+
+    if (rentInvoiceAmountsInvalid(rentAmount, totalAmount)) {
+      skipped += 1;
+      continue;
+    }
+
+    const premisesClashTl = await findBlockingRentInvoiceForPremisesMonth(allotment.assetId, periodMonth);
+    if (premisesClashTl) {
+      skipped += 1;
+      continue;
+    }
 
     const id = nanoid();
     const invoiceNo = formatRentInvoiceNo(yardCodeById.get(yardId), periodMonth, id);
@@ -141,6 +153,7 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
       generatedAt: null,
       approvedAt: null,
     });
+    existingAllotmentIds.add(allotment.id);
     createdInvoiceIds.push(id);
     created += 1;
   }
@@ -184,25 +197,17 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
     const yardId = yardByAssetPk[ea.assetId];
     if (!yardId) continue;
 
-    const [lastInvoice] = await db
-      .select()
-      .from(rentInvoices)
-      .where(eq(rentInvoices.allotmentId, ea.id))
-      .orderBy(desc(rentInvoices.periodMonth))
-      .limit(1);
-
     const { rentAmount } = await resolveRentForAllotmentPeriodMonth(ea.id, periodMonth);
-    let cgst = lastInvoice?.cgst ?? null;
-    let sgst = lastInvoice?.sgst ?? null;
-    let totalAmount = lastInvoice?.totalAmount ?? null;
-    let isGovtEntity = Boolean(lastInvoice?.isGovtEntity ?? false);
-
-    if (!lastInvoice) {
-      const g = gstComponentsFromMonthlyRent(rentAmount, Boolean(ea.gstApplicable));
+    const gstApplicableEntity = Boolean(ea.gstApplicable);
+    const isGovtEntity = !gstApplicableEntity;
+    let cgst = 0;
+    let sgst = 0;
+    let totalAmount = rentAmount;
+    if (gstApplicableEntity) {
+      const g = computeRentInvoiceGstInr(rentAmount, false, rentCgstPct, rentSgstPct);
       cgst = g.cgst;
       sgst = g.sgst;
-      totalAmount = rentAmount + cgst + sgst;
-      isGovtEntity = !ea.gstApplicable;
+      totalAmount = rentInvoiceTotalInr(rentAmount, 0, cgst, sgst);
     }
 
     const gstExempt = !ea.gstApplicable;
@@ -214,6 +219,17 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
     });
     const tdsApplicable = "error" in tdsRes ? false : tdsRes.tdsApplicable;
     const tdsAmount = "error" in tdsRes ? 0 : tdsRes.tdsAmount;
+
+    if (rentInvoiceAmountsInvalid(rentAmount, totalAmount)) {
+      skipped += 1;
+      continue;
+    }
+
+    const premisesClashEnt = await findBlockingRentInvoiceForPremisesMonth(ea.assetId, periodMonth);
+    if (premisesClashEnt) {
+      skipped += 1;
+      continue;
+    }
 
     const id = nanoid();
     const invoiceNo = formatRentInvoiceNo(yardCodeById.get(yardId), periodMonth, id);
@@ -229,9 +245,9 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
       periodMonth,
       rentAmount,
       nonGstChargesJson: null,
-      cgst: cgst ?? 0,
-      sgst: sgst ?? 0,
-      totalAmount: totalAmount ?? rentAmount + (cgst ?? 0) + (sgst ?? 0),
+      cgst,
+      sgst,
+      totalAmount,
       isGovtEntity,
       tdsApplicable,
       tdsAmount,
