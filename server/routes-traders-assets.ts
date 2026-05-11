@@ -29,7 +29,7 @@ import { nanoid } from "nanoid";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { writeAuditLog } from "./audit";
 import { createIomsReceipt } from "./routes-receipts-ioms";
-import { tenantLicenceIsGstExempt } from "./gst-exempt";
+import { tenantLicenceIsGstExempt, resolveGovtGstExemptCategoryId } from "./gst-exempt";
 import {
   assertRecordDoDvDaSeparation,
   assertSegregationDoDvDa,
@@ -1571,6 +1571,10 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm }))) {
         return sendApiError(res, 400, "LICENCE_PAN_DUPLICATE", "PAN is already used by another active record.");
       }
+      const govtGstRes = await resolveGovtGstExemptCategoryId(body.govtGstExemptCategoryId);
+      if (!govtGstRes.ok) {
+        return sendApiError(res, 400, govtGstRes.code, govtGstRes.message);
+      }
       const sys = await getMergedSystemConfig();
       const feeFromBody =
         body.feeAmount != null && String(body.feeAmount).trim() !== "" ? Number(body.feeAmount) : null;
@@ -1605,7 +1609,7 @@ export function registerTradersAssetsRoutes(app: Express) {
           blockReason: body.blockReason ? String(body.blockReason) : null,
           dvReturnRemarks: null,
           workflowRevisionCount: 0,
-          govtGstExemptCategoryId: body.govtGstExemptCategoryId ? String(body.govtGstExemptCategoryId) : null,
+          govtGstExemptCategoryId: govtGstRes.id,
           isNonGstEntity: Boolean(body.isNonGstEntity ?? false),
           fatherSpouseName: fatherSpouse,
           dateOfBirth: dob,
@@ -1901,6 +1905,11 @@ export function registerTradersAssetsRoutes(app: Express) {
       };
       const seg = assertRecordDoDvDaSeparation(req.user, mergedRoles);
       if (!seg.ok) return sendApiError(res, 403, "LICENCE_DO_DV_DA_SEGREGATION", seg.error);
+      if (updates.govtGstExemptCategoryId !== undefined) {
+        const gRes = await resolveGovtGstExemptCategoryId(updates.govtGstExemptCategoryId);
+        if (!gRes.ok) return sendApiError(res, 400, gRes.code, gRes.message);
+        updates.govtGstExemptCategoryId = gRes.id;
+      }
       await db.update(traderLicences).set(updates as Record<string, string | number | boolean | null>).where(eq(traderLicences.id, id));
 
       const [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);

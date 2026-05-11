@@ -31,6 +31,7 @@ import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 import { AuthenticatedBlobPreviewDialog } from "@/components/attachment/AuthenticatedBlobPreviewDialog";
 import { PanInput } from "@/components/inputs/PanInput";
+import { govtGstCategoriesForSelect, type GovtGstExemptCategoryRow } from "@/lib/govtGstExemptSelect";
 
 const LICENCE_TYPES = ["Associated", "Functionary", "Hamali", "Weighman", "AssistantTrader"] as const;
 
@@ -70,7 +71,9 @@ interface LicenceRow {
   applicationSerial?: string | null;
   entityPublicCode?: string | null;
   bmUndertakingAccepted?: boolean | null;
+  govtGstExemptCategoryId?: string | null;
 }
+
 
 async function readApiError(res: Response): Promise<string> {
   const t = await res.text();
@@ -144,6 +147,11 @@ export default function TraderLicenceForm() {
   const bmPendingPreviewUrl = useUploadFilePreview(bmPendingFile);
   const [renewalNoArrearsDeclared, setRenewalNoArrearsDeclared] = useState(false);
   const [bmUndertakingAccepted, setBmUndertakingAccepted] = useState(false);
+  const [exemptCategoryId, setExemptCategoryId] = useState<string>("__none__");
+
+  const { data: gstCategories = [] } = useQuery<GovtGstExemptCategoryRow[]>({
+    queryKey: ["/api/ioms/reference/govt-gst-exempt-categories"],
+  });
 
   const { data: licence, isLoading: licenceLoading } = useQuery<LicenceRow>({
     queryKey: ["/api/ioms/traders/licences", editId],
@@ -151,6 +159,11 @@ export default function TraderLicenceForm() {
   });
 
   const issued = Boolean(licence?.licenceNo && String(licence.licenceNo).trim());
+
+  const gstCategoriesForSelect = useMemo(
+    () => govtGstCategoriesForSelect(gstCategories, licence?.govtGstExemptCategoryId ?? null),
+    [gstCategories, licence?.govtGstExemptCategoryId],
+  );
 
   useEffect(() => {
     if (!isNew) return;
@@ -188,6 +201,7 @@ export default function TraderLicenceForm() {
     setBmFormDocUrl(licence.bmFormDocUrl ?? "");
     setRenewalNoArrearsDeclared(Boolean(licence.renewalNoArrearsDeclared));
     setBmUndertakingAccepted(Boolean(licence.bmUndertakingAccepted));
+    setExemptCategoryId(licence.govtGstExemptCategoryId ?? "__none__");
   }, [licence]);
 
   const buildPayload = (status: "Draft" | "Pending"): Record<string, unknown> => {
@@ -222,6 +236,7 @@ export default function TraderLicenceForm() {
       bmFormDocUrl: bmParsed.ok ? bmParsed.value : null,
       renewalNoArrearsDeclared,
       bmUndertakingAccepted,
+      govtGstExemptCategoryId: exemptCategoryId === "__none__" ? null : exemptCategoryId,
     };
     if (isNew) {
       base.aadhaarToken = aTrim || null;
@@ -815,6 +830,27 @@ export default function TraderLicenceForm() {
               <div className="space-y-2 sm:col-span-2">
                 <Label>GSTIN</Label>
                 <Input value={gstin} onChange={(e) => setGstin(e.target.value)} />
+              </div>
+              <div className="space-y-2 sm:col-span-2 rounded-md border bg-muted/20 p-4">
+                <p className="text-sm font-medium">Govt. office / godown GST exemption (M-02 / M-03)</p>
+                <p className="text-xs text-muted-foreground mb-2">
+                  If this trader holds premises under a listed exempt government institution, choose the matching category —
+                  rent invoices use zero CGST/SGST when saved. If the dropdown is empty, run the tally/GST reference seed on the server.
+                </p>
+                <Label>Govt. GST exempt category</Label>
+                <Select value={exemptCategoryId} onValueChange={setExemptCategoryId}>
+                  <SelectTrigger className="max-w-xl">
+                    <SelectValue placeholder="None (standard GST)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None (standard GST)</SelectItem>
+                    {gstCategoriesForSelect.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2">
                 <Label>Fee amount (₹)</Label>

@@ -6,6 +6,8 @@ vite.config.ts.*
 *.tar.gz
 .env
 uploads/
+db_backups/
+db_table_backup.sql
 
 # Playwright
 /test-results/

@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
+import { govtGstCategoriesForSelect } from "@/lib/govtGstExemptSelect";
 
 interface Licence {
   id: string;
@@ -267,9 +268,13 @@ export default function TraderLicenceDetail() {
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
   const receiptById = Object.fromEntries(receipts.map((r) => [r.id, r.receiptNo]));
   const assetDisplayById = useMemo(() => Object.fromEntries(assets.map((a) => [a.id, a.assetId])), [assets]);
+  const gstCategoriesForSelect = useMemo(
+    () => govtGstCategoriesForSelect(gstCategories, licence?.govtGstExemptCategoryId ?? null),
+    [gstCategories, licence?.govtGstExemptCategoryId],
+  );
   const exemptCategoryName =
     licence?.govtGstExemptCategoryId != null
-      ? gstCategories.find((c) => c.id === licence.govtGstExemptCategoryId)?.name
+      ? gstCategoriesForSelect.find((c) => c.id === licence.govtGstExemptCategoryId)?.name
       : undefined;
 
   const commodityNameById = useMemo(
@@ -708,7 +713,7 @@ export default function TraderLicenceDetail() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">None (standard GST)</SelectItem>
-                    {gstCategories.map((c) => (
+                    {gstCategoriesForSelect.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
                         {c.name}
                       </SelectItem>
