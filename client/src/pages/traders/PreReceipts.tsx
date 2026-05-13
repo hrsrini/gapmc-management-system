@@ -40,6 +40,9 @@ interface PreReceipt {
   entityId: string;
   yardId: string;
   amount: number;
+  rentPremisesType?: string | null;
+  rentPremisesRef?: string | null;
+  rentBillingMonth?: string | null;
   purpose?: string | null;
   status: string;
   settledReceiptId?: string | null;
@@ -78,6 +81,9 @@ export default function PreReceipts() {
   const [entityId, setEntityId] = useState("");
   const [purpose, setPurpose] = useState("");
   const [amount, setAmount] = useState("");
+  const [rentPremisesType, setRentPremisesType] = useState("");
+  const [rentPremisesRef, setRentPremisesRef] = useState("");
+  const [rentBillingMonth, setRentBillingMonth] = useState("");
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -99,6 +105,9 @@ export default function PreReceipts() {
       setOpen(false);
       setPurpose("");
       setAmount("");
+      setRentPremisesType("");
+      setRentPremisesRef("");
+      setRentBillingMonth("");
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
@@ -174,7 +183,7 @@ export default function PreReceipts() {
       </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Issue pre-receipt</DialogTitle>
           </DialogHeader>
@@ -192,6 +201,22 @@ export default function PreReceipts() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Premises type (PDF)</Label>
+              <Input
+                value={rentPremisesType}
+                onChange={(e) => setRentPremisesType(e.target.value)}
+                placeholder="e.g. Godown"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Premises ref (PDF)</Label>
+              <Input value={rentPremisesRef} onChange={(e) => setRentPremisesRef(e.target.value)} placeholder="e.g. G-12" />
+            </div>
+            <div className="space-y-1">
+              <Label>Billing month</Label>
+              <Input type="month" value={rentBillingMonth} onChange={(e) => setRentBillingMonth(e.target.value)} />
             </div>
             <div className="space-y-1">
               <Label>Purpose</Label>
@@ -213,7 +238,18 @@ export default function PreReceipts() {
                   toast({ title: "Invalid amount", description: "Use a valid amount.", variant: "destructive" });
                   return;
                 }
-                createMutation.mutate({ entityId, purpose: purpose.trim() || null, amount: amt });
+                if (rentBillingMonth && !/^\d{4}-\d{2}$/.test(rentBillingMonth)) {
+                  toast({ title: "Billing month", description: "Pick a month (YYYY-MM).", variant: "destructive" });
+                  return;
+                }
+                createMutation.mutate({
+                  entityId,
+                  purpose: purpose.trim() || null,
+                  amount: amt,
+                  rentPremisesType: rentPremisesType.trim() || null,
+                  rentPremisesRef: rentPremisesRef.trim() || null,
+                  rentBillingMonth: rentBillingMonth.trim() || null,
+                });
               }}
             >
               {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Issue"}

@@ -1,4 +1,5 @@
 import { type Express } from "express";
+import { sendApiError } from "./api-errors";
 import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
@@ -32,6 +33,17 @@ export async function setupVite(server: Server, app: Express) {
   app.use(vite.middlewares);
 
   app.use("/{*path}", async (req, res, next) => {
+    /** Unmatched /api/* would otherwise fall through here and return HTML (breaks fetch().json()). */
+    if (req.path.startsWith("/api")) {
+      sendApiError(
+        res,
+        404,
+        "API_NOT_FOUND",
+        "No API route matched this path. If you added routes recently, restart the Node server so it picks up changes.",
+      );
+      return;
+    }
+
     const url = req.originalUrl;
 
     try {

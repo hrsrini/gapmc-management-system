@@ -51,6 +51,7 @@ import {
 import { resolvePurchaseTransactionTraderRef, tradersRefEquivalent } from "./market-purchase-trader-resolve";
 import { generateNextPurchaseTransactionNo, persistAllocatedTransactionNoIfMissing, ensurePurchaseTransactionNoForRow } from "./market-purchase-transaction-no";
 import { buildMarketReturnPdf } from "./market-return-pdf";
+import { assertTraderLicenceAccessibleInUserScope } from "./trader-licence-market-scope";
 
 /** Trim; empty / whitespace → null so `??` does not keep bogus "" from joins. */
 function nzDisplayText(value: string | null | undefined): string | null {
@@ -366,12 +367,10 @@ export function registerMarketIomsRoutes(app: Express) {
       if (!isValidMonthPeriod(toPeriod)) {
         return sendApiError(res, 400, "MKT_STATEMENT_PERIOD", "toPeriod must be YYYY-MM");
       }
-      const scopedIds = req.scopedLocationIds;
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
-        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      }
+      const scopeStmt = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
+      if (!scopeStmt.ok) return sendApiError(res, scopeStmt.status, scopeStmt.code, scopeStmt.message);
 
       const endExclusive = monthToExclusiveEnd(toPeriod);
 
@@ -435,12 +434,10 @@ export function registerMarketIomsRoutes(app: Express) {
       if (!isValidMonthPeriod(toPeriod)) {
         return sendApiError(res, 400, "MKT_STATEMENT_PERIOD", "toPeriod must be YYYY-MM");
       }
-      const scopedIds = req.scopedLocationIds;
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
-        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      }
+      const scopePay = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
+      if (!scopePay.ok) return sendApiError(res, scopePay.status, scopePay.code, scopePay.message);
 
       // Recompute outstanding server-side (idempotent key per trader+period).
       const endExclusive = monthToExclusiveEnd(toPeriod);
@@ -914,10 +911,8 @@ export function registerMarketIomsRoutes(app: Express) {
 
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      const scopedIds = req.scopedLocationIds;
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
-        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      }
+      const scopeAdv = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
+      if (!scopeAdv.ok) return sendApiError(res, scopeAdv.status, scopeAdv.code, scopeAdv.message);
 
       const entries = await db
         .select()
@@ -952,10 +947,8 @@ export function registerMarketIomsRoutes(app: Express) {
 
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      const scopedIds = req.scopedLocationIds;
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
-        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      }
+      const scopeDep = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
+      if (!scopeDep.ok) return sendApiError(res, scopeDep.status, scopeDep.code, scopeDep.message);
 
       const createdBy = req.user?.id ?? "system";
       const receipt = await createIomsReceipt({
@@ -1010,10 +1003,8 @@ export function registerMarketIomsRoutes(app: Express) {
       }
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      const scopedIds = req.scopedLocationIds;
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
-        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      }
+      const scopeRef = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
+      if (!scopeRef.ok) return sendApiError(res, scopeRef.status, scopeRef.code, scopeRef.message);
 
       const bal = await getMarketFeeAdvanceBalance(traderLicenceId);
       if (bal < amount - 0.01) {
@@ -1848,14 +1839,6 @@ export function registerMarketIomsRoutes(app: Express) {
         .where(eq(traderLicences.id, traderLicenceId))
         .limit(1);
       if (!licence) return sendApiError(res, 404, "PURCHASE_TX_LICENCE_NOT_FOUND", "Trader licence not found");
-      if (licence.yardId && licence.yardId !== yardId) {
-        return sendApiError(
-          res,
-          400,
-          "PURCHASE_TX_LICENCE_YARD_MISMATCH",
-          "Trader licence belongs to a different yard",
-        );
-      }
       if (licence.status !== "Active") {
         return sendApiError(
           res,
@@ -2131,14 +2114,6 @@ export function registerMarketIomsRoutes(app: Express) {
             .where(eq(traderLicences.id, resolvedNew.id))
             .limit(1);
           if (!licencePut) return sendApiError(res, 404, "PURCHASE_TX_LICENCE_NOT_FOUND", "Trader licence not found");
-          if (licencePut.yardId && licencePut.yardId !== mergedYard) {
-            return sendApiError(
-              res,
-              400,
-              "PURCHASE_TX_LICENCE_YARD_MISMATCH",
-              "Trader licence belongs to a different yard",
-            );
-          }
           if (licencePut.status !== "Active") {
             return sendApiError(
               res,
@@ -2417,12 +2392,10 @@ export function registerMarketIomsRoutes(app: Express) {
       if (!isValidMonthPeriod(period)) {
         return sendApiError(res, 400, "MKT_RETURN_PREVIEW_PERIOD", "period must be YYYY-MM");
       }
-      const scopedIds = req.scopedLocationIds;
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
-        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      }
+      const scopePrev = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
+      if (!scopePrev.ok) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
       const lines = await buildReturnPreview({ traderLicenceId, period });
       const totalPurchaseValueInr = lines.reduce((s, l) => s + (Number(l.purchaseValueInr ?? 0) || 0), 0);
       res.json({ traderLicenceId, period, totalPurchaseValueInr, lines });
@@ -2438,12 +2411,10 @@ export function registerMarketIomsRoutes(app: Express) {
       const id = String(req.params.id ?? "").trim();
       const [ret] = await db.select().from(marketMonthlyReturns).where(eq(marketMonthlyReturns.id, id)).limit(1);
       if (!ret) return sendApiError(res, 404, "MKT_RETURN_NOT_FOUND", "Return not found");
-      const scopedIds = req.scopedLocationIds;
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, ret.traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "MKT_RETURN_NOT_FOUND", "Return not found");
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
-        return sendApiError(res, 404, "MKT_RETURN_NOT_FOUND", "Return not found");
-      }
+      const scopeRetGet = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
+      if (!scopeRetGet.ok) return sendApiError(res, 404, "MKT_RETURN_NOT_FOUND", "Return not found");
       const lines = await db.select().from(marketMonthlyReturnLines).where(eq(marketMonthlyReturnLines.returnId, id));
       res.json({ ...ret, lines });
     } catch (e) {
@@ -2458,12 +2429,10 @@ export function registerMarketIomsRoutes(app: Express) {
       const id = String(req.params.id ?? "").trim();
       const [ret] = await db.select().from(marketMonthlyReturns).where(eq(marketMonthlyReturns.id, id)).limit(1);
       if (!ret) return sendApiError(res, 404, "MKT_RETURN_NOT_FOUND", "Return not found");
-      const scopedIds = req.scopedLocationIds;
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, ret.traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "MKT_RETURN_NOT_FOUND", "Return not found");
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
-        return sendApiError(res, 404, "MKT_RETURN_NOT_FOUND", "Return not found");
-      }
+      const scopeRetPdf = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
+      if (!scopeRetPdf.ok) return sendApiError(res, 404, "MKT_RETURN_NOT_FOUND", "Return not found");
       const [yard] = await db.select({ name: yards.name, code: yards.code }).from(yards).where(eq(yards.id, lic.yardId)).limit(1);
       const yardLabel = yard?.name ? `${yard.name} (${yard.code})` : lic.yardId;
       const traderLabel = lic.licenceNo ? `${lic.licenceNo}${lic.firmName ? ` — ${lic.firmName}` : ""}` : (lic.firmName ?? lic.id);
@@ -2502,12 +2471,10 @@ export function registerMarketIomsRoutes(app: Express) {
       if (!["Draft", "Submitted"].includes(status)) {
         return sendApiError(res, 400, "MKT_RETURN_STATUS", "status must be Draft or Submitted");
       }
-      const scopedIds = req.scopedLocationIds;
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
-        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      }
+      const scopeRetPost = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
+      if (!scopeRetPost.ok) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
 
       const id = nanoid();
       const ts = nowIso();

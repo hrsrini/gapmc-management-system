@@ -71,6 +71,7 @@ import { hasPermission } from "./auth";
 import { routeParamString } from "./route-params";
 import { registerEntityAllotmentRoutes } from "./entity-allotment-routes";
 import { assertPremisesNotAlreadyAllocatedActive } from "./premises-allocation-guard";
+import { buildPreReceiptPdfA4Double } from "./pre-receipt-pdf";
 import {
   contentTypeForAssetAllotmentAgreement,
   extFromAssetAllotmentAgreementMime,
@@ -204,6 +205,22 @@ function yardInScope(req: Request, yardId: string): boolean {
 function licenceYardAccessible(req: Request, yardId: string): boolean {
   if (req.user?.roles.some((r) => r.tier === "ADMIN")) return true;
   return yardInScope(req, yardId);
+}
+
+/** Premises master (M-02) must sit on a Yard row, not CheckPost or HO. */
+async function assertPremisesYardLocation(
+  yardId: string,
+): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
+  const [y] = await db.select({ type: yards.type }).from(yards).where(eq(yards.id, yardId)).limit(1);
+  if (!y) return { ok: false, code: "YARD_NOT_FOUND", message: "Yard not found" };
+  if (y.type !== "Yard") {
+    return {
+      ok: false,
+      code: "PREMISES_YARD_TYPE_REQUIRED",
+      message: "Premises must be on a Yard location (not a checkpost or HO).",
+    };
+  }
+  return { ok: true };
 }
 
 /** Canonical quantity label for a commodity (same rule as GET /api/ioms/commodities). */
@@ -1087,6 +1104,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       const yardId = req.query.yardId as string | undefined;
       const status = req.query.status as string | undefined;
       let list = await db.select().from(preReceipts).orderBy(desc(preReceipts.updatedAt));
+      list = list.filter((r) => yardInScope(req, r.yardId));
       if (entityId) list = list.filter((r) => r.entityId === entityId);
       if (yardId) list = list.filter((r) => r.yardId === yardId);
       if (status) list = list.filter((r) => r.status === status);
@@ -1094,6 +1112,41 @@ export function registerTradersAssetsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch pre-receipts");
+    }
+  });
+
+  app.get("/api/ioms/pre-receipts/:id/pdf", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const [pre] = await db.select().from(preReceipts).where(eq(preReceipts.id, id)).limit(1);
+      if (!pre) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
+      if (!yardInScope(req, pre.yardId)) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
+      const [ent] = await db.select().from(entities).where(eq(entities.id, pre.entityId)).limit(1);
+      if (!ent) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
+      const [yard] = await db.select().from(yards).where(eq(yards.id, pre.yardId)).limit(1);
+      const yardDisplay = String(yard?.name?.trim() || yard?.code?.trim() || pre.yardId);
+      const buf = await buildPreReceiptPdfA4Double({ pre, entityName: ent.name, yardDisplayName: yardDisplay });
+      const safeNo = String(pre.preReceiptNo ?? id).replace(/[^\w.-]+/g, "_");
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="pre-receipt-${safeNo}.pdf"`);
+      return res.send(buf);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate pre-receipt PDF");
+    }
+  });
+
+  app.get("/api/ioms/pre-receipts/:id", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      if (!id) return sendApiError(res, 400, "PRE_RECEIPT_ID", "Pre-receipt id is required");
+      const [row] = await db.select().from(preReceipts).where(eq(preReceipts.id, id)).limit(1);
+      if (!row) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
+      if (!yardInScope(req, row.yardId)) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
+      return res.json(row);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch pre-receipt");
     }
   });
 
@@ -1114,6 +1167,10 @@ export function registerTradersAssetsRoutes(app: Express) {
           { entityId, subType: ent.subType },
         );
       }
+      const rentBRaw = body.rentBillingMonth != null ? String(body.rentBillingMonth).trim() : "";
+      if (rentBRaw && !/^\d{4}-\d{2}$/.test(rentBRaw)) {
+        return sendApiError(res, 400, "PRE_RECEIPT_BILLING_MONTH", "rentBillingMonth must be YYYY-MM when provided.");
+      }
       const id = nanoid();
       const preNoRaw = String(body.preReceiptNo ?? "").trim();
       const preNo = preNoRaw ? preNoRaw : await allocateNextPreReceiptNo();
@@ -1122,6 +1179,9 @@ export function registerTradersAssetsRoutes(app: Express) {
         preReceiptNo: preNo,
         entityId,
         yardId: ent.yardId,
+        rentPremisesType: body.rentPremisesType != null ? String(body.rentPremisesType).trim() || null : null,
+        rentPremisesRef: body.rentPremisesRef != null ? String(body.rentPremisesRef).trim() || null : null,
+        rentBillingMonth: rentBRaw || null,
         purpose: body.purpose ? String(body.purpose) : null,
         amount: body.amount != null ? Number(body.amount) : 0,
         status: "Issued",
@@ -1145,60 +1205,70 @@ export function registerTradersAssetsRoutes(app: Express) {
 
   app.put("/api/ioms/pre-receipts/:id", async (req, res) => {
     try {
-      const id = req.params.id;
+      const id = routeParamString(req.params.id);
+      if (!id) return sendApiError(res, 400, "PRE_RECEIPT_ID", "Pre-receipt id is required");
       const [existing] = await db.select().from(preReceipts).where(eq(preReceipts.id, id)).limit(1);
       if (!existing) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
+      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
       const [ent] = await db.select().from(entities).where(eq(entities.id, existing.entityId)).limit(1);
-      if (!ent || !yardInScope(req, ent.yardId)) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
+      if (!ent) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
       const body = req.body as Record<string, unknown>;
       const updates: Record<string, unknown> = { updatedAt: now() };
+      if (body.rentBillingMonth !== undefined && body.rentBillingMonth !== null && String(body.rentBillingMonth).trim() !== "") {
+        const m = String(body.rentBillingMonth).trim();
+        if (!/^\d{4}-\d{2}$/.test(m)) {
+          return sendApiError(res, 400, "PRE_RECEIPT_BILLING_MONTH", "rentBillingMonth must be YYYY-MM.");
+        }
+      }
       if (body.status !== undefined) {
         const next = String(body.status);
         const cur = String(existing.status);
-        const ok =
-          (cur === "Issued" && (next === "Dispatched" || next === "Cancelled")) ||
-          (cur === "Dispatched" && (next === "Acknowledged" || next === "Cancelled")) ||
-          (cur === "Acknowledged" && (next === "Settled" || next === "Cancelled")) ||
-          (cur === "Settled" && next === "Settled") ||
-          (cur === "Cancelled" && next === "Cancelled");
-        if (!ok) {
-          return sendApiError(
-            res,
-            400,
-            "PRE_RECEIPT_BAD_TRANSITION",
-            `Cannot change status from ${cur} to ${next}`,
-          );
-        }
-        updates.status = next;
-        if (next === "Dispatched") updates.dispatchedAt = now();
-        if (next === "Acknowledged") updates.acknowledgedAt = now();
-        if (next === "Settled") {
-          let rid = body.settledReceiptId != null ? String(body.settledReceiptId).trim() : "";
-          if (!rid) {
-            if (!req.user?.id) {
-              return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
-            }
-            // Auto-create IOMS receipt on settlement when not provided.
-            const created = await createIomsReceipt({
-              yardId: ent.yardId,
-              revenueHead: "M-02-PRE-RECEIPT",
-              payerName: ent.name,
-              payerType: "Entity",
-              payerRefId: ent.id,
-              amount: Number(existing.amount ?? 0) || 0,
-              paymentMode: "Cash",
-              sourceModule: "M-02",
-              sourceRecordId: existing.id,
-              unifiedEntityId: unifiedEntityIdFromTrackB(ent.id),
-              createdBy: req.user.id,
-            });
-            rid = created.id;
+        if (next !== cur) {
+          const ok =
+            (cur === "Issued" && (next === "Dispatched" || next === "Cancelled")) ||
+            (cur === "Dispatched" && (next === "Acknowledged" || next === "Cancelled")) ||
+            (cur === "Acknowledged" && (next === "Settled" || next === "Cancelled")) ||
+            (cur === "Settled" && next === "Settled") ||
+            (cur === "Cancelled" && next === "Cancelled");
+          if (!ok) {
+            return sendApiError(
+              res,
+              400,
+              "PRE_RECEIPT_BAD_TRANSITION",
+              `Cannot change status from ${cur} to ${next}`,
+            );
           }
-          updates.settledAt = now();
-          updates.settledReceiptId = rid;
+          updates.status = next;
+          if (next === "Dispatched") updates.dispatchedAt = now();
+          if (next === "Acknowledged") updates.acknowledgedAt = now();
+          if (next === "Settled") {
+            let rid = body.settledReceiptId != null ? String(body.settledReceiptId).trim() : "";
+            if (!rid) {
+              if (!req.user?.id) {
+                return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+              }
+              // Auto-create IOMS receipt on settlement when not provided.
+              const created = await createIomsReceipt({
+                yardId: existing.yardId,
+                revenueHead: "M-02-PRE-RECEIPT",
+                payerName: ent.name,
+                payerType: "Entity",
+                payerRefId: ent.id,
+                amount: Number(existing.amount ?? 0) || 0,
+                paymentMode: "Cash",
+                sourceModule: "M-02",
+                sourceRecordId: existing.id,
+                unifiedEntityId: unifiedEntityIdFromTrackB(ent.id),
+                createdBy: req.user.id,
+              });
+              rid = created.id;
+            }
+            updates.settledAt = now();
+            updates.settledReceiptId = rid;
+          }
         }
       }
-      (["purpose", "amount", "remarks"] as const).forEach((k) => {
+      (["purpose", "amount", "remarks", "rentPremisesType", "rentPremisesRef", "rentBillingMonth"] as const).forEach((k) => {
         if (body[k] === undefined) return;
         if (body[k] === null || body[k] === "") {
           updates[k] = null;
@@ -1206,7 +1276,20 @@ export function registerTradersAssetsRoutes(app: Express) {
         }
         updates[k] = k === "amount" ? Number(body[k]) : String(body[k]);
       });
-      await db.update(preReceipts).set(updates as Record<string, string | number | null>).where(eq(preReceipts.id, id));
+      try {
+        await db.update(preReceipts).set(updates as Record<string, string | number | null>).where(eq(preReceipts.id, id));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/rent_premises|rent_billing|column .*does not exist/i.test(msg)) {
+          return sendApiError(
+            res,
+            500,
+            "PRE_RECEIPT_SCHEMA",
+            "Database is missing pre-receipt print columns. On the server run: npm run db:apply-pre-receipt-print-fields",
+          );
+        }
+        throw e;
+      }
       const [row] = await db.select().from(preReceipts).where(eq(preReceipts.id, id));
       if (row) writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
@@ -2459,7 +2542,16 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!traderLicenceId) return sendApiError(res, 400, "TRADER_LICENCE_REQUIRED", "traderLicenceId is required");
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, traderLicenceId)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
-      if (!licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 403, "LICENCE_YARD_ACCESS_DENIED", "You do not have access to this licence yard");
+      if (lic.status !== "Active" || lic.isBlocked) {
+        return sendApiError(
+          res,
+          400,
+          "LICENCE_NOT_ELIGIBLE",
+          lic.isBlocked
+            ? "Trader licence is blocked and cannot receive a premises allocation."
+            : `Trader licence must be Active for allocation (current status: ${lic.status}).`,
+        );
+      }
 
       // Validate agreement dates + finance fields (US-M02-003)
       const fromDate = String(body.fromDate ?? "").trim();
@@ -2732,6 +2824,8 @@ export function registerTradersAssetsRoutes(app: Express) {
       const body = req.body;
       const yid = String(body.yardId ?? "");
       if (!yardInScope(req, yid)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      const yv = await assertPremisesYardLocation(yid);
+      if (!yv.ok) return sendApiError(res, 400, yv.code, yv.message);
       const id = nanoid();
       await db.insert(assets).values({
         id,
@@ -2772,6 +2866,8 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (body.yardId !== undefined && !yardInScope(req, newYard)) {
         return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
+      const yvPut = await assertPremisesYardLocation(newYard);
+      if (!yvPut.ok) return sendApiError(res, 400, yvPut.code, yvPut.message);
       const allowed = [
         "assetId",
         "yardId",

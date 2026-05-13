@@ -869,6 +869,12 @@ export const preReceipts = gapmc.table("pre_receipts", {
   preReceiptNo: text("pre_receipt_no").unique(),
   entityId: text("entity_id").notNull(),
   yardId: text("yard_id").notNull(),
+  /** Premises type label for printed pre-receipt (e.g. Godown, Shop). */
+  rentPremisesType: text("rent_premises_type"),
+  /** Premises / unit reference for printed pre-receipt (e.g. G-12). */
+  rentPremisesRef: text("rent_premises_ref"),
+  /** Billing month for printed wording, YYYY-MM. */
+  rentBillingMonth: text("rent_billing_month"),
   purpose: text("purpose"),
   amount: doublePrecision("amount").notNull().default(0),
   status: text("status").notNull(), // Issued | Dispatched | Acknowledged | Settled | Cancelled

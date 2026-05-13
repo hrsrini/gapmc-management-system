@@ -50,6 +50,7 @@
     "db:apply-rent-non-gst-charges": "dotenv -e .env -- tsx scripts/apply-rent-non-gst-charges.ts",
     "db:apply-m02-trackb-entities": "dotenv -e .env -- tsx scripts/apply-m02-trackb-entities.ts",
     "db:apply-m02-pre-receipts": "dotenv -e .env -- tsx scripts/apply-m02-pre-receipts.ts",
+    "db:apply-pre-receipt-print-fields": "dotenv -e .env -- tsx scripts/apply-pre-receipt-print-fields.ts",
     "db:apply-m02-unified-entities-rent-revisions": "dotenv -e .env -- tsx scripts/apply-m02-unified-entities-rent-revisions.ts",
     "db:apply-m02-premises-allocation-us-m02-003": "dotenv -e .env -- tsx scripts/apply-m02-premises-allocation-us-m02-003.ts",
     "db:apply-m02-licence-renewal-parent": "dotenv -e .env -- tsx scripts/apply-m02-licence-renewal-parent.ts",

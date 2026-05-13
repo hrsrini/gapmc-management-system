@@ -1,6 +1,7 @@
 import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";
+import { sendApiError } from "./api-errors";
 
 /** Stop CDNs/browsers from serving a stale SPA shell after deploy (hashed /assets/* can stay long-cached). */
 function setHtmlNoStore(res: express.Response) {
@@ -33,7 +34,16 @@ export function serveStatic(app: Express) {
   );
 
   // fall through to index.html if the file doesn't exist
-  app.use("/{*path}", (_req, res) => {
+  app.use("/{*path}", (req, res) => {
+    if (req.path.startsWith("/api")) {
+      sendApiError(
+        res,
+        404,
+        "API_NOT_FOUND",
+        "No API route matched this path. Check the server build and deployment routing.",
+      );
+      return;
+    }
     setHtmlNoStore(res);
     res.sendFile(path.resolve(distPath, "index.html"));
   });

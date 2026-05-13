@@ -33,6 +33,10 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
+import {
+  AssetAllotmentManageDialog,
+  type ManagedAssetAllotment,
+} from "@/components/assets/AssetAllotmentManageDialog";
 import { govtGstCategoriesForSelect } from "@/lib/govtGstExemptSelect";
 
 interface Licence {
@@ -125,16 +129,7 @@ interface AssetRef {
   id: string;
   assetId: string;
 }
-interface AssetAllotmentRow {
-  id: string;
-  assetId: string;
-  traderLicenceId: string;
-  allotteeName: string;
-  fromDate: string;
-  toDate: string;
-  status: string;
-  securityDeposit?: number | null;
-}
+type AssetAllotmentRow = ManagedAssetAllotment;
 
 const stockColumns: ReportTableColumn[] = [
   { key: "commodityName", header: "Commodity" },
@@ -156,8 +151,10 @@ const allotmentColumns: ReportTableColumn[] = [
   { key: "allotteeName", header: "Allottee" },
   { key: "fromDate", header: "From" },
   { key: "toDate", header: "To" },
-  { key: "_status", header: "Status", sortField: "status" },
+  { key: "_approval", header: "Approval", sortField: "approvalStatus" },
+  { key: "_status", header: "Tenancy", sortField: "status" },
   { key: "securityDeposit", header: "Security deposit" },
+  { key: "_actions", header: "" },
 ];
 
 interface RenewPreview {
@@ -190,6 +187,7 @@ export default function TraderLicenceDetail() {
   const [renewFeeDraft, setRenewFeeDraft] = useState("");
   const [renewValidFrom, setRenewValidFrom] = useState("");
   const [renewValidTo, setRenewValidTo] = useState("");
+  const [manageAllotment, setManageAllotment] = useState<AssetAllotmentRow | null>(null);
 
   const { data: licence, isLoading, isError } = useQuery<Licence>({
     queryKey: ["/api/ioms/traders/licences", id],
@@ -327,17 +325,32 @@ export default function TraderLicenceDetail() {
   }, [blockingLog]);
 
   const allotmentRows = useMemo((): Record<string, unknown>[] => {
-    return (allotments ?? []).map((a) => ({
-      id: a.id,
-      assetDisplay: assetDisplayById[a.assetId] ?? a.assetId,
-      allotteeName: a.allotteeName,
-      fromDate: a.fromDate,
-      toDate: a.toDate,
-      status: a.status,
-      securityDeposit: a.securityDeposit != null ? `₹${Number(a.securityDeposit).toLocaleString()}` : "—",
-      _status: <Badge variant={a.status === "Active" ? "default" : "secondary"}>{a.status}</Badge>,
-    }));
-  }, [allotments, assetDisplayById]);
+    return (allotments ?? []).map((a) => {
+      const appr = String(a.approvalStatus ?? "Draft");
+      return {
+        id: a.id,
+        assetDisplay: assetDisplayById[a.assetId] ?? a.assetId,
+        allotteeName: a.allotteeName,
+        fromDate: a.fromDate,
+        toDate: a.toDate,
+        status: a.status,
+        approvalStatus: appr,
+        securityDeposit: a.securityDeposit != null ? `₹${Number(a.securityDeposit).toLocaleString()}` : "—",
+        _approval: (
+          <Badge variant={appr === "Approved" ? "default" : appr === "Rejected" ? "destructive" : "secondary"}>
+            {appr}
+          </Badge>
+        ),
+        _status: <Badge variant={a.status === "Active" ? "default" : "secondary"}>{a.status}</Badge>,
+        _actions: canUpdateLicence ? (
+          <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setManageAllotment(a)}>
+            <Pencil className="h-4 w-4" />
+            <span className="sr-only">Edit allotment</span>
+          </Button>
+        ) : null,
+      };
+    });
+  }, [allotments, assetDisplayById, canUpdateLicence]);
 
   useEffect(() => {
     if (!id) setLocation("/traders/licences");
@@ -909,7 +922,8 @@ export default function TraderLicenceDetail() {
               Premises allocations ({allotments.length})
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Premises (assets) allotted to this licence (equivalent to the Premises Allocation List in SRS).
+              Premises (assets) allotted to this licence (equivalent to the Premises Allocation List in SRS). Use{" "}
+              <strong>Edit</strong> to upload the agreement and run DV/DA approval; Approved sets tenancy to Active.
             </p>
           </CardHeader>
           <CardContent>
@@ -925,7 +939,7 @@ export default function TraderLicenceDetail() {
               <ClientDataGrid
                 columns={allotmentColumns}
                 sourceRows={allotmentRows}
-                searchKeys={["assetDisplay", "allotteeName", "fromDate", "toDate", "status"]}
+                searchKeys={["assetDisplay", "allotteeName", "fromDate", "toDate", "status", "approvalStatus"]}
                 searchPlaceholder="Search allotments…"
                 defaultSortKey="fromDate"
                 defaultSortDir="desc"
@@ -935,6 +949,14 @@ export default function TraderLicenceDetail() {
             )}
           </CardContent>
         </Card>
+
+        <AssetAllotmentManageDialog
+          row={manageAllotment}
+          onClose={() => setManageAllotment(null)}
+          onRowUpdated={setManageAllotment}
+          assetDisplayMap={assetDisplayById}
+          invalidateVacant={false}
+        />
 
         <Card>
           <CardHeader>

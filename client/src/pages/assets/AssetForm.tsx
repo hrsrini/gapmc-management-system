@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useParams } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -22,6 +22,8 @@ interface Yard {
   id: string;
   code?: string | null;
   name?: string | null;
+  /** Yard | CheckPost | HO — premises master uses Yard rows only. */
+  type?: string | null;
 }
 
 interface Asset {
@@ -61,6 +63,14 @@ export default function AssetForm() {
   const [premisesStatus, setPremisesStatus] = useState<string>("Active");
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  const premiseYardOptions = useMemo(() => {
+    const yardRows = yards.filter((y) => y.type === "Yard");
+    if (isEdit && yardId && !yardRows.some((y) => y.id === yardId)) {
+      const cur = yards.find((y) => y.id === yardId);
+      if (cur) return [...yardRows, cur];
+    }
+    return yardRows;
+  }, [yards, isEdit, yardId]);
   const { data: existing, isError: assetError } = useQuery<Asset>({
     queryKey: ["/api/ioms/assets", id],
     enabled: isEdit,
@@ -225,13 +235,14 @@ export default function AssetForm() {
                     <SelectValue placeholder="Select yard" />
                   </SelectTrigger>
                   <SelectContent>
-                    {yards.map((y) => (
+                    {premiseYardOptions.map((y) => (
                       <SelectItem key={y.id} value={y.id}>
                         {y.name ?? y.code ?? y.id}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">Premises must be on a Yard location (not a checkpost).</p>
               </div>
             </div>
 

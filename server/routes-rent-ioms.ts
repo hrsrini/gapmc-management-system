@@ -38,6 +38,7 @@ import { routeParamString } from "./route-params";
 import { resolveRentInvoiceTdsFields } from "./rent-invoice-tds";
 import { isValidYearMonthYm } from "./rent-gstr1";
 import { createIomsReceipt } from "./routes-receipts-ioms";
+import { assertTraderLicenceAccessibleInUserScope } from "./trader-licence-market-scope";
 import { recordRentCollectionForM03Receipt } from "./rent-deposit-ledger-from-receipt";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
@@ -952,10 +953,8 @@ export function registerRentIomsRoutes(app: Express) {
       }
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, tid)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
-      const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
-      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(lic.yardId)) {
-        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
-      }
+      const scopeRentRcpt = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
+      if (!scopeRentRcpt.ok) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       const rows = await db
         .select()
         .from(iomsReceipts)

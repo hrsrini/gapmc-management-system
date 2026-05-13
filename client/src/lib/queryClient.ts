@@ -84,7 +84,24 @@ export async function fetchApiGet<T>(url: string): Promise<T> {
   }
 
   await throwIfResNotOk(res);
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  const trimmed = text.trim();
+  const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+  if (trimmed.startsWith("<!") || trimmed.startsWith("<") || ct.includes("text/html")) {
+    throw new Error(
+      "Server returned HTML instead of JSON — usually the API path did not match any route (restart the server after pulling changes) or the request hit the app shell by mistake.",
+    );
+  }
+  if (!trimmed) {
+    throw new Error("Empty response body (expected JSON).");
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(
+      `Could not parse JSON (${ct || "unknown content-type"}). First bytes: ${trimmed.slice(0, 80)}${trimmed.length > 80 ? "…" : ""}`,
+    );
+  }
 }
 
 export async function apiRequest(
