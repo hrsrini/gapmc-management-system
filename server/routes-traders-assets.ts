@@ -1445,6 +1445,19 @@ export function registerTradersAssetsRoutes(app: Express) {
           `Unit must be "${expectedUnit}" for this commodity (from master data).`,
         );
       }
+      const [dup] = await db
+        .select({ id: traderStockOpenings.id })
+        .from(traderStockOpenings)
+        .where(and(eq(traderStockOpenings.traderLicenceId, licenceId), eq(traderStockOpenings.commodityId, commodityId)))
+        .limit(1);
+      if (dup) {
+        return sendApiError(
+          res,
+          409,
+          "STOCK_OPENING_COMMODITY_DUPLICATE",
+          "This licence already has an opening stock line for this commodity. Delete the existing line if you need to replace it.",
+        );
+      }
       const id = nanoid();
       const ts = now();
       await db.insert(traderStockOpenings).values({
@@ -1505,6 +1518,28 @@ export function registerTradersAssetsRoutes(app: Express) {
             400,
             "STOCK_OPENING_UNIT_MISMATCH",
             `Unit must be "${expectedUnit}" for this commodity (from master data).`,
+          );
+        }
+      }
+      if (body.commodityId !== undefined && String(body.commodityId) !== existing.commodityId) {
+        const nextCid = String(body.commodityId);
+        const [other] = await db
+          .select({ id: traderStockOpenings.id })
+          .from(traderStockOpenings)
+          .where(
+            and(
+              eq(traderStockOpenings.traderLicenceId, existing.traderLicenceId),
+              eq(traderStockOpenings.commodityId, nextCid),
+              ne(traderStockOpenings.id, openingId),
+            ),
+          )
+          .limit(1);
+        if (other) {
+          return sendApiError(
+            res,
+            409,
+            "STOCK_OPENING_COMMODITY_DUPLICATE",
+            "Another opening stock line for this commodity already exists on this licence.",
           );
         }
       }

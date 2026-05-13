@@ -288,6 +288,22 @@ export default function TraderLicenceDetail() {
     [commodities],
   );
 
+  const commodityIdsAlreadyOpen = useMemo(
+    () => new Set(stockOpenings.map((s) => s.commodityId)),
+    [stockOpenings],
+  );
+
+  const commoditiesAvailableForNewOpening = useMemo(
+    () => activeCommodities.filter((c) => !commodityIdsAlreadyOpen.has(c.id)),
+    [activeCommodities, commodityIdsAlreadyOpen],
+  );
+
+  useEffect(() => {
+    if (stockCommodityId && commodityIdsAlreadyOpen.has(stockCommodityId)) {
+      setStockCommodityId("");
+    }
+  }, [stockCommodityId, commodityIdsAlreadyOpen]);
+
   useEffect(() => {
     if (!stockCommodityId) {
       setStockUnit("");
@@ -374,6 +390,7 @@ export default function TraderLicenceDetail() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/traders/licences", id, "stock-openings"] });
+      setStockCommodityId("");
       setStockQty("");
       setStockRemarks("");
       toast({ title: "Opening stock added" });
@@ -825,13 +842,19 @@ export default function TraderLicenceDetail() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="__pick__">Select…</SelectItem>
-                      {activeCommodities.map((c) => (
+                      {commoditiesAvailableForNewOpening.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
                           {c.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  {commoditiesAvailableForNewOpening.length === 0 && activeCommodities.length > 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Every active commodity already has an opening line for this licence. Remove a line to add it again
+                      with a new quantity or date.
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-2">
                   <Label>Quantity</Label>
