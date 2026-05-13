@@ -18,6 +18,7 @@ import {
   traderBlockingLog,
   traderStockOpenings,
   commodities,
+  measurementUnits,
   mspSettings,
   yards,
   rentInvoices,
@@ -203,6 +204,22 @@ function yardInScope(req: Request, yardId: string): boolean {
 function licenceYardAccessible(req: Request, yardId: string): boolean {
   if (req.user?.roles.some((r) => r.tier === "ADMIN")) return true;
   return yardInScope(req, yardId);
+}
+
+/** Canonical quantity label for a commodity (same rule as GET /api/ioms/commodities). */
+async function resolvedCommodityUnitLabel(commodityId: string): Promise<string | null> {
+  const [r] = await db
+    .select({
+      unitName: measurementUnits.name,
+      unitLegacy: commodities.unit,
+    })
+    .from(commodities)
+    .leftJoin(measurementUnits, eq(commodities.unitId, measurementUnits.id))
+    .where(eq(commodities.id, commodityId))
+    .limit(1);
+  if (!r) return null;
+  const label = String(r.unitName ?? r.unitLegacy ?? "").trim();
+  return label.length > 0 ? label : null;
 }
 
 export function registerTradersAssetsRoutes(app: Express) {
@@ -1411,6 +1428,23 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
       const [com] = await db.select().from(commodities).where(eq(commodities.id, commodityId)).limit(1);
       if (!com) return sendApiError(res, 400, "STOCK_OPENING_COMMODITY_INVALID", "Commodity not found");
+      const expectedUnit = await resolvedCommodityUnitLabel(commodityId);
+      if (!expectedUnit) {
+        return sendApiError(
+          res,
+          400,
+          "STOCK_OPENING_COMMODITY_NO_UNIT",
+          "This commodity has no unit in master data. Configure the commodity unit under Market / Admin before recording opening stock.",
+        );
+      }
+      if (unit.trim() !== expectedUnit) {
+        return sendApiError(
+          res,
+          400,
+          "STOCK_OPENING_UNIT_MISMATCH",
+          `Unit must be "${expectedUnit}" for this commodity (from master data).`,
+        );
+      }
       const id = nanoid();
       const ts = now();
       await db.insert(traderStockOpenings).values({
@@ -1453,6 +1487,27 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (body.unit !== undefined) updates.unit = String(body.unit);
       if (body.effectiveDate !== undefined) updates.effectiveDate = String(body.effectiveDate);
       if (body.remarks !== undefined) updates.remarks = body.remarks == null ? null : String(body.remarks);
+      if (body.commodityId !== undefined || body.unit !== undefined) {
+        const cid = body.commodityId !== undefined ? String(body.commodityId) : existing.commodityId;
+        const u = body.unit !== undefined ? String(body.unit) : existing.unit;
+        const expectedUnit = await resolvedCommodityUnitLabel(cid);
+        if (!expectedUnit) {
+          return sendApiError(
+            res,
+            400,
+            "STOCK_OPENING_COMMODITY_NO_UNIT",
+            "This commodity has no unit in master data. Configure the commodity unit under Market / Admin before recording opening stock.",
+          );
+        }
+        if (String(u).trim() !== expectedUnit) {
+          return sendApiError(
+            res,
+            400,
+            "STOCK_OPENING_UNIT_MISMATCH",
+            `Unit must be "${expectedUnit}" for this commodity (from master data).`,
+          );
+        }
+      }
       if (Object.keys(updates).length === 0) {
         const [row] = await db.select().from(traderStockOpenings).where(eq(traderStockOpenings.id, openingId));
         return res.json(row!);

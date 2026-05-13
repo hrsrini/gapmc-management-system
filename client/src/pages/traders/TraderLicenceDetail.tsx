@@ -96,6 +96,7 @@ interface CommodityRef {
   id: string;
   name: string;
   unit?: string | null;
+  isActive?: boolean;
 }
 
 interface GstExemptCategory {
@@ -180,7 +181,7 @@ export default function TraderLicenceDetail() {
   const [nonGst, setNonGst] = useState(false);
   const [stockCommodityId, setStockCommodityId] = useState<string>("");
   const [stockQty, setStockQty] = useState("");
-  const [stockUnit, setStockUnit] = useState("Quintal");
+  const [stockUnit, setStockUnit] = useState("");
   const [stockEffective, setStockEffective] = useState("");
   const [stockRemarks, setStockRemarks] = useState("");
   const [queryDialogOpen, setQueryDialogOpen] = useState(false);
@@ -282,6 +283,20 @@ export default function TraderLicenceDetail() {
     [commodities],
   );
 
+  const activeCommodities = useMemo(
+    () => commodities.filter((c) => c.isActive !== false),
+    [commodities],
+  );
+
+  useEffect(() => {
+    if (!stockCommodityId) {
+      setStockUnit("");
+      return;
+    }
+    const c = commodities.find((x) => x.id === stockCommodityId);
+    setStockUnit((c?.unit ?? "").trim());
+  }, [stockCommodityId, commodities]);
+
   const blockingRows = useMemo((): Record<string, unknown>[] => {
     return blockingLog.map((e) => ({
       id: e.id,
@@ -348,7 +363,7 @@ export default function TraderLicenceDetail() {
         body: JSON.stringify({
           commodityId: stockCommodityId,
           quantity: Number(stockQty),
-          unit: stockUnit.trim(),
+          unit: stockUnit,
           effectiveDate: stockEffective.trim(),
           remarks: stockRemarks.trim() || undefined,
         }),
@@ -801,13 +816,16 @@ export default function TraderLicenceDetail() {
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 items-end border-t pt-4">
                 <div className="space-y-2 sm:col-span-2">
                   <Label>Commodity</Label>
-                  <Select value={stockCommodityId || "__pick__"} onValueChange={(v) => setStockCommodityId(v === "__pick__" ? "" : v)}>
+                  <Select
+                    value={stockCommodityId || "__pick__"}
+                    onValueChange={(v) => setStockCommodityId(v === "__pick__" ? "" : v)}
+                  >
                     <SelectTrigger>
                       <SelectValue placeholder="Select commodity" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="__pick__">Select…</SelectItem>
-                      {commodities.map((c) => (
+                      {activeCommodities.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
                           {c.name}
                         </SelectItem>
@@ -821,7 +839,19 @@ export default function TraderLicenceDetail() {
                 </div>
                 <div className="space-y-2">
                   <Label>Unit</Label>
-                  <Input value={stockUnit} onChange={(e) => setStockUnit(e.target.value)} placeholder="Quintal" />
+                  <Input
+                    readOnly
+                    tabIndex={-1}
+                    value={stockUnit}
+                    placeholder={stockCommodityId ? "No unit on commodity master" : "Select commodity first"}
+                    className="bg-muted cursor-not-allowed"
+                    title="Unit comes from the commodity master and cannot be edited here."
+                  />
+                  {stockCommodityId && !stockUnit ? (
+                    <p className="text-xs text-destructive">
+                      This commodity has no unit configured. Set it under Commodities (M-04) before adding opening stock.
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-2 sm:col-span-2">
                   <Label>Effective date</Label>
@@ -836,6 +866,7 @@ export default function TraderLicenceDetail() {
                   disabled={
                     addStockMutation.isPending ||
                     !stockCommodityId ||
+                    !stockUnit.trim() ||
                     !stockEffective ||
                     !Number.isFinite(Number(stockQty))
                   }
