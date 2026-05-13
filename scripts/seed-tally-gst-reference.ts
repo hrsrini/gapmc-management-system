@@ -1,6 +1,7 @@
 /**
  * Seed Tally ledger catalogue (tally_ledgers.pdf), govt GST exempt categories (List of Exemption from GST.pdf),
- * revenue_head → tally map, and backfill expenditure_heads.tally_ledger_id where possible.
+ * revenue_head → tally map, default expenditure_heads rows with tally_ledger_id (SAL/OPS/MNT),
+ * and backfill expenditure_heads.tally_ledger_id for any other rows missing a link (by code).
  * Run after db:push: npm run db:seed-tally-gst
  */
 import "dotenv/config";
@@ -78,6 +79,19 @@ const REVENUE_HEAD_MAP: { revenueHead: string; tallyLedgerId: string }[] = [
   { revenueHead: "Miscellaneous", tallyLedgerId: "tl_misc" },
 ];
 
+/** Default M-06 heads with Tally mapping (matches headToLedger below). */
+const DEFAULT_EXPENDITURE_HEADS: {
+  id: string;
+  code: string;
+  description: string;
+  category: string | null;
+  tallyLedgerId: string;
+}[] = [
+  { id: "eh_gapmc_sal", code: "SAL", description: "Daily Wages Account", category: "Establishment", tallyLedgerId: "tl_wages" },
+  { id: "eh_gapmc_ops", code: "OPS", description: "General Charges", category: "Administration", tallyLedgerId: "tl_gen_ch" },
+  { id: "eh_gapmc_mnt", code: "MNT", description: "Repairs & Maintenance (Yards)", category: "Infrastructure", tallyLedgerId: "tl_rm_yard" },
+];
+
 async function main() {
   console.log("Seeding tally_ledgers...");
   for (const row of LEDGERS) {
@@ -115,6 +129,27 @@ async function main() {
       .onConflictDoUpdate({
         target: iomsRevenueHeadLedgerMap.revenueHead,
         set: { tallyLedgerId: m.tallyLedgerId },
+      });
+  }
+
+  console.log("Seeding expenditure_heads (defaults with Tally ledger)...");
+  for (const row of DEFAULT_EXPENDITURE_HEADS) {
+    await db
+      .insert(expenditureHeads)
+      .values({
+        id: row.id,
+        code: row.code,
+        description: row.description,
+        category: row.category,
+        tallyLedgerId: row.tallyLedgerId,
+        isActive: true,
+      })
+      .onConflictDoUpdate({
+        target: expenditureHeads.code,
+        set: {
+          tallyLedgerId: row.tallyLedgerId,
+          isActive: true,
+        },
       });
   }
 
