@@ -3,7 +3,7 @@
  * 2) TRUNCATEs every other `gapmc` table — removes traders, portal users, transactions, audit, etc.
  *
  * Preserved: yards, commodities, employees (+ HR satellite tables), RBAC (users, roles, …),
- * system_config, sla_config.
+ * system_config, sla_config, tally_ledgers, govt_gst_exempt_categories, ioms_revenue_head_ledger_map.
  *
  * Usage:
  *   npm run db:purge-retain-core-dry
@@ -40,6 +40,10 @@ const KEEP_TABLES = new Set([
   "user_yards",
   "system_config",
   "sla_config",
+  /** Finance / licence reference masters (see npm run db:seed-tally-gst). */
+  "tally_ledgers",
+  "govt_gst_exempt_categories",
+  "ioms_revenue_head_ledger_map",
 ]);
 
 function quoteIdent(ident: string): string {
