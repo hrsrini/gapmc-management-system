@@ -73,6 +73,20 @@ export function todayYmdUtc(): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
+/** Local calendar YYYY-MM-DD (runtime default timezone). */
+export function localCalendarYmd(d = new Date()): string {
+  const y = d.getFullYear();
+  return `${y}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Vacated-on (agreement end) must be on or before `todayYmd` (lexicographic YYYY-MM-DD compare). */
+export function assertVacatedToDateNotFuture(toYmd: string, todayYmd = todayYmdUtc()): string | null {
+  const s = String(toYmd ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "Vacated on must be a valid date (YYYY-MM-DD).";
+  if (s > String(todayYmd).trim()) return "Vacated on cannot be later than today.";
+  return null;
+}
+
 /** True if `fromYmd` is strictly before `boundaryYmd` (YYYY-MM-DD). */
 export function ymdBefore(a: string, b: string): boolean {
   return String(a).trim() < String(b).trim();

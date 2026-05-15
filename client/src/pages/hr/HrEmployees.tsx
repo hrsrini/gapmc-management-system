@@ -11,6 +11,7 @@ import { UserCircle, AlertCircle } from "lucide-react";
 import { fetchApiGet } from "@/lib/queryClient";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
+import { employeeStatusDisplayLabel } from "@shared/employee-lifecycle-status";
 
 interface AppLogin {
   id: string;
@@ -127,7 +128,7 @@ export default function HrEmployees() {
         ),
         _status: (
           <div className="flex flex-col gap-1">
-            <Badge variant={e.status === "Active" ? "default" : "secondary"}>{e.status}</Badge>
+            <Badge variant={e.status === "Active" ? "default" : "secondary"}>{employeeStatusDisplayLabel(e.status)}</Badge>
             {e.retirementDate ? (
               (() => {
                 const today = new Date().toISOString().slice(0, 10);

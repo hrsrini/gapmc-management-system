@@ -6,7 +6,7 @@
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "./db";
-import { users, employees, yards, userYards } from "@shared/db-schema";
+import { users, employees, yards, userYards, designationMaster } from "@shared/db-schema";
 
 async function getOrCreateAnyYardId(): Promise<string> {
   const [row] = await db.select({ id: yards.id }).from(yards).limit(1);
@@ -52,6 +52,8 @@ export async function ensureEmployeeRecordForUser(userId: string): Promise<void>
 
   const yardId = await getOrCreateAnyYardId();
 
+  const [staffDm] = await db.select({ id: designationMaster.id }).from(designationMaster).where(eq(designationMaster.code, "STAFF")).limit(1);
+
   const eid = nanoid();
   const parts = (user.name || "User").trim().split(/\s+/);
   const firstName = parts[0] || "User";
@@ -63,6 +65,7 @@ export async function ensureEmployeeRecordForUser(userId: string): Promise<void>
     firstName,
     surname,
     designation: "Staff",
+    designationId: staffDm?.id ?? null,
     yardId,
     employeeType: "Regular",
     joiningDate: now.slice(0, 10),

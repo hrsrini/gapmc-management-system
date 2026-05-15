@@ -11,8 +11,9 @@ import { buildIomsReceiptPdf } from "./receipt-pdf";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
 import {
   recordChequeDishonourLedgerForM03Receipt,
-  recordRentCollectionForM03Receipt,
+  applyM03ReceiptToRentDepositLedger,
 } from "./rent-deposit-ledger-from-receipt";
+import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
 import { nanoid } from "nanoid";
 import { getRequestClientIp, writeAuditLog, writeAuditLogSystem } from "./audit";
 import { sendApiError } from "./api-errors";
@@ -112,6 +113,7 @@ function assertPhase1PaymentMode(mode: string): void {
 const REVENUE_HEAD_CODES: Record<string, string> = {
   Rent: "RENT",
   GSTInvoice: "GST",
+  RentArrearsInterest: "RINT",
   MarketFee: "MFEE",
   LicenceFee: "LCFEE",
   SecurityDeposit: "SECDEP",
@@ -181,10 +183,18 @@ export async function createIomsReceipt(params: {
   sourceRecordId?: string;
   /** When set, must be `TA:|TB:|AH:` (M-02 unified entity register). */
   unifiedEntityId?: string | null;
+  /** M-03 combined rent + arrears interest: JSON with rentAmount, interestAmount, interestLedgerEntryIds. */
+  m03BreakdownJson?: string | null;
+  /** When set, stored as total_amount (e.g. GST base+tax + interest > amount+cgst+sgst). */
+  totalAmountOverride?: number | null;
   createdBy: string;
 }): Promise<{ id: string; receiptNo: string }> {
   assertPhase1PaymentMode(params.paymentMode);
-  const totalAmount = params.amount + (params.cgst ?? 0) + (params.sgst ?? 0);
+  const baseTotal = Math.round((params.amount + (params.cgst ?? 0) + (params.sgst ?? 0)) * 100) / 100;
+  const totalAmount =
+    params.totalAmountOverride != null && Number.isFinite(params.totalAmountOverride)
+      ? Math.round(Number(params.totalAmountOverride) * 100) / 100
+      : baseTotal;
   const receiptNo = await generateNextReceiptNo(params.yardId, params.revenueHead);
   const id = nanoid();
   const now = new Date().toISOString();
@@ -207,6 +217,7 @@ export async function createIomsReceipt(params: {
     paymentMode: params.paymentMode,
     sourceModule: params.sourceModule ?? null,
     sourceRecordId: params.sourceRecordId ?? null,
+    m03BreakdownJson: params.m03BreakdownJson != null && String(params.m03BreakdownJson).trim() !== "" ? String(params.m03BreakdownJson) : null,
     unifiedEntityId,
     qrCodeUrl: `/api/ioms/receipts/public/qr?receiptNo=${encodeURIComponent(receiptNo)}`,
     pdfUrl: null,
@@ -666,8 +677,8 @@ export function registerReceiptsIomsRoutes(app: Express) {
         existing.status !== "Paid" &&
         existing.status !== "Reconciled"
       ) {
-        const coll = await recordRentCollectionForM03Receipt(row);
-        rentDepositLedgerNotice = coll.message;
+        const coll = await applyM03ReceiptToRentDepositLedger(row);
+        rentDepositLedgerNotice = coll.messages.filter(Boolean).join(" ");
       }
 
       // If this receipt settles a rent invoice, mark invoice Paid when fully covered (online or counter receipts).
@@ -676,12 +687,19 @@ export function registerReceiptsIomsRoutes(app: Express) {
         const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
         if (inv) {
           const allRecs = await db
-            .select({ totalAmount: iomsReceipts.totalAmount, status: iomsReceipts.status })
+            .select({
+              totalAmount: iomsReceipts.totalAmount,
+              status: iomsReceipts.status,
+              revenueHead: iomsReceipts.revenueHead,
+              sourceModule: iomsReceipts.sourceModule,
+              sourceRecordId: iomsReceipts.sourceRecordId,
+              m03BreakdownJson: iomsReceipts.m03BreakdownJson,
+            })
             .from(iomsReceipts)
             .where(and(eq(iomsReceipts.sourceModule, "M-03"), eq(iomsReceipts.sourceRecordId, invoiceId)));
           const paidSum = allRecs
             .filter((r) => String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled")
-            .reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+            .reduce((s, r) => s + m03ReceiptPrincipalTowardInvoice(r), 0);
           const total = Number(inv.totalAmount ?? 0);
           if (paidSum >= total - 0.01 && String(inv.status ?? "") !== "Paid") {
             await db.update(rentInvoices).set({ status: "Paid" }).where(eq(rentInvoices.id, invoiceId));

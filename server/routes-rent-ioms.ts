@@ -13,6 +13,7 @@ import {
   iomsReceipts,
   traderLicences,
   entities,
+  adHocEntities,
   rentRevisionOverrides,
   assetAllotments,
   entityAllotments,
@@ -39,7 +40,8 @@ import { resolveRentInvoiceTdsFields } from "./rent-invoice-tds";
 import { isValidYearMonthYm } from "./rent-gstr1";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { assertTraderLicenceAccessibleInUserScope } from "./trader-licence-market-scope";
-import { recordRentCollectionForM03Receipt } from "./rent-deposit-ledger-from-receipt";
+import { applyM03ReceiptToRentDepositLedger } from "./rent-deposit-ledger-from-receipt";
+import { ledgerRowEffectiveUnifiedEntityId } from "./rent-ledger-scope";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
 import { normalizeRentRevisionBasis, yearMonthMinusOne } from "@shared/rent-revision-basis";
@@ -47,6 +49,7 @@ import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolv
 import { rentPeriodMonthEndIso } from "./rent-interest";
 import { formatRentInvoiceNo } from "./rent-invoice-number";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
+import { m03ReceiptPrincipalTowardInvoice, stringifyM03ReceiptBreakdown } from "@shared/m03-receipt-breakdown";
 import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
 import {
   MIN_RENT_INVOICE_AMOUNT_INR,
@@ -117,14 +120,22 @@ async function sumPaidM03ByInvoiceIds(invoiceIds: string[]): Promise<Map<string,
   const m = new Map<string, number>();
   if (invoiceIds.length === 0) return m;
   const recs = await db
-    .select({ sourceRecordId: iomsReceipts.sourceRecordId, totalAmount: iomsReceipts.totalAmount, status: iomsReceipts.status })
+    .select({
+      sourceRecordId: iomsReceipts.sourceRecordId,
+      totalAmount: iomsReceipts.totalAmount,
+      status: iomsReceipts.status,
+      revenueHead: iomsReceipts.revenueHead,
+      sourceModule: iomsReceipts.sourceModule,
+      m03BreakdownJson: iomsReceipts.m03BreakdownJson,
+    })
     .from(iomsReceipts)
     .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
   for (const r of recs) {
-    if (String(r.status ?? "") !== "Paid" && String(r.status ?? "") !== "Reconciled") continue;
     const id = String(r.sourceRecordId ?? "");
     if (!id) continue;
-    m.set(id, (m.get(id) ?? 0) + Number(r.totalAmount ?? 0));
+    const principal = m03ReceiptPrincipalTowardInvoice(r);
+    if (principal <= 0) continue;
+    m.set(id, (m.get(id) ?? 0) + principal);
   }
   return m;
 }
@@ -220,6 +231,33 @@ export function registerRentIomsRoutes(app: Express) {
     }
   });
 
+  /** Outstanding rent (excludes arrears-interest-only receipts) for ledger payment UI. */
+  app.get("/api/ioms/rent/invoices/:id/ledger-payment-context", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, id)).limit(1);
+      if (!inv) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
+        return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      }
+      const paidMap = await sumPaidM03ByInvoiceIds([id]);
+      const paid = paidMap.get(id) ?? 0;
+      const total = Number(inv.totalAmount ?? 0);
+      const outstandingRent = Math.max(0, Math.round((total - paid) * 100) / 100);
+      res.json({
+        invoiceId: id,
+        invoiceNo: inv.invoiceNo ?? null,
+        outstandingRent,
+        isGovtEntity: Boolean(inv.isGovtEntity),
+        status: inv.status,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load payment context");
+    }
+  });
+
   app.post("/api/ioms/rent/invoices", async (req, res) => {
     try {
       if (!canCreateRentInvoice(req.user)) {
@@ -270,6 +308,19 @@ export function registerRentIomsRoutes(app: Express) {
       if (!isValidYearMonthYm(periodMonth)) {
         return sendApiError(res, 400, "RENT_INVOICE_PERIOD_MONTH", "periodMonth must be YYYY-MM (required for GST / TDS FY logic).");
       }
+
+      const allotmentId = String((body as Record<string, unknown>).allotmentId ?? "").trim();
+      const useManualRentAmount = Boolean((body as Record<string, unknown>).useManualRentAmount ?? false);
+      if (allotmentId && !useManualRentAmount) {
+        const resolved = await resolveRentForAllotmentPeriodMonth(allotmentId, periodMonth);
+        if (
+          Number.isFinite(resolved.rentAmount) &&
+          resolved.rentAmount > MIN_RENT_INVOICE_AMOUNT_INR
+        ) {
+          rentAmount = resolved.rentAmount;
+        }
+      }
+
       const tdsRes = await resolveRentInvoiceTdsFields({
         tenantLicenceId,
         rentAmount,
@@ -278,26 +329,6 @@ export function registerRentIomsRoutes(app: Express) {
       });
       if ("error" in tdsRes) {
         return sendApiError(res, 400, "RENT_INVOICE_TDS", tdsRes.error);
-      }
-
-      // Apply latest rent revision override for the referenced allotment (if any).
-      const allotmentId = String(body.allotmentId ?? "");
-      if (allotmentId) {
-        const [rev] = await db
-          .select()
-          .from(rentRevisionOverrides)
-          .where(
-            and(
-              eq(rentRevisionOverrides.allotmentId, allotmentId),
-              lte(rentRevisionOverrides.effectiveMonth, periodMonth),
-              or(eq(rentRevisionOverrides.status, "Approved"), isNull(rentRevisionOverrides.status)),
-            ),
-          )
-          .orderBy(desc(rentRevisionOverrides.effectiveMonth))
-          .limit(1);
-        if (rev?.rentAmount != null && Number.isFinite(Number(rev.rentAmount))) {
-          rentAmount = Number(rev.rentAmount);
-        }
       }
       const mergedCfg = await getMergedSystemConfig();
       if (gstExempt) {
@@ -364,12 +395,29 @@ export function registerRentIomsRoutes(app: Express) {
   app.get("/api/ioms/rent/allotments/:allotmentId/rent-context", async (req, res) => {
     try {
       const allotmentId = routeParamString(req.params.allotmentId);
+      const pmRaw = req.query.periodMonth as string | undefined;
       const emRaw = req.query.effectiveMonth as string | undefined;
       const assetRow = await fetchYardScopeForAllotmentId(allotmentId);
       if (!assetRow) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetRow.yardId)) {
         return sendApiError(res, 403, "RENT_CONTEXT_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
+
+      if (pmRaw != null && String(pmRaw).trim() !== "") {
+        const pm = String(pmRaw).trim();
+        if (!isValidYearMonthYm(pm)) {
+          return sendApiError(res, 400, "RENT_CONTEXT_MONTH", "periodMonth must be YYYY-MM");
+        }
+        const resolved = await resolveRentForAllotmentPeriodMonth(allotmentId, pm);
+        return res.json({
+          allotmentId,
+          periodMonth: pm,
+          resolvedRent: resolved.rentAmount,
+          source: resolved.source,
+          matchedRevisionId: resolved.matchedRevisionId,
+          matchedInvoiceId: resolved.matchedInvoiceId,
+        });
       }
 
       let referenceMonth: string;
@@ -918,7 +966,7 @@ export function registerRentIomsRoutes(app: Express) {
               afterValue: paidRow,
             }).catch((e) => console.error("Audit log failed:", e));
             try {
-              await recordRentCollectionForM03Receipt(paidRow);
+              await applyM03ReceiptToRentDepositLedger(paidRow);
             } catch (e) {
               console.error("[rent-invoice] rent deposit Collection hook failed:", e);
             }
@@ -994,7 +1042,11 @@ export function registerRentIomsRoutes(app: Express) {
       if (assetId) list = list.filter((r) => r.assetId === assetId);
 
       const tenantIds = Array.from(
-        new Set(list.map((r) => String(r.tenantLicenceId ?? "").trim()).filter(Boolean)),
+        new Set(
+          list
+            .map((r) => String(r.tenantLicenceId ?? "").trim())
+            .filter((t) => t && !/^(TA|TB|AH):/i.test(t)),
+        ),
       );
       /** Firm name for unified-entity column; licence no / id for tenant column (avoid duplicating firm in both). */
       const firmByLicenceId = new Map<string, string>();
@@ -1010,17 +1062,108 @@ export function registerRentIomsRoutes(app: Express) {
           licenceNoById.set(l.id, no || null);
         }
       }
+
+      const invoiceIds = Array.from(new Set(list.map((r) => String(r.invoiceId ?? "").trim()).filter(Boolean)));
+      const invoiceTenantLicenceById = new Map<string, string>();
+      if (invoiceIds.length > 0) {
+        const invRows = await db
+          .select({ id: rentInvoices.id, tenantLicenceId: rentInvoices.tenantLicenceId })
+          .from(rentInvoices)
+          .where(inArray(rentInvoices.id, invoiceIds));
+        for (const iv of invRows) {
+          invoiceTenantLicenceById.set(iv.id, String(iv.tenantLicenceId ?? "").trim());
+        }
+      }
+
+      const tbRefFromInvoice = (invoiceId: string | null | undefined): string | null => {
+        if (!invoiceId) return null;
+        const t = invoiceTenantLicenceById.get(String(invoiceId)) ?? "";
+        const p = parseUnifiedEntityId(t);
+        return p?.kind === "TB" ? p.refId : null;
+      };
+
+      const tbIds = Array.from(
+        new Set(
+          list.flatMap((r) => {
+            const out: string[] = [];
+            const eff = ledgerRowEffectiveUnifiedEntityId(r);
+            const p1 = eff ? parseUnifiedEntityId(eff) : null;
+            if (p1?.kind === "TB" && p1.refId) out.push(p1.refId);
+            const invRef = tbRefFromInvoice(r.invoiceId);
+            if (invRef) out.push(invRef);
+            return out;
+          }),
+        ),
+      );
+      const ahIds = Array.from(
+        new Set(
+          list
+            .map((r) => {
+              const eff = ledgerRowEffectiveUnifiedEntityId(r);
+              const p = eff ? parseUnifiedEntityId(eff) : null;
+              return p?.kind === "AH" ? p.refId : null;
+            })
+            .filter((x): x is string => Boolean(x)),
+        ),
+      );
+
+      const entityNameById = new Map<string, string>();
+      const entityNameByEntityCode = new Map<string, string>();
+      if (tbIds.length > 0) {
+        const entRows = await db
+          .select({ id: entities.id, entityCode: entities.entityCode, name: entities.name })
+          .from(entities)
+          .where(or(inArray(entities.id, tbIds), inArray(entities.entityCode, tbIds)));
+        for (const er of entRows) {
+          const label = String(er.name ?? "").trim() || er.id;
+          entityNameById.set(er.id, label);
+          const code = er.entityCode != null ? String(er.entityCode).trim() : "";
+          if (code) entityNameByEntityCode.set(code, label);
+        }
+      }
+      const adhocNameById = new Map<string, string>();
+      if (ahIds.length > 0) {
+        const ahRows = await db
+          .select({ id: adHocEntities.id, name: adHocEntities.name })
+          .from(adHocEntities)
+          .where(inArray(adHocEntities.id, ahIds));
+        for (const ar of ahRows) {
+          adhocNameById.set(ar.id, String(ar.name ?? "").trim() || ar.id);
+        }
+      }
+
       const enriched = list.map((row) => {
-        const tid = String(row.tenantLicenceId ?? "").trim();
-        const firm = tid ? (firmByLicenceId.get(tid) ?? null) : null;
-        const licNo = tid ? licenceNoById.get(tid) ?? null : null;
-        const ue = String(row.unifiedEntityId ?? "").trim();
-        const parsed = ue ? parseUnifiedEntityId(ue) : null;
-        const unifiedEntityDisplayName =
-          parsed?.kind === "TA"
-            ? (firmByLicenceId.get(parsed.refId) ?? firm ?? ue) || tid || "—"
-            : ue || (firm ?? tid) || "—";
-        const tenantLicenceDisplayName = (licNo ?? tid) || "—";
+        const tidRaw = String(row.tenantLicenceId ?? "").trim();
+        const tidBare = /^(TA|TB|AH):/i.test(tidRaw) ? "" : tidRaw;
+        const firm = tidBare ? (firmByLicenceId.get(tidBare) ?? null) : null;
+        const licNo = tidBare ? (licenceNoById.get(tidBare) ?? null) : null;
+
+        const effUe = ledgerRowEffectiveUnifiedEntityId(row);
+        const parsed = effUe ? parseUnifiedEntityId(effUe) : null;
+
+        const resolveTb = (ref: string) => entityNameById.get(ref) ?? entityNameByEntityCode.get(ref);
+
+        const unifiedEntityDisplayName = (() => {
+          const invTbRef = tbRefFromInvoice(row.invoiceId);
+          if (!parsed) {
+            if (invTbRef) {
+              const n = resolveTb(invTbRef);
+              if (n) return n;
+            }
+            return firm || effUe || tidBare || "—";
+          }
+          if (parsed.kind === "TA") {
+            return (firmByLicenceId.get(parsed.refId) ?? firm ?? effUe) || tidBare || "—";
+          }
+          if (parsed.kind === "TB") {
+            return resolveTb(parsed.refId) ?? (invTbRef ? resolveTb(invTbRef) : undefined) ?? firm ?? effUe;
+          }
+          if (parsed.kind === "AH") {
+            return adhocNameById.get(parsed.refId) ?? effUe;
+          }
+          return effUe || firm || tidBare || "—";
+        })();
+        const tenantLicenceDisplayName = (licNo ?? tidBare) || "—";
         return { ...row, unifiedEntityDisplayName, tenantLicenceDisplayName };
       });
       res.json(enriched);
@@ -1047,6 +1190,8 @@ export function registerRentIomsRoutes(app: Express) {
         balance: Number(body.balance ?? 0),
         invoiceId: body.invoiceId ? String(body.invoiceId) : null,
         receiptId: body.receiptId ? String(body.receiptId) : null,
+        interestPaymentStatus: body.interestPaymentStatus != null ? String(body.interestPaymentStatus) : null,
+        settledReceiptId: body.settledReceiptId != null ? String(body.settledReceiptId) : null,
       });
       const [row] = await db.select().from(rentDepositLedger).where(eq(rentDepositLedger.id, id));
       if (row) writeAuditLog(req, { module: "Rent/Tax", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -1054,6 +1199,234 @@ export function registerRentIomsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create ledger entry");
+    }
+  });
+
+  /**
+   * Record counter payment against M-03 rent invoice outstanding and/or unpaid interest accrual lines on the deposit ledger.
+   * Creates a Paid IOMS receipt and posts Collection / InterestCollection ledger rows (same hooks as receipt status flow).
+   */
+  app.post("/api/ioms/rent/ledger/record-payment", async (req, res) => {
+    try {
+      if (!canRunM03RentArrearsInterest(req.user) && !canCreateRentInvoice(req.user)) {
+        return sendApiError(
+          res,
+          403,
+          "LEDGER_PAYMENT_DENIED",
+          "Only Data Originator, Data Approver, or Admin can record rent deposit ledger payments",
+        );
+      }
+      const body = req.body as Record<string, unknown>;
+      const mode = String(body.mode ?? "").trim();
+      const invoiceId = String(body.invoiceId ?? "").trim();
+      const paymentMode = String(body.paymentMode ?? "Cash").trim();
+      if (!invoiceId || !["rent_only", "interest_only", "combined"].includes(mode)) {
+        return sendApiError(res, 400, "LEDGER_PAY_FIELDS", "invoiceId and mode (rent_only | interest_only | combined) are required");
+      }
+
+      const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
+      if (!inv) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
+        return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      }
+      if (String(inv.status) !== "Approved" && String(inv.status) !== "Overdue" && String(inv.status) !== "Paid") {
+        return sendApiError(res, 400, "LEDGER_PAY_INVOICE_STATUS", "Invoice must be Approved, Overdue, or Paid to record payment");
+      }
+
+      const idsRaw = body.interestLedgerEntryIds;
+      const interestLedgerEntryIds = Array.isArray(idsRaw)
+        ? idsRaw.map((x) => String(x ?? "").trim()).filter(Boolean)
+        : typeof idsRaw === "string" && String(idsRaw).trim()
+          ? String(idsRaw)
+              .split(/[\s,]+/)
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : [];
+
+      const paidMap = await sumPaidM03ByInvoiceIds([inv.id]);
+      const paidSoFar = paidMap.get(inv.id) ?? 0;
+      const invoiceTotal = Number(inv.totalAmount ?? 0);
+      const outstandingRent = Math.max(0, Math.round((invoiceTotal - paidSoFar) * 100) / 100);
+
+      let rentAmt = body.rentAmount != null ? Number(body.rentAmount) : 0;
+      rentAmt = Math.round(rentAmt * 100) / 100;
+
+      let interestAmt = 0;
+      if (mode !== "rent_only") {
+        if (interestLedgerEntryIds.length === 0) {
+          return sendApiError(
+            res,
+            400,
+            "LEDGER_INTEREST_IDS",
+            "interestLedgerEntryIds is required for interest_only or combined",
+          );
+        }
+        const rows = await db.select().from(rentDepositLedger).where(inArray(rentDepositLedger.id, interestLedgerEntryIds));
+        if (rows.length !== interestLedgerEntryIds.length) {
+          return sendApiError(res, 400, "LEDGER_INTEREST_ROWS", "One or more interest ledger ids not found");
+        }
+        for (const row of rows) {
+          if (String(row.entryType) !== "Interest" || String(row.invoiceId ?? "") !== inv.id) {
+            return sendApiError(res, 400, "LEDGER_INTEREST_ROW", "Invalid interest ledger row for this invoice");
+          }
+          if (String(row.interestPaymentStatus ?? "").trim() === "Paid") {
+            return sendApiError(res, 400, "LEDGER_INTEREST_PAID", "An interest line is already paid");
+          }
+          interestAmt += Number(row.debit ?? 0);
+        }
+        interestAmt = Math.round(interestAmt * 100) / 100;
+      }
+
+      if (mode === "rent_only") {
+        if (!Number.isFinite(rentAmt) || rentAmt <= 0) {
+          return sendApiError(res, 400, "LEDGER_RENT_AMT", "rentAmount is required for rent_only");
+        }
+        if (rentAmt > outstandingRent + 0.02) {
+          return sendApiError(res, 400, "LEDGER_RENT_TOO_MUCH", "Rent amount exceeds invoice outstanding", {
+            outstandingRent,
+          });
+        }
+      } else if (mode === "interest_only") {
+        if (!Number.isFinite(interestAmt) || interestAmt <= 0.01) {
+          return sendApiError(res, 400, "LEDGER_INTEREST_AMT", "Could not derive interest amount from ledger rows");
+        }
+        rentAmt = 0;
+      } else {
+        // combined
+        if (!Number.isFinite(rentAmt) || rentAmt <= 0) {
+          return sendApiError(res, 400, "LEDGER_RENT_AMT", "rentAmount is required for combined");
+        }
+        if (rentAmt > outstandingRent + 0.02) {
+          return sendApiError(res, 400, "LEDGER_RENT_TOO_MUCH", "Rent amount exceeds invoice outstanding", {
+            outstandingRent,
+          });
+        }
+        if (!Number.isFinite(interestAmt) || interestAmt <= 0.01) {
+          return sendApiError(res, 400, "LEDGER_INTEREST_AMT", "Interest amount invalid for combined payment");
+        }
+      }
+
+      const payer = await resolveRentInvoiceCounterparty(inv);
+      const createdBy = req.user?.id ?? "system";
+
+      const splitGstForRentPay = (rentPay: number): { amount: number; cgst: number; sgst: number } => {
+        const t = Number(inv.totalAmount ?? 0) || 1;
+        const ra = Number(inv.rentAmount ?? 0);
+        const c = Number(inv.cgst ?? 0);
+        const s = Number(inv.sgst ?? 0);
+        const f = rentPay / t;
+        let amount = Math.round(ra * f * 100) / 100;
+        let cgst = Math.round(c * f * 100) / 100;
+        let sgst = Math.round(s * f * 100) / 100;
+        const drift = Math.round((rentPay - (amount + cgst + sgst)) * 100) / 100;
+        amount = Math.round((amount + drift) * 100) / 100;
+        return { amount, cgst, sgst };
+      };
+
+      let created: { id: string; receiptNo: string };
+      if (mode === "interest_only") {
+        const brJson = stringifyM03ReceiptBreakdown({
+          interestAmount: interestAmt,
+          interestLedgerEntryIds,
+        });
+        created = await createIomsReceipt({
+          yardId: inv.yardId,
+          revenueHead: "RentArrearsInterest",
+          payerName: payer.payerName,
+          payerType: payer.payerType,
+          payerRefId: payer.payerRefId,
+          amount: interestAmt,
+          cgst: 0,
+          sgst: 0,
+          tdsAmount: 0,
+          paymentMode,
+          sourceModule: "M-03",
+          sourceRecordId: inv.id,
+          unifiedEntityId: payer.unifiedEntityId,
+          m03BreakdownJson: brJson,
+          createdBy,
+        });
+      } else if (mode === "rent_only") {
+        const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
+        const parts = inv.isGovtEntity ? splitGstForRentPay(rentAmt) : { amount: rentAmt, cgst: 0, sgst: 0 };
+        created = await createIomsReceipt({
+          yardId: inv.yardId,
+          revenueHead,
+          payerName: payer.payerName,
+          payerType: payer.payerType,
+          payerRefId: payer.payerRefId,
+          amount: parts.amount,
+          cgst: parts.cgst,
+          sgst: parts.sgst,
+          tdsAmount: 0,
+          paymentMode,
+          sourceModule: "M-03",
+          sourceRecordId: inv.id,
+          unifiedEntityId: payer.unifiedEntityId,
+          createdBy,
+        });
+      } else {
+        const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
+        const parts = inv.isGovtEntity ? splitGstForRentPay(rentAmt) : { amount: rentAmt, cgst: 0, sgst: 0 };
+        const totalIn = Math.round((rentAmt + interestAmt) * 100) / 100;
+        const baseParts = Math.round((parts.amount + parts.cgst + parts.sgst) * 100) / 100;
+        if (Math.abs(baseParts - rentAmt) > 0.05) {
+          return sendApiError(res, 500, "LEDGER_SPLIT", "Internal: GST split does not match rent amount");
+        }
+        const brJson = stringifyM03ReceiptBreakdown({
+          rentAmount: rentAmt,
+          interestAmount: interestAmt,
+          interestLedgerEntryIds,
+        });
+        created = await createIomsReceipt({
+          yardId: inv.yardId,
+          revenueHead,
+          payerName: payer.payerName,
+          payerType: payer.payerType,
+          payerRefId: payer.payerRefId,
+          amount: parts.amount,
+          cgst: parts.cgst,
+          sgst: parts.sgst,
+          tdsAmount: 0,
+          paymentMode,
+          sourceModule: "M-03",
+          sourceRecordId: inv.id,
+          unifiedEntityId: payer.unifiedEntityId,
+          m03BreakdownJson: brJson,
+          totalAmountOverride: totalIn,
+          createdBy,
+        });
+      }
+
+      await db.update(iomsReceipts).set({ status: "Paid", gatewayRef: "Manual" }).where(eq(iomsReceipts.id, created.id));
+      const [paidRow] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, created.id)).limit(1);
+      let ledgerMessages: string[] = [];
+      if (paidRow) {
+        ledgerMessages = (await applyM03ReceiptToRentDepositLedger(paidRow)).messages.filter(Boolean);
+      }
+
+      const paidMap2 = await sumPaidM03ByInvoiceIds([inv.id]);
+      const paidSum2 = paidMap2.get(inv.id) ?? 0;
+      if (paidSum2 >= invoiceTotal - 0.01 && String(inv.status ?? "") !== "Paid") {
+        await db.update(rentInvoices).set({ status: "Paid" }).where(eq(rentInvoices.id, invoiceId));
+      }
+
+      writeAuditLog(req, {
+        module: "Rent/Tax",
+        action: "RentDepositLedgerPayment",
+        recordId: created.id,
+        afterValue: { invoiceId, mode, rentAmt, interestAmt, receiptNo: created.receiptNo },
+      }).catch((e) => console.error("Audit log failed:", e));
+
+      res.status(201).json({
+        receiptId: created.id,
+        receiptNo: created.receiptNo,
+        ledgerMessages,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to record ledger payment");
     }
   });
 

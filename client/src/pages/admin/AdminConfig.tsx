@@ -20,10 +20,12 @@ import { randomHexSecret } from "@/lib/randomHexSecret";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 
 /** Module scope (not inside the component) avoids production TDZ from useMemo + .map over shared config maps. */
-const ADMIN_CONFIG_FIELDS: { key: SystemConfigKey; label: string }[] = SYSTEM_CONFIG_KEYS.map((key) => ({
-  key,
-  label: SYSTEM_CONFIG_LABELS[key],
-}));
+const ADMIN_CONFIG_FIELDS: { key: SystemConfigKey; label: string }[] = SYSTEM_CONFIG_KEYS.filter((key) => key !== "ui_sidebar_hidden_hrefs_json").map(
+  (key) => ({
+    key,
+    label: SYSTEM_CONFIG_LABELS[key],
+  }),
+);
 
 export default function AdminConfig() {
   const { toast } = useToast();
@@ -51,9 +53,14 @@ export default function AdminConfig() {
 
   const updateMutation = useMutation({
     mutationFn: (body: Record<string, string>) => apiRequest("PUT", "/api/admin/config", body),
-    onSuccess: () => {
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/config"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/system/config"] });
+      try {
+        const cfg = await fetchApiGet<Record<string, string>>("/api/system/config");
+        queryClient.setQueryData(["/api/system/config"], cfg);
+      } catch {
+        await queryClient.invalidateQueries({ queryKey: ["/api/system/config"] });
+      }
       toast({ title: "Config updated", description: "System configuration saved." });
     },
     onError: (e: Error) => {

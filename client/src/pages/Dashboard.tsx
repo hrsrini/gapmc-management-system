@@ -20,6 +20,7 @@ import {
   Calendar
 } from 'lucide-react';
 import type { ActivityLog } from '@shared/schema';
+import { parseSidebarHiddenHrefsJson } from '@shared/nav-sidebar-hidden';
 
 interface Stats {
   totalTraders: number;
@@ -75,7 +76,19 @@ export default function Dashboard() {
   const displayName = user?.name?.trim() || user?.email || 'there';
   const canHrRead = can('M-01', 'Read');
   const canM05Read = can('M-05', 'Read');
-  const visibleQuickActions = useMemo(() => quickActions.filter((a) => can(a.module, 'Read')), [can]);
+
+  const { data: systemConfig } = useQuery<Record<string, string>>({
+    queryKey: ['/api/system/config'],
+  });
+  const hiddenSidebarHrefs = useMemo(
+    () => parseSidebarHiddenHrefsJson(systemConfig?.ui_sidebar_hidden_hrefs_json),
+    [systemConfig?.ui_sidebar_hidden_hrefs_json],
+  );
+
+  const visibleQuickActions = useMemo(
+    () => quickActions.filter((a) => can(a.module, 'Read') && !hiddenSidebarHrefs.has(a.href)),
+    [can, hiddenSidebarHrefs],
+  );
 
   const { data: stats, isLoading: statsLoading } = useQuery<Stats>({
     queryKey: ['/api/stats'],
@@ -237,7 +250,7 @@ export default function Dashboard() {
               <CardTitle>Recent Activity</CardTitle>
               <CardDescription>Latest actions in the system</CardDescription>
             </div>
-            {canM05Read && (
+            {canM05Read && !hiddenSidebarHrefs.has('/receipts') && (
               <Button variant="outline" size="sm" asChild>
                 <Link href="/receipts" data-testid="button-view-all-activity">
                   View All

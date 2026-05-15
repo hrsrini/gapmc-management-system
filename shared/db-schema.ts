@@ -391,7 +391,7 @@ export const iomsReceipts = gapmc.table("ioms_receipts", {
   id: text("id").primaryKey(),
   receiptNo: text("receipt_no").notNull().unique(),
   yardId: text("yard_id").notNull(),
-  revenueHead: text("revenue_head").notNull(), // Rent | GSTInvoice | MarketFee | LicenceFee | SecurityDeposit | Miscellaneous
+  revenueHead: text("revenue_head").notNull(), // Rent | GSTInvoice | RentArrearsInterest | MarketFee | LicenceFee | SecurityDeposit | Miscellaneous
   payerName: text("payer_name"),
   payerType: text("payer_type"),
   payerRefId: text("payer_ref_id"),
@@ -410,6 +410,8 @@ export const iomsReceipts = gapmc.table("ioms_receipts", {
   chequeDate: text("cheque_date"),
   sourceModule: text("source_module"), // M-02 | M-03 | M-04 | M-06 | M-08
   sourceRecordId: text("source_record_id"),
+  /** M-03: JSON (rent vs interest split, interest ledger ids) for combined rent + arrears interest receipts. */
+  m03BreakdownJson: text("m03_breakdown_json"),
   /** M-02 unified entity id: TA:|TB:|AH: (optional; populated when known). */
   unifiedEntityId: text("unified_entity_id"),
   qrCodeUrl: text("qr_code_url"),
@@ -417,6 +419,21 @@ export const iomsReceipts = gapmc.table("ioms_receipts", {
   status: text("status").notNull(), // Pending | Paid | Failed | Reconciled | Reversed (cheque/DD dishonour)
   createdBy: text("created_by").notNull(),
   createdAt: text("created_at").notNull(),
+});
+
+// ----- M-01: Designation master (centralized titles / hierarchy) -----
+export const designationMaster = gapmc.table("designation_master", {
+  id: text("id").primaryKey(),
+  /** Short stable code (e.g. ADMIN) for integrations and reporting. */
+  code: text("code").notNull().unique(),
+  /** Official designation title shown on employee records and reports. */
+  name: text("name").notNull(),
+  /** GAPMC: lower number = higher authority (1 = top). Legacy seeds may use larger values (e.g. ADMIN). */
+  hierarchyLevel: integer("hierarchy_level").notNull().default(0),
+  status: text("status").notNull().default("Active"), // Active | Inactive
+  remarks: text("remarks"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
 });
 
 // ----- M-01: HRMS & Service Record -----
@@ -428,6 +445,8 @@ export const employees = gapmc.table("employees", {
   surname: text("surname").notNull(),
   photoUrl: text("photo_url"),
   designation: text("designation").notNull(),
+  /** When set, must reference designation_master; `designation` remains denormalized display text. */
+  designationId: text("designation_id"),
   yardId: text("yard_id").notNull(),
   employeeType: text("employee_type").notNull(),
   aadhaarToken: text("aadhaar_token"),
@@ -466,7 +485,8 @@ export const employees = gapmc.table("employees", {
   category: text("category"),
   /** §4.1.1: father or spouse name. */
   fatherOrSpouseName: text("father_or_spouse_name"),
-  status: text("status").notNull(), // Draft | Submitted | Recommended | Active | Inactive | Suspended | Retired | Resigned
+  /** Draft | Submitted | Recommended | Active | INA | RET | VRS | SUS | RES | DEC | TER (see shared/employee-lifecycle-status). */
+  status: text("status").notNull(),
   userId: text("user_id"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
@@ -948,12 +968,16 @@ export const rentDepositLedger = gapmc.table("rent_deposit_ledger", {
   unifiedEntityId: text("unified_entity_id"),
   assetId: text("asset_id").notNull(),
   entryDate: text("entry_date").notNull(),
-  entryType: text("entry_type").notNull(), // OpeningBalance | Rent | Interest | CGST | SGST | Collection | ChequeDishonour
+  entryType: text("entry_type").notNull(), // OpeningBalance | Rent | Interest | InterestCollection | CGST | SGST | Collection | ChequeDishonour
   debit: doublePrecision("debit").default(0),
   credit: doublePrecision("credit").default(0),
   balance: doublePrecision("balance").notNull(),
   invoiceId: text("invoice_id"),
   receiptId: text("receipt_id"),
+  /** For entry_type Interest: Unpaid | Paid (legacy null treated as Unpaid). */
+  interestPaymentStatus: text("interest_payment_status"),
+  /** For entry_type Interest: IOMS receipt that settled this accrual line. */
+  settledReceiptId: text("settled_receipt_id"),
 });
 
 /** M-03 Rent revision overrides: effective-dated rent amount per allotment. */

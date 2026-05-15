@@ -40,7 +40,8 @@ import { sendApiError } from "./api-errors";
 import { disablePortalAccessForUnifiedEntity } from "./routes-portal";
 import { parseReportPaging, parseReportSort, reportSearchPattern } from "./report-paging";
 import { orderLicenceReport, LICENCE_REPORT_SORT_ALLOW } from "./report-order";
-import { recordRentCollectionForM03Receipt } from "./rent-deposit-ledger-from-receipt";
+import { applyM03ReceiptToRentDepositLedger } from "./rent-deposit-ledger-from-receipt";
+import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
 import {
   HrEmployeeRuleError,
   normalizeMobile10,
@@ -59,13 +60,12 @@ import {
 } from "@shared/track-b-entity";
 import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
 import {
+  assertVacatedToDateNotFuture,
   inferAgreementTypeFromDates,
   normalizeAgreementType,
   normalizePremisesStatus,
   normalizeRentRevisionMode,
   roundedMoney2,
-  todayYmdUtc,
-  ymdBefore,
 } from "@shared/premises-allocation";
 import { hasPermission } from "./auth";
 import { routeParamString } from "./route-params";
@@ -699,7 +699,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         .where(and(eq(iomsReceipts.sourceModule, "M-03"), eq(iomsReceipts.sourceRecordId, invoiceId)));
       const alreadyPaid = recs
         .filter((r) => String(r.status) === "Paid" || String(r.status) === "Reconciled")
-        .reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+        .reduce((s, r) => s + m03ReceiptPrincipalTowardInvoice(r), 0);
 
       const total = Number(inv.totalAmount ?? 0);
       const outstanding = Math.max(0, total - alreadyPaid);
@@ -731,7 +731,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       const [paidRow] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, created.id)).limit(1);
       if (paidRow) {
         try {
-          await recordRentCollectionForM03Receipt(paidRow);
+          await applyM03ReceiptToRentDepositLedger(paidRow);
         } catch (e) {
           console.error("[dues] rent deposit Collection hook failed:", e);
         }
@@ -2561,10 +2561,6 @@ export function registerTradersAssetsRoutes(app: Express) {
       const terr = ymdFieldError("Agreement to", toDate, true);
       if (terr) return sendApiError(res, 400, "AGREEMENT_TO", terr);
       if (fromDate > toDate) return sendApiError(res, 400, "AGREEMENT_RANGE", "Agreement To must be on or after Agreement From.");
-      const today = todayYmdUtc();
-      if (ymdBefore(fromDate, today)) {
-        return sendApiError(res, 400, "AGREEMENT_FROM_PAST", "Agreement From cannot be before today for a new allocation.");
-      }
 
       const monthlyRent = Number((body as Record<string, unknown>).monthlyRent ?? (body as Record<string, unknown>).monthly_rent);
       if (!Number.isFinite(monthlyRent) || monthlyRent <= 0) {
@@ -2582,6 +2578,10 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       // BR-PRE-023: one active allocation per premises (asset) across all allocation tables.
       const nextStatus = String(body.status ?? "Pending");
+      if (nextStatus === "Vacated") {
+        const vErr = assertVacatedToDateNotFuture(toDate);
+        if (vErr) return sendApiError(res, 400, "VACATED_DATE_FUTURE", vErr);
+      }
       if (nextStatus === "Active") {
         const check = await assertPremisesNotAlreadyAllocatedActive({ assetId: aid });
         if (!check.ok) {
@@ -2783,6 +2783,13 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       // BR-PRE-023: prevent switching to Active when another active allocation exists for this premises.
       const resultingStatus = (updates.status !== undefined ? String(updates.status) : existingAllot.status) ?? "Active";
+      if (resultingStatus === "Vacated") {
+        const resultingTo = (updates.toDate !== undefined ? String(updates.toDate) : existingAllot.toDate) ?? "";
+        const vOnErr = ymdFieldError("Vacated on", resultingTo, true);
+        if (vOnErr) return sendApiError(res, 400, "VACATED_ON", vOnErr);
+        const vFut = assertVacatedToDateNotFuture(resultingTo);
+        if (vFut) return sendApiError(res, 400, "VACATED_DATE_FUTURE", vFut);
+      }
       if (resultingStatus === "Active") {
         const check = await assertPremisesNotAlreadyAllocatedActive({ assetId: existingAllot.assetId, excludeAssetAllotmentId: id });
         if (!check.ok) {

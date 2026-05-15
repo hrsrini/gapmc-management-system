@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,6 +12,26 @@ import {
   type ReportTableColumn,
 } from "@/components/reports/ReportDataTable";
 import { sliceClientReport } from "@/lib/clientReportSlice";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 interface LedgerEntry {
   id: string;
@@ -27,6 +47,8 @@ interface LedgerEntry {
   balance: number;
   invoiceId?: string | null;
   receiptId?: string | null;
+  interestPaymentStatus?: string | null;
+  settledReceiptId?: string | null;
 }
 interface AssetRef {
   id: string;
@@ -35,6 +57,14 @@ interface AssetRef {
 interface RentInvoiceRef {
   id: string;
   invoiceNo?: string | null;
+}
+
+interface LedgerPaymentContext {
+  invoiceId: string;
+  invoiceNo: string | null;
+  outstandingRent: number;
+  isGovtEntity: boolean;
+  status: string;
 }
 
 interface TraderReceiptRow {
@@ -58,9 +88,14 @@ const columns: ReportTableColumn[] = [
   { key: "_credit", header: "Credit", sortField: "credit" },
   { key: "_balance", header: "Balance", sortField: "balance" },
   { key: "refDisplay", header: "Invoice / Receipt" },
+  { key: "_payStatus", header: "Payment status" },
+  { key: "_actions", header: "Actions" },
 ];
 
+type PayMode = "rent_only" | "interest_only" | "combined";
+
 export default function RentLedger() {
+  const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const unifiedEntityFromUrl = searchParams.get("unifiedEntityId")?.trim() ?? "";
   const tenantLicenceFromUrl = searchParams.get("tenantLicenceId")?.trim() ?? "";
@@ -93,6 +128,13 @@ export default function RentLedger() {
     ? `/api/ioms/rent/ledger/trader-receipts?${receiptParams.toString()}`
     : "";
 
+  const [payDialog, setPayDialog] = useState<{
+    invoiceId: string;
+    selectedInterestIds: string[];
+  } | null>(null);
+  const [payMode, setPayMode] = useState<PayMode>("interest_only");
+  const [rentAmountInput, setRentAmountInput] = useState("");
+
   useEffect(() => {
     setTableParams((p) => ({ ...p, page: 1 }));
   }, [ledgerApiUrl]);
@@ -108,33 +150,135 @@ export default function RentLedger() {
   const { data: invoices = [] } = useQuery<RentInvoiceRef[]>({
     queryKey: ["/api/ioms/rent/invoices"],
   });
+
+  const paymentContextUrl = payDialog
+    ? `/api/ioms/rent/invoices/${encodeURIComponent(payDialog.invoiceId)}/ledger-payment-context`
+    : "";
+  const { data: paymentContext } = useQuery<LedgerPaymentContext>({
+    queryKey: [paymentContextUrl],
+    enabled: Boolean(paymentContextUrl),
+  });
+
   const assetLabelById = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
   const invoiceLabelById = Object.fromEntries(invoices.map((i) => [i.id, i.invoiceNo ?? i.id]));
 
+  const openPayInterest = useCallback((row: LedgerEntry) => {
+    const invId = String(row.invoiceId ?? "").trim();
+    if (!invId) {
+      toast({ title: "Missing invoice", description: "This interest line has no linked invoice id.", variant: "destructive" });
+      return;
+    }
+    setPayMode("interest_only");
+    setRentAmountInput("");
+    setPayDialog({ invoiceId: invId, selectedInterestIds: [row.id] });
+  }, [toast]);
+
+  const payMutation = useMutation({
+    mutationFn: async () => {
+      if (!payDialog) throw new Error("No dialog");
+      const rentAmt = payMode === "interest_only" ? 0 : Number(rentAmountInput);
+      if ((payMode === "rent_only" || payMode === "combined") && (!Number.isFinite(rentAmt) || rentAmt <= 0)) {
+        throw new Error("Enter a valid rent amount.");
+      }
+      if ((payMode === "interest_only" || payMode === "combined") && payDialog.selectedInterestIds.length === 0) {
+        throw new Error("Select at least one interest line.");
+      }
+      const res = await apiRequest("POST", "/api/ioms/rent/ledger/record-payment", {
+        invoiceId: payDialog.invoiceId,
+        mode: payMode,
+        rentAmount: payMode === "interest_only" ? undefined : rentAmt,
+        interestLedgerEntryIds:
+          payMode === "rent_only" ? undefined : payDialog.selectedInterestIds,
+        paymentMode: "Cash",
+      });
+      return (await res.json()) as { receiptId: string; receiptNo: string; ledgerMessages?: string[] };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: [ledgerApiUrl] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/invoices"] });
+      queryClient.invalidateQueries({ queryKey: [paymentContextUrl] });
+      setPayDialog(null);
+      toast({
+        title: "Payment recorded",
+        description: `${data.receiptNo}${data.ledgerMessages?.length ? ` — ${data.ledgerMessages.join(" ")}` : ""}`,
+      });
+    },
+    onError: (e: unknown) => {
+      toast({
+        title: "Payment failed",
+        description: e instanceof Error ? e.message : "Request failed",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const unpaidInterestForInvoice = useMemo(() => {
+    if (!payDialog) return [];
+    return list.filter(
+      (e) =>
+        e.entryType === "Interest" &&
+        String(e.invoiceId ?? "") === payDialog.invoiceId &&
+        String(e.interestPaymentStatus ?? "").trim() !== "Paid",
+    );
+  }, [list, payDialog]);
+
   const sourceRows = useMemo((): Record<string, unknown>[] => {
-    return list.map((e) => ({
-      id: e.id,
-      entryDate: e.entryDate.slice(0, 10),
-      tenantLicenceId: e.tenantLicenceId,
-      tenantLicenceDisplay: e.tenantLicenceDisplayName?.trim() || e.tenantLicenceId || "—",
-      unifiedEntityId: e.unifiedEntityId?.trim() ? e.unifiedEntityId : "—",
-      unifiedEntityDisplay:
-        e.unifiedEntityDisplayName?.trim() ||
-        (e.unifiedEntityId?.trim() ? e.unifiedEntityId : "—"),
-      assetDisplay: assetLabelById[e.assetId] ?? e.assetId,
-      entryType: e.entryType,
-      debit: e.debit,
-      credit: e.credit,
-      balance: e.balance,
-      _debit: `₹${e.debit.toLocaleString()}`,
-      _credit: `₹${e.credit.toLocaleString()}`,
-      _balance: `₹${e.balance.toLocaleString()}`,
-      refDisplay:
-        e.invoiceId != null && e.invoiceId !== ""
-          ? (invoiceLabelById[e.invoiceId] ?? e.invoiceId)
-          : (e.receiptId ?? "—"),
-    }));
-  }, [list, assetLabelById, invoiceLabelById]);
+    return list.map((e) => {
+      const isInterest = e.entryType === "Interest";
+      const paid = String(e.interestPaymentStatus ?? "").trim() === "Paid";
+      const payStatus =
+        isInterest ? (paid ? "Paid" : "Unpaid") : "—";
+      const canPayInterest =
+        isInterest &&
+        !paid &&
+        e.invoiceId &&
+        (Number(e.debit ?? 0) > 0.001);
+      const settledLink =
+        isInterest && paid && e.settledReceiptId ? (
+          <Link
+            href={`/receipts/ioms/${encodeURIComponent(e.settledReceiptId)}`}
+            className="text-primary hover:underline text-xs font-mono"
+          >
+            Receipt
+          </Link>
+        ) : null;
+      return {
+        id: e.id,
+        entryDate: e.entryDate.slice(0, 10),
+        tenantLicenceId: e.tenantLicenceId,
+        tenantLicenceDisplay: e.tenantLicenceDisplayName?.trim() || e.tenantLicenceId || "—",
+        unifiedEntityId: e.unifiedEntityId?.trim() ? e.unifiedEntityId : "—",
+        unifiedEntityDisplay:
+          e.unifiedEntityDisplayName?.trim() ||
+          (e.unifiedEntityId?.trim() ? e.unifiedEntityId : "—"),
+        assetDisplay: assetLabelById[e.assetId] ?? e.assetId,
+        entryType: e.entryType === "Collection" ? "Rent" : e.entryType,
+        debit: e.debit,
+        credit: e.credit,
+        balance: e.balance,
+        _debit: `₹${e.debit.toLocaleString()}`,
+        _credit: `₹${e.credit.toLocaleString()}`,
+        _balance: `₹${e.balance.toLocaleString()}`,
+        refDisplay:
+          e.invoiceId != null && e.invoiceId !== ""
+            ? (invoiceLabelById[e.invoiceId] ?? e.invoiceId)
+            : (e.receiptId ?? "—"),
+        _payStatus: (
+          <div className="flex flex-col gap-0.5 text-sm">
+            <span>{payStatus}</span>
+            {settledLink}
+          </div>
+        ),
+        _actions: canPayInterest ? (
+          <Button size="sm" variant="secondary" onClick={() => openPayInterest(e)}>
+            Pay interest
+          </Button>
+        ) : (
+          <span className="text-muted-foreground text-xs">—</span>
+        ),
+      };
+    });
+  }, [list, assetLabelById, invoiceLabelById, openPayInterest]);
 
   const { rows, total } = useMemo(
     () =>
@@ -163,6 +307,17 @@ export default function RentLedger() {
     }
   }, [total, totalPages, tableParams.page]);
 
+  const toggleInterestId = (id: string, checked: boolean) => {
+    if (!payDialog) return;
+    setPayDialog((d) => {
+      if (!d) return d;
+      const set = new Set(d.selectedInterestIds);
+      if (checked) set.add(id);
+      else set.delete(id);
+      return { ...d, selectedInterestIds: Array.from(set) };
+    });
+  };
+
   if (isError) {
     return (
       <AppShell breadcrumbs={[{ label: "Rent (IOMS)", href: "/rent/ioms" }, { label: "Rent deposit ledger" }]}>
@@ -176,6 +331,9 @@ export default function RentLedger() {
     );
   }
 
+  const out = paymentContext?.outstandingRent ?? 0;
+  const allowCombined = out > 0.01;
+
   return (
     <AppShell breadcrumbs={[{ label: "Rent (IOMS)", href: "/rent/ioms" }, { label: "Rent deposit ledger" }]}>
       <Card>
@@ -185,10 +343,8 @@ export default function RentLedger() {
             Rent deposit ledger (M-03)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Per tenant per asset — opening balance, rent, interest, collections. Use the table search to find rows by
-            date, licence, firm, asset code, type, or invoice. Opening this page from a receipt or trader licence may
-            include <span className="font-mono">unifiedEntityId</span> in the URL to narrow rows; when that applies, a
-            second panel lists other IOMS receipts for the same payer ref.
+            Per tenant per asset — opening balance, rent, interest, and rent receipts. Accrued <span className="font-medium">Interest</span> lines can be settled with <span className="font-medium">Pay interest</span> (creates an IOMS receipt and posts an <span className="font-medium">InterestCollection</span> credit). Use{" "}
+            <span className="font-medium">combined</span> to pay outstanding rent and selected interest on one receipt (PDF shows both components).
           </p>
         </CardHeader>
         <CardContent>
@@ -207,6 +363,85 @@ export default function RentLedger() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={Boolean(payDialog)} onOpenChange={(o) => !o && setPayDialog(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Record rent / interest payment</DialogTitle>
+          </DialogHeader>
+          {payDialog ? (
+            <div className="grid gap-4 text-sm">
+              <p className="text-muted-foreground">
+                Invoice{" "}
+                <span className="font-mono text-foreground">
+                  {paymentContext?.invoiceNo ?? payDialog.invoiceId.slice(0, 8)}…
+                </span>
+                {paymentContext != null ? (
+                  <>
+                    {" "}
+                    — outstanding rent{" "}
+                    <span className="font-medium text-foreground">₹{out.toLocaleString()}</span>
+                  </>
+                ) : null}
+              </p>
+              <div className="grid gap-2">
+                <Label>Payment type</Label>
+                <Select
+                  value={payMode}
+                  onValueChange={(v) => setPayMode(v as PayMode)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="interest_only">Interest only</SelectItem>
+                    {allowCombined ? <SelectItem value="combined">Rent + interest (one receipt)</SelectItem> : null}
+                    {allowCombined ? <SelectItem value="rent_only">Rent only</SelectItem> : null}
+                  </SelectContent>
+                </Select>
+              </div>
+              {(payMode === "rent_only" || payMode === "combined") && (
+                <div className="grid gap-2">
+                  <Label htmlFor="rent-amt">Rent amount (₹)</Label>
+                  <Input
+                    id="rent-amt"
+                    inputMode="decimal"
+                    value={rentAmountInput}
+                    onChange={(ev) => setRentAmountInput(ev.target.value)}
+                    placeholder={allowCombined ? `Max ₹${out.toLocaleString()}` : "Amount"}
+                  />
+                </div>
+              )}
+              {(payMode === "interest_only" || payMode === "combined") && (
+                <div className="grid gap-2">
+                  <Label>Unpaid interest lines</Label>
+                  <div className="max-h-40 overflow-y-auto rounded border p-2 space-y-2">
+                    {unpaidInterestForInvoice.map((row) => (
+                      <label key={row.id} className="flex items-center gap-2 cursor-pointer">
+                        <Checkbox
+                          checked={payDialog.selectedInterestIds.includes(row.id)}
+                          onCheckedChange={(c) => toggleInterestId(row.id, c === true)}
+                        />
+                        <span className="tabular-nums">
+                          ₹{Number(row.debit ?? 0).toLocaleString()} — {row.entryDate.slice(0, 10)}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setPayDialog(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => payMutation.mutate()} disabled={payMutation.isPending}>
+              {payMutation.isPending ? "Saving…" : "Create receipt & post ledger"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {traderReceiptsUrl ? (
         <Card className="mt-4">

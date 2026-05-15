@@ -7,15 +7,14 @@ import { db } from "./db";
 import { employees, users, auditLog } from "@shared/db-schema";
 import { sendNotificationStub } from "./notify";
 import { writeAuditLogSystem } from "./audit";
+import { employeeStatusesThatDisableAppLogin } from "@shared/employee-lifecycle-status";
 
-const TERMINAL_EMPLOYEE_STATUSES = ["Inactive", "Retired", "Suspended", "Resigned"] as const;
-
-/** Users stay disabled while employee is in a terminal status; safe to run daily. */
+/** Users stay disabled while employee is in a separated / inactive HR status; safe to run daily. */
 export async function disableUsersForSeparatedEmployees(): Promise<{ disabled: number }> {
   const separated = await db
     .select({ id: employees.id, userId: employees.userId })
     .from(employees)
-    .where(inArray(employees.status, [...TERMINAL_EMPLOYEE_STATUSES]));
+    .where(inArray(employees.status, [...employeeStatusesThatDisableAppLogin()]));
   const empIds = separated.map((r) => r.id);
   const userIds = new Set<string>();
   for (const r of separated) {
@@ -58,7 +57,7 @@ export async function autoRetireDueEmployees(): Promise<{ retired: number }> {
   let retired = 0;
   for (const e of due) {
     await db.transaction(async (tx) => {
-      await tx.update(employees).set({ status: "Retired", updatedAt: ts }).where(eq(employees.id, e.id));
+      await tx.update(employees).set({ status: "RET", updatedAt: ts }).where(eq(employees.id, e.id));
       // Disable linked user rows in the same transaction (SRS §1.4 coupling).
       await tx
         .update(users)
@@ -70,7 +69,7 @@ export async function autoRetireDueEmployees(): Promise<{ retired: number }> {
       action: "AutoRetireEmployee",
       recordId: e.id,
       beforeValue: { status: "Active", retirementDate: e.retirementDate },
-      afterValue: { status: "Retired", disabledUser: true },
+      afterValue: { status: "RET", disabledUser: true },
     });
     retired += 1;
   }

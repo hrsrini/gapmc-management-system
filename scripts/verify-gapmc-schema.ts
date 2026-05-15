@@ -14,7 +14,8 @@ const REQUIRED_TABLES = [
   "dak_escalations",
   "land_records",
   "users",
-  "employees",
+    "employees",
+    "designation_master",
 ] as const;
 
 const COLUMN_CHECKS: { table: string; columns: string[] }[] = [
@@ -53,6 +54,7 @@ const COLUMN_CHECKS: { table: string; columns: string[] }[] = [
       "ifsc_code",
       "category",
       "father_or_spouse_name",
+      "designation_id",
     ],
   },
 ];

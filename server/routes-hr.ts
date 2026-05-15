@@ -5,12 +5,13 @@
  */
 import type { Express, Response, Request } from "express";
 import path from "path";
-import { eq, desc, or, and, gte, lte, isNotNull } from "drizzle-orm";
+import { eq, desc, or, and, gte, lte, isNotNull, asc, sql } from "drizzle-orm";
 import multer from "multer";
 import { db } from "./db";
 import {
   employees,
   users,
+  designationMaster,
   employeeContracts,
   recruitment,
   attendances,
@@ -24,6 +25,14 @@ import {
   employeeDocuments,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
+import {
+  canonicalizeEmployeeStatus,
+  employeeStatusDisplayLabel,
+  employeeStatusesThatDisableAppLogin,
+  isAllowedEmployeeLifecycleTransition,
+  isKnownEmployeeLifecycleStatus,
+  isTerminalEmployeeLifecycleStatus,
+} from "@shared/employee-lifecycle-status";
 import {
   canCreateLeaveRequest,
   canTransitionLeaveRequest,
@@ -71,11 +80,15 @@ import {
   normalizeMobile10,
   assertEmployeeUniqueness,
   allocateNextEmpId,
-  isDraftOrSubmitted,
   parseEmployeeMasterSrs411Fields,
 } from "./hr-employee-rules";
 import { aadhaarFingerprintHmac, maskAadhaar, readAadhaarRawFromRequestBody } from "./aadhaar-fingerprint";
 import { inclusiveCalendarDays } from "./hr-leave-utils";
+import {
+  resolveDesignationForEmployeeUpsert,
+  countEmployeesUsingDesignation,
+  assertDesignationMasterCode,
+} from "./hr-designation-resolve";
 
 const employeeDocUpload = multer({
   storage: multer.memoryStorage(),
@@ -260,6 +273,170 @@ export function registerHrRoutes(app: Express) {
     }
   });
 
+  // ----- Designation master (M-01): hierarchy / routing / validation -----
+  app.get("/api/hr/designations", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      if (!hasPermission(req.user, "M-01", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-01:Read" });
+      }
+      const includeInactive =
+        String(req.query.includeInactive ?? "") === "1" || String(req.query.includeInactive ?? "").toLowerCase() === "true";
+      // Lower hierarchy_level = higher authority (GAPMC designation master). Legacy rows may use larger numbers (e.g. ADMIN).
+      const rows = includeInactive
+        ? await db.select().from(designationMaster).orderBy(asc(designationMaster.hierarchyLevel), asc(designationMaster.code))
+        : await db
+            .select()
+            .from(designationMaster)
+            .where(eq(designationMaster.status, "Active"))
+            .orderBy(asc(designationMaster.hierarchyLevel), asc(designationMaster.code));
+      res.json(rows);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch designations");
+    }
+  });
+
+  app.post("/api/hr/designations", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      if (!hasPermission(req.user, "M-01", "Update")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-01:Update" });
+      }
+      const body = req.body as Record<string, unknown>;
+      const code = String(body.code ?? "").trim().toUpperCase();
+      const name = String(body.name ?? "").trim();
+      const hl = body.hierarchyLevel != null ? Number(body.hierarchyLevel) : 0;
+      const status = String(body.status ?? "Active").trim() === "Inactive" ? "Inactive" : "Active";
+      const remarks = body.remarks != null && String(body.remarks).trim() !== "" ? String(body.remarks).trim() : null;
+      if (!code || !name) {
+        return sendApiError(res, 400, "HR_DESIGNATION_FIELDS", "code and name are required");
+      }
+      try {
+        assertDesignationMasterCode(code);
+      } catch (e) {
+        if (sendHrEmployeeRuleError(res, e)) return;
+        throw e;
+      }
+      if (!Number.isFinite(hl) || hl < 0 || hl > 9999) {
+        return sendApiError(res, 400, "HR_DESIGNATION_LEVEL", "hierarchyLevel must be a number between 0 and 9999");
+      }
+      const id = nanoid();
+      const ts = now();
+      await db.insert(designationMaster).values({
+        id,
+        code,
+        name,
+        hierarchyLevel: Math.round(hl),
+        status,
+        remarks,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      const [row] = await db.select().from(designationMaster).where(eq(designationMaster.id, id)).limit(1);
+      writeAuditLog(req, { module: "HR", action: "CreateDesignation", recordId: id, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.status(201).json(row);
+    } catch (e: unknown) {
+      console.error(e);
+      const pg = e as { code?: string };
+      if (pg?.code === "23505") {
+        return sendApiError(res, 400, "HR_DESIGNATION_CODE_DUPLICATE", "A designation with this code already exists.");
+      }
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create designation");
+    }
+  });
+
+  app.put("/api/hr/designations/:id", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      if (!hasPermission(req.user, "M-01", "Update")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-01:Update" });
+      }
+      const id = String(req.params.id ?? "").trim();
+      const [beforeRow] = await db.select().from(designationMaster).where(eq(designationMaster.id, id)).limit(1);
+      if (!beforeRow) return sendApiError(res, 404, "HR_DESIGNATION_NOT_FOUND", "Designation not found");
+      const body = req.body as Record<string, unknown>;
+
+      let nextStatus = String(beforeRow.status ?? "Active");
+      if (body.status !== undefined) {
+        const st = String(body.status ?? "").trim();
+        if (st !== "Active" && st !== "Inactive") {
+          return sendApiError(res, 400, "HR_DESIGNATION_STATUS", "status must be Active or Inactive");
+        }
+        nextStatus = st;
+      }
+      if (nextStatus === "Inactive" && String(beforeRow.status ?? "") === "Active") {
+        const n = await countEmployeesUsingDesignation(id);
+        if (n > 0) {
+          return sendApiError(res, 400, "HR_DESIGNATION_IN_USE", `Cannot deactivate: ${n} employee(s) still reference this designation.`, {
+            employeeCount: n,
+          });
+        }
+      }
+
+      const setValues: {
+        updatedAt: string;
+        code?: string;
+        name?: string;
+        hierarchyLevel?: number;
+        status?: string;
+        remarks?: string | null;
+      } = { updatedAt: now() };
+      if (body.code !== undefined) {
+        const code = String(body.code ?? "").trim().toUpperCase();
+        if (!code) return sendApiError(res, 400, "HR_DESIGNATION_CODE", "code cannot be empty");
+        try {
+          assertDesignationMasterCode(code);
+        } catch (e) {
+          if (sendHrEmployeeRuleError(res, e)) return;
+          throw e;
+        }
+        setValues.code = code;
+      }
+      if (body.name !== undefined) {
+        const name = String(body.name ?? "").trim();
+        if (!name) return sendApiError(res, 400, "HR_DESIGNATION_NAME", "name cannot be empty");
+        setValues.name = name;
+      }
+      if (body.hierarchyLevel !== undefined) {
+        const hl = Number(body.hierarchyLevel);
+        if (!Number.isFinite(hl) || hl < 0 || hl > 9999) {
+          return sendApiError(res, 400, "HR_DESIGNATION_LEVEL", "hierarchyLevel must be between 0 and 9999");
+        }
+        setValues.hierarchyLevel = Math.round(hl);
+      }
+      if (body.status !== undefined) {
+        setValues.status = nextStatus;
+      }
+      if (body.remarks !== undefined) {
+        setValues.remarks = body.remarks === null ? null : String(body.remarks).trim() || null;
+      }
+
+      await db.update(designationMaster).set(setValues).where(eq(designationMaster.id, id));
+      const [afterRow] = await db.select().from(designationMaster).where(eq(designationMaster.id, id)).limit(1);
+      writeAuditLog(req, {
+        module: "HR",
+        action: "UpdateDesignation",
+        recordId: id,
+        beforeValue: beforeRow,
+        afterValue: afterRow,
+      }).catch((e) => console.error("Audit log failed:", e));
+      if (setValues.name != null && String(setValues.name) !== String(beforeRow.name)) {
+        await db.update(employees).set({ designation: String(setValues.name), updatedAt: now() }).where(eq(employees.designationId, id));
+      }
+      res.json(afterRow);
+    } catch (e: unknown) {
+      console.error(e);
+      const pg = e as { code?: string };
+      if (pg?.code === "23505") {
+        return sendApiError(res, 400, "HR_DESIGNATION_CODE_DUPLICATE", "A designation with this code already exists.");
+      }
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update designation");
+    }
+  });
+
   app.get("/api/hr/employees", async (req, res) => {
     try {
       if (!req.user) {
@@ -340,8 +517,8 @@ export function registerHrRoutes(app: Express) {
     try {
       const body = req.body;
       const id = nanoid();
-      const statusRaw = String(body.status ?? "Draft");
-      if (statusRaw !== "Draft" && statusRaw !== "Submitted") {
+      const statusCanon = canonicalizeEmployeeStatus(String(body.status ?? "Draft"));
+      if (statusCanon !== "Draft" && statusCanon !== "Submitted") {
         return sendApiError(
           res,
           400,
@@ -431,16 +608,25 @@ export function registerHrRoutes(app: Express) {
         }
       }
 
+      let resolvedDesig: { designation: string; designationId: string | null };
+      try {
+        resolvedDesig = await resolveDesignationForEmployeeUpsert(body as Record<string, unknown>);
+      } catch (e) {
+        if (sendHrEmployeeRuleError(res, e)) return;
+        throw e;
+      }
+
       const payload = {
         id,
         empId: null as string | null,
         firstName: String(body.firstName ?? ""),
         surname: String(body.surname ?? ""),
-        designation: String(body.designation ?? ""),
+        designation: resolvedDesig.designation,
+        designationId: resolvedDesig.designationId,
         yardId: String(body.yardId ?? ""),
         employeeType: String(body.employeeType ?? "Regular"),
         joiningDate: String(body.joiningDate ?? ""),
-        status: statusRaw,
+        status: statusCanon,
         middleName: body.middleName ? String(body.middleName) : null,
         photoUrl: body.photoUrl ? String(body.photoUrl) : null,
         aadhaarToken: aadhaarMasked,
@@ -509,7 +695,7 @@ export function registerHrRoutes(app: Express) {
       const id = req.params.id;
       const [emp] = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
       if (!emp) return sendApiError(res, 404, "HR_EMPLOYEE_NOT_FOUND", "Employee not found");
-      if (emp.status !== "Submitted") {
+      if (canonicalizeEmployeeStatus(emp.status) !== "Submitted") {
         return sendApiError(res, 400, "HR_EMP_RECOMMEND_STATE", "Only Submitted employees can be recommended to DA.");
       }
       try {
@@ -648,13 +834,38 @@ export function registerHrRoutes(app: Express) {
         return sendApiError(res, 400, "HR_EMP_EMPID_READONLY", "Employee ID is assigned only through DA approval (Approve registration).");
       }
 
+      const beforeCanon = canonicalizeEmployeeStatus(beforeEmp.status);
+      if (isTerminalEmployeeLifecycleStatus(beforeCanon)) {
+        return sendApiError(
+          res,
+          403,
+          "HR_EMP_TERMINAL_READONLY",
+          "This employee is in a terminal separation status (retired, resigned, deceased, terminated, or VRS). The record is read-only.",
+        );
+      }
+
+      if (body.status !== undefined) {
+        const nextS = canonicalizeEmployeeStatus(String(body.status));
+        if (!isKnownEmployeeLifecycleStatus(nextS)) {
+          return sendApiError(res, 400, "HR_EMP_STATUS_UNKNOWN", `Unknown employee status: ${String(body.status)}`);
+        }
+        if (!isAllowedEmployeeLifecycleTransition(beforeEmp.status, nextS)) {
+          return sendApiError(
+            res,
+            400,
+            "HR_EMP_STATUS_TRANSITION",
+            `Cannot change employee status from ${employeeStatusDisplayLabel(beforeEmp.status)} to ${employeeStatusDisplayLabel(nextS)}.`,
+          );
+        }
+        (body as Record<string, unknown>).status = nextS;
+      }
+
       const updates: Record<string, unknown> = { updatedAt: now() };
       const allowed = [
         "firstName",
         "middleName",
         "surname",
         "photoUrl",
-        "designation",
         "yardId",
         "employeeType",
         "aadhaarToken",
@@ -681,6 +892,21 @@ export function registerHrRoutes(app: Express) {
         "category",
         "fatherOrSpouseName",
       ];
+      if (body.designationId !== undefined) {
+        try {
+          const rd = await resolveDesignationForEmployeeUpsert({
+            designationId: body.designationId,
+            designation: body.designation !== undefined ? body.designation : beforeEmp.designation,
+          });
+          updates.designation = rd.designation;
+          updates.designationId = rd.designationId;
+        } catch (e) {
+          if (sendHrEmployeeRuleError(res, e)) return;
+          throw e;
+        }
+      } else if (body.designation !== undefined) {
+        updates.designation = String(body.designation).trim() || beforeEmp.designation;
+      }
       for (const key of allowed) {
         if (body[key] === undefined) continue;
         if (key === "payLevel") {
@@ -741,16 +967,6 @@ export function registerHrRoutes(app: Express) {
         if (k === "updatedAt") continue;
         (merged as Record<string, unknown>)[k] = updates[k];
       }
-      const newStatus = (updates.status !== undefined ? String(updates.status) : beforeEmp.status) as string;
-      if (isDraftOrSubmitted(beforeEmp.status) && newStatus === "Active") {
-        return sendApiError(
-          res,
-          400,
-          "HR_EMP_ACTIVE_VIA_APPROVE",
-          "Cannot set status to Active from Draft/Submitted here. Use Approve registration (DA) to assign EMP-ID and activate.",
-        );
-      }
-
       let panNorm: string | null;
       let aadhaarMasked: string | null;
       let aadhaarFingerprintOut: string | null;
@@ -827,7 +1043,7 @@ export function registerHrRoutes(app: Express) {
         fatherOrSpouseName: srs411.fatherOrSpouseName,
       } as Record<string, string | number | null | undefined>;
 
-      const terminalStatuses = ["Inactive", "Retired", "Suspended", "Resigned"];
+      const loginDisableStatuses = employeeStatusesThatDisableAppLogin();
       await db.transaction(async (tx) => {
         await tx.update(employees).set(setPayload).where(eq(employees.id, id));
         const [after] = await tx
@@ -835,7 +1051,7 @@ export function registerHrRoutes(app: Express) {
           .from(employees)
           .where(eq(employees.id, id))
           .limit(1);
-        if (after?.status && terminalStatuses.includes(after.status)) {
+        if (after?.status && loginDisableStatuses.includes(after.status)) {
           const t = now();
           if (after.userId) {
             await tx

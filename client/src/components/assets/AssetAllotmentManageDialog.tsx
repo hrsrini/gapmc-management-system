@@ -17,7 +17,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth, type AuthUser } from "@/context/AuthContext";
 import { Loader2, ExternalLink, FileText } from "lucide-react";
-import { RENT_REVISION_MODES } from "@shared/premises-allocation";
+import { localCalendarYmd, RENT_REVISION_MODES } from "@shared/premises-allocation";
 import { invalidateAssetAllotmentQueries } from "@/lib/invalidate-asset-allotments";
 
 export interface ManagedAssetAllotment {
@@ -195,7 +195,12 @@ export function AssetAllotmentManageDialog({
                   </div>
                   <div className="space-y-1">
                     <Label>Agreement to</Label>
-                    <Input type="date" value={mTo} onChange={(e) => setMTo(e.target.value)} />
+                    <Input
+                      type="date"
+                      value={mTo}
+                      onChange={(e) => setMTo(e.target.value)}
+                      max={manageRow.status === "Vacated" ? localCalendarYmd() : undefined}
+                    />
                   </div>
                   <div className="space-y-1 md:col-span-2">
                     <Label>Monthly rent</Label>

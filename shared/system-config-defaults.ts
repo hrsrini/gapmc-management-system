@@ -43,6 +43,8 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   expenditure_head_authority_url: "",
   /** M-10 / reports: allow `format=xml` on `/api/ioms/reports/tally-export` (interchange v1). */
   tally_xml_export_enabled: "true",
+  /** M-10 UI: JSON array of sidebar link paths (`href`) to hide app-wide (still enforced after RBAC). Default [] shows all links user may access. */
+  ui_sidebar_hidden_hrefs_json: "[]",
   /**
    * US-M10-003: MFA enforcement (TOTP) for privileged roles.
    * Default false for easier rollout; enable only when MFA setup process is ready for users.
@@ -143,6 +145,7 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "public_receipt_verify_enabled",
   "expenditure_head_authority_url",
   "tally_xml_export_enabled",
+  "ui_sidebar_hidden_hrefs_json",
   "mfa_privileged_enforced",
   "data_retention_ioms_receipts_years",
   "data_retention_payment_vouchers_years",
@@ -197,6 +200,8 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   public_receipt_verify_enabled: "Public receipt verification (true|false)",
   expenditure_head_authority_url: "Expenditure head authority URL (optional)",
   tally_xml_export_enabled: "Tally export: allow XML interchange (true|false)",
+  ui_sidebar_hidden_hrefs_json:
+    "Sidebar: JSON array of menu paths to hide globally (e.g. [\"/fleet\"]) — use Admin → Sidebar menu visibility",
   mfa_privileged_enforced: "Auth: enforce MFA for privileged roles (DA/ADMIN/ACCOUNTS) (true|false)",
   data_retention_ioms_receipts_years: "Retention policy (years) — IOMS receipts count snapshot",
   data_retention_payment_vouchers_years: "Retention policy (years) — payment vouchers count snapshot",

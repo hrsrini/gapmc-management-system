@@ -2,7 +2,7 @@ import { and, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { employees, traderLicences, entities, adHocEntities, traders } from "@shared/db-schema";
 
-const ACTIVE_EMPLOYEE_STATUSES = ["Active", "Draft", "Submitted", "Recommended"] as const;
+const ACTIVE_EMPLOYEE_STATUSES = ["Active", "Draft", "Submitted", "Recommended", "SUS"] as const;
 const ACTIVE_ENTITY_STATUSES = ["Active", "Draft"] as const;
 const ACTIVE_LICENCE_STATUSES = ["Draft", "Pending", "Query", "Active"] as const;
 

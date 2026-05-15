@@ -46,6 +46,7 @@ import {
   Eye,
 } from "lucide-react";
 import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
+import { employeeStatusDisplayLabel } from "@shared/employee-lifecycle-status";
 
 const SERVICE_BOOK_SECTIONS = ["History", "Appendix", "AuditComments", "Verification", "CertMutable", "CertImmutable"];
 
@@ -583,7 +584,7 @@ export default function HrEmployeeDetail() {
               {employee.fatherOrSpouseName ?? "—"}
             </div>
             <div><span className="text-muted-foreground">Type</span><br />{employee.employeeType}</div>
-            <div><span className="text-muted-foreground">Status</span><br /><Badge variant="secondary">{employee.status}</Badge></div>
+            <div><span className="text-muted-foreground">Status</span><br /><Badge variant="secondary">{employeeStatusDisplayLabel(employee.status)}</Badge></div>
             <div><span className="text-muted-foreground">Joining date</span><br />{formatYmdToDisplay(employee.joiningDate)}</div>
             <div><span className="text-muted-foreground">DOB</span><br />{formatYmdToDisplay(employee.dob ?? "")}</div>
             <div><span className="text-muted-foreground">Mobile</span><br />{employee.mobile ?? "—"}</div>

@@ -3,10 +3,12 @@
 export type UnifiedEntityKind = "TA" | "TB" | "AH";
 
 export function parseUnifiedEntityId(id: string): { kind: UnifiedEntityKind; refId: string } | null {
-  const m = /^(TA|TB|AH):(.+)$/.exec(String(id ?? "").trim());
+  const m = /^(TA|TB|AH):(.+)$/i.exec(String(id ?? "").trim());
   if (!m) return null;
-  const kind = m[1] as UnifiedEntityKind;
-  const refId = m[2] ?? "";
+  const kindU = m[1].toUpperCase();
+  if (kindU !== "TA" && kindU !== "TB" && kindU !== "AH") return null;
+  const kind = kindU as UnifiedEntityKind;
+  const refId = String(m[2] ?? "").trim();
   if (!refId) return null;
   return { kind, refId };
 }

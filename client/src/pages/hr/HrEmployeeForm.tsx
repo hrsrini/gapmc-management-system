@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { useParams, useLocation } from "wouter";
+import { useParams, useLocation, Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,6 +31,12 @@ import {
 } from "@shared/india-validation";
 import { PanInput } from "@/components/inputs/PanInput";
 import { getPasswordPolicyBrUsr10FirstViolation, passwordPolicyBrUsr10Hint } from "@shared/password-policy-br-usr-10";
+import {
+  canonicalizeEmployeeStatus,
+  employeeStatusDisplayLabel,
+  isTerminalEmployeeLifecycleStatus,
+  listEmployeeStatusOptionsForDropdown,
+} from "@shared/employee-lifecycle-status";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 
 interface Yard {
@@ -46,6 +52,7 @@ interface Employee {
   surname: string;
   photoUrl?: string | null;
   designation: string;
+  designationId?: string | null;
   yardId: string;
   employeeType: string;
   aadhaarToken?: string | null;
@@ -81,7 +88,6 @@ interface Role {
 }
 
 const EMPLOYEE_TYPES = ["Regular", "Contract", "Daily Wage", "Temporary"];
-const STATUS_OPTIONS = ["Draft", "Submitted", "Recommended", "Active", "Inactive", "Suspended", "Retired", "Resigned"];
 const GENDER_OPTIONS = ["", "Male", "Female", "Other", "Prefer not to say"];
 const MARITAL_OPTIONS = ["", "Single", "Married", "Widowed", "Divorced"];
 /** SRS §4.1.1 — reservation / employee category (value stored as text). */
@@ -97,6 +103,8 @@ export default function HrEmployeeForm() {
   const { can, user } = useAuth();
   const canM10Create = can("M-10", "Create");
   const canM10Read = can("M-10", "Read");
+  const canM01Read = can("M-01", "Read");
+  const canM01Update = can("M-01", "Update");
   const canApproveRegistration =
     can("M-01", "Approve") || Boolean(user?.roles?.some((r) => r.tier === "DA" || r.tier === "ADMIN"));
   const isEdit = !!id && id !== "new";
@@ -108,6 +116,7 @@ export default function HrEmployeeForm() {
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const photoPickPreviewUrl = useUploadFilePreview(photoFile);
   const [designation, setDesignation] = useState("");
+  const [designationMasterId, setDesignationMasterId] = useState("");
   const [yardId, setYardId] = useState("");
   const [employeeType, setEmployeeType] = useState("Regular");
   const [empId, setEmpId] = useState("");
@@ -147,6 +156,12 @@ export default function HrEmployeeForm() {
   const [createYardIds, setCreateYardIds] = useState<Set<string>>(new Set());
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  const { data: designationRows = [] } = useQuery<
+    Array<{ id: string; code: string; name: string; hierarchyLevel: number; status: string }>
+  >({
+    queryKey: ["/api/hr/designations"],
+    enabled: canM01Read,
+  });
   const { data: allEmployees = [] } = useQuery<Employee[]>({ queryKey: ["/api/hr/employees"] });
   const { data: employee, isLoading, isError } = useQuery<Employee>({
     queryKey: ["/api/hr/employees", id],
@@ -170,6 +185,7 @@ export default function HrEmployeeForm() {
       setSurname(employee.surname ?? "");
       setPhotoUrl(employee.photoUrl ?? "");
       setDesignation(employee.designation ?? "");
+      setDesignationMasterId(employee.designationId?.trim() ? employee.designationId : "");
       setYardId(employee.yardId ?? "");
       setEmployeeType(employee.employeeType ?? "Regular");
       setEmpId(employee.empId ?? "");
@@ -238,8 +254,10 @@ export default function HrEmployeeForm() {
 
   const recommendMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`/api/hr/employees/${id}/recommend-registration`, {
-        method: "POST",
+      const res = await fetch(`/api/hr/employees/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "Recommended" }),
         credentials: "include",
       });
       if (!res.ok) {
@@ -427,7 +445,7 @@ export default function HrEmployeeForm() {
       middleName: middleName || null,
       surname,
       photoUrl: photoUrl || null,
-      designation,
+      designation: designation.trim(),
       yardId,
       employeeType,
       pan: pan || null,
@@ -453,6 +471,11 @@ export default function HrEmployeeForm() {
       category: category.trim() || null,
       fatherOrSpouseName: fatherOrSpouseName.trim() || null,
     };
+    if (designationMasterId) {
+      payload.designationId = designationMasterId;
+    } else if (isEdit && canM01Read) {
+      payload.designationId = null;
+    }
     if (!isEdit) {
       // Send raw Aadhaar digits for server-side masking + fingerprint; raw is never stored.
       payload.aadhaarRaw = aadhaarTrim || null;
@@ -583,6 +606,13 @@ export default function HrEmployeeForm() {
   const pending = submitting || updateMutation.isPending;
   const showAccessTab = (!isEdit && canM10Create) || (isEdit && canM10Read);
   const displayNameForAccess = [firstName, middleName, surname].filter(Boolean).join(" ").trim();
+  const formLocked = Boolean(isEdit && employee && isTerminalEmployeeLifecycleStatus(canonicalizeEmployeeStatus(employee.status)));
+  const statusSelectLocked =
+    formLocked || Boolean(isEdit && employee && canonicalizeEmployeeStatus(employee.status) === "Recommended");
+  const statusDropdownOptions = useMemo(
+    () => listEmployeeStatusOptionsForDropdown(isEdit ? (employee?.status ?? "Draft") : "", !isEdit),
+    [isEdit, employee?.status],
+  );
 
   if (isEdit && (isLoading || (employee === undefined && !isError))) {
     return (
@@ -623,7 +653,14 @@ export default function HrEmployeeForm() {
           </Button>
         </CardHeader>
         <CardContent>
+          {formLocked ? (
+            <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100">
+              This employee is in a terminal separation status ({employeeStatusDisplayLabel(employee!.status)}). The profile
+              is read-only; lifecycle status and other fields cannot be changed here.
+            </div>
+          ) : null}
           <form onSubmit={handleSubmit}>
+            <fieldset disabled={formLocked} className="min-w-0 border-0 p-0 m-0 space-y-0">
             <Tabs defaultValue="public">
               <TabsList className={`grid w-full gap-1 ${showAccessTab ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-3"}`}>
                 <TabsTrigger value="public"><User className="h-4 w-4 mr-2 shrink-0" /> Public info</TabsTrigger>
@@ -673,7 +710,58 @@ export default function HrEmployeeForm() {
                       <Input value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} placeholder="https://..." />
                     </div>
                   </div>
-                  <div><Label>Designation *</Label><Input value={designation} onChange={(e) => setDesignation(e.target.value)} required /></div>
+                  <div className="md:col-span-2 space-y-2">
+                    <Label>Designation *</Label>
+                    {canM01Read ? (
+                      <>
+                        <Select
+                          value={designationMasterId || "__legacy__"}
+                          onValueChange={(v) => {
+                            if (v === "__legacy__") {
+                              setDesignationMasterId("");
+                              return;
+                            }
+                            setDesignationMasterId(v);
+                            const row = designationRows.find((d) => d.id === v);
+                            if (row) setDesignation(row.name);
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="From designation master or free text" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__legacy__">Not from list (free text)</SelectItem>
+                            {designationRows.map((d) => (
+                              <SelectItem key={d.id} value={d.id}>
+                                {d.code} — {d.name} (level {d.hierarchyLevel})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {canM01Update ? (
+                          <p className="text-xs text-muted-foreground">
+                            Maintain codes and hierarchy in{" "}
+                            <Link href="/hr/designations" className="font-medium text-primary underline">
+                              Designation master
+                            </Link>
+                            .
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
+                    <div>
+                      <Label className="text-xs text-muted-foreground">
+                        Label stored on employee{designationMasterId ? " (synced from master)" : ""}
+                      </Label>
+                      <Input
+                        value={designation}
+                        onChange={(e) => setDesignation(e.target.value)}
+                        required
+                        readOnly={Boolean(designationMasterId)}
+                        className={designationMasterId ? "bg-muted" : undefined}
+                      />
+                    </div>
+                  </div>
                   <div><Label>Yard *</Label>
                     <Select value={yardId} onValueChange={setYardId} required>
                       <SelectTrigger><SelectValue placeholder="Select yard" /></SelectTrigger>
@@ -919,14 +1007,22 @@ export default function HrEmployeeForm() {
                   <div><Label>Joining date *</Label><Input type="date" value={joiningDate} onChange={(e) => setJoiningDate(e.target.value)} required /></div>
                   <div><Label>Retirement date</Label><Input type="date" value={retirementDate} onChange={(e) => setRetirementDate(e.target.value)} /></div>
                   <div><Label>Status</Label>
-                    <Select value={status} onValueChange={setStatus}>
+                    <Select value={status} onValueChange={setStatus} disabled={statusSelectLocked}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {STATUS_OPTIONS.map((s) => (
-                          <SelectItem key={s} value={s}>{s}</SelectItem>
+                        {statusDropdownOptions.map((o) => (
+                          <SelectItem key={o.value} value={o.value}>
+                            {o.label}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+                    {statusSelectLocked && !formLocked ? (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        While status is Recommended, lifecycle changes are frozen here until a Data Approver uses{" "}
+                        <span className="font-medium">Approve registration</span> to assign an official EMP-ID and set Active.
+                      </p>
+                    ) : null}
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
@@ -1014,22 +1110,24 @@ export default function HrEmployeeForm() {
               {isEdit &&
                 id &&
                 canApproveRegistration &&
-                (status === "Draft" || status === "Submitted" || (status === "Active" && !/^EMP-\d{3}$/i.test((empId || "").trim()))) && (
+                (canonicalizeEmployeeStatus(status) === "Draft" ||
+                  canonicalizeEmployeeStatus(status) === "Submitted" ||
+                  (canonicalizeEmployeeStatus(status) === "Active" && !/^EMP-\d{3}$/i.test((empId || "").trim()))) && (
                   <Button
                     type="button"
                     variant="secondary"
-                    disabled={approveMutation.isPending || pending}
+                    disabled={approveMutation.isPending || pending || formLocked}
                     onClick={() => approveMutation.mutate()}
                   >
                     {approveMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                     Approve registration (assign EMP-ID)
                   </Button>
                 )}
-              {isEdit && id && (status === "Submitted") && (
+              {isEdit && id && canonicalizeEmployeeStatus(status) === "Submitted" && (
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={recommendMutation.isPending || pending}
+                  disabled={recommendMutation.isPending || pending || formLocked}
                   onClick={() => recommendMutation.mutate()}
                 >
                   {recommendMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
@@ -1037,11 +1135,12 @@ export default function HrEmployeeForm() {
                 </Button>
               )}
               <Button type="button" variant="outline" onClick={() => setLocation(isEdit ? `/hr/employees/${id}` : "/hr/employees")}>Cancel</Button>
-              <Button type="submit" disabled={pending}>
+              <Button type="submit" disabled={pending || formLocked}>
                 {pending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 {isEdit ? "Update" : "Create"}
               </Button>
             </div>
+            </fieldset>
           </form>
         </CardContent>
       </Card>

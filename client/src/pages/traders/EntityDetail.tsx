@@ -37,6 +37,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   inferAgreementTypeFromDates,
   defaultGstApplicableTrackBEntity,
+  localCalendarYmd,
   RENT_REVISION_MODES,
 } from "@shared/premises-allocation";
 
@@ -184,6 +185,7 @@ export default function EntityDetail() {
   const [mDvReturn, setMDvReturn] = useState("");
   const [mGapOv, setMGapOv] = useState(false);
   const [mGstDaOv, setMGstDaOv] = useState(false);
+  const [tenancyVacateOn, setTenancyVacateOn] = useState("");
   const [agreementFile, setAgreementFile] = useState<File | null>(null);
   const [editName, setEditName] = useState("");
   const [editSubType, setEditSubType] = useState("");
@@ -219,6 +221,7 @@ export default function EntityDetail() {
     setMDvReturn("");
     setMGapOv(false);
     setMGstDaOv(false);
+    setTenancyVacateOn(localCalendarYmd());
     setAgreementFile(null);
   }, [manageRow]);
 
@@ -1009,6 +1012,15 @@ export default function EntityDetail() {
                 ["Active", "Vacating"].includes(manageRow.status) &&
                 canUpdate ? (
                   <div className="border-t pt-3 space-y-2">
+                    <div className="space-y-1">
+                      <Label>Vacated on</Label>
+                      <Input
+                        type="date"
+                        max={localCalendarYmd()}
+                        value={tenancyVacateOn}
+                        onChange={(e) => setTenancyVacateOn(e.target.value)}
+                      />
+                    </div>
                     <Label>Tenancy status</Label>
                     <Select
                       value={manageRow.status}
@@ -1018,7 +1030,23 @@ export default function EntityDetail() {
                         const ok =
                           (cur === "Active" && (v === "Vacating" || v === "Vacated")) || (cur === "Vacating" && v === "Vacated");
                         if (!ok) return;
-                        patchAllotMutation.mutate({ allocId: manageRow.id, body: { status: v } });
+                        if (v === "Vacated") {
+                          const today = localCalendarYmd();
+                          if (tenancyVacateOn > today) {
+                            toast({
+                              title: "Invalid vacated date",
+                              description: "Vacated on must be today or an earlier date.",
+                              variant: "destructive",
+                            });
+                            return;
+                          }
+                          patchAllotMutation.mutate({
+                            allocId: manageRow.id,
+                            body: { status: v, toDate: tenancyVacateOn },
+                          });
+                        } else {
+                          patchAllotMutation.mutate({ allocId: manageRow.id, body: { status: v } });
+                        }
                       }}
                     >
                       <SelectTrigger className="max-w-xs">
@@ -1040,7 +1068,8 @@ export default function EntityDetail() {
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground">
-                      Move to Vacating or Vacated when the entity leaves; the premises appears in the vacant list again after Vacated.
+                      Move to Vacating or Vacated when the entity leaves; the premises appears in the vacant list again after
+                      Vacated. Vacated on must be today or an earlier date.
                     </p>
                   </div>
                 ) : null}

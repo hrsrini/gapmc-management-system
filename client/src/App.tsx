@@ -33,6 +33,7 @@ import Health from "@/pages/Health";
 import AdminRoles from "@/pages/admin/AdminRoles";
 import AdminLocations from "@/pages/admin/AdminLocations";
 import AdminConfig from "@/pages/admin/AdminConfig";
+import AdminSidebarMenuPage from "@/pages/admin/AdminSidebarMenuPage";
 import AdminAudit from "@/pages/admin/AdminAudit";
 import AdminPermissionMatrix from "@/pages/admin/AdminPermissionMatrix";
 import AdminSlaConfig from "@/pages/admin/AdminSlaConfig";
@@ -41,6 +42,7 @@ import AdminMeasurementUnits from "@/pages/admin/AdminMeasurementUnits";
 import HrEmployees from "@/pages/hr/HrEmployees";
 import HrEmployeeDetail from "@/pages/hr/HrEmployeeDetail";
 import HrEmployeeForm from "@/pages/hr/HrEmployeeForm";
+import HrDesignationMaster from "@/pages/hr/HrDesignationMaster";
 import LeaveRequests from "@/pages/hr/LeaveRequests";
 import HrClaims from "@/pages/hr/HrClaims";
 import HrLeaveBalances from "@/pages/hr/HrLeaveBalances";
@@ -375,6 +377,9 @@ function Router() {
       <Route path="/admin/config">
         <AdminRoute><AdminConfig /></AdminRoute>
       </Route>
+      <Route path="/admin/sidebar-menu">
+        <AdminRoute><AdminSidebarMenuPage /></AdminRoute>
+      </Route>
       <Route path="/admin/audit">
         <AdminRoute><AdminAudit /></AdminRoute>
       </Route>
@@ -401,6 +406,13 @@ function Router() {
       </Route>
       <Route path="/hr/employees/:id">
         <ProtectedRoute><HrEmployeeDetail /></ProtectedRoute>
+      </Route>
+      <Route path="/hr/designations">
+        <ProtectedRoute>
+          <RequirePermission module="M-01" action="Read">
+            <HrDesignationMaster />
+          </RequirePermission>
+        </ProtectedRoute>
       </Route>
       <Route path="/hr/leaves">
         <ProtectedRoute><LeaveRequests /></ProtectedRoute>

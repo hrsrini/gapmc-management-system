@@ -33,7 +33,6 @@ interface Asset {
   assetType: string;
   complexName?: string | null;
   area?: string | null;
-  plinthAreaSqft?: number | null;
   value?: number | null;
   fileNumber?: string | null;
   orderNumber?: string | null;
@@ -55,7 +54,6 @@ export default function AssetForm() {
   const [assetType, setAssetType] = useState("Shop");
   const [complexName, setComplexName] = useState("");
   const [area, setArea] = useState("");
-  const [plinthAreaSqft, setPlinthAreaSqft] = useState("");
   const [value, setValue] = useState("");
   const [fileNumber, setFileNumber] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
@@ -88,7 +86,6 @@ export default function AssetForm() {
     setAssetType(existing.assetType ?? "Shop");
     setComplexName(existing.complexName ?? "");
     setArea(existing.area ?? "");
-    setPlinthAreaSqft(existing.plinthAreaSqft != null ? String(existing.plinthAreaSqft) : "");
     setValue(existing.value != null ? String(existing.value) : "");
     setFileNumber(existing.fileNumber ?? "");
     setOrderNumber(existing.orderNumber ?? "");
@@ -155,7 +152,6 @@ export default function AssetForm() {
       assetType,
       complexName: complexName.trim() || null,
       area: area.trim() || null,
-      plinthAreaSqft: plinthAreaSqft ? Number(plinthAreaSqft) : null,
       value: value ? Number(value) : null,
       fileNumber: fileNumber.trim() || null,
       orderNumber: orderNumber.trim() || null,
@@ -242,7 +238,6 @@ export default function AssetForm() {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">Premises must be on a Yard location (not a checkpost).</p>
               </div>
             </div>
 
@@ -291,19 +286,8 @@ export default function AssetForm() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Area</Label>
+                <Label>Area (sq. meters)</Label>
                 <Input value={area} onChange={(e) => setArea(e.target.value)} placeholder="Optional" />
-              </div>
-              <div className="space-y-2">
-                <Label>Plinth area (sqft)</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={plinthAreaSqft}
-                  onChange={(e) => setPlinthAreaSqft(e.target.value)}
-                  placeholder="Optional"
-                />
               </div>
             </div>
 

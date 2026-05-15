@@ -28,6 +28,7 @@ import {
   SYSTEM_CONFIG_KEYS_SENSITIVE,
   type SystemConfigKey,
 } from "@shared/system-config-defaults";
+import { SIDEBAR_MENU_VISIBILITY_PAGE_HREF } from "@shared/nav-sidebar-hidden";
 import { getMergedSystemConfig } from "./system-config";
 import { getDataRetentionSummary } from "./data-retention-audit";
 import { writeAuditLog } from "./audit";
@@ -242,7 +243,7 @@ export function registerAdminRoutes(app: Express) {
       const before = await getMergedSystemConfig();
       for (const key of SYSTEM_CONFIG_KEYS) {
         if (!(key in body)) continue;
-        const value = String(body[key] ?? "");
+        let value = String(body[key] ?? "");
         if (key === "expenditure_head_authority_url") {
           const u = value.trim();
           if (u.length > 0) {
@@ -328,6 +329,36 @@ export function registerAdminRoutes(app: Express) {
               "rent_dishonour_bank_charge_inr must be between 0 and 500000.",
             );
           }
+        }
+        if (key === "ui_sidebar_hidden_hrefs_json") {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(value.trim() === "" ? "[]" : value.trim());
+          } catch {
+            return sendApiError(res, 400, "ADMIN_CONFIG_SIDEBAR_JSON", "ui_sidebar_hidden_hrefs_json must be valid JSON.");
+          }
+          if (!Array.isArray(parsed)) {
+            return sendApiError(
+              res,
+              400,
+              "ADMIN_CONFIG_SIDEBAR_JSON",
+              "ui_sidebar_hidden_hrefs_json must be a JSON array of path strings.",
+            );
+          }
+          const paths: string[] = [];
+          for (const x of parsed) {
+            if (typeof x !== "string" || !x.startsWith("/") || x.length > 256) {
+              return sendApiError(
+                res,
+                400,
+                "ADMIN_CONFIG_SIDEBAR_JSON",
+                "Each hidden menu entry must be a non-empty path string starting with / (max 256 chars).",
+              );
+            }
+            paths.push(x);
+          }
+          const filtered = paths.filter((p) => p !== SIDEBAR_MENU_VISIBILITY_PAGE_HREF);
+          value = JSON.stringify(filtered.sort());
         }
         if (key === "aadhaar_hmac_secret") {
           const t = value.trim();

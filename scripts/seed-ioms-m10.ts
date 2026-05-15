@@ -15,6 +15,7 @@ import {
   users,
   userYards,
   employees,
+  designationMaster,
 } from "../shared/db-schema";
 import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -181,6 +182,10 @@ async function seed() {
   // 5. Bootstrap employee for admin (SRS §1.4 — user must link to active employee)
   let bootstrapEmpId: string | null = null;
   const firstYardId = yardIds[0];
+  const [adminDm] =
+    firstYardId != null
+      ? await db.select({ id: designationMaster.id }).from(designationMaster).where(eq(designationMaster.code, "ADMIN")).limit(1)
+      : [];
   if (firstYardId) {
     const [existingBoot] = await db
       .select()
@@ -197,6 +202,7 @@ async function seed() {
         firstName: "System",
         surname: "Admin",
         designation: "Administrator",
+        designationId: adminDm?.id ?? null,
         yardId: firstYardId,
         employeeType: "Regular",
         joiningDate: now.slice(0, 10),
@@ -284,6 +290,7 @@ async function seed() {
       firstName: "System",
       surname: "Admin",
       designation: "Administrator",
+      designationId: adminDm?.id ?? null,
       yardId: y0,
       employeeType: "Regular",
       joiningDate: now.slice(0, 10),

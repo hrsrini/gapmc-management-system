@@ -17,7 +17,6 @@ interface Asset {
   yardId: string;
   assetType: string;
   complexName?: string | null;
-  plinthAreaSqft?: number | null;
   value?: number | null;
   isActive?: boolean;
 }
@@ -27,7 +26,6 @@ const columns: ReportTableColumn[] = [
   { key: "yardName", header: "Yard" },
   { key: "assetType", header: "Type" },
   { key: "complexName", header: "Complex" },
-  { key: "plinthAreaSqft", header: "Plinth (sqft)" },
   { key: "value", header: "Value" },
   { key: "_status", header: "Status", sortField: "statusSort" },
 ];
@@ -60,7 +58,6 @@ export default function AssetList() {
         yardName: yardById[a.yardId] ?? a.yardId,
         assetType: a.assetType,
         complexName: a.complexName ?? "—",
-        plinthAreaSqft: a.plinthAreaSqft != null ? a.plinthAreaSqft : "—",
         value: a.value != null ? a.value : "—",
         statusSort: active ? "Active" : "Inactive",
         _status: <Badge variant={active ? "default" : "secondary"}>{active ? "Active" : "Inactive"}</Badge>,
@@ -110,7 +107,7 @@ export default function AssetList() {
             <ClientDataGrid
               columns={columns}
               sourceRows={sourceRows}
-              searchKeys={["assetId", "yardName", "assetType", "complexName", "plinthAreaSqft", "value", "statusSort"]}
+              searchKeys={["assetId", "yardName", "assetType", "complexName", "value", "statusSort"]}
               searchPlaceholder="Search by asset ID, yard, type, complex…"
               defaultSortKey="assetId"
               defaultSortDir="asc"

@@ -12,6 +12,7 @@ import { writeAuditLogSystem } from "./audit";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-interest";
 import { latestRentDepositLedgerRowForInvoice, rentInvoiceLedgerScope } from "./rent-ledger-scope";
+import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
 
 type RentInvoiceRow = InferSelectModel<typeof rentInvoices>;
 
@@ -34,12 +35,19 @@ function nonGstChargesSum(json: string | null | undefined): number {
 
 async function sumPaidOrReconciledOnInvoice(invoiceId: string): Promise<number> {
   const recs = await db
-    .select({ totalAmount: iomsReceipts.totalAmount, status: iomsReceipts.status })
+    .select({
+      totalAmount: iomsReceipts.totalAmount,
+      status: iomsReceipts.status,
+      revenueHead: iomsReceipts.revenueHead,
+      sourceModule: iomsReceipts.sourceModule,
+      sourceRecordId: iomsReceipts.sourceRecordId,
+      m03BreakdownJson: iomsReceipts.m03BreakdownJson,
+    })
     .from(iomsReceipts)
     .where(and(eq(iomsReceipts.sourceModule, "M-03"), eq(iomsReceipts.sourceRecordId, invoiceId)));
   return recs
     .filter((r) => String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled")
-    .reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+    .reduce((s, r) => s + m03ReceiptPrincipalTowardInvoice(r), 0);
 }
 
 async function sumInterestPostedForInvoice(invoiceId: string): Promise<number> {
@@ -143,6 +151,8 @@ export async function runM03RentArrearsInterest(): Promise<{
       balance,
       invoiceId: inv.id,
       receiptId: null,
+      interestPaymentStatus: "Unpaid",
+      settledReceiptId: null,
     });
 
     interestPosted += delta;

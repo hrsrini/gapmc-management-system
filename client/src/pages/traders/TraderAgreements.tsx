@@ -205,6 +205,17 @@ export default function TraderAgreements() {
     }));
   }, [filteredAgreements, updateMutation.isPending]);
 
+  const gridEmptyMessage = useMemo(() => {
+    const total = agreements?.length ?? 0;
+    if (total === 0) {
+      return 'No trader agreements are stored yet. This screen lists rows from the legacy agreements table; IOMS premises allotments and agreement PDFs are managed under Licences / Shop Allotments.';
+    }
+    if (filteredAgreements.length === 0) {
+      return 'No agreements match the selected yard or status.';
+    }
+    return 'No agreements match your search.';
+  }, [agreements?.length, filteredAgreements.length]);
+
   if (isError) {
     return (
       <AppShell breadcrumbs={[{ label: 'Traders', href: '/traders' }, { label: 'Agreements' }]}>
@@ -294,7 +305,7 @@ export default function TraderAgreements() {
                 defaultSortKey="endDate"
                 defaultSortDir="desc"
                 resetPageDependency={filterKey}
-                emptyMessage="No agreements found"
+                emptyMessage={gridEmptyMessage}
               />
             )}
           </CardContent>

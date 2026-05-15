@@ -27,7 +27,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { KeyRound, AlertCircle, Plus, Loader2, Pencil } from "lucide-react";
-import { RENT_REVISION_MODES } from "@shared/premises-allocation";
+import { localCalendarYmd, RENT_REVISION_MODES } from "@shared/premises-allocation";
 import { invalidateAssetAllotmentQueries } from "@/lib/invalidate-asset-allotments";
 import {
   AssetAllotmentManageDialog,
@@ -177,6 +177,15 @@ export default function AssetAllotments() {
 
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
+    const todayLocal = localCalendarYmd();
+    if (status === "Vacated" && toDate > todayLocal) {
+      toast({
+        title: "Invalid vacated date",
+        description: "Vacated on must be today or an earlier date.",
+        variant: "destructive",
+      });
+      return;
+    }
     createMutation.mutate({
       assetId: assetId || undefined,
       traderLicenceId: traderLicenceId || undefined,
@@ -262,7 +271,16 @@ export default function AssetAllotments() {
                   <div><Label>Allottee name *</Label><Input value={allotteeName} onChange={(e) => setAllotteeName(e.target.value)} required /></div>
                   <div className="grid grid-cols-2 gap-4">
                     <div><Label>From date *</Label><Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} required /></div>
-                    <div><Label>To date *</Label><Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} required /></div>
+                    <div>
+                      <Label>To date *</Label>
+                      <Input
+                        type="date"
+                        value={toDate}
+                        onChange={(e) => setToDate(e.target.value)}
+                        max={status === "Vacated" ? localCalendarYmd() : undefined}
+                        required
+                      />
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>

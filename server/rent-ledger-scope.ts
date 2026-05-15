@@ -6,6 +6,18 @@ import { parseUnifiedEntityId, unifiedEntityIdFromTrackA } from "@shared/unified
 
 type LedgerRow = InferSelectModel<typeof rentDepositLedger>;
 
+/** Prefer `unified_entity_id`; fallback to `tenant_licence_id` when it carries a `TA:|TB:|AH:` token (legacy / denormalized rows). */
+export function ledgerRowEffectiveUnifiedEntityId(row: {
+  unifiedEntityId?: string | null;
+  tenantLicenceId?: string | null;
+}): string {
+  const ue = String(row.unifiedEntityId ?? "").trim();
+  if (ue) return ue;
+  const tl = String(row.tenantLicenceId ?? "").trim();
+  if (/^(TA|TB|AH):/i.test(tl)) return tl;
+  return "";
+}
+
 /** Rent invoices store bare trader licence id for Track A; Track B entity rent uses `TB:<entity_id>` in tenant_licence_id. */
 export function rentInvoiceLedgerScope(inv: { tenantLicenceId: string }): {
   ledgerTenantLicenceId: string | null;

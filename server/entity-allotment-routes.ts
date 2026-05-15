@@ -24,14 +24,14 @@ import {
   canTransitionEntityAllotmentApproval,
 } from "./workflow";
 import {
+  assertVacatedToDateNotFuture,
   defaultGstApplicableTrackBEntity,
+  hasAgreementCalendarGap,
   inferAgreementTypeFromDates,
   normalizeAgreementType,
   normalizeRentRevisionMode,
   roundedMoney2,
   todayYmdUtc,
-  ymdBefore,
-  hasAgreementCalendarGap,
 } from "@shared/premises-allocation";
 import {
   contentTypeForEntityAllotmentAgreement,
@@ -180,11 +180,6 @@ export function registerEntityAllotmentRoutes(app: Express) {
       const terr = ymdFieldError("Agreement to", toDate, true);
       if (terr) return sendApiError(res, 400, "AGREEMENT_TO", terr);
       if (fromDate > toDate) return sendApiError(res, 400, "AGREEMENT_RANGE", "Agreement To must be on or after Agreement From.");
-
-      const today = todayYmdUtc();
-      if (ymdBefore(fromDate, today)) {
-        return sendApiError(res, 400, "AGREEMENT_FROM_PAST", "Agreement From cannot be before today for a new allocation.");
-      }
 
       const monthlyRent = Number(body.monthlyRent);
       if (!Number.isFinite(monthlyRent) || monthlyRent <= 0) {
@@ -481,7 +476,39 @@ export function registerEntityAllotmentRoutes(app: Express) {
       if (existing.approvalStatus === "Approved") {
         const tenancy = body.status !== undefined ? String(body.status).trim() : null;
         if (tenancy && tenancy !== existing.status && ["Vacating", "Vacated"].includes(tenancy)) {
-          await db.update(entityAllotments).set({ status: tenancy }).where(eq(entityAllotments.id, id));
+          if (tenancy === "Vacated") {
+            const existingTo = String(existing.toDate ?? "").trim();
+            const bodyToRaw = body.toDate;
+            const hasExplicitTo =
+              bodyToRaw !== undefined && bodyToRaw !== null && String(bodyToRaw).trim() !== "";
+            const nextTo = hasExplicitTo ? String(bodyToRaw).trim() : existingTo;
+            const vOnErr = ymdFieldError("Vacated on", nextTo, true);
+            if (vOnErr) return sendApiError(res, 400, "VACATED_ON", vOnErr);
+            const vFut = assertVacatedToDateNotFuture(nextTo);
+            if (vFut) return sendApiError(res, 400, "VACATED_DATE_FUTURE", vFut);
+            if (!hasExplicitTo && existingTo > todayYmdUtc()) {
+              return sendApiError(
+                res,
+                400,
+                "VACATED_TO_REQUIRED",
+                "Agreement end is still in the future: set toDate to the actual vacation date (today or earlier).",
+              );
+            }
+            const nextFrom = String(existing.fromDate ?? "").trim();
+            if (nextFrom > nextTo) {
+              return sendApiError(
+                res,
+                400,
+                "AGREEMENT_RANGE",
+                "Vacated on (agreement to) must be on or after agreement from.",
+              );
+            }
+            const setPayload: Partial<EntityAllotmentRow> = { status: tenancy };
+            if (hasExplicitTo) setPayload.toDate = nextTo;
+            await db.update(entityAllotments).set(setPayload).where(eq(entityAllotments.id, id));
+          } else {
+            await db.update(entityAllotments).set({ status: tenancy }).where(eq(entityAllotments.id, id));
+          }
           const [row] = await db.select().from(entityAllotments).where(eq(entityAllotments.id, id));
           writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) =>
             console.error(e),

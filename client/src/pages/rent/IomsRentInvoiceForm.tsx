@@ -26,6 +26,7 @@ import {
 } from "./rent-allotments-ui";
 import { SYSTEM_CONFIG_DEFAULTS } from "@shared/system-config-defaults";
 import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
+import { MIN_RENT_INVOICE_AMOUNT_INR } from "@shared/rent-invoice-amount-validation";
 
 interface Yard {
   id: string;
@@ -37,9 +38,58 @@ interface Asset {
   assetId: string;
   yardId: string;
   assetType: string;
+  premisesRefNo?: string | null;
+}
+
+/** GET rent-context when `periodMonth` is supplied (M-03 create invoice). */
+interface InvoiceRentContextResponse {
+  allotmentId: string;
+  periodMonth: string;
+  resolvedRent: number;
+  source: "revision" | "invoice" | "none";
+  matchedRevisionId: string | null;
+  matchedInvoiceId: string | null;
 }
 
 type Selection = "" | `trader:${string}` | `entity:${string}`;
+
+function isValidInvoicePeriodYm(s: string): boolean {
+  const t = s.trim();
+  const m = /^(\d{4})-(\d{2})$/.exec(t);
+  if (!m) return false;
+  const mo = Number(m[2]);
+  return mo >= 1 && mo <= 12;
+}
+
+function billingCalendarBoundsYm(ym: string): { from: string; to: string } | null {
+  if (!isValidInvoicePeriodYm(ym)) return null;
+  const [yStr, moStr] = ym.trim().split("-");
+  const y = Number(yStr);
+  const mo = Number(moStr);
+  const last = new Date(y, mo, 0).getDate();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    from: `${y}-${pad(mo)}-01`,
+    to: `${y}-${pad(mo)}-${pad(last)}`,
+  };
+}
+
+function formatResolvedRentInput(n: number): string {
+  if (!Number.isFinite(n)) return "";
+  const rounded = Math.round(n * 100) / 100;
+  return String(rounded);
+}
+
+function rentResolvedSourceHint(source: InvoiceRentContextResponse["source"]): string {
+  switch (source) {
+    case "revision":
+      return "Approved rent revision effective for this billing month.";
+    case "invoice":
+      return "Rent carried from the latest prior invoice for this allotment.";
+    default:
+      return "Monthly rent configured on the allotment.";
+  }
+}
 
 export default function IomsRentInvoiceForm() {
   const [, setLocation] = useLocation();
@@ -51,6 +101,8 @@ export default function IomsRentInvoiceForm() {
   const [selection, setSelection] = useState<Selection>("");
   const [periodMonth, setPeriodMonth] = useState("");
   const [rentAmount, setRentAmount] = useState("");
+  /** When false, UI/server prefer resolver output for allotment + period; true uses typed rent. */
+  const [rentOverride, setRentOverride] = useState(false);
   const [nonGstLabel, setNonGstLabel] = useState("Garbage / Premises");
   const [nonGstAmount, setNonGstAmount] = useState("");
   const [isGovtEntity, setIsGovtEntity] = useState(false);
@@ -132,12 +184,47 @@ export default function IomsRentInvoiceForm() {
   const resolvedYardId = selectedAsset?.yardId ?? yardId;
   const isEntitySelection = Boolean(selectedEntity);
 
+  const selectedAllotmentId = selectedTrader?.id ?? selectedEntity?.id ?? "";
+  const periodYmTrim = periodMonth.trim();
+  const billingBounds = billingCalendarBoundsYm(periodYmTrim);
+
   useEffect(() => {
-    if (!selectedEntity) return;
-    const mr = selectedEntity.monthlyRent;
-    if (mr == null || !Number.isFinite(Number(mr)) || Number(mr) <= 0) return;
-    setRentAmount((prev) => (String(prev).trim() === "" ? String(mr) : prev));
-  }, [selectedEntity?.id]);
+    setRentOverride(false);
+    setRentAmount("");
+  }, [selection]);
+
+  useEffect(() => {
+    setRentOverride(false);
+  }, [periodYmTrim]);
+
+  const {
+    data: rentResolve,
+    isFetching: rentResolveFetching,
+    isError: rentResolveIsError,
+  } = useQuery<InvoiceRentContextResponse>({
+    queryKey: ["/api/ioms/rent/allotments/rent-context", selectedAllotmentId, periodYmTrim],
+    enabled: Boolean(selectedAllotmentId) && isValidInvoicePeriodYm(periodYmTrim),
+    queryFn: async () => {
+      const u = `/api/ioms/rent/allotments/${encodeURIComponent(selectedAllotmentId)}/rent-context?periodMonth=${encodeURIComponent(periodYmTrim)}`;
+      const res = await fetch(u, { credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { message?: string }).message ?? res.statusText);
+      return data as InvoiceRentContextResponse;
+    },
+  });
+
+  const hasResolvedRent =
+    rentResolve != null &&
+    Number.isFinite(rentResolve.resolvedRent) &&
+    rentResolve.resolvedRent > MIN_RENT_INVOICE_AMOUNT_INR;
+
+  useEffect(() => {
+    if (rentOverride) return;
+    if (!hasResolvedRent || !rentResolve) return;
+    setRentAmount(formatResolvedRentInput(rentResolve.resolvedRent));
+  }, [rentResolve, hasResolvedRent, rentOverride, selectedAllotmentId, periodYmTrim]);
+
+  const rentLocked = hasResolvedRent && !rentOverride;
 
   const rentNum = Number(rentAmount) || 0;
   const nonGstNum = Number(nonGstAmount) || 0;
@@ -180,32 +267,78 @@ export default function IomsRentInvoiceForm() {
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
 
+  const yardLabel = useMemo(() => {
+    const yid = selectedAsset?.yardId;
+    if (!yid) return null;
+    const y = yards.find((row) => row.id === yid);
+    return y ? `${y.name} (${y.code})` : null;
+  }, [selectedAsset?.yardId, yards]);
+
+  const premisesDetailsLine = useMemo(() => {
+    if (!selectedTrader && !selectedEntity) return "";
+    const ref = selectedAsset?.premisesRefNo?.trim();
+    const type = selectedAsset?.assetType?.trim();
+    const aid = selectedTrader?.assetId ?? selectedEntity?.assetId ?? "";
+    const bits: string[] = [];
+    if (ref) bits.push(ref);
+    if (type) bits.push(type);
+    bits.push(aid);
+    if (yardLabel) bits.push(`Yard: ${yardLabel}`);
+    return bits.filter(Boolean).join(" · ") || aid || "—";
+  }, [selectedAsset, selectedTrader, selectedEntity, yardLabel]);
+
   const pickerLoading = allotmentsLoading || entityAllotmentsLoading;
   const pickerEmpty = traderOptions.length === 0 && entityOptions.length === 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selection || (!selectedTrader && !selectedEntity) || !resolvedYardId || !periodMonth.trim()) {
+    if (!selection || (!selectedTrader && !selectedEntity) || !resolvedYardId || !periodYmTrim) {
       toast({
         title: "Missing fields",
-        description: "Select an allotment (trader or Track B premises) and period; ensure yard is set.",
+        description: "Select an allotment and enter the billing period (YYYY-MM). Yard is inferred from the premises.",
         variant: "destructive",
       });
       return;
     }
-    if (rentNum < 0 || totalAmount < 0) {
-      toast({ title: "Invalid amounts", description: "Rent and total must be non-negative.", variant: "destructive" });
+    if (!isValidInvoicePeriodYm(periodYmTrim)) {
+      toast({
+        title: "Invalid period",
+        description: "Period must be a calendar month as YYYY-MM (e.g. 2026-05).",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!Number.isFinite(rentNum) || rentNum <= MIN_RENT_INVOICE_AMOUNT_INR) {
+      toast({
+        title: "Rent amount required",
+        description:
+          rentResolveFetching && !rentOverride
+            ? "Still loading resolved rent for this allotment and month — wait a moment or enter the amount manually."
+            : "Enter a positive rent amount for this invoice.",
+        variant: "destructive",
+      });
       return;
     }
     if (nonGstNum > 0 && !nonGstLabel.trim()) {
       toast({ title: "Non-GST label missing", description: "Enter a label for non-GST charge line.", variant: "destructive" });
       return;
     }
+    if (totalAmount <= 0) {
+      toast({
+        title: "Invalid total",
+        description: "Invoice total must be greater than zero.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const useManualRentAmount = rentOverride || !hasResolvedRent;
 
     const base: Record<string, unknown> = {
       yardId: resolvedYardId,
-      periodMonth: periodMonth.trim(),
+      periodMonth: periodYmTrim,
       rentAmount: rentNum,
+      useManualRentAmount,
       nonGstCharges: nonGstNum > 0 ? [{ label: nonGstLabel.trim(), amount: nonGstNum }] : [],
       cgst: cgstNum,
       sgst: sgstNum,
@@ -318,6 +451,46 @@ export default function IomsRentInvoiceForm() {
               </div>
             </div>
 
+            {(selectedTrader || selectedEntity) && (
+              <div className="rounded-lg border bg-muted/40 px-3 py-3 text-sm space-y-2">
+                <div className="font-medium text-foreground">Premises & agreement</div>
+                <div>
+                  <div className="text-muted-foreground text-xs uppercase tracking-wide">Premises details</div>
+                  <div className="font-medium mt-0.5">{premisesDetailsLine}</div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-muted-foreground text-xs uppercase tracking-wide">Agreement period from</div>
+                    <div className="font-medium mt-0.5">
+                      {formatYmdToDisplay(selectedTrader?.fromDate ?? selectedEntity?.fromDate)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground text-xs uppercase tracking-wide">Agreement period to</div>
+                    <div className="font-medium mt-0.5">
+                      {formatYmdToDisplay(selectedTrader?.toDate ?? selectedEntity?.toDate)}
+                    </div>
+                  </div>
+                </div>
+                {billingBounds ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-border/60">
+                    <div>
+                      <div className="text-muted-foreground text-xs uppercase tracking-wide">Period from</div>
+                      <div className="font-medium mt-0.5">{formatYmdToDisplay(billingBounds.from)}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-xs uppercase tracking-wide">Period to</div>
+                      <div className="font-medium mt-0.5">{formatYmdToDisplay(billingBounds.to)}</div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground pt-1 border-t border-border/60">
+                    Enter the billing month (YYYY-MM) below to show this invoice&apos;s calendar period (period from / period to).
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Period (YYYY-MM) *</Label>
@@ -326,18 +499,65 @@ export default function IomsRentInvoiceForm() {
                   onChange={(e) => setPeriodMonth(e.target.value)}
                   placeholder="e.g. 2025-04"
                   required
+                  autoComplete="off"
                 />
               </div>
               <div className="space-y-2">
-                <Label>Rent amount (₹) *</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  value={rentAmount}
-                  onChange={(e) => setRentAmount(e.target.value)}
-                  required
-                />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Label>Rent amount (₹){!rentLocked ? " *" : ""}</Label>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {rentResolveFetching && isValidInvoicePeriodYm(periodYmTrim) && selectedAllotmentId ? (
+                      <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Resolving…
+                      </span>
+                    ) : null}
+                    {rentLocked ? (
+                      <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => setRentOverride(true)}>
+                        Override amount
+                      </Button>
+                    ) : null}
+                    {rentOverride && hasResolvedRent ? (
+                      <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => setRentOverride(false)}>
+                        Use resolved rent
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+                {rentLocked ? (
+                  <>
+                    <Input type="text" readOnly className="bg-muted font-medium" value={rentAmount} />
+                    {rentResolve ? (
+                      <p className="text-xs text-muted-foreground">{rentResolvedSourceHint(rentResolve.source)}</p>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <Input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={rentAmount}
+                      onChange={(e) => setRentAmount(e.target.value)}
+                      required
+                      placeholder="Enter monthly rent (₹)"
+                    />
+                    {rentResolveIsError ? (
+                      <p className="text-xs text-destructive">
+                        Could not resolve rent automatically — enter the amount manually or retry after fixing access/network issues.
+                      </p>
+                    ) : null}
+                    {rentResolve &&
+                    !hasResolvedRent &&
+                    !rentResolveFetching &&
+                    isValidInvoicePeriodYm(periodYmTrim) &&
+                    selectedAllotmentId ? (
+                      <p className="text-xs text-muted-foreground">
+                        No approved revision or prior-invoice rent was resolved — enter rent from the allotment if billing manually.
+                      </p>
+                    ) : null}
+                  </>
+                )}
               </div>
             </div>
 

@@ -21,7 +21,6 @@ interface Asset {
   yardId: string;
   assetType: string;
   complexName?: string | null;
-  plinthAreaSqft?: number | null;
 }
 interface VacantRow {
   asset: Asset;

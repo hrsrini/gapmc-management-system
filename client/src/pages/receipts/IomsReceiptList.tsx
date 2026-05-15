@@ -37,6 +37,7 @@ function formatReceiptSource(r: {
 const REVENUE_HEADS = [
   "Rent",
   "GSTInvoice",
+  "RentArrearsInterest",
   "MarketFee",
   "LicenceFee",
   "SecurityDeposit",
