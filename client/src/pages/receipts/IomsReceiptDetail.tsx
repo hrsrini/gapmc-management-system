@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useLocation, Link } from "wouter";
+import { useParams, useLocation, Link, useSearchParams } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Receipt, ArrowLeft, AlertCircle, ExternalLink, Download, QrCode, Undo2 } from "lucide-react";
+import { Receipt, ArrowLeft, AlertCircle, ExternalLink, Download, QrCode, Undo2, Printer } from "lucide-react";
 import QRCode from "qrcode";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -71,6 +71,8 @@ interface YardRef {
 export default function IomsReceiptDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
+  const [searchParams] = useSearchParams();
+  const autoPrintFromQuery = searchParams.get("print") === "1";
   const { can } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -261,6 +263,15 @@ export default function IomsReceiptDetail() {
   useEffect(() => {
     if (!id) setLocation("/receipts/ioms");
   }, [id, setLocation]);
+
+  useEffect(() => {
+    if (!receipt || !autoPrintFromQuery || !id) return;
+    const t = setTimeout(() => {
+      window.print();
+      setLocation(`/receipts/ioms/${id}`);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [receipt, autoPrintFromQuery, id, setLocation]);
   if (!id) return null;
   if (isLoading || receipt === undefined) {
     return (
@@ -290,13 +301,13 @@ export default function IomsReceiptDetail() {
 
   return (
     <AppShell breadcrumbs={[{ label: "Receipts", href: "/receipts" }, { label: receipt.receiptNo }]}>
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <Receipt className="h-5 w-5" />
-            {receipt.receiptNo}
+      <Card className="receipt-print-content">
+        <CardHeader className="flex flex-row items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 min-w-0">
+            <Receipt className="h-5 w-5 shrink-0" />
+            <span className="font-mono text-base md:text-lg break-all">{receipt.receiptNo}</span>
           </CardTitle>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 shrink-0 no-print">
             <Button variant="ghost" size="sm" onClick={() => setLocation("/receipts/ioms")}>
               <ArrowLeft className="h-4 w-4 mr-1" /> Back
             </Button>
@@ -307,6 +318,9 @@ export default function IomsReceiptDetail() {
             </Button>
             <Button variant="outline" size="sm" onClick={() => downloadServerPdf()}>
               <Download className="h-4 w-4 mr-1" /> PDF
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => window.print()}>
+              <Printer className="h-4 w-4 mr-1" /> Print
             </Button>
             {canUpdate &&
               (receipt.paymentMode === "Cheque" || receipt.paymentMode === "DD") &&
@@ -427,7 +441,7 @@ export default function IomsReceiptDetail() {
               {formatDisplayDateTime(receipt.createdAt)} by {receipt.createdByName?.trim() || receipt.createdBy}
             </div>
             {canMockPay && receipt.status === "Pending" && (
-              <div className="md:col-span-2">
+              <div className="md:col-span-2 no-print">
                 <span className="text-muted-foreground">Payment (Mock)</span>
                 <div className="flex flex-wrap gap-2 mt-2">
                   {!gatewayTxnId ? (
@@ -471,7 +485,7 @@ export default function IomsReceiptDetail() {
                   <div className="text-xs text-muted-foreground break-all">
                     {verifyUrl ? <>QR encodes public verify URL: <span className="font-mono">{verifyUrl}</span></> : "—"}
                   </div>
-                  <div className="flex gap-2 flex-wrap">
+                  <div className="flex gap-2 flex-wrap no-print">
                     <Button size="sm" variant="outline" onClick={downloadQrPng} disabled={!qrDataUrl}>
                       <Download className="h-4 w-4 mr-1" /> Download QR (PNG)
                     </Button>

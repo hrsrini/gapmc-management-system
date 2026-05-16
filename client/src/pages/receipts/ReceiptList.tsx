@@ -182,6 +182,10 @@ export default function ReceiptList() {
             variant="ghost"
             size="icon"
             onClick={() => {
+              if (isIomsUnifiedReceiptNo(receipt.receiptNo)) {
+                window.open(`/receipts/ioms/${receipt.id}?print=1`, "_blank", "noopener,noreferrer");
+                return;
+              }
               setViewReceipt(receipt);
               setAutoPrint(true);
             }}

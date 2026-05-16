@@ -242,7 +242,7 @@
   }
 }
 
-/* Print: show only receipt content */
+/* Print: show only receipt content (visibility isolation) */
 @media print {
   body * {
     visibility: hidden;
@@ -259,6 +259,15 @@
     max-width: none;
     box-shadow: none;
     border: 1px solid #000;
+    /* Browsers often omit “muted” greys unless background graphics / exact colour is on */
+    color: #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .receipt-print-content * {
+    color: #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .receipt-print-content .no-print {
     display: none !important;
