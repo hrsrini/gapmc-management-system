@@ -41,13 +41,13 @@ import { isValidYearMonthYm } from "./rent-gstr1";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { assertTraderLicenceAccessibleInUserScope } from "./trader-licence-market-scope";
 import { applyM03ReceiptToRentDepositLedger } from "./rent-deposit-ledger-from-receipt";
-import { ledgerRowEffectiveUnifiedEntityId } from "./rent-ledger-scope";
+import { listRentDepositLedgerEnriched } from "./rent-deposit-ledger-display";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
 import { normalizeRentRevisionBasis, yearMonthMinusOne } from "@shared/rent-revision-basis";
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
 import { rentPeriodMonthEndIso } from "./rent-interest";
-import { formatRentInvoiceNo } from "./rent-invoice-number";
+import { allocateRentInvoiceNo, allocateRentInvoiceNoInTx } from "./rent-invoice-number";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { m03ReceiptPrincipalTowardInvoice, stringifyM03ReceiptBreakdown } from "@shared/m03-receipt-breakdown";
 import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
@@ -57,6 +57,7 @@ import {
 } from "@shared/rent-invoice-amount-validation";
 import {
   findBlockingRentInvoiceForPremisesMonth,
+  normalizeRentInvoiceAssetId,
   RENT_INVOICE_PREMISES_MONTH_DUPLICATE_MESSAGE,
 } from "./rent-invoice-premises-month-uniqueness";
 
@@ -65,16 +66,26 @@ function currentYearMonthUtc(): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-async function fetchYardScopeForAllotmentId(allotmentId: string): Promise<{ yardId: string } | null> {
+async function fetchYardScopeForAllotmentId(
+  allotmentId: string,
+): Promise<{ yardId: string; assetId: string } | null> {
   const [aa] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, allotmentId)).limit(1);
   const assetIdPk = aa?.assetId;
   if (assetIdPk) {
-    const [ar] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, assetIdPk)).limit(1);
+    const [ar] = await db
+      .select({ yardId: assets.yardId, assetId: assets.id })
+      .from(assets)
+      .where(eq(assets.id, assetIdPk))
+      .limit(1);
     return ar ?? null;
   }
   const [ea] = await db.select().from(entityAllotments).where(eq(entityAllotments.id, allotmentId)).limit(1);
   if (ea?.assetId) {
-    const [ar] = await db.select({ yardId: assets.yardId }).from(assets).where(eq(assets.id, ea.assetId)).limit(1);
+    const [ar] = await db
+      .select({ yardId: assets.yardId, assetId: assets.id })
+      .from(assets)
+      .where(eq(assets.id, ea.assetId))
+      .limit(1);
     return ar ?? null;
   }
   return null;
@@ -343,46 +354,67 @@ export function registerRentIomsRoutes(app: Express) {
         sgst = g.sgst;
         totalAmount = rentInvoiceTotalInr(rentAmount, nonGst.sum, cgst, sgst);
       }
-      let invoiceNo = body.invoiceNo ? String(body.invoiceNo).trim() : "";
-      if (!invoiceNo) {
-        const [y] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, yardId)).limit(1);
-        invoiceNo = formatRentInvoiceNo(y?.code, periodMonth, id);
-      }
       const zeroMsg = rentInvoiceValidationErrorMessage(rentAmount, totalAmount);
       if (zeroMsg) {
         return sendApiError(res, 400, "RENT_INVOICE_ZERO_AMOUNT", zeroMsg);
       }
-      const assetIdForInvoice = String(body.assetId ?? "").trim();
-      const premisesClash = await findBlockingRentInvoiceForPremisesMonth(assetIdForInvoice, periodMonth);
+      let assetIdForInvoice = String(body.assetId ?? "").trim();
+      if (allotmentId) {
+        const [aa] = await db
+          .select({ assetId: assetAllotments.assetId })
+          .from(assetAllotments)
+          .where(eq(assetAllotments.id, allotmentId))
+          .limit(1);
+        if (aa?.assetId) assetIdForInvoice = aa.assetId;
+        if (!aa?.assetId) {
+          const [ea] = await db
+            .select({ assetId: entityAllotments.assetId })
+            .from(entityAllotments)
+            .where(eq(entityAllotments.id, allotmentId))
+            .limit(1);
+          if (ea?.assetId) assetIdForInvoice = ea.assetId;
+        }
+      }
+      const assetIdCanonical = await normalizeRentInvoiceAssetId(assetIdForInvoice);
+      if (!assetIdCanonical) {
+        return sendApiError(res, 400, "RENT_INVOICE_ASSET_REQUIRED", "Premises (asset) is required for the rent invoice.");
+      }
+      const premisesClash = await findBlockingRentInvoiceForPremisesMonth(assetIdCanonical, periodMonth);
       if (premisesClash) {
         return sendApiError(res, 409, "RENT_INVOICE_PREMISES_MONTH_DUPLICATE", RENT_INVOICE_PREMISES_MONTH_DUPLICATE_MESSAGE);
       }
-      await db.insert(rentInvoices).values({
-        id,
-        allotmentId,
-        allotmentKind: allotmentKindInsert,
-        entityId: entityIdInsert,
-        tenantLicenceId,
-        assetId: assetIdForInvoice,
-        yardId,
-        periodMonth,
-        rentAmount,
-        nonGstChargesJson: nonGst.json,
-        cgst,
-        sgst,
-        totalAmount,
-        tdsApplicable: tdsRes.tdsApplicable,
-        tdsAmount: tdsRes.tdsAmount,
-        status: "Draft",
-        isGovtEntity,
-        invoiceNo,
-        doUser: req.user?.id ?? null,
-        dvUser: null,
-        daUser: null,
-        generatedAt: null,
-        approvedAt: null,
+      const manualInvoiceNo = body.invoiceNo ? String(body.invoiceNo).trim() : "";
+      const [row] = await db.transaction(async (tx) => {
+        const invoiceNo =
+          manualInvoiceNo ||
+          (await allocateRentInvoiceNoInTx(tx, { yardId, periodMonth }));
+        await tx.insert(rentInvoices).values({
+          id,
+          allotmentId,
+          allotmentKind: allotmentKindInsert,
+          entityId: entityIdInsert,
+          tenantLicenceId,
+          assetId: assetIdCanonical,
+          yardId,
+          periodMonth,
+          rentAmount,
+          nonGstChargesJson: nonGst.json,
+          cgst,
+          sgst,
+          totalAmount,
+          tdsApplicable: tdsRes.tdsApplicable,
+          tdsAmount: tdsRes.tdsAmount,
+          status: "Draft",
+          isGovtEntity,
+          invoiceNo,
+          doUser: req.user?.id ?? null,
+          dvUser: null,
+          daUser: null,
+          generatedAt: null,
+          approvedAt: null,
+        });
+        return tx.select().from(rentInvoices).where(eq(rentInvoices.id, id));
       });
-      const [row] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, id));
       writeAuditLog(req, { module: "Rent/Tax", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
@@ -410,6 +442,10 @@ export function registerRentIomsRoutes(app: Express) {
           return sendApiError(res, 400, "RENT_CONTEXT_MONTH", "periodMonth must be YYYY-MM");
         }
         const resolved = await resolveRentForAllotmentPeriodMonth(allotmentId, pm);
+        const blockingInvoice =
+          assetRow.assetId != null
+            ? await findBlockingRentInvoiceForPremisesMonth(assetRow.assetId, pm)
+            : null;
         return res.json({
           allotmentId,
           periodMonth: pm,
@@ -417,6 +453,7 @@ export function registerRentIomsRoutes(app: Express) {
           source: resolved.source,
           matchedRevisionId: resolved.matchedRevisionId,
           matchedInvoiceId: resolved.matchedInvoiceId,
+          blockingInvoice,
         });
       }
 
@@ -870,8 +907,15 @@ export function registerRentIomsRoutes(app: Express) {
         }
       }
 
-      const mergedAssetIdPut =
+      let mergedAssetIdPut =
         updates.assetId !== undefined ? String(updates.assetId ?? "").trim() : String(existing.assetId ?? "").trim();
+      if (updates.assetId !== undefined && mergedAssetIdPut) {
+        const normalizedPut = await normalizeRentInvoiceAssetId(mergedAssetIdPut);
+        if (normalizedPut) {
+          mergedAssetIdPut = normalizedPut;
+          updates.assetId = normalizedPut;
+        }
+      }
       const mergedPeriodMonthPut =
         updates.periodMonth !== undefined ? String(updates.periodMonth ?? "").trim() : String(existing.periodMonth ?? "").trim();
       const mergedStatusPut =
@@ -892,8 +936,10 @@ export function registerRentIomsRoutes(app: Express) {
         statusChange &&
         ["Verified", "Approved", "Paid", "Overdue"].includes(String(newStatus))
       ) {
-        const [y] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, existing.yardId)).limit(1);
-        updates.invoiceNo = formatRentInvoiceNo(y?.code, existing.periodMonth, id);
+        updates.invoiceNo = await allocateRentInvoiceNo({
+          yardId: existing.yardId,
+          periodMonth: mergedPeriodMonthPut || existing.periodMonth,
+        });
       }
 
       await db.update(rentInvoices).set(updates as Record<string, string | number | boolean | null>).where(eq(rentInvoices.id, id));
@@ -1021,7 +1067,7 @@ export function registerRentIomsRoutes(app: Express) {
       const unifiedRaw = String(req.query.unifiedEntityId ?? "").trim();
       const tenantLicenceId = req.query.tenantLicenceId as string | undefined;
       const assetId = req.query.assetId as string | undefined;
-      let list = await db.select().from(rentDepositLedger).orderBy(desc(rentDepositLedger.entryDate));
+      let list = await listRentDepositLedgerEnriched();
       if (unifiedRaw) {
         const parsed = parseUnifiedEntityId(unifiedRaw);
         if (!parsed) {
@@ -1040,133 +1086,7 @@ export function registerRentIomsRoutes(app: Express) {
         list = list.filter((r) => r.tenantLicenceId === tenantLicenceId);
       }
       if (assetId) list = list.filter((r) => r.assetId === assetId);
-
-      const tenantIds = Array.from(
-        new Set(
-          list
-            .map((r) => String(r.tenantLicenceId ?? "").trim())
-            .filter((t) => t && !/^(TA|TB|AH):/i.test(t)),
-        ),
-      );
-      /** Firm name for unified-entity column; licence no / id for tenant column (avoid duplicating firm in both). */
-      const firmByLicenceId = new Map<string, string>();
-      const licenceNoById = new Map<string, string | null>();
-      if (tenantIds.length > 0) {
-        const licRows = await db
-          .select({ id: traderLicences.id, firmName: traderLicences.firmName, licenceNo: traderLicences.licenceNo })
-          .from(traderLicences)
-          .where(inArray(traderLicences.id, tenantIds));
-        for (const l of licRows) {
-          firmByLicenceId.set(l.id, String(l.firmName ?? "").trim() || l.id);
-          const no = l.licenceNo != null ? String(l.licenceNo).trim() : "";
-          licenceNoById.set(l.id, no || null);
-        }
-      }
-
-      const invoiceIds = Array.from(new Set(list.map((r) => String(r.invoiceId ?? "").trim()).filter(Boolean)));
-      const invoiceTenantLicenceById = new Map<string, string>();
-      if (invoiceIds.length > 0) {
-        const invRows = await db
-          .select({ id: rentInvoices.id, tenantLicenceId: rentInvoices.tenantLicenceId })
-          .from(rentInvoices)
-          .where(inArray(rentInvoices.id, invoiceIds));
-        for (const iv of invRows) {
-          invoiceTenantLicenceById.set(iv.id, String(iv.tenantLicenceId ?? "").trim());
-        }
-      }
-
-      const tbRefFromInvoice = (invoiceId: string | null | undefined): string | null => {
-        if (!invoiceId) return null;
-        const t = invoiceTenantLicenceById.get(String(invoiceId)) ?? "";
-        const p = parseUnifiedEntityId(t);
-        return p?.kind === "TB" ? p.refId : null;
-      };
-
-      const tbIds = Array.from(
-        new Set(
-          list.flatMap((r) => {
-            const out: string[] = [];
-            const eff = ledgerRowEffectiveUnifiedEntityId(r);
-            const p1 = eff ? parseUnifiedEntityId(eff) : null;
-            if (p1?.kind === "TB" && p1.refId) out.push(p1.refId);
-            const invRef = tbRefFromInvoice(r.invoiceId);
-            if (invRef) out.push(invRef);
-            return out;
-          }),
-        ),
-      );
-      const ahIds = Array.from(
-        new Set(
-          list
-            .map((r) => {
-              const eff = ledgerRowEffectiveUnifiedEntityId(r);
-              const p = eff ? parseUnifiedEntityId(eff) : null;
-              return p?.kind === "AH" ? p.refId : null;
-            })
-            .filter((x): x is string => Boolean(x)),
-        ),
-      );
-
-      const entityNameById = new Map<string, string>();
-      const entityNameByEntityCode = new Map<string, string>();
-      if (tbIds.length > 0) {
-        const entRows = await db
-          .select({ id: entities.id, entityCode: entities.entityCode, name: entities.name })
-          .from(entities)
-          .where(or(inArray(entities.id, tbIds), inArray(entities.entityCode, tbIds)));
-        for (const er of entRows) {
-          const label = String(er.name ?? "").trim() || er.id;
-          entityNameById.set(er.id, label);
-          const code = er.entityCode != null ? String(er.entityCode).trim() : "";
-          if (code) entityNameByEntityCode.set(code, label);
-        }
-      }
-      const adhocNameById = new Map<string, string>();
-      if (ahIds.length > 0) {
-        const ahRows = await db
-          .select({ id: adHocEntities.id, name: adHocEntities.name })
-          .from(adHocEntities)
-          .where(inArray(adHocEntities.id, ahIds));
-        for (const ar of ahRows) {
-          adhocNameById.set(ar.id, String(ar.name ?? "").trim() || ar.id);
-        }
-      }
-
-      const enriched = list.map((row) => {
-        const tidRaw = String(row.tenantLicenceId ?? "").trim();
-        const tidBare = /^(TA|TB|AH):/i.test(tidRaw) ? "" : tidRaw;
-        const firm = tidBare ? (firmByLicenceId.get(tidBare) ?? null) : null;
-        const licNo = tidBare ? (licenceNoById.get(tidBare) ?? null) : null;
-
-        const effUe = ledgerRowEffectiveUnifiedEntityId(row);
-        const parsed = effUe ? parseUnifiedEntityId(effUe) : null;
-
-        const resolveTb = (ref: string) => entityNameById.get(ref) ?? entityNameByEntityCode.get(ref);
-
-        const unifiedEntityDisplayName = (() => {
-          const invTbRef = tbRefFromInvoice(row.invoiceId);
-          if (!parsed) {
-            if (invTbRef) {
-              const n = resolveTb(invTbRef);
-              if (n) return n;
-            }
-            return firm || effUe || tidBare || "—";
-          }
-          if (parsed.kind === "TA") {
-            return (firmByLicenceId.get(parsed.refId) ?? firm ?? effUe) || tidBare || "—";
-          }
-          if (parsed.kind === "TB") {
-            return resolveTb(parsed.refId) ?? (invTbRef ? resolveTb(invTbRef) : undefined) ?? firm ?? effUe;
-          }
-          if (parsed.kind === "AH") {
-            return adhocNameById.get(parsed.refId) ?? effUe;
-          }
-          return effUe || firm || tidBare || "—";
-        })();
-        const tenantLicenceDisplayName = (licNo ?? tidBare) || "—";
-        return { ...row, unifiedEntityDisplayName, tenantLicenceDisplayName };
-      });
-      res.json(enriched);
+      res.json(list);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch ledger");

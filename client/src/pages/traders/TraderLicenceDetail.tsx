@@ -37,6 +37,7 @@ import {
   AssetAllotmentManageDialog,
   type ManagedAssetAllotment,
 } from "@/components/assets/AssetAllotmentManageDialog";
+import { formatInr } from "@/lib/formatInr";
 import { govtGstCategoriesForSelect } from "@/lib/govtGstExemptSelect";
 
 interface Licence {
@@ -335,7 +336,7 @@ export default function TraderLicenceDetail() {
         toDate: a.toDate,
         status: a.status,
         approvalStatus: appr,
-        securityDeposit: a.securityDeposit != null ? `₹${Number(a.securityDeposit).toLocaleString()}` : "—",
+        securityDeposit: a.securityDeposit != null ? `${formatInr(Number(a.securityDeposit))}` : "—",
         _approval: (
           <Badge variant={appr === "Approved" ? "default" : appr === "Rejected" ? "destructive" : "secondary"}>
             {appr}
@@ -714,7 +715,7 @@ export default function TraderLicenceDetail() {
                     <span className="text-muted-foreground">Parent fee snapshot (BK)</span>
                     <br />
                     {licence.parentLicenceFeeSnapshot != null && Number.isFinite(Number(licence.parentLicenceFeeSnapshot))
-                      ? `₹${Number(licence.parentLicenceFeeSnapshot).toLocaleString()}`
+                      ? `${formatInr(Number(licence.parentLicenceFeeSnapshot))}`
                       : "—"}
                   </div>
                 </>
@@ -722,7 +723,7 @@ export default function TraderLicenceDetail() {
               <div><span className="text-muted-foreground">Aadhaar (masked)</span><br />{licence.aadhaarToken ?? "—"}</div>
               <div><span className="text-muted-foreground">Valid from</span><br />{formatYmdToDisplay(licence.validFrom ?? "")}</div>
               <div><span className="text-muted-foreground">Valid to</span><br />{formatYmdToDisplay(licence.validTo ?? "")}</div>
-              <div><span className="text-muted-foreground">Fee amount</span><br />{licence.feeAmount != null ? `₹${licence.feeAmount}` : "—"}</div>
+              <div><span className="text-muted-foreground">Fee amount</span><br />{licence.feeAmount != null ? formatInr(licence.feeAmount) : "—"}</div>
               <div><span className="text-muted-foreground">Receipt</span><br />{licence.receiptId ? (receiptById[licence.receiptId] ?? licence.receiptId) : "—"}</div>
               <div className="md:col-span-2">
                 <span className="text-muted-foreground">Govt. GST exempt category (office/godown)</span>
@@ -1008,7 +1009,7 @@ export default function TraderLicenceDetail() {
                   <AlertDescription className="text-foreground space-y-2">
                     <p>
                       Default for the new Draft:{" "}
-                      <span className="font-semibold tabular-nums">₹{Number(renewPreview.defaultRenewalFee).toLocaleString()}</span>
+                      <span className="font-semibold tabular-nums">{formatInr(Number(renewPreview.defaultRenewalFee))}</span>
                       {renewPreview.resolutionSource === "parent_licence_fee" ? (
                         <> (from this licence&apos;s current fee)</>
                       ) : (
@@ -1018,11 +1019,10 @@ export default function TraderLicenceDetail() {
                     <p className="text-muted-foreground text-xs">
                       Parent fee:{" "}
                       {renewPreview.parentFeeAmount != null
-                        ? `₹${Number(renewPreview.parentFeeAmount).toLocaleString()}`
+                        ? `${formatInr(Number(renewPreview.parentFeeAmount))}`
                         : "—"}
                       {" · "}
-                      Config <span className="font-mono">licence_fee</span>: ₹
-                      {Number(renewPreview.systemLicenceFee).toLocaleString()}
+                      Config <span className="font-mono">licence_fee</span>: {formatInr(renewPreview.systemLicenceFee)}
                     </p>
                     <p className="text-xs text-muted-foreground">{renewPreview.resolutionNote}</p>
                     <p className="text-xs text-muted-foreground">

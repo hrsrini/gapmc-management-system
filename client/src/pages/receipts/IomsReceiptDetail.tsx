@@ -16,6 +16,7 @@ import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { formatInr } from "@/lib/formatInr";
 import { Label } from "@/components/ui/label";
 
 interface RentArrearsDisclosure {
@@ -376,7 +377,7 @@ export default function IomsReceiptDetail() {
                       Create bank charge voucher
                     </Link>
                     {receipt.rentDishonourScaffold.bankChargeInr != null ? (
-                      <span className="text-muted-foreground"> (₹{receipt.rentDishonourScaffold.bankChargeInr.toLocaleString()})</span>
+                      <span className="text-muted-foreground"> ({formatInr(receipt.rentDishonourScaffold.bankChargeInr)})</span>
                     ) : null}
                   </p>
                 ) : null}
@@ -392,9 +393,9 @@ export default function IomsReceiptDetail() {
                   A previous receipt for this rent invoice was reversed (cheque/DD dishonour). Simple interest from
                   period end ({receipt.rentArrearsDisclosure.dueDateIso}) to this receipt date (
                   {receipt.rentArrearsDisclosure.asOfIso}) is indicative only: about{" "}
-                  <strong>₹{receipt.rentArrearsDisclosure.approxInterestInr.toFixed(2)}</strong> over{" "}
+                  <strong>{formatInr(receipt.rentArrearsDisclosure.approxInterestInr, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong> over{" "}
                   {receipt.rentArrearsDisclosure.overdueDays} day(s) at {receipt.rentArrearsDisclosure.ratePercentPerAnnum}
-                  % p.a. on principal ₹{receipt.rentArrearsDisclosure.principalInr.toFixed(2)}. It is{" "}
+                  % p.a. on principal {formatInr(receipt.rentArrearsDisclosure.principalInr, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. It is{" "}
                   <strong>not included</strong> in the receipt total above — confirm posting with finance.
                 </p>
                 <p className="flex flex-wrap gap-x-4 gap-y-1">
@@ -421,9 +422,9 @@ export default function IomsReceiptDetail() {
             <div><span className="text-muted-foreground">Revenue head</span><br />{receipt.revenueHead}</div>
             <div><span className="text-muted-foreground">Payer</span><br />{payerResolvedLabel}</div>
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant={receipt.status === "Paid" ? "default" : "secondary"}>{receipt.status}</Badge></div>
-            <div><span className="text-muted-foreground">Amount</span><br />₹{receipt.amount.toLocaleString()}</div>
-            <div><span className="text-muted-foreground">CGST / SGST</span><br />₹{(receipt.cgst ?? 0).toLocaleString()} / ₹{(receipt.sgst ?? 0).toLocaleString()}</div>
-            <div><span className="text-muted-foreground">Total</span><br />₹{receipt.totalAmount.toLocaleString()}</div>
+            <div><span className="text-muted-foreground">Amount</span><br />{formatInr(receipt.amount)}</div>
+            <div><span className="text-muted-foreground">CGST / SGST</span><br />{formatInr((receipt.cgst ?? 0))} / {formatInr((receipt.sgst ?? 0))}</div>
+            <div><span className="text-muted-foreground">Total</span><br />{formatInr(receipt.totalAmount)}</div>
             <div><span className="text-muted-foreground">Payment mode</span><br />{receipt.paymentMode}</div>
             {receipt.gatewayRef && <div><span className="text-muted-foreground">Gateway ref</span><br />{receipt.gatewayRef}</div>}
             {receipt.chequeNo && <div><span className="text-muted-foreground">Cheque no</span><br />{receipt.chequeNo} {receipt.bankName ? `(${receipt.bankName})` : ""}</div>}

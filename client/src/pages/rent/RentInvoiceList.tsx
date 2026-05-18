@@ -24,6 +24,7 @@ import { formatDisplayDate } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/context/AuthContext';
+import { formatInr } from "@/lib/formatInr";
 import type { Invoice } from '@shared/schema';
 
 const statusColors: Record<string, string> = {
@@ -101,9 +102,9 @@ export default function RentInvoiceList() {
         yard: invoice.yard,
         baseRent: invoice.baseRent,
         gstSum,
-        _gst: `₹${gstSum.toLocaleString()}`,
+        _gst: `${formatInr(gstSum)}`,
         total: invoice.total,
-        _total: `₹${invoice.total.toLocaleString()}`,
+        _total: `${formatInr(invoice.total)}`,
         status: invoice.status,
         _status: (
           <Badge variant="outline" className={statusColors[invoice.status] ?? statusColors.Draft}>
@@ -297,25 +298,25 @@ export default function RentInvoiceList() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Base Rent</span>
-                  <span>₹{viewInvoice.baseRent.toLocaleString()}</span>
+                  <span>{formatInr(viewInvoice.baseRent)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">CGST + SGST</span>
-                  <span>₹{(viewInvoice.cgst + viewInvoice.sgst).toLocaleString()}</span>
+                  <span>{formatInr((viewInvoice.cgst + viewInvoice.sgst))}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Interest</span>
-                  <span>₹{viewInvoice.interest.toLocaleString()}</span>
+                  <span>{formatInr(viewInvoice.interest)}</span>
                 </div>
                 {viewInvoice.tdsApplicable && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">TDS</span>
-                    <span>₹{viewInvoice.tdsAmount.toLocaleString()}</span>
+                    <span>{formatInr(viewInvoice.tdsAmount)}</span>
                   </div>
                 )}
                 <div className="flex justify-between pt-2 border-t font-semibold">
                   <span>Total</span>
-                  <span>₹{viewInvoice.total.toLocaleString()}</span>
+                  <span>{formatInr(viewInvoice.total)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Status</span>

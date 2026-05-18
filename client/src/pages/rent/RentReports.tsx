@@ -29,6 +29,7 @@ import {
   type ReportPagedParams,
   type ReportTableColumn,
 } from "@/components/reports/ReportDataTable";
+import { formatInr } from "@/lib/formatInr";
 import { sliceClientReport } from "@/lib/clientReportSlice";
 
 function invoiceMatchesSelectedYard(
@@ -131,7 +132,7 @@ export default function RentReports() {
           traderMobile,
           yard: inv.yard,
           total: inv.total,
-          _amount: `₹${inv.total.toLocaleString()}`,
+          _amount: `${formatInr(inv.total)}`,
           status: inv.status,
           _status: (
             <span
@@ -181,9 +182,9 @@ export default function RentReports() {
         totalAmount: item.totalAmount,
         collected: item.collected,
         pending: item.pending,
-        _totalAmt: `₹${item.totalAmount.toLocaleString()}`,
-        _collected: `₹${item.collected.toLocaleString()}`,
-        _pending: `₹${item.pending.toLocaleString()}`,
+        _totalAmt: `${formatInr(item.totalAmount)}`,
+        _collected: `${formatInr(item.collected)}`,
+        _pending: `${formatInr(item.pending)}`,
       })),
     [yardWiseCollection],
   );
@@ -207,31 +208,31 @@ export default function RentReports() {
         id: "base",
         metric: "Total base rent",
         amount: gstSummary.totalBase,
-        _amount: `₹${gstSummary.totalBase.toLocaleString()}`,
+        _amount: `${formatInr(gstSummary.totalBase)}`,
       },
       {
         id: "cgst",
         metric: "Total CGST",
         amount: gstSummary.totalCGST,
-        _amount: `₹${gstSummary.totalCGST.toLocaleString()}`,
+        _amount: `${formatInr(gstSummary.totalCGST)}`,
       },
       {
         id: "sgst",
         metric: "Total SGST",
         amount: gstSummary.totalSGST,
-        _amount: `₹${gstSummary.totalSGST.toLocaleString()}`,
+        _amount: `${formatInr(gstSummary.totalSGST)}`,
       },
       {
         id: "interest",
         metric: "Total interest",
         amount: gstSummary.totalInterest,
-        _amount: `₹${gstSummary.totalInterest.toLocaleString()}`,
+        _amount: `${formatInr(gstSummary.totalInterest)}`,
       },
       {
         id: "grand",
         metric: "Grand total",
         amount: gstSummary.grandTotal,
-        _amount: `₹${gstSummary.grandTotal.toLocaleString()}`,
+        _amount: `${formatInr(gstSummary.grandTotal)}`,
       },
     ];
   }, [gstSummary]);

@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { formatInr } from "@/lib/formatInr";
 import {
   inferAgreementTypeFromDates,
   defaultGstApplicableTrackBEntity,
@@ -68,6 +69,8 @@ interface VacantAssetRow {
     assetType?: string | null;
     complexName?: string | null;
     premisesStatus?: string | null;
+    area?: string | null;
+    plinthAreaSqft?: number | null;
   };
 }
 interface Allotment {
@@ -164,7 +167,6 @@ export default function EntityDetail() {
 
   const [open, setOpen] = useState(false);
   const [assetId, setAssetId] = useState("");
-  const [allotteeName, setAllotteeName] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [monthlyRent, setMonthlyRent] = useState("");
@@ -175,7 +177,6 @@ export default function EntityDetail() {
   const [securityDeposit, setSecurityDeposit] = useState("");
 
   const [manageRow, setManageRow] = useState<Allotment | null>(null);
-  const [mAllottee, setMAllottee] = useState("");
   const [mFrom, setMFrom] = useState("");
   const [mTo, setMTo] = useState("");
   const [mRent, setMRent] = useState("");
@@ -211,7 +212,6 @@ export default function EntityDetail() {
   useEffect(() => {
     const r = manageRow;
     if (!r) return;
-    setMAllottee(r.allotteeName ?? "");
     setMFrom(r.fromDate ?? "");
     setMTo(r.toDate ?? "");
     setMRent(r.monthlyRent != null ? String(r.monthlyRent) : "");
@@ -288,7 +288,6 @@ export default function EntityDetail() {
         description: "Upload the notarised agreement PDF, then DV verifies and DA approves.",
       });
       setOpen(false);
-      setAllotteeName("");
       setSecurityDeposit("");
       setMonthlyRent("");
       setAssetId("");
@@ -350,6 +349,16 @@ export default function EntityDetail() {
   });
 
   const selectedVacant = assetId ? vacantByAssetPk[assetId] : undefined;
+  const premisesAreaDisplay = useMemo(() => {
+    const a = selectedVacant?.asset;
+    if (!a) return "—";
+    const textArea = a.area?.trim();
+    if (textArea) return textArea;
+    if (a.plinthAreaSqft != null && Number.isFinite(Number(a.plinthAreaSqft))) {
+      return String(Math.round(Number(a.plinthAreaSqft) * 0.092903 * 100) / 100);
+    }
+    return "—";
+  }, [selectedVacant]);
   const inferredAgType =
     fromDate && toDate && /^\d{4}-\d{2}-\d{2}$/.test(fromDate) && /^\d{4}-\d{2}-\d{2}$/.test(toDate)
       ? inferAgreementTypeFromDates(fromDate, toDate)
@@ -366,7 +375,7 @@ export default function EntityDetail() {
         fromDate: a.fromDate,
         toDate: a.toDate,
         status: a.status,
-        monthlyRent: a.monthlyRent != null ? `₹${Number(a.monthlyRent).toLocaleString()}` : "—",
+        monthlyRent: a.monthlyRent != null ? `${formatInr(Number(a.monthlyRent))}` : "—",
         premisesRef: a.premisesRefNo?.trim() ? a.premisesRefNo : "—",
         _approval: (
           <Badge variant={appr === "Approved" ? "default" : appr === "Rejected" ? "destructive" : "secondary"}>{appr}</Badge>
@@ -626,20 +635,19 @@ export default function EntityDetail() {
               {selectedVacant?.asset ? (
                 <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-0.5">
                   <div>
-                    <span className="font-medium text-foreground">Master:</span>{" "}
-                    {selectedVacant.asset.complexName?.trim() || "—"}
-                    {selectedVacant.asset.assetType ? ` · ${selectedVacant.asset.assetType}` : ""}
+                    <span className="font-medium text-foreground">Premises type:</span>{" "}
+                    {selectedVacant.asset.assetType?.trim() || "—"}
                   </div>
                   <div>
-                    <span className="font-medium text-foreground">Premises status:</span>{" "}
-                    {selectedVacant.asset.premisesStatus ?? "Active"}
+                    <span className="font-medium text-foreground">Area (sq. meters):</span> {premisesAreaDisplay}
                   </div>
                 </div>
               ) : null}
             </div>
             <div className="md:col-span-2 space-y-1">
-              <Label>Allottee name *</Label>
-              <Input value={allotteeName} onChange={(e) => setAllotteeName(e.target.value)} placeholder="Shown on allocation record" />
+              <Label>Allottee name</Label>
+              <Input value={entity?.name ?? ""} readOnly className="bg-muted/50" />
+              <p className="text-xs text-muted-foreground">Taken from the entity record.</p>
             </div>
             <div className="space-y-1">
               <Label>Agreement from *</Label>
@@ -693,7 +701,7 @@ export default function EntityDetail() {
               <Input value={consecutiveRenewalCount} onChange={(e) => setConsecutiveRenewalCount(e.target.value)} inputMode="numeric" />
             </div>
             <div className="space-y-1">
-              <Label>Security deposit</Label>
+              <Label>Security deposit (₹)</Label>
               <Input value={securityDeposit} onChange={(e) => setSecurityDeposit(e.target.value)} inputMode="decimal" />
             </div>
             {entity?.subType === "AdHocOccupant" ? (
@@ -721,7 +729,7 @@ export default function EntityDetail() {
               disabled={
                 createMutation.isPending ||
                 !assetId ||
-                !allotteeName.trim() ||
+                !entity?.name?.trim() ||
                 !fromDate ||
                 !toDate ||
                 !Number.isFinite(Number(monthlyRent)) ||
@@ -732,7 +740,6 @@ export default function EntityDetail() {
                 const body: Record<string, unknown> = {
                   assetId,
                   entityId: id,
-                  allotteeName: allotteeName.trim(),
                   fromDate,
                   toDate,
                   monthlyRent: mr,
@@ -795,7 +802,7 @@ export default function EntityDetail() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 border-t pt-3">
                     <div className="md:col-span-2 space-y-1">
                       <Label>Allottee name</Label>
-                      <Input value={mAllottee} onChange={(e) => setMAllottee(e.target.value)} />
+                      <Input value={entity?.name ?? manageRow.allotteeName ?? ""} readOnly className="bg-muted/50" />
                     </div>
                     <div className="space-y-1">
                       <Label>Agreement from</Label>
@@ -839,14 +846,12 @@ export default function EntityDetail() {
                         disabled={
                           patchAllotMutation.isPending ||
                           !Number.isFinite(Number(mRent)) ||
-                          Number(mRent) <= 0 ||
-                          !mAllottee.trim()
+                          Number(mRent) <= 0
                         }
                         onClick={() =>
                           patchAllotMutation.mutate({
                             allocId: manageRow.id,
                             body: {
-                              allotteeName: mAllottee.trim(),
                               fromDate: mFrom,
                               toDate: mTo,
                               monthlyRent: Number(mRent),

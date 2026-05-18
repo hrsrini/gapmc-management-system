@@ -20,7 +20,9 @@ import { randomHexSecret } from "@/lib/randomHexSecret";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 
 /** Module scope (not inside the component) avoids production TDZ from useMemo + .map over shared config maps. */
-const ADMIN_CONFIG_FIELDS: { key: SystemConfigKey; label: string }[] = SYSTEM_CONFIG_KEYS.filter((key) => key !== "ui_sidebar_hidden_hrefs_json").map(
+const ADMIN_CONFIG_FIELDS: { key: SystemConfigKey; label: string }[] = SYSTEM_CONFIG_KEYS.filter(
+  (key) => key !== "ui_sidebar_hidden_hrefs_json" && key !== "ui_dashboard_show_kpi_cards",
+).map(
   (key) => ({
     key,
     label: SYSTEM_CONFIG_LABELS[key],

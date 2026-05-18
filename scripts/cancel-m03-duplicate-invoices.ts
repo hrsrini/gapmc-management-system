@@ -74,6 +74,17 @@ async function main() {
   await client.connect();
 
   try {
+    const norm = await client.query(`
+      UPDATE gapmc.rent_invoices ri
+      SET asset_id = a.id
+      FROM gapmc.assets a
+      WHERE trim(ri.asset_id) = trim(a.asset_id)
+        AND ri.asset_id IS DISTINCT FROM a.id
+    `);
+    if ((norm.rowCount ?? 0) > 0) {
+      console.log(`Normalized rent_invoices.asset_id rows: ${norm.rowCount}\n`);
+    }
+
     const groups = await client.query<{ asset_id: string; period_month: string; cnt: string }>(
       `SELECT asset_id, period_month, COUNT(*)::text AS cnt
        FROM gapmc.rent_invoices

@@ -21,6 +21,8 @@ import { validateDaRejection, validateDvReturnToDraft } from "@shared/workflow-r
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
 import { routeParamString } from "./route-params";
+import { formatInrPdf } from "@shared/format-inr";
+import { pdfSafeText } from "./pdf-safe-text";
 import {
   contentTypeForVoucherAttachment,
   extFromVoucherAttachmentMime,
@@ -289,11 +291,13 @@ export function registerVoucherRoutes(app: Express) {
             doc
               .fontSize(10)
               .text(
-                `${r.headCode} — ${r.headDescription}: ${r.voucherCount} voucher(s), ₹${Number(r.totalAmount).toFixed(2)}`,
+                pdfSafeText(
+                  `${r.headCode} — ${r.headDescription}: ${r.voucherCount} voucher(s), ${formatInrPdf(r.totalAmount)}`,
+                ),
               );
           }
           doc.moveDown();
-          doc.fontSize(11).text(`Grand total: ₹${grandTotal.toFixed(2)} (${inMonth.length} paid voucher(s))`);
+          doc.fontSize(11).text(pdfSafeText(`Grand total: ${formatInrPdf(grandTotal)} (${inMonth.length} paid voucher(s))`));
           doc.end();
         });
         const pdfBuffer = Buffer.concat(chunks);

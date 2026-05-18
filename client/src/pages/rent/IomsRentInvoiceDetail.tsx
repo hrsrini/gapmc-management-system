@@ -22,6 +22,7 @@ import { FileText, ArrowLeft, ShieldCheck, CheckCircle, AlertCircle, SendHorizon
 import { formatApiDateOrDateTime, formatYearMonthToDisplay } from "@/lib/dateFormat";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
+import { formatInr } from "@/lib/formatInr";
 import { entityIdFromRentInvoice } from "./rent-allotments-ui";
 
 interface RentInvoice {
@@ -307,13 +308,13 @@ export default function IomsRentInvoiceDetail() {
               <br />
               <Badge variant={overdue ? "destructive" : "secondary"}>{invoice.status}</Badge>
             </div>
-            <div><span className="text-muted-foreground">Rent</span><br />₹{invoice.rentAmount.toLocaleString()}</div>
-            <div><span className="text-muted-foreground">CGST / SGST</span><br />₹{invoice.cgst.toLocaleString()} / ₹{invoice.sgst.toLocaleString()}</div>
-            <div><span className="text-muted-foreground">Total</span><br />₹{invoice.totalAmount.toLocaleString()}</div>
+            <div><span className="text-muted-foreground">Rent</span><br />{formatInr(invoice.rentAmount)}</div>
+            <div><span className="text-muted-foreground">CGST / SGST</span><br />{formatInr(invoice.cgst)} / {formatInr(invoice.sgst)}</div>
+            <div><span className="text-muted-foreground">Total</span><br />{formatInr(invoice.totalAmount)}</div>
             {invoice.tdsApplicable ? (
               <div>
                 <span className="text-muted-foreground">TDS (194-I style, on rent)</span>
-                <br />₹{Number(invoice.tdsAmount ?? 0).toLocaleString()}
+                <br />{formatInr(Number(invoice.tdsAmount ?? 0))}
               </div>
             ) : (
               <div>
@@ -328,7 +329,7 @@ export default function IomsRentInvoiceDetail() {
                 <ul className="mt-1 list-disc list-inside text-sm">
                   {nonGstLines.map((l, i) => (
                     <li key={i}>
-                      {l.label}: ₹{l.amount.toLocaleString()}
+                      {l.label}: {formatInr(l.amount)}
                     </li>
                   ))}
                 </ul>
@@ -417,7 +418,7 @@ export default function IomsRentInvoiceDetail() {
                   <li key={c.id} className="flex flex-wrap justify-between gap-2">
                     <span className="font-mono">{c.creditNoteNo}</span>
                     <Badge variant="secondary">{c.status}</Badge>
-                    <span className="text-muted-foreground w-full">₹{c.amount.toLocaleString()} — {c.reason}</span>
+                    <span className="text-muted-foreground w-full">{formatInr(c.amount)} — {c.reason}</span>
                   </li>
                 ))}
               </ul>

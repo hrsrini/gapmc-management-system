@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle, Wallet, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
+import { formatInr, formatInrSigned } from "@/lib/formatInr";
 import { useAuth } from "@/context/AuthContext";
 
 interface LedgerEntry {
@@ -124,7 +125,7 @@ export default function MarketAdvanceLedger() {
       id: e.id,
       entryDate: String(e.entryDate ?? "").slice(0, 10),
       entryType: <Badge variant={e.entryType === "Deposit" ? "default" : "secondary"}>{e.entryType}</Badge>,
-      _amount: `${Number(e.amountInr) >= 0 ? "+" : ""}₹${Math.abs(Number(e.amountInr ?? 0)).toLocaleString("en-IN")}`,
+      _amount: formatInrSigned(e.amountInr),
       _receipt: e.receiptId ? (
         <Link className="text-primary hover:underline text-sm font-mono" href={`/receipts/ioms/${e.receiptId}`}>
           View
@@ -182,11 +183,11 @@ export default function MarketAdvanceLedger() {
               <Input
                 readOnly
                 className="bg-muted"
-                value={traderLicenceId ? `₹${Number(data?.balance ?? 0).toLocaleString("en-IN")}` : "—"}
+                value={traderLicenceId ? `${formatInr(Number(data?.balance ?? 0))}` : "—"}
               />
               {traderLicenceId && data?.belowThreshold ? (
                 <p className="text-xs text-amber-700 dark:text-amber-400">
-                  Low balance: below ₹{Number(data.thresholdInr ?? 0).toLocaleString("en-IN")}
+                  Low balance: below {formatInr(Number(data.thresholdInr ?? 0))}
                 </p>
               ) : null}
             </div>
@@ -201,7 +202,7 @@ export default function MarketAdvanceLedger() {
               </CardHeader>
               <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
                 <div className="space-y-1">
-                  <Label>Amount (INR)</Label>
+                  <Label>Amount (₹)</Label>
                   <Input type="number" value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} />
                 </div>
                 <div className="space-y-1">
@@ -235,7 +236,7 @@ export default function MarketAdvanceLedger() {
               </CardHeader>
               <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
                 <div className="space-y-1">
-                  <Label>Amount (INR)</Label>
+                  <Label>Amount (₹)</Label>
                   <Input type="number" value={refundAmount} onChange={(e) => setRefundAmount(e.target.value)} />
                 </div>
                 <div className="space-y-1">

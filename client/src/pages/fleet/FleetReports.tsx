@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
+import { formatInr } from "@/lib/formatInr";
 import { FileDown, Gauge } from "lucide-react";
 
 interface TripRow {
@@ -72,7 +73,7 @@ export default function FleetReports() {
       ...v,
       _dist: v.totalDistanceKm.toFixed(2),
       _fuel: v.totalFuelLitres.toFixed(2),
-      _cost: `₹${Math.round(v.totalFuelCostInr).toLocaleString("en-IN")}`,
+      _cost: `${formatInr(Math.round(v.totalFuelCostInr))}`,
       _eff: v.efficiencyKmPerLitre == null ? "—" : v.efficiencyKmPerLitre.toFixed(2),
     }));
   }, [vehicles]);

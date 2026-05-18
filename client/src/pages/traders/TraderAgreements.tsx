@@ -30,6 +30,7 @@ import type { Agreement } from '@shared/schema';
 import { ClientDataGrid } from '@/components/reports/ClientDataGrid';
 import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
 import { useUploadFilePreview } from '@/hooks/useUploadFilePreview';
+import { formatInr } from "@/lib/formatInr";
 import { AuthenticatedBlobPreviewDialog } from '@/components/attachment/AuthenticatedBlobPreviewDialog';
 
 const statusColors: Record<string, string> = {
@@ -141,9 +142,9 @@ export default function TraderAgreements() {
       yardName: agreement.yardName,
       startDate: agreement.startDate,
       endDate: agreement.endDate,
-      rentAmount: `₹${agreement.rentAmount.toLocaleString()}`,
+      rentAmount: `${formatInr(agreement.rentAmount)}`,
       rentAmountNum: agreement.rentAmount,
-      securityDeposit: `₹${agreement.securityDeposit.toLocaleString()}`,
+      securityDeposit: `${formatInr(agreement.securityDeposit)}`,
       securityDepositNum: agreement.securityDeposit,
       status: agreement.status,
       _status: (
@@ -345,11 +346,11 @@ export default function TraderAgreements() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Rent</span>
-                  <span>₹{viewAgreement.rentAmount.toLocaleString()}</span>
+                  <span>{formatInr(viewAgreement.rentAmount)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Security Deposit</span>
-                  <span>₹{viewAgreement.securityDeposit.toLocaleString()}</span>
+                  <span>{formatInr(viewAgreement.securityDeposit)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Status</span>

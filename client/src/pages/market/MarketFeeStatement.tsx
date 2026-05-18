@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { Banknote, AlertCircle, ExternalLink } from "lucide-react";
 import { Link } from "wouter";
+import { formatInr } from "@/lib/formatInr";
 
 interface TraderLicenceRef {
   id: string;
@@ -146,7 +147,7 @@ export default function MarketFeeStatement() {
                       <CardTitle className="text-sm text-muted-foreground">Total payable (₹)</CardTitle>
                     </CardHeader>
                     <CardContent className="pt-0 text-xl font-semibold">
-                      {Number(statement.totalPayable ?? 0).toLocaleString()}
+                      {formatInr(statement.totalPayable ?? 0)}
                     </CardContent>
                   </Card>
                   <Card>
@@ -154,7 +155,7 @@ export default function MarketFeeStatement() {
                       <CardTitle className="text-sm text-muted-foreground">Total paid (₹)</CardTitle>
                     </CardHeader>
                     <CardContent className="pt-0 text-xl font-semibold">
-                      {Number(statement.totalPaid ?? 0).toLocaleString()}
+                      {formatInr(statement.totalPaid ?? 0)}
                     </CardContent>
                   </Card>
                   <Card>
@@ -162,7 +163,7 @@ export default function MarketFeeStatement() {
                       <CardTitle className="text-sm text-muted-foreground">Outstanding (₹)</CardTitle>
                     </CardHeader>
                     <CardContent className="pt-0 text-xl font-semibold">
-                      {Number(statement.outstanding ?? 0).toLocaleString()}
+                      {formatInr(statement.outstanding ?? 0)}
                     </CardContent>
                   </Card>
                 </div>

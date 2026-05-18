@@ -25,6 +25,7 @@ import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
 import { format, formatDisplayDate } from '@/lib/dateFormat';
 import type { MarketFee } from '@shared/schema';
 import { ClientDataGrid } from '@/components/reports/ClientDataGrid';
+import { formatInr } from "@/lib/formatInr";
 import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
 
 const columns: ReportTableColumn[] = [
@@ -74,7 +75,7 @@ export default function FeeCollection() {
         <Badge variant={entry.entryType === 'Import' ? 'default' : 'secondary'}>{entry.entryType}</Badge>
       ),
       _marketFee: (
-        <span className="font-semibold text-accent">₹{entry.marketFee.toLocaleString()}</span>
+        <span className="font-semibold text-accent">{formatInr(entry.marketFee)}</span>
       ),
       _actions: (
         <div className="flex justify-end">
@@ -101,19 +102,19 @@ export default function FeeCollection() {
   const stats = [
     {
       title: "Today's Collection",
-      value: `₹${todayCollection.toLocaleString()}`,
+      value: `${formatInr(todayCollection)}`,
       icon: IndianRupee,
       color: 'bg-accent/10 text-accent',
     },
     {
       title: 'This Month',
-      value: `₹${monthCollection.toLocaleString()}`,
+      value: `${formatInr(monthCollection)}`,
       icon: TrendingUp,
       color: 'bg-primary/10 text-primary',
     },
     {
       title: 'Pending Dues',
-      value: '₹0',
+      value: formatInr(0),
       icon: Clock,
       color: 'bg-amber-500/10 text-amber-600',
     },
@@ -272,15 +273,15 @@ export default function FeeCollection() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Rate</span>
-                  <span>₹{viewEntry.ratePerUnit?.toLocaleString()}/unit</span>
+                  <span>{formatInr(viewEntry.ratePerUnit)}/unit</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Total Value</span>
-                  <span>₹{viewEntry.totalValue.toLocaleString()}</span>
+                  <span>{formatInr(viewEntry.totalValue)}</span>
                 </div>
                 <div className="flex justify-between pt-2 border-t font-semibold">
                   <span>Market Fee</span>
-                  <span className="text-accent">₹{viewEntry.marketFee.toLocaleString()}</span>
+                  <span className="text-accent">{formatInr(viewEntry.marketFee)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Location</span>

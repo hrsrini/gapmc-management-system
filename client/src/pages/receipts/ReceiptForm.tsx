@@ -23,6 +23,7 @@ import { PlusCircle, Save, Printer, X, AlertCircle } from 'lucide-react';
 import { RECEIPT_HEADS } from '@/data/yards';
 import { format } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
+import { formatInr } from "@/lib/formatInr";
 import type { Trader } from '@shared/schema';
 
 type ReceiptType = 'Rent' | 'Market Fee' | 'License Fee' | 'Other';
@@ -419,7 +420,7 @@ export default function ReceiptForm() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Total: ₹{total.toLocaleString()}</CardTitle>
+            <CardTitle>Total: {formatInr(total)}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">

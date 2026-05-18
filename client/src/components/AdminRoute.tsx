@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/context/AuthContext';
+import { useAppHomeHref } from '@/hooks/useAppHomeHref';
 
 /** Allow access to Admin section if user has ADMIN role or any M-10 permission (API still enforces per-action permissions). */
 function hasAdminAccess(
@@ -18,6 +19,7 @@ interface AdminRouteProps {
 export function AdminRoute({ children }: AdminRouteProps) {
   const { user, isAuthenticated, isLoading } = useAuth();
   const [, setLocation] = useLocation();
+  const homeHref = useAppHomeHref();
   const isAdmin = hasAdminAccess(user?.roles, user?.permissions);
 
   useEffect(() => {
@@ -27,9 +29,9 @@ export function AdminRoute({ children }: AdminRouteProps) {
       return;
     }
     if (!isAdmin) {
-      setLocation('/dashboard');
+      setLocation(homeHref);
     }
-  }, [isAuthenticated, isLoading, isAdmin, setLocation]);
+  }, [isAuthenticated, isLoading, isAdmin, setLocation, homeHref]);
 
   if (isLoading || !isAuthenticated) {
     return (

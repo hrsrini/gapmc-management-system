@@ -11,6 +11,7 @@ import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { AlertCircle, Gauge, RefreshCw } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { formatInr } from "@/lib/formatInr";
 import { useToast } from "@/hooks/use-toast";
 
 interface YardRef {
@@ -95,9 +96,9 @@ export default function MarketDailyPrices() {
     return (data ?? []).map((r) => ({
       id: r.id,
       commodityName: commodityById.get(r.commodityId) ?? r.commodityId,
-      _min: `₹${Number(r.minPriceInrPerUnit ?? 0).toLocaleString("en-IN")}`,
-      _max: `₹${Number(r.maxPriceInrPerUnit ?? 0).toLocaleString("en-IN")}`,
-      _modal: `₹${Number(r.modalPriceInrPerUnit ?? 0).toLocaleString("en-IN")}`,
+      _min: `${formatInr(Number(r.minPriceInrPerUnit ?? 0))}`,
+      _max: `${formatInr(Number(r.maxPriceInrPerUnit ?? 0))}`,
+      _modal: `${formatInr(Number(r.modalPriceInrPerUnit ?? 0))}`,
       sampleCount: r.sampleCount ?? 0,
       _qty: Number(r.totalQty ?? 0).toLocaleString("en-IN"),
       generatedAt: (r.generatedAt ?? "—").toString().slice(0, 19).replace("T", " "),

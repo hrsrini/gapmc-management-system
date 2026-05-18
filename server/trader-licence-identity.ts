@@ -60,6 +60,17 @@ export async function nextApplicationSerialTx(tx: any): Promise<string> {
   return `APP-${year}-${String(seq).padStart(4, "0")}`;
 }
 
+/** SRS §6.1 M-02: public Entity ID `ENT-[YYYY]-[NNNNN]` (immutable once assigned). */
+export const ENTITY_PUBLIC_CODE_RE = /^ENT-\d{4}-\d{5}$/;
+
+export function formatEntityPublicCode(year: number, seq: number): string {
+  return `ENT-${year}-${String(seq).padStart(5, "0")}`;
+}
+
+export function isEntityPublicCodeFormat(value: string | null | undefined): boolean {
+  return ENTITY_PUBLIC_CODE_RE.test(String(value ?? "").trim());
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function nextEntityPublicCodeTx(tx: any): Promise<string> {
   const year = new Date().getUTCFullYear();
@@ -74,7 +85,12 @@ export async function nextEntityPublicCodeTx(tx: any): Promise<string> {
   );
   const n = Number(firstCell(r));
   const seq = Number.isFinite(n) && n > 0 ? n : 1;
-  return `ENT-${year}-${String(seq).padStart(5, "0")}`;
+  return formatEntityPublicCode(year, seq);
+}
+
+/** Allocate next ENT-YYYY-NNNNN (Track B entity master / ad-hoc entity). */
+export async function nextEntityPublicCode(): Promise<string> {
+  return db.transaction(async (tx: unknown) => nextEntityPublicCodeTx(tx));
 }
 
 /** Allocate final licence number + ENT public code when activating (preserves existing non-empty values). */

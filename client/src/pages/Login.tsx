@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { Leaf } from 'lucide-react';
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp';
+import { resolveAppHomeHref } from '@shared/nav-sidebar-hidden';
 
 export default function Login() {
   const [loginId, setLoginId] = useState('');
@@ -31,7 +32,13 @@ export default function Login() {
         title: 'Welcome back!',
         description: 'You have successfully signed in.',
       });
-      window.location.href = '/dashboard';
+      try {
+        const cfgRes = await fetch('/api/system/config', { credentials: 'include' });
+        const cfg = cfgRes.ok ? ((await cfgRes.json()) as Record<string, string>) : undefined;
+        window.location.href = resolveAppHomeHref(cfg?.ui_sidebar_hidden_hrefs_json);
+      } catch {
+        window.location.href = '/dashboard';
+      }
     } else {
       if (result.mfaRequired) {
         setMfaRequired(true);

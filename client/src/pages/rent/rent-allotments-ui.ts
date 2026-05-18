@@ -2,12 +2,21 @@
 
 export interface AssetAllotmentRow {
   id: string;
+  /** FK to `assets.id` (primary key), not the human-readable `assets.asset_id` code. */
   assetId: string;
   traderLicenceId: string;
   allotteeName: string;
   fromDate: string;
   toDate: string;
   status: string;
+  approvalStatus?: string | null;
+}
+
+export interface YardRef {
+  id: string;
+  name: string;
+  code: string;
+  type?: string | null;
 }
 
 export interface EntityAllotmentRow {
@@ -24,17 +33,43 @@ export interface EntityAllotmentRow {
   gstApplicable?: boolean | null;
 }
 
-export function activeAssetAllotmentsInYard(rows: AssetAllotmentRow[], yardAssetIds: Set<string>): AssetAllotmentRow[] {
-  return rows.filter((a) => a.status === "Active" && yardAssetIds.has(a.assetId));
+/** Premises exist only at market yards — exclude check posts and HO from rent-invoice yard filters. */
+export function yardsWithPremises(yards: YardRef[]): YardRef[] {
+  return yards.filter((y) => String(y.type ?? "Yard").trim() === "Yard");
 }
 
-export function billableEntityAllotmentsInYard(rows: EntityAllotmentRow[], yardAssetIds: Set<string>): EntityAllotmentRow[] {
+/** Primary keys (`assets.id`) for premises in the selected yard. */
+export function buildYardAssetPrimaryKeySet(
+  assets: { id: string; yardId: string }[],
+  yardId: string,
+): Set<string> {
+  return new Set(assets.filter((a) => a.yardId === yardId).map((a) => a.id));
+}
+
+export function billableAssetAllotments(rows: AssetAllotmentRow[]): AssetAllotmentRow[] {
   return rows.filter(
-    (e) =>
-      String(e.approvalStatus ?? "") === "Approved" &&
-      e.status === "Active" &&
-      yardAssetIds.has(e.assetId),
+    (a) => a.status === "Active" && String(a.approvalStatus ?? "Approved") === "Approved",
   );
+}
+
+export function billableEntityAllotments(rows: EntityAllotmentRow[]): EntityAllotmentRow[] {
+  return rows.filter(
+    (e) => String(e.approvalStatus ?? "") === "Approved" && e.status === "Active",
+  );
+}
+
+export function activeAssetAllotmentsInYard(
+  rows: AssetAllotmentRow[],
+  yardAssetPrimaryKeys: Set<string>,
+): AssetAllotmentRow[] {
+  return billableAssetAllotments(rows).filter((a) => yardAssetPrimaryKeys.has(a.assetId));
+}
+
+export function billableEntityAllotmentsInYard(
+  rows: EntityAllotmentRow[],
+  yardAssetPrimaryKeys: Set<string>,
+): EntityAllotmentRow[] {
+  return billableEntityAllotments(rows).filter((e) => yardAssetPrimaryKeys.has(e.assetId));
 }
 
 /** Merge allotments keyed by primary key — trader vs entity ids are distinct nanoids in practice. */

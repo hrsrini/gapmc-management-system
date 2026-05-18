@@ -3,8 +3,10 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ShieldX } from "lucide-react";
+import { useAppHomeHref } from "@/hooks/useAppHomeHref";
 
 export default function AccessDenied() {
+  const homeHref = useAppHomeHref();
   return (
     <AppShell breadcrumbs={[{ label: "Access denied" }]}>
       <Card className="max-w-md mx-auto border-destructive/30 bg-destructive/5">
@@ -19,7 +21,7 @@ export default function AccessDenied() {
             You don&apos;t have permission to perform this action. If you believe this is an error, contact your administrator.
           </p>
           <Button asChild variant="default">
-            <Link href="/dashboard">Back to dashboard</Link>
+            <Link href={homeHref}>Back to home</Link>
           </Button>
         </CardContent>
       </Card>

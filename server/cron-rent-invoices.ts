@@ -8,7 +8,7 @@
 import { eq, and, gte, lte } from "drizzle-orm";
 import { db } from "./db";
 import { assetAllotments, assets, entities, entityAllotments, rentInvoices, yards } from "@shared/db-schema";
-import { formatRentInvoiceNo } from "./rent-invoice-number";
+import { allocateRentInvoiceNoInTx } from "./rent-invoice-number";
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
 import { nanoid } from "nanoid";
 import { writeAuditLogSystem } from "./audit";
@@ -19,7 +19,10 @@ import { unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { rentInvoiceAmountsInvalid } from "@shared/rent-invoice-amount-validation";
-import { findBlockingRentInvoiceForPremisesMonth } from "./rent-invoice-premises-month-uniqueness";
+import {
+  findBlockingRentInvoiceForPremisesMonth,
+  normalizeRentInvoiceAssetId,
+} from "./rent-invoice-premises-month-uniqueness";
 
 function getFirstAndLastDayOfMonth(yyyy: number, mm: number): { first: string; last: string } {
   const first = `${yyyy}-${String(mm).padStart(2, "0")}-01`;
@@ -120,38 +123,45 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
       continue;
     }
 
-    const premisesClashTl = await findBlockingRentInvoiceForPremisesMonth(allotment.assetId, periodMonth);
+    const assetPkTl = (await normalizeRentInvoiceAssetId(allotment.assetId)) ?? allotment.assetId;
+    const premisesClashTl = await findBlockingRentInvoiceForPremisesMonth(assetPkTl, periodMonth);
     if (premisesClashTl) {
       skipped += 1;
       continue;
     }
 
     const id = nanoid();
-    const invoiceNo = formatRentInvoiceNo(yardCodeById.get(yardId), periodMonth, id);
-    await db.insert(rentInvoices).values({
-      id,
-      allotmentId: allotment.id,
-      allotmentKind: "TraderLicence",
-      tenantLicenceId: allotment.traderLicenceId,
-      entityId: null,
-      assetId: allotment.assetId,
-      yardId,
-      periodMonth,
-      rentAmount,
-      nonGstChargesJson: null,
-      cgst,
-      sgst,
-      totalAmount,
-      isGovtEntity,
-      tdsApplicable,
-      tdsAmount,
-      status: "Draft",
-      invoiceNo,
-      doUser: null,
-      dvUser: null,
-      daUser: null,
-      generatedAt: null,
-      approvedAt: null,
+    await db.transaction(async (tx) => {
+      const invoiceNo = await allocateRentInvoiceNoInTx(tx, {
+        yardId,
+        periodMonth,
+        yardCode: yardCodeById.get(yardId),
+      });
+      await tx.insert(rentInvoices).values({
+        id,
+        allotmentId: allotment.id,
+        allotmentKind: "TraderLicence",
+        tenantLicenceId: allotment.traderLicenceId,
+        entityId: null,
+        assetId: assetPkTl,
+        yardId,
+        periodMonth,
+        rentAmount,
+        nonGstChargesJson: null,
+        cgst,
+        sgst,
+        totalAmount,
+        isGovtEntity,
+        tdsApplicable,
+        tdsAmount,
+        status: "Draft",
+        invoiceNo,
+        doUser: null,
+        dvUser: null,
+        daUser: null,
+        generatedAt: null,
+        approvedAt: null,
+      });
     });
     existingAllotmentIds.add(allotment.id);
     createdInvoiceIds.push(id);
@@ -225,39 +235,47 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
       continue;
     }
 
-    const premisesClashEnt = await findBlockingRentInvoiceForPremisesMonth(ea.assetId, periodMonth);
+    const assetPkEnt = (await normalizeRentInvoiceAssetId(ea.assetId)) ?? ea.assetId;
+    const premisesClashEnt = await findBlockingRentInvoiceForPremisesMonth(assetPkEnt, periodMonth);
     if (premisesClashEnt) {
       skipped += 1;
       continue;
     }
 
     const id = nanoid();
-    const invoiceNo = formatRentInvoiceNo(yardCodeById.get(yardId), periodMonth, id);
 
-    await db.insert(rentInvoices).values({
-      id,
-      allotmentId: ea.id,
-      allotmentKind: "Entity",
-      tenantLicenceId: unifiedEntityIdFromTrackB(ea.entityId),
-      entityId: ea.entityId,
-      assetId: ea.assetId,
-      yardId,
-      periodMonth,
-      rentAmount,
-      nonGstChargesJson: null,
-      cgst,
-      sgst,
-      totalAmount,
-      isGovtEntity,
-      tdsApplicable,
-      tdsAmount,
-      status: "Draft",
-      invoiceNo,
-      doUser: null,
-      dvUser: null,
-      daUser: null,
-      generatedAt: null,
-      approvedAt: null,
+    await db.transaction(async (tx) => {
+      const invoiceNo = await allocateRentInvoiceNoInTx(tx, {
+        yardId,
+        periodMonth,
+        yardCode: yardCodeById.get(yardId),
+      });
+
+      await tx.insert(rentInvoices).values({
+        id,
+        allotmentId: ea.id,
+        allotmentKind: "Entity",
+        tenantLicenceId: unifiedEntityIdFromTrackB(ea.entityId),
+        entityId: ea.entityId,
+        assetId: assetPkEnt,
+        yardId,
+        periodMonth,
+        rentAmount,
+        nonGstChargesJson: null,
+        cgst,
+        sgst,
+        totalAmount,
+        isGovtEntity,
+        tdsApplicable,
+        tdsAmount,
+        status: "Draft",
+        invoiceNo,
+        doUser: null,
+        dvUser: null,
+        daUser: null,
+        generatedAt: null,
+        approvedAt: null,
+      });
     });
 
     existingAllotmentIds.add(ea.id);

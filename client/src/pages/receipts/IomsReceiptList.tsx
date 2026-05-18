@@ -17,6 +17,7 @@ import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
+import { formatInr } from "@/lib/formatInr";
 import { Receipt, AlertCircle, ExternalLink } from "lucide-react";
 function formatReceiptSource(r: {
   sourceModule: string | null;
@@ -108,7 +109,7 @@ export default function IomsReceiptList() {
       sourceLabel: formatReceiptSource(r),
       payerName: (r.payerDisplayName ?? r.payerName)?.trim() || "—",
       totalAmount: r.totalAmount,
-      _total: `₹${Number(r.totalAmount).toLocaleString("en-IN")}`,
+      _total: `${formatInr(Number(r.totalAmount))}`,
       paymentMode: r.paymentMode,
       status: r.status,
       _status: <Badge variant={r.status === "Paid" ? "default" : "secondary"}>{r.status}</Badge>,

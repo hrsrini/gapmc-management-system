@@ -10,7 +10,7 @@ import { RequirePermission } from "@/components/RequirePermission";
 import { Auth403Listener } from "@/components/Auth403Listener";
 
 import Login from "@/pages/Login";
-import Dashboard from "@/pages/Dashboard";
+import { DashboardRouteGate, WelcomeRouteGate } from "@/components/HomeRouteGate";
 import RentInvoiceList from "@/pages/rent/RentInvoiceList";
 import RentInvoiceForm from "@/pages/rent/RentInvoiceForm";
 import RentInvoiceEditPage from "@/pages/rent/RentInvoiceEditPage";
@@ -121,7 +121,10 @@ function Router() {
     <Switch>
       <Route path="/" component={Login} />
       <Route path="/dashboard">
-        <ProtectedRoute><Dashboard /></ProtectedRoute>
+        <ProtectedRoute><DashboardRouteGate /></ProtectedRoute>
+      </Route>
+      <Route path="/welcome">
+        <ProtectedRoute><WelcomeRouteGate /></ProtectedRoute>
       </Route>
       <Route path="/bugs/dashboard">
         <ProtectedRoute><BugDashboard /></ProtectedRoute>

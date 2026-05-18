@@ -72,6 +72,42 @@ export function isKnownEmployeeLifecycleStatus(raw: string | null | undefined): 
   return KNOWN.has(String(raw ?? "").trim());
 }
 
+const OFFICIAL_EMP_ID_RE = /^EMP-\d{3}$/i;
+
+/** BR-EMP-01 / BR-EMP-06: official assigned id (EMP-NNN). */
+export function hasOfficialEmployeeId(empId: string | null | undefined): boolean {
+  if (empId == null || String(empId).trim() === "") return false;
+  return OFFICIAL_EMP_ID_RE.test(String(empId).trim());
+}
+
+/** Pre-Active registration states where EMP-ID is not yet assigned. */
+export function employeeRegistrationPendingEmpId(statusRaw: string | null | undefined): boolean {
+  const s = canonicalizeEmployeeStatus(statusRaw);
+  return s === "Draft" || s === "Submitted" || s === "Recommended";
+}
+
+/** List/detail display: never fall back to internal row id before DA approval. */
+export function displayEmployeeEmpId(
+  empId: string | null | undefined,
+  statusRaw: string | null | undefined,
+  internalId: string,
+): string | null {
+  if (empId != null && String(empId).trim() !== "") return String(empId).trim();
+  if (employeeRegistrationPendingEmpId(statusRaw)) return null;
+  return internalId;
+}
+
+/** UI + server: DA approval applies only after DV recommend (or legacy Active without EMP-ID). */
+export function canApproveEmployeeRegistration(
+  statusRaw: string | null | undefined,
+  empId: string | null | undefined,
+): boolean {
+  const s = canonicalizeEmployeeStatus(statusRaw);
+  if (s === "Recommended") return true;
+  if (s === "Active" && !hasOfficialEmployeeId(empId)) return true;
+  return false;
+}
+
 /**
  * Allowed transitions for PUT / employee form (excluding approve-registration EMP-ID path).
  * `from` / `to` may be legacy or canonical; compared after canonicalize.

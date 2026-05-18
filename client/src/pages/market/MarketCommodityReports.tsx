@@ -11,6 +11,7 @@ import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { AlertCircle, CalendarDays, FileDown } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { formatInr } from "@/lib/formatInr";
 import { useToast } from "@/hooks/use-toast";
 
 interface YardRef {
@@ -146,12 +147,12 @@ export default function MarketCommodityReports() {
       totalQty: r.totalQty,
       _qty: Number(r.totalQty ?? 0).toLocaleString("en-IN"),
       totalValueInr: r.totalValueInr,
-      _value: `₹${Number(r.totalValueInr ?? 0).toLocaleString("en-IN")}`,
+      _value: `${formatInr(Number(r.totalValueInr ?? 0))}`,
       arrivalSamples: r.arrivalSamples ?? 0,
       priceDays: r.priceDays ?? 0,
-      _min: r.minPrice == null ? "—" : `₹${Number(r.minPrice).toLocaleString("en-IN")}`,
-      _max: r.maxPrice == null ? "—" : `₹${Number(r.maxPrice).toLocaleString("en-IN")}`,
-      _modal: r.modalPriceAvg == null ? "—" : `₹${Number(r.modalPriceAvg).toLocaleString("en-IN")}`,
+      _min: r.minPrice == null ? "—" : `${formatInr(Number(r.minPrice))}`,
+      _max: r.maxPrice == null ? "—" : `${formatInr(Number(r.maxPrice))}`,
+      _modal: r.modalPriceAvg == null ? "—" : `${formatInr(Number(r.modalPriceAvg))}`,
     }));
   }, [data?.rows, yardById, commodityById]);
 

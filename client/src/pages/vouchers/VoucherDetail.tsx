@@ -43,6 +43,7 @@ import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/wor
 import { formatApiDateOrDateTime } from "@/lib/dateFormat";
 import { FormFileAttachments } from "@/components/forms/FormFileAttachments";
 import { AuthenticatedBlobPreviewDialog } from "@/components/attachment/AuthenticatedBlobPreviewDialog";
+import { formatInr } from "@/lib/formatInr";
 import { filesToFileList } from "@/lib/filesToFileList";
 
 interface Voucher {
@@ -256,7 +257,7 @@ export default function VoucherDetail() {
               <div><span className="text-muted-foreground">Yard</span><p className="font-medium">{yardById[voucher.yardId] ?? voucher.yardId}</p></div>
               <div><span className="text-muted-foreground">Type</span><p className="font-medium">{voucher.voucherType}</p></div>
               <div><span className="text-muted-foreground">Payee</span><p className="font-medium">{voucher.payeeName}</p></div>
-              <div><span className="text-muted-foreground">Amount</span><p className="font-medium">₹{voucher.amount}</p></div>
+              <div><span className="text-muted-foreground">Amount</span><p className="font-medium">{formatInr(voucher.amount)}</p></div>
               {voucher.payeeAccount && <div><span className="text-muted-foreground">Account</span><p className="font-mono text-sm">{voucher.payeeAccount}</p></div>}
               {voucher.payeeBank && <div><span className="text-muted-foreground">Bank</span><p>{voucher.payeeBank}</p></div>}
               {voucher.paymentRef && <div><span className="text-muted-foreground">Payment ref</span><p>{voucher.paymentRef}</p></div>}

@@ -6,10 +6,12 @@ import multer from "multer";
 import { and, desc, eq } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { assets, entities, entityAllotments, yards } from "@shared/db-schema";
+import { assets, entities, entityAllotments, iomsReceipts, yards } from "@shared/db-schema";
+import { unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { db, pool } from "./db";
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
+import { createIomsReceipt } from "./routes-receipts-ioms";
 import { routeParamString } from "./route-params";
 import {
   assertPremisesNotAlreadyAllocatedActive,
@@ -215,8 +217,8 @@ export function registerEntityAllotmentRoutes(app: Express) {
         );
       }
 
-      const allotteeName = String(body.allotteeName ?? "").trim();
-      if (!allotteeName) return sendApiError(res, 400, "ALLOTTEE_REQUIRED", "Allottee name is required.");
+      const allotteeName = String(ent.name ?? "").trim();
+      if (!allotteeName) return sendApiError(res, 400, "ALLOTTEE_REQUIRED", "Entity name is required as allottee.");
       const sec = body.securityDeposit != null ? Number(body.securityDeposit) : null;
 
       const id = nanoid();
@@ -411,6 +413,7 @@ export function registerEntityAllotmentRoutes(app: Express) {
             .update(entityAllotments)
             .set({
               approvalStatus: "Approved",
+              allotteeName: String(entRow.name ?? existing.allotteeName ?? "").trim() || existing.allotteeName,
               dvUser: existing.dvUser,
               verifiedAt: existing.verifiedAt,
               daUser: transition.setDaUser ? req.user?.id ?? null : existing.daUser,
@@ -423,6 +426,46 @@ export function registerEntityAllotmentRoutes(app: Express) {
               status: "Active",
             })
             .where(eq(entityAllotments.id, id));
+
+          const secDep = Number(existing.securityDeposit ?? 0);
+          if (Number.isFinite(secDep) && secDep > 0) {
+            const [existingReceipt] = await db
+              .select()
+              .from(iomsReceipts)
+              .where(
+                and(
+                  eq(iomsReceipts.sourceModule, "M-02"),
+                  eq(iomsReceipts.sourceRecordId, id),
+                  eq(iomsReceipts.revenueHead, "SecurityDeposit"),
+                ),
+              )
+              .limit(1);
+            if (!existingReceipt) {
+              const createdBy = req.user?.id ?? "system";
+              const created = await createIomsReceipt({
+                yardId: assetRow.yardId,
+                revenueHead: "SecurityDeposit",
+                payerName: String(entRow.name ?? existing.allotteeName ?? "").trim() || existing.allotteeName,
+                payerType: "Entity",
+                payerRefId: entRow.id,
+                amount: roundedMoney2(secDep),
+                paymentMode: "Cash",
+                sourceModule: "M-02",
+                sourceRecordId: id,
+                unifiedEntityId: unifiedEntityIdFromTrackB(entRow.id),
+                createdBy,
+              });
+              const [createdRow] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, created.id)).limit(1);
+              if (createdRow) {
+                writeAuditLog(req, {
+                  module: "Receipts",
+                  action: "Create",
+                  recordId: createdRow.id,
+                  afterValue: createdRow,
+                }).catch((e) => console.error(e));
+              }
+            }
+          }
 
           const [after] = await db.select().from(entityAllotments).where(eq(entityAllotments.id, id));
           writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existing, afterValue: after }).catch((e) =>
@@ -524,7 +567,12 @@ export function registerEntityAllotmentRoutes(app: Express) {
 
       const financeEditable = ["Draft", "Rejected"].includes(String(existing.approvalStatus ?? ""));
       const updates: Partial<EntityAllotmentRow> = {};
-      if (body.allotteeName !== undefined) updates.allotteeName = String(body.allotteeName ?? "").trim();
+      if (financeEditable) {
+        const syncedAllottee = String(entRow.name ?? "").trim();
+        if (syncedAllottee) updates.allotteeName = syncedAllottee;
+      } else if (body.allotteeName !== undefined) {
+        updates.allotteeName = String(body.allotteeName ?? "").trim();
+      }
       if (body.fromDate !== undefined) updates.fromDate = String(body.fromDate ?? "").trim();
       if (body.toDate !== undefined) updates.toDate = String(body.toDate ?? "").trim();
 

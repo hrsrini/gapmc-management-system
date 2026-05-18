@@ -23,6 +23,7 @@ import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { Truck, ArrowLeft, Pencil, Route, Fuel, Wrench, AlertCircle, Plus, Loader2 } from "lucide-react";
+import { formatInr } from "@/lib/formatInr";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
 
 function TripForm({
@@ -253,7 +254,7 @@ export default function FleetVehicleDetail() {
       distanceKmNum: t.distanceKm ?? null,
       fuelFilledLitres: t.fuelFilledLitres ?? "—",
       fuelFilledLitresNum: t.fuelFilledLitres ?? null,
-      fuelCostInr: t.fuelCostInr != null ? `₹${t.fuelCostInr}` : "—",
+      fuelCostInr: t.fuelCostInr != null ? formatInr(t.fuelCostInr) : "—",
       fuelCostInrNum: t.fuelCostInr ?? null,
     }));
   }, [trips]);
@@ -263,7 +264,7 @@ export default function FleetVehicleDetail() {
       id: f.id,
       fuelDate: f.fuelDate,
       quantityLitres: f.quantityLitres,
-      totalAmount: f.totalAmount != null ? `₹${f.totalAmount}` : "—",
+      totalAmount: f.totalAmount != null ? formatInr(f.totalAmount) : "—",
       totalAmountNum: f.totalAmount ?? null,
     }));
   }, [fuelEntries]);
@@ -274,7 +275,7 @@ export default function FleetVehicleDetail() {
       serviceDate: m.serviceDate,
       maintenanceType: m.maintenanceType,
       description: m.description ?? "—",
-      cost: m.cost != null ? `₹${m.cost}` : "—",
+      cost: m.cost != null ? formatInr(m.cost) : "—",
       costNum: m.cost ?? null,
     }));
   }, [maintenanceEntries]);
@@ -401,7 +402,7 @@ export default function FleetVehicleDetail() {
                     <p>{formatYmdToDisplay(vehicle.purchaseDate)}</p>
                   </div>
                 )}
-                {vehicle.purchaseValue != null && <div><span className="text-muted-foreground">Purchase value</span><p>₹{vehicle.purchaseValue}</p></div>}
+                {vehicle.purchaseValue != null && <div><span className="text-muted-foreground">Purchase value</span><p>{formatInr(vehicle.purchaseValue)}</p></div>}
                 {vehicle.insuranceExpiry && (
                   <div>
                     <span className="text-muted-foreground">Insurance expiry</span>

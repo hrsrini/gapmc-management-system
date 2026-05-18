@@ -382,7 +382,7 @@ export async function handleCreateEmployeeLogin(req: Request, res: Response, emp
       "IOMS user account provisioned",
       `Hello ${String(name).trim()},\n\nAn IOMS application user account was created for you (M-10 / SRS §1.4).\n\n${loginHint} Change your password after first sign-in if prompted.\n\nIf you did not expect this message, contact your system administrator.\n\n— GAPMC IOMS`,
     );
-    res.status(201).json(row);
+    res.status(201).json(await buildLoginProfileForEmployee(employeeIdRaw));
   } catch (e: unknown) {
     console.error(e);
     const code = e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code) : "";
@@ -542,7 +542,7 @@ export async function handleUpdateEmployeeLogin(req: Request, res: Response, emp
       beforeValue: userSnapshotForAudit(beforeUser as unknown as Record<string, unknown>),
       afterValue: userSnapshotForAudit(row as unknown as Record<string, unknown>),
     }).catch((e) => console.error("Audit log failed:", e));
-    res.json(row);
+    res.json(await buildLoginProfileForEmployee(employeeIdRaw));
   } catch (e: unknown) {
     console.error(e);
     const code = e && typeof e === "object" && "code" in e ? String((e as { code?: string }).code) : "";

@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { fetchApiGet, readApiErrorEnvelope } from "@/lib/queryClient";
 import { AlertCircle, ArrowLeft, Download, FileText, Loader2 } from "lucide-react";
+import { formatInr } from "@/lib/formatInr";
 import {
   Select,
   SelectContent,
@@ -212,7 +213,7 @@ export default function PreReceiptDetail() {
               <span className="text-muted-foreground">Yard:</span> {yardLabelById[row.yardId] ?? row.yardId}
             </div>
             <div>
-              <span className="text-muted-foreground">Amount:</span> ₹{Number(row.amount ?? 0).toLocaleString()}
+              <span className="text-muted-foreground">Amount:</span> {formatInr(Number(row.amount ?? 0))}
             </div>
             <div>
               <span className="text-muted-foreground">Status:</span>{" "}
@@ -244,7 +245,7 @@ export default function PreReceiptDetail() {
                 <Input value={purpose} onChange={(e) => setPurpose(e.target.value)} disabled={!canUpdate} />
               </div>
               <div className="space-y-1">
-                <Label>Amount (INR)</Label>
+                <Label>Amount (₹)</Label>
                 <Input value={amount} onChange={(e) => setAmount(e.target.value)} disabled={!canUpdate} inputMode="decimal" />
               </div>
               <div className="space-y-1">

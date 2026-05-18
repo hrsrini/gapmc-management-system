@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatInr } from "@/lib/formatInr";
 import { Banknote, AlertCircle } from "lucide-react";
 
 interface Advance {
@@ -99,9 +100,9 @@ export default function VouchersAdvances() {
       employeeLabel: employeeLabelById[a.employeeId] ?? a.employeeId,
       purpose: a.purpose,
       amount: a.amount,
-      _amount: `₹${a.amount.toLocaleString()}`,
+      _amount: `${formatInr(a.amount)}`,
       recoveredAmount: a.recoveredAmount ?? 0,
-      _recovered: `₹${(a.recoveredAmount ?? 0).toLocaleString()}`,
+      _recovered: `${formatInr((a.recoveredAmount ?? 0))}`,
       recoverySchedule: a.recoverySchedule ?? "—",
     }));
   }, [advances, voucherNoMap, employeeLabelById]);

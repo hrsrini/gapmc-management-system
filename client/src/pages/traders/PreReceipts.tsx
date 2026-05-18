@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatInr } from "@/lib/formatInr";
 import { Link } from "wouter";
 
 interface EntityRef {
@@ -123,7 +124,7 @@ export default function PreReceipts() {
       ),
       entityLabel: entityLabelById[p.entityId] ?? p.entityId,
       purpose: p.purpose ?? "—",
-      amount: `₹${Number(p.amount ?? 0).toLocaleString()}`,
+      amount: `${formatInr(Number(p.amount ?? 0))}`,
       amountNum: Number(p.amount ?? 0),
       status: p.status,
       _status: <span>{p.status}</span>,
@@ -223,7 +224,7 @@ export default function PreReceipts() {
               <Input value={purpose} onChange={(e) => setPurpose(e.target.value)} />
             </div>
             <div className="space-y-1">
-              <Label>Amount (INR)</Label>
+              <Label>Amount (₹)</Label>
               <Input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" />
             </div>
           </div>

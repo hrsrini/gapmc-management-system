@@ -314,6 +314,12 @@ export function registerAdminRoutes(app: Express) {
             return sendApiError(res, 400, "ADMIN_CONFIG_TALLY_XML_FLAG", "tally_xml_export_enabled must be true or false.");
           }
         }
+        if (key === "ui_dashboard_show_kpi_cards") {
+          const v = value.trim().toLowerCase();
+          if (v !== "true" && v !== "false") {
+            return sendApiError(res, 400, "ADMIN_CONFIG_DASHBOARD_KPI_FLAG", "ui_dashboard_show_kpi_cards must be true or false.");
+          }
+        }
         if (key === "rent_dishonour_bank_charge_hint") {
           if (value.length > 500) {
             return sendApiError(res, 400, "ADMIN_CONFIG_DISHONOUR_HINT", "rent_dishonour_bank_charge_hint must be at most 500 characters.");

@@ -1,6 +1,8 @@
 import type { InferSelectModel } from "drizzle-orm";
 import { marketMonthlyReturns, marketMonthlyReturnLines } from "@shared/db-schema";
 import { loadPdfDocumentConstructor } from "./pdfkit-loader";
+import { pdfSafeText } from "./pdf-safe-text";
+import { formatInrPdf } from "@shared/format-inr";
 
 type ReturnRow = InferSelectModel<typeof marketMonthlyReturns>;
 type LineRow = InferSelectModel<typeof marketMonthlyReturnLines>;
@@ -36,17 +38,17 @@ export async function buildMarketReturnPdf(params: {
     if (ret.submittedAt) doc.text(`Submitted at: ${String(ret.submittedAt).slice(0, 19).replace("T", " ")}`);
     doc.moveDown(0.8);
 
-    doc.fontSize(11).text("Summary (INR)", { underline: true });
+    doc.fontSize(11).text("Summary", { underline: true });
     doc.fontSize(10);
-    doc.text(`Total purchase value: ₹${Number(ret.totalPurchaseValueInr ?? 0).toFixed(2)}`);
-    doc.text(`Market fee (computed): ₹${Number(ret.totalMarketFeeInr ?? 0).toFixed(2)}`);
+    doc.text(pdfSafeText(`Total purchase value: ${formatInrPdf(ret.totalPurchaseValueInr ?? 0)}`));
+    doc.text(pdfSafeText(`Market fee (computed): ${formatInrPdf(ret.totalMarketFeeInr ?? 0)}`));
     if (ret.deadlineDate) doc.text(`Deadline: ${ret.deadlineDate}`);
     if (Number(ret.daysLate ?? 0) > 0) {
       doc
         .fillColor("#b45309")
         .text(`Late submission: Yes (${Number(ret.daysLate)} day(s))`);
       doc.fillColor("#000");
-      doc.text(`Interest on market fee: ₹${Number(ret.interestAmountInr ?? 0).toFixed(2)}`);
+      doc.text(pdfSafeText(`Interest on market fee: ${formatInrPdf(ret.interestAmountInr ?? 0)}`));
     } else {
       doc.text("Late submission: No");
     }
@@ -83,7 +85,7 @@ export async function buildMarketReturnPdf(params: {
       doc.fontSize(9).text(String(l.commodityId ?? ""), col.commodity, rowY, { width: 155 });
       doc.text(String(Number(l.openingQty ?? 0)), col.opening, rowY, { width: 50, align: "right" });
       doc.text(String(Number(l.purchaseQty ?? 0)), col.purchaseQty, rowY, { width: 60, align: "right" });
-      doc.text(`₹${Number(l.purchaseValueInr ?? 0).toFixed(2)}`, col.purchaseVal, rowY, { width: 90, align: "right" });
+      doc.text(pdfSafeText(formatInrPdf(l.purchaseValueInr ?? 0)), col.purchaseVal, rowY, { width: 90, align: "right" });
       doc.text(String(Number(l.salesQty ?? 0)), col.sales, rowY, { width: 55, align: "right" });
       doc.text(String(Number(l.closingQty ?? 0)), col.closing, rowY, { width: 55, align: "right" });
       doc.moveDown(0.6);

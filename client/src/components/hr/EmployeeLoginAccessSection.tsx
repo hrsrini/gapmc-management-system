@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,6 +47,10 @@ interface Yard {
   id: string;
   name: string;
   isActive?: boolean | null;
+}
+
+interface LoginProfileResponse {
+  login: User | null;
 }
 
 interface EmployeeLoginAccessSectionProps {
@@ -114,8 +118,29 @@ export function EmployeeLoginAccessSection({
   });
 
   const activeYards = useMemo(() => yards.filter((y) => y.isActive !== false), [yards]);
+  const serverRolesKey = useMemo(
+    () =>
+      (linkedUser?.roles ?? [])
+        .map((r) => r.id)
+        .sort()
+        .join(","),
+    [linkedUser?.roles],
+  );
+  const serverYardsKey = useMemo(
+    () =>
+      (linkedUser?.yards ?? [])
+        .map((y) => y.id)
+        .sort()
+        .join(","),
+    [linkedUser?.yards],
+  );
+  const lastHydratedKeyRef = useRef<string>("");
 
   useEffect(() => {
+    const hydrateKey = linkedUser ? `${linkedUser.id}|${serverRolesKey}|${serverYardsKey}|${linkedUser.email}|${linkedUser.name}` : "none";
+    if (lastHydratedKeyRef.current === hydrateKey) return;
+    lastHydratedKeyRef.current = hydrateKey;
+
     if (linkedUser) {
       setEmail(linkedUser.email);
       setName(linkedUser.name);
@@ -137,7 +162,7 @@ export function EmployeeLoginAccessSection({
       setSelectedRoleIds(new Set());
       setSelectedYardIds(new Set());
     }
-  }, [linkedUser, displayName, workEmail]);
+  }, [linkedUser, displayName, workEmail, serverRolesKey, serverYardsKey]);
 
   useEffect(() => {
     if (employeeStatus !== "Active") {
@@ -170,9 +195,11 @@ export function EmployeeLoginAccessSection({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
-      return data as User;
+      return data as LoginProfileResponse;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      queryClient.setQueryData([profileUrl], data);
+      lastHydratedKeyRef.current = "";
       queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
       queryClient.invalidateQueries({ queryKey: [profileUrl] });
       queryClient.invalidateQueries({ queryKey: ["/api/hr/employees", employeeId] });
@@ -201,9 +228,11 @@ export function EmployeeLoginAccessSection({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
-      return data;
+      return data as LoginProfileResponse;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      queryClient.setQueryData([profileUrl], data);
+      lastHydratedKeyRef.current = "";
       queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
       queryClient.invalidateQueries({ queryKey: [profileUrl] });
       queryClient.invalidateQueries({ queryKey: ["/api/hr/employees", employeeId] });
@@ -231,8 +260,8 @@ export function EmployeeLoginAccessSection({
     });
   }
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  function handleSubmit(e?: React.FormEvent) {
+    e?.preventDefault();
     if (isEditMode && linkedUser) {
       if (password !== "" || confirmPassword !== "") {
         const pwdErr = getPasswordPolicyBrUsr10FirstViolation(password);
@@ -372,7 +401,7 @@ export function EmployeeLoginAccessSection({
             This employee does not have an app login yet. You need <span className="font-medium">M-10 Create</span> permission to enable one.
           </p>
         ) : (
-          <form onSubmit={handleSubmit} className="space-y-4 max-w-3xl">
+          <div className="space-y-4 max-w-3xl">
             {!isEditMode && employeeStatus !== "Active" && (
               <p className="text-sm text-amber-700 dark:text-amber-400 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2">
                 This employee is not Active. Activate the employee record before enabling a new login.
@@ -511,7 +540,7 @@ export function EmployeeLoginAccessSection({
                 </div>
               </div>
               <div className="flex flex-col rounded-md border">
-                <div className="rounded-t-md border-b bg-muted/40 px-3 py-2 text-sm font-medium">Locations (yards)</div>
+                <div className="rounded-t-md border-b bg-muted/40 px-3 py-2 text-sm font-medium">Locations</div>
                 <div className="space-y-2 p-3 max-h-48 overflow-y-auto">
                   {yardsLoading ? (
                     <Skeleton className="h-20 w-full" />
@@ -542,7 +571,7 @@ export function EmployeeLoginAccessSection({
             </p>
 
             {((!isEditMode && canCreate) || (isEditMode && canUpdate)) && (
-              <Button type="submit" disabled={saving}>
+              <Button type="button" disabled={saving} onClick={() => handleSubmit()}>
                 {saving ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -555,7 +584,7 @@ export function EmployeeLoginAccessSection({
                 )}
               </Button>
             )}
-          </form>
+          </div>
         )}
       </CardContent>
     </Card>

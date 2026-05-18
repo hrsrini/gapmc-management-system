@@ -15,11 +15,17 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, Receipt, Banknote, Download, UserCircle, BarChart3, Table2, Truck, Clock } from "lucide-react";
+import { formatYearMonthToDisplay } from "@/lib/dateFormat";
+import { formatInr } from "@/lib/formatInr";
 import {
   ReportDataTable,
   type ReportPagedParams,
   type ReportTableColumn,
 } from "@/components/reports/ReportDataTable";
+
+function formatRs(n: unknown): string {
+  return formatInr(n);
+}
 
 interface Yard {
   id: string;
@@ -84,12 +90,15 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
   switch (kind) {
     case "rent":
       return [
-        { key: "invoiceNo", header: "Invoice no." },
-        { key: "yardName", header: "Yard", sortField: "yardId" },
-        { key: "periodMonth", header: "Period" },
-        { key: "assetId", header: "Asset" },
-        { key: "rentAmount", header: "Rent" },
-        { key: "totalAmount", header: "Total" },
+        { key: "invoiceNo", header: "Invoice No." },
+        { key: "periodMonth", header: "Period (Month)" },
+        { key: "yardName", header: "Yard Name", sortField: "yardId" },
+        { key: "premisesId", header: "Premises ID", sortField: "assetId" },
+        { key: "occupantName", header: "Occupant Name" },
+        { key: "_rent", header: "Rent (₹)", sortField: "rentAmount" },
+        { key: "_sgst", header: "SGST (₹)", sortField: "sgst" },
+        { key: "_cgst", header: "CGST (₹)", sortField: "cgst" },
+        { key: "_total", header: "Total (₹)", sortField: "totalAmount" },
         { key: "status", header: "Status" },
       ];
     case "voucher":
@@ -145,6 +154,9 @@ function searchPlaceholderForKind(kind: ReportKind): string {
   }
   if (kind === "staff") {
     return "Search by name, emp. ID, mobile, email…";
+  }
+  if (kind === "rent") {
+    return "Search invoice no., period, premises, occupant, amounts, status…";
   }
   return "Search across columns (partial text or numbers)…";
 }
@@ -255,11 +267,27 @@ export default function IomsReports() {
     return rows.map((r) => {
       const raw = r.yardId;
       const id = raw != null && raw !== "" ? String(raw) : "";
-      const yardName = id ? (yardLabelById.get(id) ?? id) : "—";
+      const yardName =
+        previewKind === "rent"
+          ? String(r.yardName ?? "").trim() || (id ? (yardLabelById.get(id) ?? id) : "—")
+          : id
+            ? (yardLabelById.get(id) ?? id)
+            : "—";
       const out: Record<string, unknown> = { ...r, yardName };
       if (previewKind === "receipt") {
         const pr = r as { payerDisplayName?: string | null; payerName?: string | null };
         out.payerDisplayName = (pr.payerDisplayName ?? pr.payerName)?.trim() || "—";
+      }
+      if (previewKind === "rent") {
+        const pm = String(r.periodMonth ?? "").trim();
+        out.periodMonth = pm ? formatYearMonthToDisplay(pm) : "—";
+        out.premisesId = String(r.premisesId ?? r.assetId ?? "—");
+        out.occupantName = String(r.occupantName ?? "—");
+        out.invoiceNo = String(r.invoiceNo ?? r.id ?? "—");
+        out._rent = formatRs(r.rentAmount);
+        out._sgst = formatRs(r.sgst);
+        out._cgst = formatRs(r.cgst);
+        out._total = formatRs(r.totalAmount);
       }
       return out;
     });
@@ -518,7 +546,7 @@ export default function IomsReports() {
               </Button>
               {ageingData && (
                 <p className="text-sm text-muted-foreground">
-                  {ageingData.totals.count} line(s) · total outstanding ≈ ₹{ageingData.totals.outstanding.toLocaleString()}
+                  {ageingData.totals.count} line(s) · total outstanding ≈ {formatInr(ageingData.totals.outstanding)}
                 </p>
               )}
             </div>
@@ -534,7 +562,7 @@ export default function IomsReports() {
                         className="rounded border bg-muted/50 px-2 py-1"
                         title="Bucket count / outstanding"
                       >
-                        {b.bucket} d: {b.count} · ₹{b.outstanding.toLocaleString()}
+                        {b.bucket} d: {b.count} · {formatInr(b.outstanding)}
                       </span>
                     ))}
                   </div>
@@ -567,7 +595,7 @@ export default function IomsReports() {
                             <td className="p-2">{r.dueDate}</td>
                             <td className="p-2">{r.daysPastDue}</td>
                             <td className="p-2">{r.ageingBucket}</td>
-                            <td className="p-2">₹{r.outstandingAmount.toLocaleString()}</td>
+                            <td className="p-2">{formatInr(r.outstandingAmount)}</td>
                             <td className="p-2">{r.status}</td>
                           </tr>
                         ))

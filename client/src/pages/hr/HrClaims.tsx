@@ -28,6 +28,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Wallet, Plane, Car, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal, Plus } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import { formatInr } from "@/lib/formatInr";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
 interface LtcClaim {
@@ -317,10 +318,10 @@ export default function HrClaims() {
       employeeLabel: employeeLabelById[c.employeeId] ?? c.employeeId,
       claimDate: c.claimDate,
       period: c.period ?? "—",
-      amount: `₹${c.amount.toLocaleString()}`,
+      amount: `${formatInr(c.amount)}`,
       amountNum: c.amount,
       netPayableNum: c.netPayable ?? 0,
-      netPayable: c.netPayable != null ? `₹${Number(c.netPayable).toLocaleString()}` : "—",
+      netPayable: c.netPayable != null ? `${formatInr(Number(c.netPayable))}` : "—",
       status: c.status,
       rejectionSnippet:
         c.status === "Rejected" && c.rejectionRemarks
@@ -406,10 +407,10 @@ export default function HrClaims() {
       employeeLabel: employeeLabelById[c.employeeId] ?? c.employeeId,
       travelDate: c.travelDate,
       purpose: c.purpose,
-      amount: `₹${c.amount.toLocaleString()}`,
+      amount: `${formatInr(c.amount)}`,
       amountNum: c.amount,
       entitledTotalNum: c.entitledTotal ?? 0,
-      entitledTotal: c.entitledTotal != null ? `₹${Number(c.entitledTotal).toLocaleString()}` : "—",
+      entitledTotal: c.entitledTotal != null ? `${formatInr(Number(c.entitledTotal))}` : "—",
       status: c.status,
       rejectionSnippet:
         c.status === "Rejected" && c.rejectionRemarks
@@ -963,7 +964,7 @@ export default function HrClaims() {
               <Input type="number" min={0} step={1} value={tadaHotelAmount} onChange={(e) => setTadaHotelAmount(e.target.value)} />
             </div>
             <div className="space-y-1">
-              <Label>Amount (INR)</Label>
+              <Label>Amount (₹)</Label>
               <Input type="number" min={0} step={1} value={tadaNewAmount} onChange={(e) => setTadaNewAmount(e.target.value)} />
             </div>
           </div>
@@ -1055,16 +1056,16 @@ export default function HrClaims() {
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
-                <Label>Estimated entitlement (INR)</Label>
+                <Label>Estimated entitlement (₹)</Label>
                 <Input type="number" min={0} step={1} value={ltcNewEstimated} onChange={(e) => setLtcNewEstimated(e.target.value)} />
               </div>
               <div className="space-y-1">
-                <Label>Advance amount (INR)</Label>
+                <Label>Advance amount (₹)</Label>
                 <Input type="number" min={0} step={1} value={ltcNewAdvance} onChange={(e) => setLtcNewAdvance(e.target.value)} />
               </div>
             </div>
             <div className="space-y-1">
-              <Label>Amount (INR)</Label>
+              <Label>Amount (₹)</Label>
               <Input type="number" min={0} step={1} value={ltcNewAmount} onChange={(e) => setLtcNewAmount(e.target.value)} />
             </div>
           </div>

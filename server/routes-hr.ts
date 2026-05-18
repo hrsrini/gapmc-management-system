@@ -34,6 +34,11 @@ import {
   isTerminalEmployeeLifecycleStatus,
 } from "@shared/employee-lifecycle-status";
 import {
+  employeeStatusRequiresEffectiveDate,
+  localCalendarYmdUtc,
+  resolveStatusEffectiveDate,
+} from "@shared/employee-status-effective-date";
+import {
   canCreateLeaveRequest,
   canTransitionLeaveRequest,
   leaveRequestAwaitingMyAction,
@@ -469,7 +474,7 @@ export function registerHrRoutes(app: Express) {
       if (!req.user) {
         return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
       }
-      if (!hasPermission(req.user, "M-10", "Read")) {
+      if (!req.user.roles.some((r) => r.tier === "ADMIN") && !hasPermission(req.user, "M-10", "Read")) {
         return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-10:Read" });
       }
       const [emp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, req.params.id)).limit(1);
@@ -486,7 +491,7 @@ export function registerHrRoutes(app: Express) {
     if (!req.user) {
       return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
     }
-    if (!hasPermission(req.user, "M-10", "Create")) {
+    if (!req.user.roles.some((r) => r.tier === "ADMIN") && !hasPermission(req.user, "M-10", "Create")) {
       return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-10:Create" });
     }
     await handleCreateEmployeeLogin(req, res, req.params.id);
@@ -496,7 +501,7 @@ export function registerHrRoutes(app: Express) {
     if (!req.user) {
       return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
     }
-    if (!hasPermission(req.user, "M-10", "Update")) {
+    if (!req.user.roles.some((r) => r.tier === "ADMIN") && !hasPermission(req.user, "M-10", "Update")) {
       return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-10:Update" });
     }
     await handleUpdateEmployeeLogin(req, res, req.params.id);
@@ -801,7 +806,7 @@ export function registerHrRoutes(app: Express) {
       }
       await db
         .update(employees)
-        .set({ empId: newEmpId, status: "Active", updatedAt: now() })
+        .set({ empId: newEmpId, status: "Active", statusEffectiveDate: localCalendarYmdUtc(), updatedAt: now() })
         .where(eq(employees.id, id));
       const [row] = await db.select().from(employees).where(eq(employees.id, id));
       if (row) {
@@ -859,6 +864,10 @@ export function registerHrRoutes(app: Express) {
         }
         (body as Record<string, unknown>).status = nextS;
       }
+
+      const nextStatusCanon =
+        body.status !== undefined ? canonicalizeEmployeeStatus(String(body.status)) : beforeCanon;
+      const statusTransitionRequested = body.status !== undefined && nextStatusCanon !== beforeCanon;
 
       const updates: Record<string, unknown> = { updatedAt: now() };
       const allowed = [
@@ -959,6 +968,29 @@ export function registerHrRoutes(app: Express) {
         const [roEmp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, roUpd)).limit(1);
         if (!roEmp) {
           return sendApiError(res, 400, "HR_EMP_REPORTING_NOT_FOUND", "Reporting officer employee id was not found.");
+        }
+      }
+
+      if (statusTransitionRequested) {
+        if (employeeStatusRequiresEffectiveDate(nextStatusCanon)) {
+          const resolved = resolveStatusEffectiveDate({
+            nextStatus: nextStatusCanon,
+            inputDate:
+              body.statusEffectiveDate !== undefined && body.statusEffectiveDate !== null
+                ? String(body.statusEffectiveDate)
+                : null,
+            retirementDate:
+              updates.retirementDate !== undefined
+                ? (updates.retirementDate as string | null)
+                : beforeEmp.retirementDate,
+            todayYmd: localCalendarYmdUtc(),
+          });
+          if (!resolved.ok) {
+            return sendApiError(res, 400, resolved.code, resolved.message);
+          }
+          updates.statusEffectiveDate = resolved.date;
+        } else {
+          updates.statusEffectiveDate = null;
         }
       }
 

@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { useAuth } from "@/context/AuthContext";
+import { formatInr } from "@/lib/formatInr";
 import { AlertCircle, ArrowLeftRight } from "lucide-react";
 
 interface YardRef {
@@ -78,7 +79,7 @@ export default function CheckPostStockReturns() {
       quantity: r.quantity,
       value: r.value,
       _qty: Number(r.quantity ?? 0).toLocaleString("en-IN"),
-      _value: `₹${Number(r.value ?? 0).toLocaleString("en-IN")}`,
+      _value: `${formatInr(Number(r.value ?? 0))}`,
     }));
   }, [data?.imports, yardById, commodityById]);
 
@@ -90,7 +91,7 @@ export default function CheckPostStockReturns() {
       quantity: r.quantity,
       value: r.value,
       _qty: Number(r.quantity ?? 0).toLocaleString("en-IN"),
-      _value: `₹${Number(r.value ?? 0).toLocaleString("en-IN")}`,
+      _value: `${formatInr(Number(r.value ?? 0))}`,
     }));
   }, [data?.exports, yardById, commodityById]);
 
@@ -160,7 +161,7 @@ export default function CheckPostStockReturns() {
                 <CardTitle className="text-base">Imports</CardTitle>
                 <div className="flex flex-wrap gap-2 pt-1 text-sm text-muted-foreground">
                   <Badge variant="outline">Qty: {Number(data?.totals.importQty ?? 0).toLocaleString("en-IN")}</Badge>
-                  <Badge variant="outline">Value: ₹{Number(data?.totals.importValue ?? 0).toLocaleString("en-IN")}</Badge>
+                  <Badge variant="outline">Value: {formatInr(Number(data?.totals.importValue ?? 0))}</Badge>
                 </div>
               </CardHeader>
               <CardContent>
@@ -180,7 +181,7 @@ export default function CheckPostStockReturns() {
                 <CardTitle className="text-base">Exports</CardTitle>
                 <div className="flex flex-wrap gap-2 pt-1 text-sm text-muted-foreground">
                   <Badge variant="outline">Qty: {Number(data?.totals.exportQty ?? 0).toLocaleString("en-IN")}</Badge>
-                  <Badge variant="outline">Value: ₹{Number(data?.totals.exportValue ?? 0).toLocaleString("en-IN")}</Badge>
+                  <Badge variant="outline">Value: {formatInr(Number(data?.totals.exportValue ?? 0))}</Badge>
                 </div>
               </CardHeader>
               <CardContent>

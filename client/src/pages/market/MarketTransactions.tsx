@@ -22,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { ApiUserError, readApiErrorEnvelope, fetchApiGet } from "@/lib/queryClient";
+import { formatInr } from "@/lib/formatInr";
 import { ArrowRightLeft, AlertCircle, ShieldCheck, CheckCircle, Plus, SendHorizontal } from "lucide-react";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 
@@ -563,8 +564,8 @@ export default function MarketTransactions() {
       { key: "traderLicenceNo", header: "Licence No." },
       { key: "commodityName", header: "Commodity" },
       { key: "qtyLabel", header: "Qty" },
-      { key: "declaredValue", header: "Value" },
-      { key: "marketFeeAmount", header: "Fee" },
+      { key: "_value", header: "Value (₹)", sortField: "declaredValue" },
+      { key: "_fee", header: "Fee (₹)", sortField: "marketFeeAmount" },
       { key: "_entryKind", header: "Kind", sortField: "entryKind" },
       { key: "_status", header: "Status", sortField: "status" },
     ];
@@ -622,6 +623,8 @@ export default function MarketTransactions() {
         qtyLabel: `${t.quantity} ${t.unit}`,
         declaredValue: t.declaredValue,
         marketFeeAmount: t.marketFeeAmount,
+        _value: formatInr(t.declaredValue),
+        _fee: formatInr(t.marketFeeAmount),
         entryKind: kind,
         status: t.status,
         _entryKind: (
@@ -828,7 +831,7 @@ export default function MarketTransactions() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
-                      <Label>Declared value</Label>
+                      <Label>Declared value (₹)</Label>
                       <Input type="number" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} />
                     </div>
                     <div className="space-y-1">
@@ -852,8 +855,8 @@ export default function MarketTransactions() {
                     </div>
                   </div>
                   <div className="space-y-1">
-                    <Label>Market fee amount</Label>
-                    <Input readOnly value={marketFeeAmount.toFixed(2)} className="bg-muted" />
+                    <Label>Market fee amount (₹)</Label>
+                    <Input readOnly value={formatInr(marketFeeAmount)} className="bg-muted" />
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">
@@ -899,6 +902,8 @@ export default function MarketTransactions() {
                 "displayTraderLicence",
                 "commodityName",
                 "qtyLabel",
+                "_value",
+                "_fee",
                 "declaredValue",
                 "marketFeeAmount",
                 "entryKind",
@@ -974,11 +979,11 @@ export default function MarketTransactions() {
           )}
           <div className="space-y-3">
             <div className="space-y-1">
-              <Label>Market fee amount (negative)</Label>
+              <Label>Market fee amount (₹, negative)</Label>
               <Input type="number" value={adjustFee} onChange={(e) => setAdjustFee(e.target.value)} />
             </div>
             <div className="space-y-1">
-              <Label>Declared value (non-negative)</Label>
+              <Label>Declared value (₹, non-negative)</Label>
               <Input type="number" value={adjustDeclared} onChange={(e) => setAdjustDeclared(e.target.value)} />
             </div>
             <div className="space-y-1">

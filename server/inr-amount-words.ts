@@ -1,3 +1,5 @@
+import { formatInrPdf } from "@shared/format-inr";
+
 /** Whole-number Indian English words for INR amounts (pre-receipts, receipts). */
 
 const ONES = [
@@ -77,12 +79,13 @@ export function formatInrAmountWordsLine(amountInr: number): string {
   return `${core} Only`;
 }
 
+/** Digits line for receipts/PDF (Indian grouping; Rs. prefix for PDF font safety). */
 export function formatInrDigitsRs(amountInr: number): string {
   const rounded = Math.round(amountInr * 100) / 100;
-  const [whole, frac] = String(rounded).split(".");
-  const w = Number(whole);
-  const f = frac ? frac.padEnd(2, "0").slice(0, 2) : "";
-  const base = Number.isFinite(w) ? w.toLocaleString("en-IN") : "0";
-  if (f && f !== "00") return `Rs.${base}.${f}/-`;
-  return `Rs.${base}/-`;
+  const hasPaise = Math.abs(rounded - Math.floor(rounded)) > 0.001;
+  const digits = formatInrPdf(rounded, {
+    minimumFractionDigits: hasPaise ? 2 : 0,
+    maximumFractionDigits: 2,
+  });
+  return hasPaise ? `${digits}/-` : `${digits}/-`;
 }

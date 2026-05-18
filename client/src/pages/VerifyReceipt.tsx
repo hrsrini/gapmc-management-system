@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, XCircle, Printer } from "lucide-react";
+import { formatInr } from "@/lib/formatInr";
 import { formatDisplayDateTime } from "@/lib/dateFormat";
 
 interface VerifyResult {
@@ -92,7 +93,7 @@ export default function VerifyReceipt() {
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Amount</span>
-            <span>₹{Number(data.totalAmount).toLocaleString("en-IN")}</span>
+            <span>{formatInr(Number(data.totalAmount))}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Revenue head</span>

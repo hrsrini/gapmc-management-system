@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
+import { formatInr } from "@/lib/formatInr";
 import { FileText, AlertCircle, CheckCircle, ShieldCheck, Plus, Download, CalendarClock, Percent } from "lucide-react";
 interface RentInvoice {
   id: string;
@@ -125,7 +126,7 @@ export default function IomsRentInvoices() {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/ledger"] });
       toast({
         title: "M-03 arrears & interest",
-        description: `As of ${data.asOfDate}: ${data.markedOverdue} marked overdue, ${data.interestRows} interest line(s) posted (₹${data.interestPosted.toFixed(2)}), ${data.skipped} skipped.`,
+        description: `As of ${data.asOfDate}: ${data.markedOverdue} marked overdue, ${data.interestRows} interest line(s) posted (${formatInr(data.interestPosted, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}), ${data.skipped} skipped.`,
       });
     },
     onError: (e: Error) => {
@@ -139,8 +140,8 @@ export default function IomsRentInvoices() {
       { key: "periodMonth", header: "Period" },
       { key: "assetLabel", header: "Asset" },
       { key: "yardName", header: "Yard" },
-      { key: "rentAmount", header: "Rent" },
-      { key: "totalAmount", header: "Total" },
+      { key: "_rent", header: "Rent (₹)", sortField: "rentAmount" },
+      { key: "_total", header: "Total (₹)", sortField: "totalAmount" },
       { key: "_status", header: "Status", sortField: "status" },
     ];
     if (canVerify || canApprove) base.push({ key: "_actions", header: "Actions" });
@@ -161,6 +162,8 @@ export default function IomsRentInvoices() {
       yardName: yardById[r.yardId] ?? r.yardId,
       rentAmount: r.rentAmount,
       totalAmount: r.totalAmount,
+      _rent: formatInr(r.rentAmount),
+      _total: formatInr(r.totalAmount),
       status: r.status,
       _status: <Badge variant="secondary">{r.status}</Badge>,
       _actions: (canVerify || canApprove) ? (
@@ -351,7 +354,7 @@ export default function IomsRentInvoices() {
             <ClientDataGrid
               columns={invoiceColumns}
               sourceRows={invoiceRows}
-              searchKeys={["invoiceNoSort", "periodMonth", "assetLabel", "yardName", "status"]}
+              searchKeys={["invoiceNoSort", "periodMonth", "assetLabel", "yardName", "_rent", "_total", "status"]}
               defaultSortKey="periodMonth"
               defaultSortDir="desc"
               emptyMessage="No IOMS rent invoices. Existing invoices are under Rent & Tax."

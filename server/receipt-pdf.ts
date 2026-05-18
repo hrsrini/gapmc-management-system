@@ -12,6 +12,7 @@ import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
 import { loadPdfDocumentConstructor } from "./pdfkit-loader";
 import { pdfSafeText } from "./pdf-safe-text";
 import { parseM03ReceiptBreakdown } from "@shared/m03-receipt-breakdown";
+import { formatInrPdf } from "@shared/format-inr";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
 
@@ -165,23 +166,27 @@ export async function buildIomsReceiptPdf(params: {
     if (receipt.payerType) doc.text(pdfSafeText(`Type: ${receipt.payerType}`));
     if (unifiedEntityPdfLine) doc.text(pdfSafeText(`Unified entity: ${unifiedEntityPdfLine}`));
     doc.moveDown(0.8);
-    doc.fontSize(11).text(pdfSafeText("Amounts (INR)"), { underline: true });
+    doc.fontSize(11).text(pdfSafeText("Amounts"), { underline: true });
     doc.fontSize(10);
     doc.text(pdfSafeText(`Revenue head: ${receipt.revenueHead}`));
-    doc.text(`Base amount: Rs.${Number(receipt.amount ?? 0).toFixed(2)}`);
+    doc.text(pdfSafeText(`Base amount: ${formatInrPdf(receipt.amount ?? 0)}`));
     if (Number(receipt.cgst ?? 0) > 0 || Number(receipt.sgst ?? 0) > 0) {
-      doc.text(`CGST: Rs.${Number(receipt.cgst ?? 0).toFixed(2)}   SGST: Rs.${Number(receipt.sgst ?? 0).toFixed(2)}`);
+      doc.text(
+        pdfSafeText(
+          `CGST: ${formatInrPdf(receipt.cgst ?? 0)}   SGST: ${formatInrPdf(receipt.sgst ?? 0)}`,
+        ),
+      );
     }
-    doc.fontSize(12).text(`Total: Rs.${Number(receipt.totalAmount ?? 0).toFixed(2)}`, { continued: false });
+    doc.fontSize(12).text(pdfSafeText(`Total: ${formatInrPdf(receipt.totalAmount ?? 0)}`), { continued: false });
     const m03Br = parseM03ReceiptBreakdown((receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson);
     if (m03Br && ((m03Br.rentAmount ?? 0) > 0.005 || (m03Br.interestAmount ?? 0) > 0.005)) {
       doc.moveDown(0.25);
       doc.fontSize(9).fillColor("#444");
       if (m03Br.rentAmount != null && m03Br.rentAmount > 0.005) {
-        doc.text(pdfSafeText(`Rent / tax component: Rs.${m03Br.rentAmount.toFixed(2)}`));
+        doc.text(pdfSafeText(`Rent / tax component: ${formatInrPdf(m03Br.rentAmount)}`));
       }
       if (m03Br.interestAmount != null && m03Br.interestAmount > 0.005) {
-        doc.text(pdfSafeText(`Arrears interest (M-03 ledger): Rs.${m03Br.interestAmount.toFixed(2)}`));
+        doc.text(pdfSafeText(`Arrears interest (M-03 ledger): ${formatInrPdf(m03Br.interestAmount)}`));
       }
       doc.fillColor("#000");
     }
@@ -193,7 +198,7 @@ export async function buildIomsReceiptPdf(params: {
         .fillColor("#444")
         .text(
           pdfSafeText(
-            `TDS u/s 194-I (on rent component): Rs.${tds.toFixed(2)} - shown for statutory disclosure; total above is gross invoice amount.`,
+            `TDS u/s 194-I (on rent component): ${formatInrPdf(tds)} - shown for statutory disclosure; total above is gross invoice amount.`,
           ),
         );
       doc.fillColor("#000");
@@ -205,7 +210,7 @@ export async function buildIomsReceiptPdf(params: {
         .fillColor("#444")
         .text(
           pdfSafeText(
-            `Arrears interest (after prior dishonour, ${arrearsDisclosure.overdueDays} day(s) from due ${arrearsDisclosure.dueDateIso} to ${arrearsDisclosure.asOfIso} at ${arrearsDisclosure.ratePercentPerAnnum}% p.a. on Rs.${arrearsDisclosure.principalInr.toFixed(2)}): approx Rs.${arrearsDisclosure.approxInterestInr.toFixed(2)} - not included in total above.`,
+            `Arrears interest (after prior dishonour, ${arrearsDisclosure.overdueDays} day(s) from due ${arrearsDisclosure.dueDateIso} to ${arrearsDisclosure.asOfIso} at ${arrearsDisclosure.ratePercentPerAnnum}% p.a. on ${formatInrPdf(arrearsDisclosure.principalInr)}): approx ${formatInrPdf(arrearsDisclosure.approxInterestInr)} - not included in total above.`,
           ),
         );
       doc.fillColor("#000");

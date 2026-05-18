@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Percent, AlertCircle } from "lucide-react";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import { formatInr } from "@/lib/formatInr";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
 interface MspSetting {
@@ -36,7 +37,7 @@ export default function MspSettingsList() {
       validFrom: m.validFrom.slice(0, 10),
       validTo: m.validTo ? m.validTo.slice(0, 10) : null,
       mspRate: m.mspRate,
-      _msp: `₹${m.mspRate.toLocaleString()}`,
+      _msp: `${formatInr(m.mspRate)}`,
       updatedBy: m.updatedBy ?? "—",
     }));
   }, [list]);

@@ -91,6 +91,7 @@ import {
   allocateTraderLicenceActivationIds,
   formatProvisionalLicenceNo,
   nextApplicationSerialTx,
+  nextEntityPublicCodeTx,
 } from "./trader-licence-identity";
 
 const TRADER_LICENCE_MOBILE_DUP_STATUSES = ["Draft", "Pending", "Query", "Active"] as const;
@@ -351,31 +352,42 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm }))) {
         return sendApiError(res, 400, "ENTITY_PAN_DUPLICATE", "PAN is already used by another active record.");
       }
-      const id = nanoid();
-      const code = body.entityCode ? String(body.entityCode) : null;
+      if (body.entityCode != null && String(body.entityCode).trim() !== "") {
+        return sendApiError(
+          res,
+          400,
+          "ENTITY_CODE_SYSTEM_ASSIGNED",
+          "Entity ID (ENT-YYYY-NNNNN) is assigned automatically by the system and cannot be supplied on create.",
+        );
+      }
       const track = String(body.track ?? "TrackB");
       if (track !== "TrackB") return sendApiError(res, 400, "ENTITY_TRACK_INVALID", "Only TrackB entities can be created here");
       const subType = normalizeTrackBSubType(body.subType);
       if (body.subType != null && String(body.subType).trim() !== "" && subType == null) {
         return sendApiError(res, 400, "ENTITY_SUBTYPE_INVALID", `subType must be one of: ${TRACKB_SUBTYPES.join(", ")}`);
       }
-      await db.insert(entities).values({
-        id,
-        entityCode: code,
-        track,
-        subType,
-        name: String(body.name ?? ""),
-        yardId,
-        pan: panNorm,
-        gstin: body.gstin ? String(body.gstin) : null,
-        mobile: body.mobile ? normalizeMobile10(String(body.mobile)) : null,
-        email: body.email ? String(body.email).trim().toLowerCase() : null,
-        address: body.address ? String(body.address) : null,
-        status: String(body.status ?? "Active"),
-        createdAt: now(),
-        updatedAt: now(),
+      const id = nanoid();
+      const ts = now();
+      const [row] = await db.transaction(async (tx) => {
+        const entityCode = await nextEntityPublicCodeTx(tx);
+        await tx.insert(entities).values({
+          id,
+          entityCode,
+          track,
+          subType,
+          name: String(body.name ?? ""),
+          yardId,
+          pan: panNorm,
+          gstin: body.gstin ? String(body.gstin) : null,
+          mobile: body.mobile ? normalizeMobile10(String(body.mobile)) : null,
+          email: body.email ? String(body.email).trim().toLowerCase() : null,
+          address: body.address ? String(body.address) : null,
+          status: String(body.status ?? "Active"),
+          createdAt: ts,
+          updatedAt: ts,
+        });
+        return tx.select().from(entities).where(eq(entities.id, id));
       });
-      const [row] = await db.select().from(entities).where(eq(entities.id, id));
       if (row) writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {
@@ -446,8 +458,25 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (!yardInScope(req, yid)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
         updates.yardId = yid;
       }
+      if (body.entityCode !== undefined) {
+        const incoming = String(body.entityCode ?? "").trim();
+        const current = String(existing.entityCode ?? "").trim();
+        if (incoming && incoming !== current) {
+          return sendApiError(
+            res,
+            400,
+            "ENTITY_CODE_IMMUTABLE",
+            "Entity ID (ENT-YYYY-NNNNN) cannot be changed once assigned.",
+          );
+        }
+      }
       const nextStatus = updates.status !== undefined ? String(updates.status ?? "") : String(existing.status ?? "");
+      const needsEntityCode =
+        !String(existing.entityCode ?? "").trim() && nextStatus === "Active";
       await db.transaction(async (tx) => {
+        if (needsEntityCode) {
+          (updates as Record<string, unknown>).entityCode = await nextEntityPublicCodeTx(tx);
+        }
         await tx.update(entities).set(updates as Record<string, string | null>).where(eq(entities.id, id));
       });
       if (nextStatus && nextStatus !== "Active") {
@@ -1046,24 +1075,35 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm }))) {
         return sendApiError(res, 400, "ADHOC_PAN_DUPLICATE", "PAN is already used by another active record.");
       }
+      if (body.entityCode != null && String(body.entityCode).trim() !== "") {
+        return sendApiError(
+          res,
+          400,
+          "ENTITY_CODE_SYSTEM_ASSIGNED",
+          "Entity ID (ENT-YYYY-NNNNN) is assigned automatically by the system and cannot be supplied on create.",
+        );
+      }
 
       const id = nanoid();
       const ts = now();
-      await db.insert(adHocEntities).values({
-        id,
-        entityCode: body.entityCode ? String(body.entityCode) : null,
-        name,
-        yardId,
-        pan: panNorm,
-        gstin: body.gstin ? String(body.gstin) : null,
-        mobile: body.mobile ? normalizeMobile10(String(body.mobile)) : null,
-        email: body.email ? String(body.email).trim().toLowerCase() : null,
-        address: body.address ? String(body.address) : null,
-        status: String(body.status ?? "Active"),
-        createdAt: ts,
-        updatedAt: ts,
+      const [row] = await db.transaction(async (tx) => {
+        const entityCode = await nextEntityPublicCodeTx(tx);
+        await tx.insert(adHocEntities).values({
+          id,
+          entityCode,
+          name,
+          yardId,
+          pan: panNorm,
+          gstin: body.gstin ? String(body.gstin) : null,
+          mobile: body.mobile ? normalizeMobile10(String(body.mobile)) : null,
+          email: body.email ? String(body.email).trim().toLowerCase() : null,
+          address: body.address ? String(body.address) : null,
+          status: String(body.status ?? "Active"),
+          createdAt: ts,
+          updatedAt: ts,
+        });
+        return tx.select().from(adHocEntities).where(eq(adHocEntities.id, id));
       });
-      const [row] = await db.select().from(adHocEntities).where(eq(adHocEntities.id, id)).limit(1);
       if (row) writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.status(201).json(row);
     } catch (e) {

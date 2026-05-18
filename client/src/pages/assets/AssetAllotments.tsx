@@ -29,6 +29,7 @@ import { useAuth } from "@/context/AuthContext";
 import { KeyRound, AlertCircle, Plus, Loader2, Pencil } from "lucide-react";
 import { localCalendarYmd, RENT_REVISION_MODES } from "@shared/premises-allocation";
 import { invalidateAssetAllotmentQueries } from "@/lib/invalidate-asset-allotments";
+import { formatInr } from "@/lib/formatInr";
 import {
   AssetAllotmentManageDialog,
   type ManagedAssetAllotment,
@@ -124,7 +125,7 @@ export default function AssetAllotments() {
         status: a.status,
         approvalStatus: appr,
         securityDeposit:
-          a.securityDeposit != null ? `₹${a.securityDeposit.toLocaleString()}` : "—",
+          a.securityDeposit != null ? `${formatInr(a.securityDeposit)}` : "—",
         securityDepositNum: a.securityDeposit ?? null,
         _approval: (
           <Badge variant={appr === "Approved" ? "default" : appr === "Rejected" ? "destructive" : "secondary"}>

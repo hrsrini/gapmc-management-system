@@ -49,6 +49,7 @@ import { formatDisplayDate } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/context/AuthContext';
+import { formatInr } from "@/lib/formatInr";
 import type { Receipt } from '@shared/schema';
 
 const typeColors: Record<string, string> = {
@@ -161,7 +162,7 @@ export default function ReceiptList() {
       traderName: receipt.traderName,
       head: receipt.head,
       total: receipt.total,
-      _total: `₹${receipt.total.toLocaleString()}`,
+      _total: `${formatInr(receipt.total)}`,
       paymentMode: receipt.paymentMode,
       issuedBy: receipt.issuedBy,
       _actions: (
@@ -389,35 +390,35 @@ export default function ReceiptList() {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Amount</span>
-                    <span>₹{viewReceipt.amount?.toLocaleString() ?? '—'}</span>
+                    <span>{viewReceipt.amount != null ? formatInr(viewReceipt.amount) : "—"}</span>
                   </div>
                   {viewReceipt.cgst != null && viewReceipt.cgst > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">CGST</span>
-                      <span>₹{viewReceipt.cgst.toLocaleString()}</span>
+                      <span>{formatInr(viewReceipt.cgst)}</span>
                     </div>
                   )}
                   {viewReceipt.sgst != null && viewReceipt.sgst > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">SGST</span>
-                      <span>₹{viewReceipt.sgst.toLocaleString()}</span>
+                      <span>{formatInr(viewReceipt.sgst)}</span>
                     </div>
                   )}
                   {viewReceipt.interest != null && viewReceipt.interest > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Interest</span>
-                      <span>₹{viewReceipt.interest.toLocaleString()}</span>
+                      <span>{formatInr(viewReceipt.interest)}</span>
                     </div>
                   )}
                   {viewReceipt.tdsAmount != null && viewReceipt.tdsAmount > 0 && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">TDS</span>
-                      <span>₹{viewReceipt.tdsAmount.toLocaleString()}</span>
+                      <span>{formatInr(viewReceipt.tdsAmount)}</span>
                     </div>
                   )}
                   <div className="flex justify-between pt-2 border-t font-semibold text-base">
                     <span>Total</span>
-                    <span>₹{viewReceipt.total.toLocaleString()}</span>
+                    <span>{formatInr(viewReceipt.total)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Payment</span>

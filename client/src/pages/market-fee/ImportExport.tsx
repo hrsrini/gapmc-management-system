@@ -18,6 +18,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { ArrowLeftRight, Save, Printer, X, AlertCircle } from 'lucide-react';
 import { COMMODITIES, VEHICLE_TYPES, UNITS } from '@/data/yards';
+import { formatInr } from '@/lib/formatInr';
 import { apiYardToLegacyYardId } from '@/lib/legacyYardMatch';
 import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
 import { format } from '@/lib/dateFormat';
@@ -288,11 +289,11 @@ export default function ImportExport() {
               </div>
               <div className="space-y-2">
                 <Label>Total Value (₹)</Label>
-                <Input value={totalValue.toLocaleString()} readOnly className="bg-muted" />
+                <Input value={formatInr(totalValue)} readOnly className="bg-muted" />
               </div>
               <div className="space-y-2">
                 <Label>Market Fee (₹) @ 2.5%</Label>
-                <Input value={marketFee.toLocaleString()} readOnly className="bg-primary/10 font-bold" />
+                <Input value={formatInr(marketFee)} readOnly className="bg-primary/10 font-bold" />
               </div>
             </div>
           </CardContent>

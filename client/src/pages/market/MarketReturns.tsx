@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { ClipboardList, AlertCircle, SendHorizontal } from "lucide-react";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import { formatInr } from "@/lib/formatInr";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
 type ReturnStatus = "Draft" | "Submitted" | "Verified" | "Approved";
@@ -195,11 +196,11 @@ export default function MarketReturns() {
       period: r.period,
       ackSort: r.acknowledgementRef ?? "",
       ack: r.acknowledgementRef ?? "—",
-      value: Number(r.totalPurchaseValueInr ?? 0).toLocaleString(),
-      fee: Number(r.totalMarketFeeInr ?? 0).toLocaleString(),
+      value: formatInr(r.totalPurchaseValueInr ?? 0),
+      fee: formatInr(r.totalMarketFeeInr ?? 0),
       late:
         Number(r.daysLate ?? 0) > 0
-          ? `${Number(r.daysLate)}d late (₹${Number(r.interestAmountInr ?? 0).toFixed(2)})`
+          ? `${Number(r.daysLate)}d late (${formatInr(r.interestAmountInr ?? 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
           : "—",
       status: r.status,
       _status: <Badge variant="secondary">{r.status}</Badge>,
@@ -329,7 +330,7 @@ export default function MarketReturns() {
                 <>
                   <div className="text-sm">
                     Total purchase value:{" "}
-                    <span className="font-medium">₹{Number(preview.totalPurchaseValueInr ?? 0).toLocaleString()}</span>
+                    <span className="font-medium">{formatInr(Number(preview.totalPurchaseValueInr ?? 0))}</span>
                   </div>
                   <Table>
                     <TableHeader>
@@ -348,7 +349,7 @@ export default function MarketReturns() {
                           <TableCell>{commodityNameById.get(l.commodityId) ?? l.commodityId}</TableCell>
                           <TableCell className="text-right">{Number(l.openingQty ?? 0)}</TableCell>
                           <TableCell className="text-right">{Number(l.purchaseQty ?? 0)}</TableCell>
-                          <TableCell className="text-right">{Number(l.purchaseValueInr ?? 0).toLocaleString()}</TableCell>
+                          <TableCell className="text-right">{formatInr(l.purchaseValueInr ?? 0)}</TableCell>
                           <TableCell className="text-right">
                             <Input
                               value={salesByCommodity[l.commodityId] ?? ""}

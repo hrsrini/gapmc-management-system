@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { formatInr } from "@/lib/formatInr";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 interface UnifiedEntityRow {
@@ -245,9 +246,9 @@ export default function OutstandingDues() {
           ),
           periodMonth: d.transactionDate?.slice(0, 7) ?? d.transactionDate ?? "—",
           assetLabel: d.commodityId,
-          _amount: `₹${Number(d.totalAmount ?? 0).toLocaleString()}`,
-          _paid: `₹${Number(d.paidAmount ?? 0).toLocaleString()}`,
-          _outstanding: `₹${Number(d.outstandingAmount ?? 0).toLocaleString()}`,
+          _amount: `${formatInr(Number(d.totalAmount ?? 0))}`,
+          _paid: `${formatInr(Number(d.paidAmount ?? 0))}`,
+          _outstanding: `${formatInr(Number(d.outstandingAmount ?? 0))}`,
           _status: (
             <span>
               {d.receiptStatus ?? "Pending receipt"}
@@ -282,9 +283,9 @@ export default function OutstandingDues() {
           ),
           periodMonth: "—",
           assetLabel: "—",
-          _amount: `₹${Number(d.amount ?? 0).toLocaleString()}`,
+          _amount: `${formatInr(Number(d.amount ?? 0))}`,
           _paid: "—",
-          _outstanding: `₹${Number(d.amount ?? 0).toLocaleString()}`,
+          _outstanding: `${formatInr(Number(d.amount ?? 0))}`,
           _status: <span>{d.status}</span>,
           _actions: <span className="text-sm text-muted-foreground">Open to settle</span>,
         };
@@ -300,9 +301,9 @@ export default function OutstandingDues() {
         ),
         periodMonth: d.periodMonth,
         assetLabel: assetLabelById[d.assetId] ?? d.assetId,
-        _amount: `₹${Number(d.totalAmount ?? 0).toLocaleString()}`,
-        _paid: `₹${Number(d.paidAmount ?? 0).toLocaleString()}`,
-        _outstanding: `₹${Number(d.outstandingAmount ?? 0).toLocaleString()}`,
+        _amount: `${formatInr(Number(d.totalAmount ?? 0))}`,
+        _paid: `${formatInr(Number(d.paidAmount ?? 0))}`,
+        _outstanding: `${formatInr(Number(d.outstandingAmount ?? 0))}`,
         _status: <span>{d.status}</span>,
         _actions: (
           <Button
@@ -372,7 +373,7 @@ export default function OutstandingDues() {
             </div>
             <div className="text-sm">
               <span className="text-muted-foreground">Total outstanding:</span>{" "}
-              <span className="font-medium">₹{totalOutstanding.toLocaleString()}</span>
+              <span className="font-medium">{formatInr(totalOutstanding)}</span>
             </div>
           </div>
 
@@ -441,7 +442,7 @@ export default function OutstandingDues() {
                   <span className="font-mono">{payInvoice?.invoiceNo ?? payInvoice?.invoiceId}</span>
                   <br />
                   <span className="text-muted-foreground">Outstanding:</span>{" "}
-                  <span className="font-medium">₹{Number(payInvoice?.outstandingAmount ?? 0).toLocaleString()}</span>
+                  <span className="font-medium">{formatInr(Number(payInvoice?.outstandingAmount ?? 0))}</span>
                 </>
               ) : (
                 <>
@@ -449,7 +450,7 @@ export default function OutstandingDues() {
                   <span className="font-mono">{payMarket?.transactionNo ?? payMarket?.purchaseTransactionId}</span>
                   <br />
                   <span className="text-muted-foreground">Outstanding:</span>{" "}
-                  <span className="font-medium">₹{Number(payMarket?.outstandingAmount ?? 0).toLocaleString()}</span>
+                  <span className="font-medium">{formatInr(Number(payMarket?.outstandingAmount ?? 0))}</span>
                 </>
               )}
             </div>

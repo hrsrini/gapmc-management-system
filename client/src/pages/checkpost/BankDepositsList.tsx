@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { formatInr } from "@/lib/formatInr";
 import { Landmark, AlertCircle, Plus, ShieldCheck, Pencil } from "lucide-react";
 interface BankDeposit {
   id: string;
@@ -178,7 +179,7 @@ export default function BankDepositsList() {
       checkPostName: checkPostById.get(d.checkPostId)?.name ?? d.checkPostId,
       bankName: d.bankName,
       amount: d.amount,
-      _amount: `₹${d.amount.toLocaleString()}`,
+      _amount: `${formatInr(d.amount)}`,
       status: d.status,
       _status: <Badge variant="secondary">{d.status}</Badge>,
       verifiedBy: d.verifiedBy ?? "—",

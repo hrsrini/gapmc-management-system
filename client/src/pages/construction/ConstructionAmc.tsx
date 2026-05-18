@@ -15,6 +15,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FileCheck, AlertCircle } from "lucide-react";
+import { formatInr } from "@/lib/formatInr";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 interface AmcContract {
@@ -76,7 +77,7 @@ export default function ConstructionAmc() {
       contractStart: a.contractStart.slice(0, 10),
       contractEnd: a.contractEnd.slice(0, 10),
       amountPerPeriod: a.amountPerPeriod,
-      _amountPerPeriod: `₹${a.amountPerPeriod.toLocaleString()}`,
+      _amountPerPeriod: `${formatInr(a.amountPerPeriod)}`,
       status: a.status,
       _status: <Badge variant="secondary">{a.status}</Badge>,
     }));

@@ -5,6 +5,21 @@
 /** This route is never hideable — admins must always reach menu visibility settings from the sidebar. */
 export const SIDEBAR_MENU_VISIBILITY_PAGE_HREF = "/admin/sidebar-menu";
 
+/** Sidebar Dashboard link (Admin → Sidebar menu visibility can hide this). */
+export const DASHBOARD_SIDEBAR_HREF = "/dashboard";
+
+/** Landing page when Dashboard is hidden from the sidebar. */
+export const WELCOME_PAGE_HREF = "/welcome";
+
+export function isDashboardHiddenInSidebar(raw: string | undefined): boolean {
+  return parseSidebarHiddenHrefsJson(raw).has(DASHBOARD_SIDEBAR_HREF);
+}
+
+/** Post-login / “home” route: welcome when dashboard is hidden, otherwise dashboard. */
+export function resolveAppHomeHref(raw: string | undefined): string {
+  return isDashboardHiddenInSidebar(raw) ? WELCOME_PAGE_HREF : DASHBOARD_SIDEBAR_HREF;
+}
+
 export function parseSidebarHiddenHrefsJson(raw: string | undefined): Set<string> {
   try {
     const j = JSON.parse(raw == null || String(raw).trim() === "" ? "[]" : String(raw).trim());

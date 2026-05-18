@@ -28,6 +28,7 @@ import {
   type ReportPagedParams,
   type ReportTableColumn,
 } from "@/components/reports/ReportDataTable";
+import { formatInr } from "@/lib/formatInr";
 import { sliceClientReport } from "@/lib/clientReportSlice";
 
 type ReportType = "trader" | "head" | "yard" | "daily" | "payment";
@@ -197,7 +198,7 @@ export default function LedgerReports() {
           type: item.type,
           head: item.head,
           total: item.total,
-          _amount: `₹${item.total.toLocaleString()}`,
+          _amount: `${formatInr(item.total)}`,
           paymentMode: item.paymentMode,
         }));
       case "head":
@@ -207,7 +208,7 @@ export default function LedgerReports() {
           head: item.head,
           count: item.count,
           total: item.total,
-          _amount: `₹${item.total.toLocaleString()}`,
+          _amount: `${formatInr(item.total)}`,
         }));
       case "yard":
         return yardWiseSummary.map((item) => ({
@@ -218,7 +219,7 @@ export default function LedgerReports() {
           inactive: item.inactive,
           count: item.count,
           total: item.total,
-          _amount: `₹${item.total.toLocaleString()}`,
+          _amount: `${formatInr(item.total)}`,
         }));
       case "daily":
         return dailyCollection.map((row) => ({
@@ -226,7 +227,7 @@ export default function LedgerReports() {
           date: row.date,
           count: row.count,
           total: row.total,
-          _amount: `₹${row.total.toLocaleString()}`,
+          _amount: `${formatInr(row.total)}`,
         }));
       case "payment":
         return Object.values(paymentModeSummary).map((item) => ({
@@ -234,7 +235,7 @@ export default function LedgerReports() {
           mode: item.mode,
           count: item.count,
           total: item.total,
-          _amount: `₹${item.total.toLocaleString()}`,
+          _amount: `${formatInr(item.total)}`,
         }));
       default:
         return [];
@@ -522,7 +523,7 @@ export default function LedgerReports() {
               </CardDescription>
               {reportType === "trader" ? (
                 <p className="text-sm font-medium pt-1">
-                  Grand total: ₹{traderGrandTotal.toLocaleString()} ({traderLedger.length} receipt
+                  Grand total: {formatInr(traderGrandTotal)} ({traderLedger.length} receipt
                   {traderLedger.length === 1 ? "" : "s"})
                 </p>
               ) : null}

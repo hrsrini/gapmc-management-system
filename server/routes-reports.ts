@@ -34,6 +34,7 @@ import {
 } from "@shared/db-schema";
 import { maskPanForExport } from "@shared/india-validation";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
+import { enrichRentSummaryRows } from "./rent-summary-report-enrich";
 
 function escapeCsvCell(val: unknown): string {
   if (val == null) return "";
@@ -314,10 +315,33 @@ export function registerReportsRoutes(app: Express) {
 
       const base = db.select().from(rentInvoices).orderBy(desc(rentInvoices.periodMonth));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
+      const enrichedList = await enrichRentSummaryRows(list);
 
       if (format === "csv") {
-        const headers = ["id", "invoiceNo", "yardId", "periodMonth", "assetId", "rentAmount", "totalAmount", "status"];
-        const rows = list.map((r) => [r.id, r.invoiceNo, r.yardId, r.periodMonth, r.assetId, r.rentAmount, r.totalAmount, r.status]);
+        const headers = [
+          "Invoice No.",
+          "Period (Month)",
+          "Yard Name",
+          "Premises ID",
+          "Occupant Name",
+          "Rent (₹)",
+          "SGST (₹)",
+          "CGST (₹)",
+          "Total (₹)",
+          "Status",
+        ];
+        const rows = enrichedList.map((r) => [
+          r.invoiceNo ?? r.id,
+          r.periodMonth,
+          r.yardName,
+          r.premisesId,
+          r.occupantName,
+          r.rentAmount,
+          r.sgst,
+          r.cgst,
+          r.totalAmount,
+          r.status,
+        ]);
         const csv = [headers.join(","), ...rows.map(toCsvRow)].join("\r\n");
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", "attachment; filename=rent-summary.csv");
@@ -338,7 +362,10 @@ export function registerReportsRoutes(app: Express) {
               ilike(rentInvoices.status, pattern),
               ilike(rentInvoices.id, pattern),
               sql`cast(${rentInvoices.rentAmount} as text) ilike ${pattern}`,
+              sql`cast(${rentInvoices.cgst} as text) ilike ${pattern}`,
+              sql`cast(${rentInvoices.sgst} as text) ilike ${pattern}`,
               sql`cast(${rentInvoices.totalAmount} as text) ilike ${pattern}`,
+              ilike(rentInvoices.tenantLicenceId, pattern),
             )!,
           );
         }
@@ -348,22 +375,23 @@ export function registerReportsRoutes(app: Express) {
         const rentBase = db.select().from(rentInvoices);
         const rentFiltered = wc ? rentBase.where(wc) : rentBase;
         const dataQ = rentFiltered.orderBy(...orderRentReport(sortKey, sortDir));
-        const rows =
+        const rawRows =
           pageSize === "all"
             ? await dataQ
             : await dataQ.limit(pageSize).offset((page - 1) * pageSize);
+        const rows = await enrichRentSummaryRows(rawRows);
         return res.json({ total, page, pageSize, rows });
       }
 
       const summary = {
-        count: list.length,
-        totalRent: list.reduce((s, r) => s + Number(r.rentAmount ?? 0), 0),
-        totalAmount: list.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0),
-        byStatus: list.reduce((acc, r) => {
+        count: enrichedList.length,
+        totalRent: enrichedList.reduce((s, r) => s + Number(r.rentAmount ?? 0), 0),
+        totalAmount: enrichedList.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0),
+        byStatus: enrichedList.reduce((acc, r) => {
           acc[r.status] = (acc[r.status] ?? 0) + 1;
           return acc;
         }, {} as Record<string, number>),
-        rows: list,
+        rows: enrichedList,
       };
       res.json(summary);
     } catch (e) {

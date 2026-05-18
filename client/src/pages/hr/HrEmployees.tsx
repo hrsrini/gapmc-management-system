@@ -11,7 +11,7 @@ import { UserCircle, AlertCircle } from "lucide-react";
 import { fetchApiGet } from "@/lib/queryClient";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
-import { employeeStatusDisplayLabel } from "@shared/employee-lifecycle-status";
+import { displayEmployeeEmpId, employeeRegistrationPendingEmpId, employeeStatusDisplayLabel } from "@shared/employee-lifecycle-status";
 
 interface AppLogin {
   id: string;
@@ -89,8 +89,8 @@ export default function HrEmployees() {
       const fullName = [e.firstName, e.middleName, e.surname].filter(Boolean).join(" ");
       const empIdSort =
         e.empId ??
-        (e.status === "Draft" || e.status === "Submitted" ? "" : e.id);
-      const displayEmpId = e.empId ?? (e.status === "Draft" || e.status === "Submitted" ? "—" : e.id);
+        (employeeRegistrationPendingEmpId(e.status) ? "" : e.id);
+      const displayEmpId = displayEmployeeEmpId(e.empId, e.status, e.id);
       const permLabels = (linked?.effectivePermissions ?? []).map(formatPermissionLabel);
       const permShown = permLabels.slice(0, PERM_BADGE_MAX);
       const permRest = permLabels.length - permShown.length;
@@ -118,7 +118,7 @@ export default function HrEmployees() {
         permsLabels,
         _empId: (
           <Link href={`/hr/employees/${e.id}`} className="text-primary hover:underline font-mono text-sm">
-            {displayEmpId}
+            {displayEmpId ?? "—"}
           </Link>
         ),
         _name: (

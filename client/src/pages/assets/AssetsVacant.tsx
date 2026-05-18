@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatInr } from "@/lib/formatInr";
 import { AlertCircle, Store } from "lucide-react";
 
 interface Asset {
@@ -87,7 +88,7 @@ export default function AssetsVacant() {
         daUser: row.lastAllotment?.daUser ?? "—",
         lastRentSort: row.lastRentAmount ?? null,
         _lastRent:
-          row.lastRentAmount != null ? `₹${row.lastRentAmount.toLocaleString()}` : "—",
+          row.lastRentAmount != null ? `${formatInr(row.lastRentAmount)}` : "—",
       };
     });
   }, [vacant, yardById]);

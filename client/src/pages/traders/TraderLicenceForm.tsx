@@ -31,6 +31,7 @@ import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 import { AuthenticatedBlobPreviewDialog } from "@/components/attachment/AuthenticatedBlobPreviewDialog";
 import { PanInput } from "@/components/inputs/PanInput";
+import { formatInr } from "@/lib/formatInr";
 import { govtGstCategoriesForSelect, type GovtGstExemptCategoryRow } from "@/lib/govtGstExemptSelect";
 
 const LICENCE_TYPES = ["Associated", "Functionary", "Hamali", "Weighman", "AssistantTrader"] as const;
@@ -553,7 +554,7 @@ export default function TraderLicenceForm() {
                 {licence?.parentLicenceFeeSnapshot != null && Number.isFinite(Number(licence.parentLicenceFeeSnapshot)) ? (
                   <p className="text-sm text-muted-foreground">
                     Parent licence fee on file at renewal:{" "}
-                    <span className="font-medium text-foreground">₹{Number(licence.parentLicenceFeeSnapshot).toLocaleString()}</span>
+                    <span className="font-medium text-foreground">{formatInr(Number(licence.parentLicenceFeeSnapshot))}</span>
                   </p>
                 ) : null}
                 <div className="flex items-start gap-2">

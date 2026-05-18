@@ -46,7 +46,12 @@ import {
   Eye,
 } from "lucide-react";
 import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
-import { employeeStatusDisplayLabel } from "@shared/employee-lifecycle-status";
+import {
+  canApproveEmployeeRegistration,
+  displayEmployeeEmpId,
+  employeeStatusDisplayLabel,
+} from "@shared/employee-lifecycle-status";
+import { statusEffectiveDateLabel } from "@shared/employee-status-effective-date";
 
 const SERVICE_BOOK_SECTIONS = ["History", "Appendix", "AuditComments", "Verification", "CertMutable", "CertImmutable"];
 
@@ -76,6 +81,7 @@ interface Employee {
   employeeType: string;
   joiningDate: string;
   status: string;
+  statusEffectiveDate?: string | null;
   mobile?: string | null;
   workEmail?: string | null;
   personalEmail?: string | null;
@@ -508,16 +514,8 @@ export default function HrEmployeeDetail() {
   }
 
   const fullName = [employee.firstName, employee.middleName, employee.surname].filter(Boolean).join(" ");
-  const displayEmpId =
-    employee.empId ??
-    (employee.status === "Draft" || employee.status === "Submitted" ? null : employee.id);
-  const hasOfficialEmpId = /^EMP-\d{3}$/i.test((employee.empId ?? "").trim());
-  const showApproveRegistration =
-    Boolean(id) &&
-    canApproveRegistration &&
-    (employee.status === "Draft" ||
-      employee.status === "Submitted" ||
-      (employee.status === "Active" && !hasOfficialEmpId));
+  const displayEmpId = displayEmployeeEmpId(employee.empId, employee.status, employee.id);
+  const showApproveRegistration = Boolean(id) && canApproveRegistration && canApproveEmployeeRegistration(employee.status, employee.empId);
 
   return (
     <AppShell
@@ -560,6 +558,12 @@ export default function HrEmployeeDetail() {
               Registration is <span className="font-medium">{employee.status}</span>. Official EMP-ID is assigned when a Data Approver approves (BR-EMP-06).
             </div>
           )}
+          {employee.status === "Recommended" && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100">
+              Registration is <span className="font-medium">Recommended</span> — awaiting Data Approver action. Use{" "}
+              <span className="font-medium">Approve registration (EMP-ID)</span> to assign the official EMP-ID and set status to Active.
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Designation</span><br />{employee.designation}</div>
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[employee.yardId] ?? employee.yardId}</div>
@@ -585,6 +589,13 @@ export default function HrEmployeeDetail() {
             </div>
             <div><span className="text-muted-foreground">Type</span><br />{employee.employeeType}</div>
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant="secondary">{employeeStatusDisplayLabel(employee.status)}</Badge></div>
+            {employee.statusEffectiveDate?.trim() ? (
+              <div>
+                <span className="text-muted-foreground">{statusEffectiveDateLabel(employee.status) ?? "Status effective date"}</span>
+                <br />
+                {formatYmdToDisplay(employee.statusEffectiveDate)}
+              </div>
+            ) : null}
             <div><span className="text-muted-foreground">Joining date</span><br />{formatYmdToDisplay(employee.joiningDate)}</div>
             <div><span className="text-muted-foreground">DOB</span><br />{formatYmdToDisplay(employee.dob ?? "")}</div>
             <div><span className="text-muted-foreground">Mobile</span><br />{employee.mobile ?? "—"}</div>

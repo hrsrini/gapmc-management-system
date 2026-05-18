@@ -17,6 +17,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { formatInr } from "@/lib/formatInr";
 import { CalendarDays, Download, AlertCircle } from "lucide-react";
 
 interface StatementRow {
@@ -107,7 +108,7 @@ export default function VoucherMonthlyStatement() {
       { key: "headCode", header: "Head code" },
       { key: "headDescription", header: "Description" },
       { key: "voucherCount", header: "Vouchers" },
-      { key: "_totalAmount", header: "Total (INR)", sortField: "totalAmount" },
+      { key: "_totalAmount", header: "Total (₹)", sortField: "totalAmount" },
     ],
     [],
   );
@@ -120,7 +121,7 @@ export default function VoucherMonthlyStatement() {
       headDescription: r.headDescription || "—",
       voucherCount: r.voucherCount,
       totalAmount: r.totalAmount,
-      _totalAmount: `₹${r.totalAmount.toLocaleString()}`,
+      _totalAmount: `${formatInr(r.totalAmount)}`,
     }));
   }, [data]);
 
@@ -202,7 +203,7 @@ export default function VoucherMonthlyStatement() {
               <p className="text-sm text-muted-foreground mb-4">
                 Period {data.monthStart} — {data.monthEnd}
                 {data.yardId ? ` · Yard: ${yardLabel(data.yardId)}` : ""} · {data.voucherCount} paid voucher(s) · Grand
-                total ₹{data.grandTotal.toLocaleString()}
+                total {formatInr(data.grandTotal)}
               </p>
               <ClientDataGrid
                 columns={statementColumns}

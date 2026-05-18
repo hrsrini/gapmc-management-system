@@ -9,6 +9,7 @@ import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { AlertCircle, RefreshCcw, Receipt, CircleCheck, XCircle } from "lucide-react";
 import { Link } from "wouter";
+import { formatInr } from "@/lib/formatInr";
 import { useAuth } from "@/context/AuthContext";
 
 type GatewayLogStatus = "Initiated" | "Paid" | "Failed" | "Reconciled";
@@ -79,7 +80,7 @@ export default function IomsReceiptReconciliation() {
         </Link>
       ),
       amount: log.amount,
-      _amount: `₹${Number(log.amount).toLocaleString("en-IN")}`,
+      _amount: `${formatInr(Number(log.amount))}`,
       createdAt: log.createdAt,
     }));
   }, [data]);

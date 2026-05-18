@@ -23,6 +23,7 @@ import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { HardHat, ArrowLeft, Pencil, FileText, AlertCircle, Plus, Loader2 } from "lucide-react";
+import { formatInr } from "@/lib/formatInr";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
 
 interface Work {
@@ -112,9 +113,9 @@ export default function WorkDetail() {
       billNo: b.billNo ?? "—",
       billDate: b.billDate.slice(0, 10),
       amount: b.amount,
-      _amount: `₹${b.amount.toLocaleString()}`,
+      _amount: `${formatInr(b.amount)}`,
       cumulativePaid: b.cumulativePaid ?? 0,
-      _cumulativePaid: `₹${(b.cumulativePaid ?? 0).toLocaleString()}`,
+      _cumulativePaid: `${formatInr((b.cumulativePaid ?? 0))}`,
       status: b.status,
       _status: <Badge variant="outline">{b.status}</Badge>,
       voucherLabel: b.voucherId ? (voucherNoById[b.voucherId] ?? b.voucherId) : "—",
@@ -215,8 +216,8 @@ export default function WorkDetail() {
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant="secondary">{work.status}</Badge></div>
             <div><span className="text-muted-foreground">Contractor</span><br />{work.contractorName ?? "—"}</div>
             <div><span className="text-muted-foreground">Location</span><br />{work.location ?? "—"}</div>
-            <div><span className="text-muted-foreground">Estimate</span><br />{work.estimateAmount != null ? `₹${work.estimateAmount.toLocaleString()}` : "—"}</div>
-            <div><span className="text-muted-foreground">Tender value</span><br />{work.tenderValue != null ? `₹${work.tenderValue.toLocaleString()}` : "—"}</div>
+            <div><span className="text-muted-foreground">Estimate</span><br />{work.estimateAmount != null ? `${formatInr(work.estimateAmount)}` : "—"}</div>
+            <div><span className="text-muted-foreground">Tender value</span><br />{work.tenderValue != null ? `${formatInr(work.tenderValue)}` : "—"}</div>
             <div>
               <span className="text-muted-foreground">Work order</span>
               <br />

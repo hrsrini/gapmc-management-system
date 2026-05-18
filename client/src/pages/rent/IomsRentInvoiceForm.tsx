@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,22 +17,21 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { FileText, ArrowLeft, Loader2 } from "lucide-react";
+import { FileText, ArrowLeft, Loader2, AlertCircle } from "lucide-react";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
-import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
+import type { AssetAllotmentRow, EntityAllotmentRow, YardRef } from "./rent-allotments-ui";
 import {
   activeAssetAllotmentsInYard,
+  billableAssetAllotments,
+  billableEntityAllotments,
   billableEntityAllotmentsInYard,
+  buildYardAssetPrimaryKeySet,
+  yardsWithPremises,
 } from "./rent-allotments-ui";
 import { SYSTEM_CONFIG_DEFAULTS } from "@shared/system-config-defaults";
 import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
 import { MIN_RENT_INVOICE_AMOUNT_INR } from "@shared/rent-invoice-amount-validation";
 
-interface Yard {
-  id: string;
-  name: string;
-  code: string;
-}
 interface Asset {
   id: string;
   assetId: string;
@@ -49,6 +48,7 @@ interface InvoiceRentContextResponse {
   source: "revision" | "invoice" | "none";
   matchedRevisionId: string | null;
   matchedInvoiceId: string | null;
+  blockingInvoice?: { id: string; invoiceNo: string | null } | null;
 }
 
 type Selection = "" | `trader:${string}` | `entity:${string}`;
@@ -107,7 +107,8 @@ export default function IomsRentInvoiceForm() {
   const [nonGstAmount, setNonGstAmount] = useState("");
   const [isGovtEntity, setIsGovtEntity] = useState(false);
 
-  const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  const { data: yards = [] } = useQuery<YardRef[]>({ queryKey: ["/api/yards"] });
+  const premiseYards = useMemo(() => yardsWithPremises(yards), [yards]);
   const { data: sysCfg } = useQuery<Record<string, string>>({
     queryKey: ["/api/system/config"],
   });
@@ -145,24 +146,20 @@ export default function IomsRentInvoiceForm() {
     return m;
   }, [assets]);
 
-  const yardAssetIdSet = useMemo(() => {
+  const yardAssetPrimaryKeySet = useMemo(() => {
     if (!yardId) return null as Set<string> | null;
-    return new Set(assets.filter((a) => a.yardId === yardId).map((a) => a.assetId));
+    return buildYardAssetPrimaryKeySet(assets, yardId);
   }, [assets, yardId]);
 
   const traderOptions = useMemo(() => {
-    if (!yardAssetIdSet) return allotments.filter((a) => a.status === "Active");
-    return activeAssetAllotmentsInYard(allotments, yardAssetIdSet);
-  }, [allotments, yardAssetIdSet]);
+    if (!yardAssetPrimaryKeySet) return billableAssetAllotments(allotments);
+    return activeAssetAllotmentsInYard(allotments, yardAssetPrimaryKeySet);
+  }, [allotments, yardAssetPrimaryKeySet]);
 
   const entityOptions = useMemo(() => {
-    if (!yardAssetIdSet) {
-      return entityAllotments.filter(
-        (e) => String(e.approvalStatus ?? "") === "Approved" && e.status === "Active",
-      );
-    }
-    return billableEntityAllotmentsInYard(entityAllotments, yardAssetIdSet);
-  }, [entityAllotments, yardAssetIdSet]);
+    if (!yardAssetPrimaryKeySet) return billableEntityAllotments(entityAllotments);
+    return billableEntityAllotmentsInYard(entityAllotments, yardAssetPrimaryKeySet);
+  }, [entityAllotments, yardAssetPrimaryKeySet]);
 
   const selectedTrader = useMemo(() => {
     if (!selection.startsWith("trader:")) return null;
@@ -217,6 +214,9 @@ export default function IomsRentInvoiceForm() {
     rentResolve != null &&
     Number.isFinite(rentResolve.resolvedRent) &&
     rentResolve.resolvedRent > MIN_RENT_INVOICE_AMOUNT_INR;
+
+  const blockingInvoice = rentResolve?.blockingInvoice ?? null;
+  const premisesMonthBlocked = blockingInvoice != null;
 
   useEffect(() => {
     if (rentOverride) return;
@@ -278,13 +278,13 @@ export default function IomsRentInvoiceForm() {
     if (!selectedTrader && !selectedEntity) return "";
     const ref = selectedAsset?.premisesRefNo?.trim();
     const type = selectedAsset?.assetType?.trim();
-    const aid = selectedTrader?.assetId ?? selectedEntity?.assetId ?? "";
+    const displayAssetCode = selectedAsset?.assetId?.trim();
     const bits: string[] = [];
-    if (ref) bits.push(ref);
     if (type) bits.push(type);
-    bits.push(aid);
+    if (ref) bits.push(ref);
+    if (displayAssetCode) bits.push(displayAssetCode);
     if (yardLabel) bits.push(`Yard: ${yardLabel}`);
-    return bits.filter(Boolean).join(" · ") || aid || "—";
+    return bits.filter(Boolean).join(" · ") || displayAssetCode || "—";
   }, [selectedAsset, selectedTrader, selectedEntity, yardLabel]);
 
   const pickerLoading = allotmentsLoading || entityAllotmentsLoading;
@@ -304,6 +304,15 @@ export default function IomsRentInvoiceForm() {
       toast({
         title: "Invalid period",
         description: "Period must be a calendar month as YYYY-MM (e.g. 2026-05).",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (premisesMonthBlocked && blockingInvoice) {
+      toast({
+        title: "Invoice already exists",
+        description:
+          "Only one rent invoice is allowed per premises for each billing month. Cancel or adjust the existing invoice first.",
         variant: "destructive",
       });
       return;
@@ -395,7 +404,7 @@ export default function IomsRentInvoiceForm() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All yards</SelectItem>
-                    {yards.map((y) => (
+                    {premiseYards.map((y) => (
                       <SelectItem key={y.id} value={y.id}>
                         {y.name} ({y.code})
                       </SelectItem>
@@ -421,22 +430,29 @@ export default function IomsRentInvoiceForm() {
                         {traderOptions.length > 0 ? (
                           <SelectGroup>
                             <SelectLabel>Trader licence (Track A)</SelectLabel>
-                            {traderOptions.map((a) => (
-                              <SelectItem key={`trader:${a.id}`} value={`trader:${a.id}`}>
-                                {a.allotteeName} — {a.assetId} ({formatYmdToDisplay(a.fromDate)} to {formatYmdToDisplay(a.toDate)})
-                              </SelectItem>
-                            ))}
+                            {traderOptions.map((a) => {
+                              const assetCode = assetByAssetId[a.assetId]?.assetId ?? a.assetId;
+                              return (
+                                <SelectItem key={`trader:${a.id}`} value={`trader:${a.id}`}>
+                                  {a.allotteeName} — {assetCode} ({formatYmdToDisplay(a.fromDate)} to{" "}
+                                  {formatYmdToDisplay(a.toDate)})
+                                </SelectItem>
+                              );
+                            })}
                           </SelectGroup>
                         ) : null}
                         {entityOptions.length > 0 ? (
                           <SelectGroup>
                             <SelectLabel>Track B premises (approved)</SelectLabel>
-                            {entityOptions.map((e) => (
-                              <SelectItem key={`entity:${e.id}`} value={`entity:${e.id}`}>
-                                {e.allotteeName} — {e.premisesRefNo?.trim() || e.assetId} (
-                                {formatYmdToDisplay(e.fromDate)} to {formatYmdToDisplay(e.toDate)})
-                              </SelectItem>
-                            ))}
+                            {entityOptions.map((e) => {
+                              const assetCode = assetByAssetId[e.assetId]?.assetId ?? e.assetId;
+                              return (
+                                <SelectItem key={`entity:${e.id}`} value={`entity:${e.id}`}>
+                                  {e.allotteeName} — {e.premisesRefNo?.trim() || assetCode} (
+                                  {formatYmdToDisplay(e.fromDate)} to {formatYmdToDisplay(e.toDate)})
+                                </SelectItem>
+                              );
+                            })}
                           </SelectGroup>
                         ) : null}
                       </>
@@ -501,6 +517,23 @@ export default function IomsRentInvoiceForm() {
                   required
                   autoComplete="off"
                 />
+                {premisesMonthBlocked && blockingInvoice ? (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive flex gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium">Invoice already exists for this premises and month</p>
+                      <p className="text-xs mt-1 text-destructive/90">
+                        Only one rent invoice per premises per billing month is allowed. Cancel the existing invoice first.
+                      </p>
+                      <Link
+                        href={`/rent/ioms/invoices/${encodeURIComponent(blockingInvoice.id)}`}
+                        className="text-xs font-mono underline mt-1 inline-block"
+                      >
+                        {blockingInvoice.invoiceNo ?? blockingInvoice.id}
+                      </Link>
+                    </div>
+                  </div>
+                ) : null}
               </div>
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -616,7 +649,7 @@ export default function IomsRentInvoiceForm() {
             </div>
 
             <div className="flex gap-2 pt-2">
-              <Button type="submit" disabled={createMutation.isPending}>
+              <Button type="submit" disabled={createMutation.isPending || premisesMonthBlocked}>
                 {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Create draft invoice
               </Button>

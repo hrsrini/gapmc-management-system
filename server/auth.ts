@@ -428,6 +428,28 @@ export async function requireModulePermissionByPath(req: Request, res: Response,
     sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-01:Approve or DA role" });
     return;
   }
+  // M-10: app login provisioning is HR-scoped but governed by M-10 Create/Update (not plain M-01 POST/PUT).
+  if (
+    (req.method === "POST" || req.method === "PUT") &&
+    /^\/api\/hr\/employees\/[^/]+\/login$/.test(req.path)
+  ) {
+    const action = req.method === "POST" ? "Create" : "Update";
+    if (hasPermission(req.user, "M-10", action)) {
+      return next();
+    }
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: `M-10:${action}` });
+    return;
+  }
+  if (
+    req.method === "GET" &&
+    /^\/api\/hr\/employees\/[^/]+\/login-profile$/.test(req.path)
+  ) {
+    if (hasPermission(req.user, "M-10", "Read")) {
+      return next();
+    }
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: "M-10:Read" });
+    return;
+  }
   const action = METHOD_TO_ACTION[req.method] ?? "Read";
   if (!hasPermission(req.user, module, action)) {
     sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "Insufficient permissions", { required: `${module}:${action}` });

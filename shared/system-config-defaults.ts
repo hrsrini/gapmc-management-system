@@ -45,6 +45,8 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   tally_xml_export_enabled: "true",
   /** M-10 UI: JSON array of sidebar link paths (`href`) to hide app-wide (still enforced after RBAC). Default [] shows all links user may access. */
   ui_sidebar_hidden_hrefs_json: "[]",
+  /** M-10 UI: show summary KPI cards on Dashboard (Total Traders, Active Invoices, Pending Receipts, Today's Collection). */
+  ui_dashboard_show_kpi_cards: "true",
   /**
    * US-M10-003: MFA enforcement (TOTP) for privileged roles.
    * Default false for easier rollout; enable only when MFA setup process is ready for users.
@@ -146,6 +148,7 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "expenditure_head_authority_url",
   "tally_xml_export_enabled",
   "ui_sidebar_hidden_hrefs_json",
+  "ui_dashboard_show_kpi_cards",
   "mfa_privileged_enforced",
   "data_retention_ioms_receipts_years",
   "data_retention_payment_vouchers_years",
@@ -202,6 +205,8 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   tally_xml_export_enabled: "Tally export: allow XML interchange (true|false)",
   ui_sidebar_hidden_hrefs_json:
     "Sidebar: JSON array of menu paths to hide globally (e.g. [\"/fleet\"]) — use Admin → Sidebar menu visibility",
+  ui_dashboard_show_kpi_cards:
+    "Dashboard: show summary KPI cards (Total Traders, Active Invoices, Pending Receipts, Today's Collection) (true|false)",
   mfa_privileged_enforced: "Auth: enforce MFA for privileged roles (DA/ADMIN/ACCOUNTS) (true|false)",
   data_retention_ioms_receipts_years: "Retention policy (years) — IOMS receipts count snapshot",
   data_retention_payment_vouchers_years: "Retention policy (years) — payment vouchers count snapshot",
@@ -233,3 +238,11 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   aadhaar_hmac_secret:
     "M-01 HR: Aadhaar HMAC secret (fingerprint for dedup; use a long random value; keep stable — rotating changes new fingerprints)",
 };
+
+/** Parse `true` / `false` system_config values; unknown strings fall back to `defaultValue`. */
+export function parseSystemConfigBoolean(raw: string | null | undefined, defaultValue: boolean): boolean {
+  const trimmed = String(raw ?? "").trim().toLowerCase();
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  return defaultValue;
+}

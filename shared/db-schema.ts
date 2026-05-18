@@ -487,6 +487,8 @@ export const employees = gapmc.table("employees", {
   fatherOrSpouseName: text("father_or_spouse_name"),
   /** Draft | Submitted | Recommended | Active | INA | RET | VRS | SUS | RES | DEC | TER (see shared/employee-lifecycle-status). */
   status: text("status").notNull(),
+  /** YYYY-MM-DD date of occurrence for the current lifecycle status (suspension, VRS, retirement, etc.). */
+  statusEffectiveDate: text("status_effective_date"),
   userId: text("user_id"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),

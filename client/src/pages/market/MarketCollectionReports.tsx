@@ -11,6 +11,7 @@ import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { useAuth } from "@/context/AuthContext";
 import { AlertCircle, BarChart3 } from "lucide-react";
+import { formatInr } from "@/lib/formatInr";
 import { Link } from "wouter";
 
 interface YardRef {
@@ -140,7 +141,7 @@ export default function MarketCollectionReports() {
       payerName: r.payerName ?? r.payerRefId ?? "—",
       paymentMode: r.paymentMode,
       totalAmount: r.totalAmount,
-      _amount: `₹${Number(r.totalAmount ?? 0).toLocaleString("en-IN")}`,
+      _amount: `${formatInr(Number(r.totalAmount ?? 0))}`,
       _grace: r.isGracePeriod ? <Badge variant="outline">Yes</Badge> : <span className="text-muted-foreground">—</span>,
     }));
   }, [collections?.receipts, yardById]);
@@ -152,7 +153,7 @@ export default function MarketCollectionReports() {
       checkPostName: yardById[d.checkPostId] ?? d.checkPostId,
       bankName: d.bankName,
       amount: d.amount,
-      _amount: `₹${Number(d.amount ?? 0).toLocaleString("en-IN")}`,
+      _amount: `${formatInr(Number(d.amount ?? 0))}`,
       status: d.status,
       _status: <Badge variant={d.status === "Verified" ? "default" : "secondary"}>{d.status}</Badge>,
     }));
@@ -249,14 +250,14 @@ export default function MarketCollectionReports() {
                     Count: <span className="text-foreground font-medium">{collections?.count ?? 0}</span>
                   </span>
                   <span>
-                    Grand total: <span className="text-foreground font-medium">₹{Number(collections?.grandTotal ?? 0).toLocaleString("en-IN")}</span>
+                    Grand total: <span className="text-foreground font-medium">{formatInr(Number(collections?.grandTotal ?? 0))}</span>
                   </span>
                 </div>
                 {modeBadges.length > 0 && (
                   <div className="flex flex-wrap gap-2 pt-1">
                     {modeBadges.map(([mode, amt]) => (
                       <Badge key={mode} variant="outline">
-                        {mode}: ₹{Number(amt).toLocaleString("en-IN")}
+                        {mode}: {formatInr(Number(amt))}
                       </Badge>
                     ))}
                   </div>
@@ -282,7 +283,7 @@ export default function MarketCollectionReports() {
                     Count: <span className="text-foreground font-medium">{deposits?.count ?? 0}</span>
                   </span>
                   <span>
-                    Total amount: <span className="text-foreground font-medium">₹{Number(deposits?.totalAmount ?? 0).toLocaleString("en-IN")}</span>
+                    Total amount: <span className="text-foreground font-medium">{formatInr(Number(deposits?.totalAmount ?? 0))}</span>
                   </span>
                 </div>
               </CardHeader>

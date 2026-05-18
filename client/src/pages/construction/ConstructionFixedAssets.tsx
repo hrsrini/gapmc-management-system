@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
+import { formatInr } from "@/lib/formatInr";
 import { useToast } from "@/hooks/use-toast";
 
 interface FixedAsset {
@@ -90,15 +91,15 @@ export default function ConstructionFixedAssets() {
       yardName: yardById.get(a.yardId) ?? a.yardId,
       acquisitionDate: a.acquisitionDate.slice(0, 10),
       acquisitionValue: a.acquisitionValue,
-      _acquisitionValue: `₹${a.acquisitionValue.toLocaleString()}`,
+      _acquisitionValue: `${formatInr(a.acquisitionValue)}`,
       bookValueSort: a.currentBookValue ?? null,
-      _bookValue: a.currentBookValue != null ? `₹${a.currentBookValue.toLocaleString()}` : "—",
+      _bookValue: a.currentBookValue != null ? `${formatInr(a.currentBookValue)}` : "—",
       status: a.status,
       _status: (
         <Badge variant="secondary">{a.status}</Badge>
       ),
       disposalSummary: a.disposalDate
-        ? `${formatYmdToDisplay(a.disposalDate)}${a.disposalValue != null ? ` · ₹${a.disposalValue.toLocaleString()}` : ""}`
+        ? `${formatYmdToDisplay(a.disposalDate)}${a.disposalValue != null ? ` · ${formatInr(a.disposalValue)}` : ""}`
         : "—",
       description: a.description ?? "—",
       _actions: canDispose && a.status !== "Disposed" && !a.disposalDate ? (

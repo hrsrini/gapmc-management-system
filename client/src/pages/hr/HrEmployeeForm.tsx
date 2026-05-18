@@ -32,11 +32,19 @@ import {
 import { PanInput } from "@/components/inputs/PanInput";
 import { getPasswordPolicyBrUsr10FirstViolation, passwordPolicyBrUsr10Hint } from "@shared/password-policy-br-usr-10";
 import {
+  canApproveEmployeeRegistration,
   canonicalizeEmployeeStatus,
   employeeStatusDisplayLabel,
   isTerminalEmployeeLifecycleStatus,
   listEmployeeStatusOptionsForDropdown,
 } from "@shared/employee-lifecycle-status";
+import {
+  localCalendarYmdUtc,
+  resolveStatusEffectiveDate,
+  shouldPromptStatusEffectiveDateOnSave,
+  statusEffectiveDateLabel,
+  statusEffectiveDateMode,
+} from "@shared/employee-status-effective-date";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 
 interface Yard {
@@ -78,6 +86,7 @@ interface Employee {
   category?: string | null;
   fatherOrSpouseName?: string | null;
   status: string;
+  statusEffectiveDate?: string | null;
   userId?: string | null;
 }
 
@@ -132,6 +141,7 @@ export default function HrEmployeeForm() {
   const [joiningDate, setJoiningDate] = useState("");
   const [retirementDate, setRetirementDate] = useState("");
   const [status, setStatus] = useState("Draft");
+  const [statusEffectiveDate, setStatusEffectiveDate] = useState("");
   const [gender, setGender] = useState("");
   const [maritalStatus, setMaritalStatus] = useState("");
   const [bloodGroup, setBloodGroup] = useState("");
@@ -198,6 +208,7 @@ export default function HrEmployeeForm() {
       setJoiningDate(employee.joiningDate ?? "");
       setRetirementDate(employee.retirementDate ?? "");
       setStatus(employee.status ?? "Active");
+      setStatusEffectiveDate(employee.statusEffectiveDate ?? "");
       setGender(employee.gender ?? "");
       setMaritalStatus(employee.maritalStatus ?? "");
       setBloodGroup(employee.bloodGroup ?? "");
@@ -440,6 +451,19 @@ export default function HrEmployeeForm() {
       return;
     }
 
+    if (isEdit && shouldPromptStatusEffectiveDateOnSave(status, baselineStatus)) {
+      const resolved = resolveStatusEffectiveDate({
+        nextStatus: status,
+        inputDate: statusEffectiveDate.trim() || null,
+        retirementDate: retirementDate.trim() || null,
+        todayYmd: localCalendarYmdUtc(),
+      });
+      if (!resolved.ok) {
+        toast({ title: "Status date required", description: resolved.message, variant: "destructive" });
+        return;
+      }
+    }
+
     const payload: Record<string, unknown> = {
       firstName,
       middleName: middleName || null,
@@ -471,6 +495,9 @@ export default function HrEmployeeForm() {
       category: category.trim() || null,
       fatherOrSpouseName: fatherOrSpouseName.trim() || null,
     };
+    if (isEdit && shouldPromptStatusEffectiveDateOnSave(status, baselineStatus)) {
+      payload.statusEffectiveDate = statusEffectiveDate.trim() || null;
+    }
     if (designationMasterId) {
       payload.designationId = designationMasterId;
     } else if (isEdit && canM01Read) {
@@ -613,6 +640,21 @@ export default function HrEmployeeForm() {
     () => listEmployeeStatusOptionsForDropdown(isEdit ? (employee?.status ?? "Draft") : "", !isEdit),
     [isEdit, employee?.status],
   );
+  const baselineStatus = isEdit ? canonicalizeEmployeeStatus(employee?.status ?? status) : status;
+  const showStatusEffectiveDate = shouldPromptStatusEffectiveDateOnSave(status, baselineStatus);
+  const statusDateMode = statusEffectiveDateMode(status);
+  const statusDateLabel = statusEffectiveDateLabel(status);
+
+  useEffect(() => {
+    if (!showStatusEffectiveDate) return;
+    if (statusDateMode === "auto_today") {
+      setStatusEffectiveDate(localCalendarYmdUtc());
+      return;
+    }
+    if (statusDateMode === "auto_retirement") {
+      setStatusEffectiveDate(retirementDate.trim() || "");
+    }
+  }, [showStatusEffectiveDate, status, statusDateMode, retirementDate]);
 
   if (isEdit && (isLoading || (employee === undefined && !isError))) {
     return (
@@ -1024,6 +1066,35 @@ export default function HrEmployeeForm() {
                       </p>
                     ) : null}
                   </div>
+                  {showStatusEffectiveDate && statusDateLabel ? (
+                    <div className="md:col-span-2 space-y-1">
+                      <Label>{statusDateLabel} *</Label>
+                      <Input
+                        type="date"
+                        value={statusEffectiveDate}
+                        onChange={(e) => setStatusEffectiveDate(e.target.value)}
+                        readOnly={statusDateMode === "auto_today" || (statusDateMode === "auto_retirement" && Boolean(retirementDate.trim()))}
+                        max={localCalendarYmdUtc()}
+                        required
+                        className={
+                          statusDateMode === "auto_today" || (statusDateMode === "auto_retirement" && Boolean(retirementDate.trim()))
+                            ? "bg-muted/50"
+                            : undefined
+                        }
+                      />
+                      {statusDateMode === "auto_today" ? (
+                        <p className="text-xs text-muted-foreground">Set automatically to today when status becomes Active.</p>
+                      ) : statusDateMode === "auto_retirement" ? (
+                        <p className="text-xs text-muted-foreground">
+                          {retirementDate.trim()
+                            ? "Taken from Retirement date above."
+                            : "Enter Retirement date above, or provide the date of retirement here."}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Required when updating status to {employeeStatusDisplayLabel(status)}.</p>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   New employees start as Draft or Submitted; a Data Approver assigns <span className="font-medium">EMP-NNN</span> and activates the record. App login is linked from the <span className="font-medium">App access</span> tab when status is Active.
@@ -1080,7 +1151,7 @@ export default function HrEmployeeForm() {
                               </div>
                             </div>
                             <div className="rounded-md border">
-                              <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Locations (yards)</div>
+                              <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Locations</div>
                               <div className="p-3 space-y-2 max-h-40 overflow-y-auto">
                                 {activeAdminYards.map((y) => (
                                   <label key={y.id} className="flex items-center gap-2 text-sm cursor-pointer">
@@ -1110,9 +1181,7 @@ export default function HrEmployeeForm() {
               {isEdit &&
                 id &&
                 canApproveRegistration &&
-                (canonicalizeEmployeeStatus(status) === "Draft" ||
-                  canonicalizeEmployeeStatus(status) === "Submitted" ||
-                  (canonicalizeEmployeeStatus(status) === "Active" && !/^EMP-\d{3}$/i.test((empId || "").trim()))) && (
+                canApproveEmployeeRegistration(status, empId) && (
                   <Button
                     type="button"
                     variant="secondary"

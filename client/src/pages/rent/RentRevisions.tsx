@@ -33,6 +33,7 @@ import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { DEFAULT_RENT_REVISION_BASIS, type RentRevisionBasis } from "@shared/rent-revision-basis";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
+import { formatInr } from "@/lib/formatInr";
 import { allotmentAssetIdByPk } from "./rent-allotments-ui";
 
 interface RevisionRow {
@@ -69,7 +70,7 @@ interface RentContextResponse {
 }
 
 const REVISION_BASIS_LABEL: Record<string, string> = {
-  FixedMonthlyRent: "Fixed monthly (INR)",
+  FixedMonthlyRent: "Fixed monthly (₹)",
   OtherDocumented: "Other / documented",
 };
 
@@ -287,7 +288,7 @@ export default function RentRevisions() {
         allotmentSort: meta?.label ?? r.allotmentId,
         _status: statusBadge,
         _basis: REVISION_BASIS_LABEL[String(r.revisionBasis ?? "FixedMonthlyRent")] ?? String(r.revisionBasis ?? "—"),
-        _rent: `₹${Number(r.rentAmount ?? 0).toLocaleString()}`,
+        _rent: `${formatInr(Number(r.rentAmount ?? 0))}`,
         _actions: (
           <div className="flex flex-wrap gap-1 justify-end">
             {canDoVerify && (
@@ -488,7 +489,7 @@ export default function RentRevisions() {
                   <AlertTitle>Baseline rent (reference {rentCtx.referenceMonth})</AlertTitle>
                   <AlertDescription className="text-foreground space-y-3">
                     <p>
-                      <span className="font-semibold tabular-nums">₹{Number(rentCtx.resolvedRent).toLocaleString()}</span>
+                      <span className="font-semibold tabular-nums">{formatInr(Number(rentCtx.resolvedRent))}</span>
                       {" — "}
                       <span className="capitalize">{rentCtx.source}</span>
                       {rentCtx.effectiveMonth ? (

@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { formatInr } from "@/lib/formatInr";
 import { useToast } from "@/hooks/use-toast";
 
 interface LedgerEntry {
@@ -40,23 +41,19 @@ interface LedgerEntry {
   unifiedEntityId?: string | null;
   unifiedEntityDisplayName?: string | null;
   assetId: string;
+  assetDisplay?: string | null;
   entryDate: string;
   entryType: string;
   debit: number;
   credit: number;
   balance: number;
   invoiceId?: string | null;
+  invoiceNo?: string | null;
   receiptId?: string | null;
+  receiptNo?: string | null;
+  refDisplay?: string | null;
   interestPaymentStatus?: string | null;
   settledReceiptId?: string | null;
-}
-interface AssetRef {
-  id: string;
-  assetId: string;
-}
-interface RentInvoiceRef {
-  id: string;
-  invoiceNo?: string | null;
 }
 
 interface LedgerPaymentContext {
@@ -144,13 +141,6 @@ export default function RentLedger() {
     queryKey: [traderReceiptsUrl],
     enabled: Boolean(traderReceiptsUrl),
   });
-  const { data: assets = [] } = useQuery<AssetRef[]>({
-    queryKey: ["/api/ioms/assets"],
-  });
-  const { data: invoices = [] } = useQuery<RentInvoiceRef[]>({
-    queryKey: ["/api/ioms/rent/invoices"],
-  });
-
   const paymentContextUrl = payDialog
     ? `/api/ioms/rent/invoices/${encodeURIComponent(payDialog.invoiceId)}/ledger-payment-context`
     : "";
@@ -158,9 +148,6 @@ export default function RentLedger() {
     queryKey: [paymentContextUrl],
     enabled: Boolean(paymentContextUrl),
   });
-
-  const assetLabelById = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
-  const invoiceLabelById = Object.fromEntries(invoices.map((i) => [i.id, i.invoiceNo ?? i.id]));
 
   const openPayInterest = useCallback((row: LedgerEntry) => {
     const invId = String(row.invoiceId ?? "").trim();
@@ -247,22 +234,16 @@ export default function RentLedger() {
         entryDate: e.entryDate.slice(0, 10),
         tenantLicenceId: e.tenantLicenceId,
         tenantLicenceDisplay: e.tenantLicenceDisplayName?.trim() || e.tenantLicenceId || "—",
-        unifiedEntityId: e.unifiedEntityId?.trim() ? e.unifiedEntityId : "—",
-        unifiedEntityDisplay:
-          e.unifiedEntityDisplayName?.trim() ||
-          (e.unifiedEntityId?.trim() ? e.unifiedEntityId : "—"),
-        assetDisplay: assetLabelById[e.assetId] ?? e.assetId,
+        unifiedEntityDisplay: e.unifiedEntityDisplayName?.trim() || "—",
+        assetDisplay: e.assetDisplay?.trim() || "—",
         entryType: e.entryType === "Collection" ? "Rent" : e.entryType,
         debit: e.debit,
         credit: e.credit,
         balance: e.balance,
-        _debit: `₹${e.debit.toLocaleString()}`,
-        _credit: `₹${e.credit.toLocaleString()}`,
-        _balance: `₹${e.balance.toLocaleString()}`,
-        refDisplay:
-          e.invoiceId != null && e.invoiceId !== ""
-            ? (invoiceLabelById[e.invoiceId] ?? e.invoiceId)
-            : (e.receiptId ?? "—"),
+        _debit: `${formatInr(e.debit)}`,
+        _credit: `${formatInr(e.credit)}`,
+        _balance: `${formatInr(e.balance)}`,
+        refDisplay: e.refDisplay?.trim() || e.invoiceNo?.trim() || e.receiptNo?.trim() || "—",
         _payStatus: (
           <div className="flex flex-col gap-0.5 text-sm">
             <span>{payStatus}</span>
@@ -278,7 +259,7 @@ export default function RentLedger() {
         ),
       };
     });
-  }, [list, assetLabelById, invoiceLabelById, openPayInterest]);
+  }, [list, openPayInterest]);
 
   const { rows, total } = useMemo(
     () =>
@@ -380,7 +361,7 @@ export default function RentLedger() {
                   <>
                     {" "}
                     — outstanding rent{" "}
-                    <span className="font-medium text-foreground">₹{out.toLocaleString()}</span>
+                    <span className="font-medium text-foreground">{formatInr(out)}</span>
                   </>
                 ) : null}
               </p>
@@ -408,7 +389,7 @@ export default function RentLedger() {
                     inputMode="decimal"
                     value={rentAmountInput}
                     onChange={(ev) => setRentAmountInput(ev.target.value)}
-                    placeholder={allowCombined ? `Max ₹${out.toLocaleString()}` : "Amount"}
+                    placeholder={allowCombined ? `Max ${formatInr(out)}` : "Amount"}
                   />
                 </div>
               )}
@@ -423,7 +404,7 @@ export default function RentLedger() {
                           onCheckedChange={(c) => toggleInterestId(row.id, c === true)}
                         />
                         <span className="tabular-nums">
-                          ₹{Number(row.debit ?? 0).toLocaleString()} — {row.entryDate.slice(0, 10)}
+                          {formatInr(Number(row.debit ?? 0))} — {row.entryDate.slice(0, 10)}
                         </span>
                       </label>
                     ))}
@@ -489,7 +470,7 @@ export default function RentLedger() {
                           {r.sourceModule ?? "—"}
                           {r.sourceRecordId ? ` · ${r.sourceRecordId.slice(0, 8)}…` : ""}
                         </td>
-                        <td className="p-2 text-right tabular-nums">₹{Number(r.totalAmount ?? 0).toLocaleString()}</td>
+                        <td className="p-2 text-right tabular-nums">{formatInr(Number(r.totalAmount ?? 0))}</td>
                         <td className="p-2">{r.status}</td>
                         <td className="p-2 text-muted-foreground whitespace-nowrap">
                           {r.createdAt?.slice(0, 10) ?? "—"}

@@ -21,6 +21,9 @@ import {
 } from 'lucide-react';
 import type { ActivityLog } from '@shared/schema';
 import { parseSidebarHiddenHrefsJson } from '@shared/nav-sidebar-hidden';
+import { parseSystemConfigBoolean } from '@shared/system-config-defaults';
+import { SYSTEM_CONFIG_QUERY_KEY } from '@/lib/systemConfigQuery';
+import { formatInr } from '@/lib/formatInr';
 
 interface Stats {
   totalTraders: number;
@@ -78,11 +81,15 @@ export default function Dashboard() {
   const canM05Read = can('M-05', 'Read');
 
   const { data: systemConfig } = useQuery<Record<string, string>>({
-    queryKey: ['/api/system/config'],
+    queryKey: SYSTEM_CONFIG_QUERY_KEY,
   });
   const hiddenSidebarHrefs = useMemo(
     () => parseSidebarHiddenHrefsJson(systemConfig?.ui_sidebar_hidden_hrefs_json),
     [systemConfig?.ui_sidebar_hidden_hrefs_json],
+  );
+  const showKpiCards = useMemo(
+    () => parseSystemConfigBoolean(systemConfig?.ui_dashboard_show_kpi_cards, true),
+    [systemConfig?.ui_dashboard_show_kpi_cards],
   );
 
   const visibleQuickActions = useMemo(
@@ -92,6 +99,7 @@ export default function Dashboard() {
 
   const { data: stats, isLoading: statsLoading } = useQuery<Stats>({
     queryKey: ['/api/stats'],
+    enabled: showKpiCards,
   });
 
   const { data: activityLogs, isLoading: logsLoading } = useQuery<ActivityLog[]>({
@@ -147,8 +155,7 @@ export default function Dashboard() {
     },
     {
       title: "Today's Collection",
-      value: `${((stats?.todaysCollection ?? 0) / 1000).toFixed(1)}K`,
-      prefix: '₹',
+      value: formatInr(stats?.todaysCollection ?? 0),
       icon: IndianRupee,
       color: 'bg-slate-500/10 text-slate-600',
       iconColor: 'text-slate-600',
@@ -167,29 +174,31 @@ export default function Dashboard() {
           </p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {statCards.map((stat) => (
-            <Card key={stat.title} className="hover-elevate" data-testid={`card-stat-${stat.title.toLowerCase().replace(/\s+/g, '-')}`}>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground">{stat.title}</p>
-                    {statsLoading ? (
-                      <Skeleton className="h-8 w-16 mt-1" />
-                    ) : (
-                      <p className="text-2xl font-bold mt-1">
-                        {stat.prefix}{stat.value}
-                      </p>
-                    )}
+        {showKpiCards ? (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {statCards.map((stat) => (
+              <Card key={stat.title} className="hover-elevate" data-testid={`card-stat-${stat.title.toLowerCase().replace(/\s+/g, '-')}`}>
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground">{stat.title}</p>
+                      {statsLoading ? (
+                        <Skeleton className="h-8 w-16 mt-1" />
+                      ) : (
+                        <p className="text-2xl font-bold mt-1">
+                          {stat.value}
+                        </p>
+                      )}
+                    </div>
+                    <div className={`p-3 rounded-lg ${stat.color}`}>
+                      <stat.icon className={`h-6 w-6 ${stat.iconColor}`} />
+                    </div>
                   </div>
-                  <div className={`p-3 rounded-lg ${stat.color}`}>
-                    <stat.icon className={`h-6 w-6 ${stat.iconColor}`} />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : null}
 
         {canHrRead && retirementSummary != null && (
           <Card className={retirementSummary.count > 0 ? 'border-amber-500/40 bg-amber-500/5' : ''}>
