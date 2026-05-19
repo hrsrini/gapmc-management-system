@@ -59,8 +59,9 @@ export function AssetAllotmentManageDialog({
   const gapCheckboxId = useId();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   const tiers = useMemo(() => userTierSet(user ?? null), [user]);
+  const canUpdate = can("M-02", "Update");
 
   const [mAllottee, setMAllottee] = useState("");
   const [mFrom, setMFrom] = useState("");
@@ -71,6 +72,7 @@ export function AssetAllotmentManageDialog({
   const [mDvReturn, setMDvReturn] = useState("");
   const [mGapOv, setMGapOv] = useState(false);
   const [agreementFile, setAgreementFile] = useState<File | null>(null);
+  const [tenancyVacateOn, setTenancyVacateOn] = useState("");
 
   useEffect(() => {
     const r = row;
@@ -84,6 +86,9 @@ export function AssetAllotmentManageDialog({
     setMDvReturn("");
     setMGapOv(false);
     setAgreementFile(null);
+    const to = String(r.toDate ?? "").slice(0, 10);
+    const today = localCalendarYmd();
+    setTenancyVacateOn(to && to <= today ? to : today);
   }, [row]);
 
   const afterMutation = (next: ManagedAssetAllotment) => {
@@ -231,7 +236,15 @@ export function AssetAllotmentManageDialog({
                         Number(mRent) <= 0 ||
                         !mAllottee.trim()
                       }
-                      onClick={() =>
+                      onClick={() => {
+                        if (manageRow.status === "Vacated" && mTo > localCalendarYmd()) {
+                          toast({
+                            title: "Invalid vacated date",
+                            description: "Vacated on must be today or an earlier date.",
+                            variant: "destructive",
+                          });
+                          return;
+                        }
                         patchAllotMutation.mutate({
                           allocId: manageRow.id,
                           body: {
@@ -241,8 +254,8 @@ export function AssetAllotmentManageDialog({
                             monthlyRent: Number(mRent),
                             rentRevisionMode: mRevMode,
                           },
-                        })
-                      }
+                        });
+                      }}
                     >
                       {patchAllotMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save draft fields"}
                     </Button>
@@ -372,6 +385,72 @@ export function AssetAllotmentManageDialog({
                   >
                     Resubmit as draft (DO)
                   </Button>
+                </div>
+              ) : null}
+
+              {String(manageRow.approvalStatus ?? "") === "Approved" &&
+              ["Active", "Vacating"].includes(manageRow.status) &&
+              canUpdate ? (
+                <div className="border-t pt-3 space-y-2">
+                  <div className="space-y-1">
+                    <Label>Vacated on</Label>
+                    <Input
+                      type="date"
+                      max={localCalendarYmd()}
+                      value={tenancyVacateOn}
+                      onChange={(e) => setTenancyVacateOn(e.target.value)}
+                    />
+                  </div>
+                  <Label>Tenancy status</Label>
+                  <Select
+                    value={manageRow.status}
+                    onValueChange={(v) => {
+                      const cur = manageRow.status;
+                      if (v === cur) return;
+                      const ok =
+                        (cur === "Active" && (v === "Vacating" || v === "Vacated")) ||
+                        (cur === "Vacating" && v === "Vacated");
+                      if (!ok) return;
+                      if (v === "Vacated") {
+                        const today = localCalendarYmd();
+                        if (tenancyVacateOn > today) {
+                          toast({
+                            title: "Invalid vacated date",
+                            description: "Vacated on must be today or an earlier date.",
+                            variant: "destructive",
+                          });
+                          return;
+                        }
+                        patchAllotMutation.mutate({
+                          allocId: manageRow.id,
+                          body: { status: v, toDate: tenancyVacateOn },
+                        });
+                      } else {
+                        patchAllotMutation.mutate({ allocId: manageRow.id, body: { status: v } });
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="max-w-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {manageRow.status === "Active" ? (
+                        <>
+                          <SelectItem value="Active">Active</SelectItem>
+                          <SelectItem value="Vacating">Vacating</SelectItem>
+                          <SelectItem value="Vacated">Vacated</SelectItem>
+                        </>
+                      ) : (
+                        <>
+                          <SelectItem value="Vacating">Vacating</SelectItem>
+                          <SelectItem value="Vacated">Vacated</SelectItem>
+                        </>
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    When marked Vacated, the premises appears on Shop Vacant. Vacated date must be today or earlier.
+                  </p>
                 </div>
               ) : null}
             </div>

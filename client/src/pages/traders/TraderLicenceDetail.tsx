@@ -9,7 +9,7 @@ import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert, Loader2, Trash2, Package, Pencil, MessageSquareWarning, Wallet, BookOpen } from "lucide-react";
+import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert, Loader2, Trash2, Package, Pencil, MessageSquareWarning, Wallet, BookOpen, Plus } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -39,6 +39,9 @@ import {
 } from "@/components/assets/AssetAllotmentManageDialog";
 import { formatInr } from "@/lib/formatInr";
 import { govtGstCategoriesForSelect } from "@/lib/govtGstExemptSelect";
+import { invalidateAssetAllotmentQueries } from "@/lib/invalidate-asset-allotments";
+import { inferAgreementTypeFromDates, RENT_REVISION_MODES } from "@shared/premises-allocation";
+import { buildAssetDisplayByRowId, formatPremisesAssetLabel } from "@/lib/asset-premises-display";
 
 interface Licence {
   id: string;
@@ -129,8 +132,20 @@ interface ReceiptRef {
 interface AssetRef {
   id: string;
   assetId: string;
+  yardId?: string;
+  assetType?: string | null;
+  area?: string | null;
+}
+interface VacantAssetRow {
+  asset: AssetRef;
 }
 type AssetAllotmentRow = ManagedAssetAllotment;
+
+function agreementTypeLabel(code: string | null | undefined): string {
+  if (code === "RentalAgreement") return "Rental (≤11 mo approx.)";
+  if (code === "LeaseAgreement") return "Lease (>11 mo)";
+  return "—";
+}
 
 const stockColumns: ReportTableColumn[] = [
   { key: "commodityName", header: "Commodity" },
@@ -175,6 +190,7 @@ export default function TraderLicenceDetail() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canUpdateLicence = can("M-02", "Update");
+  const canCreateAllotment = can("M-02", "Create");
   const [exemptCategoryId, setExemptCategoryId] = useState<string>("__none__");
   const [nonGst, setNonGst] = useState(false);
   const [stockCommodityId, setStockCommodityId] = useState<string>("");
@@ -189,6 +205,15 @@ export default function TraderLicenceDetail() {
   const [renewValidFrom, setRenewValidFrom] = useState("");
   const [renewValidTo, setRenewValidTo] = useState("");
   const [manageAllotment, setManageAllotment] = useState<AssetAllotmentRow | null>(null);
+  const [allotDialogOpen, setAllotDialogOpen] = useState(false);
+  const [allotAssetId, setAllotAssetId] = useState("");
+  const [allotFromDate, setAllotFromDate] = useState("");
+  const [allotToDate, setAllotToDate] = useState("");
+  const [allotMonthlyRent, setAllotMonthlyRent] = useState("");
+  const [allotRentRevisionMode, setAllotRentRevisionMode] = useState("StandardConsecutiveRenewal");
+  const [allotConsecutiveRenewalCount, setAllotConsecutiveRenewalCount] = useState("0");
+  const [allotSecurityDeposit, setAllotSecurityDeposit] = useState("");
+  const [allotAgreementTypeOverride, setAllotAgreementTypeOverride] = useState("__auto__");
 
   const { data: licence, isLoading, isError } = useQuery<Licence>({
     queryKey: ["/api/ioms/traders/licences", id],
@@ -254,6 +279,23 @@ export default function TraderLicenceDetail() {
       return res.json();
     },
   });
+  const { data: vacantRows = [] } = useQuery<VacantAssetRow[]>({
+    queryKey: ["/api/ioms/assets/vacant"],
+    enabled: allotDialogOpen,
+    queryFn: async () => {
+      const res = await fetch("/api/ioms/assets/vacant", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load vacant premises");
+      return res.json();
+    },
+  });
+  const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
+  const vacantByAssetPk = useMemo(() => Object.fromEntries(vacantRows.map((r) => [r.asset.id, r])), [vacantRows]);
+  const selectedVacant = allotAssetId ? vacantByAssetPk[allotAssetId] : undefined;
+  const inferredAgType =
+    allotFromDate && allotToDate ? inferAgreementTypeFromDates(allotFromDate, allotToDate) : null;
+  const licenceCanReceiveAllotment = Boolean(
+    licence && licence.status === "Active" && !licence.isBlocked,
+  );
   const { data: stockOpenings = [], isLoading: stockLoading } = useQuery<StockOpeningRow[]>({
     queryKey: ["/api/ioms/traders/licences", id, "stock-openings"],
     enabled: !!id,
@@ -267,7 +309,7 @@ export default function TraderLicenceDetail() {
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
   const receiptById = Object.fromEntries(receipts.map((r) => [r.id, r.receiptNo]));
-  const assetDisplayById = useMemo(() => Object.fromEntries(assets.map((a) => [a.id, a.assetId])), [assets]);
+  const assetDisplayById = useMemo(() => buildAssetDisplayByRowId(assets), [assets]);
   const gstCategoriesForSelect = useMemo(
     () => govtGstCategoriesForSelect(gstCategories, licence?.govtGstExemptCategoryId ?? null),
     [gstCategories, licence?.govtGstExemptCategoryId],
@@ -330,7 +372,7 @@ export default function TraderLicenceDetail() {
       const appr = String(a.approvalStatus ?? "Draft");
       return {
         id: a.id,
-        assetDisplay: assetDisplayById[a.assetId] ?? a.assetId,
+        assetDisplay: formatPremisesAssetLabel(a.assetId, assetDisplayById, a.premisesRefNo),
         allotteeName: a.allotteeName,
         fromDate: a.fromDate,
         toDate: a.toDate,
@@ -382,6 +424,44 @@ export default function TraderLicenceDetail() {
     },
     onError: (e: Error) =>
       toast({ title: "Update failed", description: e.message, variant: "destructive" }),
+  });
+
+  const createAllotmentMutation = useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await fetch("/api/ioms/asset-allotments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string; error?: string }).message ?? (err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      invalidateAssetAllotmentQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets/vacant"] });
+      if (id) {
+        queryClient.invalidateQueries({
+          queryKey: [`/api/ioms/asset-allotments?traderLicenceId=${encodeURIComponent(id)}`],
+        });
+      }
+      toast({
+        title: "Draft allocation created",
+        description: "Upload the notarised agreement, then DV verifies and DA approves.",
+      });
+      setAllotDialogOpen(false);
+      setAllotAssetId("");
+      setAllotFromDate("");
+      setAllotToDate("");
+      setAllotMonthlyRent("");
+      setAllotSecurityDeposit("");
+      setAllotConsecutiveRenewalCount("0");
+      setAllotAgreementTypeOverride("__auto__");
+    },
+    onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
 
   const addStockMutation = useMutation({
@@ -917,39 +997,220 @@ export default function TraderLicenceDetail() {
         )}
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileCheck className="h-5 w-5" />
-              Premises allocations ({allotments.length})
-            </CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Premises (assets) allotted to this licence (equivalent to the Premises Allocation List in SRS). Use{" "}
-              <strong>Edit</strong> to upload the agreement and run DV/DA approval; Approved sets tenancy to Active.
-            </p>
+          <CardHeader className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <FileCheck className="h-5 w-5" />
+                Premises allocations ({allotments.length})
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Premises allotted to this licence. Traders may be allocated at any yard when the licence is Active and
+                the premises is vacant. Use <strong>Edit</strong> to upload the agreement and run DV/DA approval;
+                Approved sets tenancy to Active.
+              </p>
+            </div>
+            {canCreateAllotment && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!licenceCanReceiveAllotment}
+                title={
+                  licenceCanReceiveAllotment
+                    ? "Add a new premises allocation (draft)"
+                    : "Licence must be Active and not blocked to add an allocation"
+                }
+                onClick={() => setAllotDialogOpen(true)}
+              >
+                <Plus className="h-4 w-4 mr-1" /> Add allotment
+              </Button>
+            )}
           </CardHeader>
           <CardContent>
-            {allotments.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4">
-                No allotments found for this licence. You can add one from{" "}
-                <Link href="/assets/allotments" className="text-primary hover:underline">
-                  Shop Allotments
-                </Link>
-                .
-              </p>
-            ) : (
-              <ClientDataGrid
-                columns={allotmentColumns}
-                sourceRows={allotmentRows}
-                searchKeys={["assetDisplay", "allotteeName", "fromDate", "toDate", "status", "approvalStatus"]}
-                searchPlaceholder="Search allotments…"
-                defaultSortKey="fromDate"
-                defaultSortDir="desc"
-                resetPageDependency={id}
-                emptyMessage="No allotments."
-              />
-            )}
+            <ClientDataGrid
+              columns={allotmentColumns}
+              sourceRows={allotmentRows}
+              searchKeys={["assetDisplay", "allotteeName", "fromDate", "toDate", "status", "approvalStatus"]}
+              searchPlaceholder="Search allotments…"
+              defaultSortKey="fromDate"
+              defaultSortDir="desc"
+              resetPageDependency={id}
+              emptyMessage="No allotments yet. Use Add allotment to create a draft allocation."
+            />
           </CardContent>
         </Card>
+
+        <Dialog open={allotDialogOpen} onOpenChange={setAllotDialogOpen}>
+          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>New premises allocation (draft)</DialogTitle>
+              <p className="text-sm text-muted-foreground">
+                Select vacant premises at any yard in your scope. Tenancy becomes Active only after DA approval.
+              </p>
+            </DialogHeader>
+            {!licenceCanReceiveAllotment ? (
+              <Alert variant="destructive">
+                <AlertTitle>Licence not eligible</AlertTitle>
+                <AlertDescription>
+                  Only an <strong>Active</strong>, unblocked trader licence can receive a new premises allocation.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="md:col-span-2 space-y-1">
+                  <Label>Vacant premises *</Label>
+                  <Select value={allotAssetId || "__pick__"} onValueChange={(v) => setAllotAssetId(v === "__pick__" ? "" : v)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select premises" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__pick__">Select…</SelectItem>
+                      {vacantAssets.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.assetId}
+                          {a.yardId && yardById[a.yardId] ? ` · ${yardById[a.yardId]}` : ""}
+                          {a.assetType ? ` · ${a.assetType}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {vacantAssets.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No vacant premises in your yard scope.</p>
+                  ) : null}
+                  {selectedVacant?.asset ? (
+                    <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-0.5">
+                      <div>
+                        <span className="font-medium text-foreground">Premises type:</span>{" "}
+                        {selectedVacant.asset.assetType?.trim() || "—"}
+                      </div>
+                      {selectedVacant.asset.area?.trim() ? (
+                        <div>
+                          <span className="font-medium text-foreground">Area:</span> {selectedVacant.asset.area}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="md:col-span-2 space-y-1">
+                  <Label>Allottee name</Label>
+                  <Input
+                    value={(licence?.firmName ?? licence?.contactName ?? "").trim()}
+                    readOnly
+                    className="bg-muted/50"
+                  />
+                  <p className="text-xs text-muted-foreground">Taken from this licence.</p>
+                </div>
+                <div className="space-y-1">
+                  <Label>Agreement from *</Label>
+                  <Input type="date" value={allotFromDate} onChange={(e) => setAllotFromDate(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Agreement to *</Label>
+                  <Input type="date" value={allotToDate} onChange={(e) => setAllotToDate(e.target.value)} />
+                </div>
+                <div className="md:col-span-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+                  <span className="text-muted-foreground">Inferred agreement kind: </span>
+                  <span className="font-medium text-foreground">
+                    {inferredAgType ? agreementTypeLabel(inferredAgType) : "Pick both dates"}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <Label>Agreement type override</Label>
+                  <Select value={allotAgreementTypeOverride} onValueChange={setAllotAgreementTypeOverride}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__auto__">Auto from dates</SelectItem>
+                      <SelectItem value="RentalAgreement">Rental agreement</SelectItem>
+                      <SelectItem value="LeaseAgreement">Lease agreement</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Monthly rent *</Label>
+                  <Input
+                    value={allotMonthlyRent}
+                    onChange={(e) => setAllotMonthlyRent(e.target.value)}
+                    inputMode="decimal"
+                    placeholder="> 0"
+                  />
+                </div>
+                <div className="space-y-1 md:col-span-2">
+                  <Label>Rent revision mode *</Label>
+                  <Select value={allotRentRevisionMode} onValueChange={setAllotRentRevisionMode}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {RENT_REVISION_MODES.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {m === "StandardConsecutiveRenewal" ? "Standard consecutive renewal" : "PWD certificate basis"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Consecutive renewal count</Label>
+                  <Input
+                    value={allotConsecutiveRenewalCount}
+                    onChange={(e) => setAllotConsecutiveRenewalCount(e.target.value)}
+                    inputMode="numeric"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Security deposit (₹)</Label>
+                  <Input
+                    value={allotSecurityDeposit}
+                    onChange={(e) => setAllotSecurityDeposit(e.target.value)}
+                    inputMode="decimal"
+                  />
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setAllotDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={
+                  !licenceCanReceiveAllotment ||
+                  createAllotmentMutation.isPending ||
+                  !allotAssetId ||
+                  !allotFromDate ||
+                  !allotToDate ||
+                  !Number.isFinite(Number(allotMonthlyRent)) ||
+                  Number(allotMonthlyRent) <= 0
+                }
+                onClick={() => {
+                  const allotteeName = (licence?.firmName ?? licence?.contactName ?? "").trim();
+                  if (!allotteeName) {
+                    toast({ title: "Allottee name required", variant: "destructive" });
+                    return;
+                  }
+                  const body: Record<string, unknown> = {
+                    assetId: allotAssetId,
+                    traderLicenceId: id,
+                    allotteeName,
+                    fromDate: allotFromDate,
+                    toDate: allotToDate,
+                    status: "Pending",
+                    approvalStatus: "Draft",
+                    monthlyRent: Number(allotMonthlyRent),
+                    rentRevisionMode: allotRentRevisionMode,
+                    consecutiveRenewalCount: Number(allotConsecutiveRenewalCount) || 0,
+                    securityDeposit: allotSecurityDeposit.trim() ? Number(allotSecurityDeposit) : null,
+                  };
+                  if (allotAgreementTypeOverride !== "__auto__") body.agreementType = allotAgreementTypeOverride;
+                  createAllotmentMutation.mutate(body);
+                }}
+              >
+                {createAllotmentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create draft"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <AssetAllotmentManageDialog
           row={manageAllotment}

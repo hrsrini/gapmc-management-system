@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
 import { formatInr } from "@/lib/formatInr";
-import { FileText, AlertCircle, CheckCircle, ShieldCheck, Plus, Download, CalendarClock, Percent } from "lucide-react";
+import { FileText, AlertCircle, CheckCircle, ShieldCheck, Plus, Download, CalendarClock, Percent, Loader2 } from "lucide-react";
 interface RentInvoice {
   id: string;
   invoiceNo?: string | null;
@@ -37,6 +37,7 @@ export default function IomsRentInvoices() {
   const [gstr1From, setGstr1From] = useState("");
   const [gstr1To, setGstr1To] = useState("");
   const [gstr1Loading, setGstr1Loading] = useState(false);
+  const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
   const roles = user?.roles?.map((r) => r.tier) ?? [];
   const canVerify = roles.includes("DV") || roles.includes("ADMIN");
   const canApprove = roles.includes("DA") || roles.includes("ADMIN");
@@ -102,6 +103,39 @@ export default function IomsRentInvoices() {
     },
   });
 
+  const downloadInvoicePdf = useCallback(
+    async (invoice: RentInvoice) => {
+      setPdfLoadingId(invoice.id);
+      try {
+        const res = await fetch(`/api/ioms/rent/invoices/${encodeURIComponent(invoice.id)}/pdf`, {
+          credentials: "include",
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error((err as { error?: string }).error ?? res.statusText);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const label = (invoice.invoiceNo ?? invoice.id).replace(/[^\w.-]+/g, "_");
+        a.download = `rent-invoice-${label}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast({ title: "PDF downloaded", description: "Server-generated rent invoice PDF." });
+      } catch (e: unknown) {
+        toast({
+          title: "PDF download failed",
+          description: e instanceof Error ? e.message : "Could not download invoice PDF.",
+          variant: "destructive",
+        });
+      } finally {
+        setPdfLoadingId(null);
+      }
+    },
+    [toast],
+  );
+
   const runArrearsInterestMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch("/api/ioms/rent/run-arrears-interest", {
@@ -144,9 +178,9 @@ export default function IomsRentInvoices() {
       { key: "_total", header: "Total (₹)", sortField: "totalAmount" },
       { key: "_status", header: "Status", sortField: "status" },
     ];
-    if (canVerify || canApprove) base.push({ key: "_actions", header: "Actions" });
+    base.push({ key: "_actions", header: "Actions" });
     return base;
-  }, [canVerify, canApprove]);
+  }, []);
 
   const invoiceRows = useMemo((): Record<string, unknown>[] => {
     return (list ?? []).map((r) => ({
@@ -166,8 +200,24 @@ export default function IomsRentInvoices() {
       _total: formatInr(r.totalAmount),
       status: r.status,
       _status: <Badge variant="secondary">{r.status}</Badge>,
-      _actions: (canVerify || canApprove) ? (
-        <div className="flex flex-wrap gap-2">
+      _actions: (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => void downloadInvoicePdf(r)}
+            disabled={pdfLoadingId === r.id}
+            title="Download PDF"
+            aria-label="Download invoice PDF"
+          >
+            {pdfLoadingId === r.id ? (
+              <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5 mr-1" />
+            )}
+            PDF
+          </Button>
           {canVerify && r.status === "Draft" && (
             <Button
               size="sm"
@@ -191,9 +241,9 @@ export default function IomsRentInvoices() {
             </Button>
           )}
         </div>
-      ) : null,
+      ),
     }));
-  }, [list, assetLabelById, yardById, canVerify, canApprove, statusMutation]);
+  }, [list, assetLabelById, yardById, canVerify, canApprove, statusMutation, downloadInvoicePdf, pdfLoadingId]);
 
   const handleExportGstr1 = async () => {
     const from = gstr1From.trim();

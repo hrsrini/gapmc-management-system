@@ -61,11 +61,14 @@ import {
 import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
 import {
   assertVacatedToDateNotFuture,
+  capVacatedOnYmd,
   inferAgreementTypeFromDates,
   normalizeAgreementType,
   normalizePremisesStatus,
   normalizeRentRevisionMode,
+  resolveVacatedDisplayYmd,
   roundedMoney2,
+  todayYmdUtc,
 } from "@shared/premises-allocation";
 import { hasPermission } from "./auth";
 import { routeParamString } from "./route-params";
@@ -2652,9 +2655,12 @@ export function registerTradersAssetsRoutes(app: Express) {
         list.push(a);
         allotmentsByAsset.set(a.assetId, list);
       }
+      const todayYmd = todayYmdUtc();
       const vacant: Array<{
         asset: (typeof allAssets)[0];
-        lastAllotment: { allotteeName: string; fromDate: string; toDate: string; id: string } | null;
+        lastAllotment: { allotteeName: string; fromDate: string; toDate: string; id: string; status: string } | null;
+        /** Actual vacated date (today or earlier); not future agreement end. */
+        vacatedOn: string | null;
         lastRentAmount: number | null;
       }> = [];
       for (const asset of allAssets) {
@@ -2668,10 +2674,12 @@ export function registerTradersAssetsRoutes(app: Express) {
               fromDate: latest.fromDate,
               toDate: latest.toDate,
               id: latest.id,
+              status: String(latest.status ?? ""),
             }
           : null;
+        const vacatedOn = resolveVacatedDisplayYmd(list, todayYmd);
         const lastRentAmount = lastAllotment ? (latestRentByAllotment[lastAllotment.id] ?? null) : null;
-        vacant.push({ asset, lastAllotment, lastRentAmount });
+        vacant.push({ asset, lastAllotment, vacatedOn, lastRentAmount });
       }
       res.json(vacant);
     } catch (e) {
@@ -2793,7 +2801,7 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       // Validate agreement dates + finance fields (US-M02-003)
       const fromDate = String(body.fromDate ?? "").trim();
-      const toDate = String(body.toDate ?? "").trim();
+      let toDate = String(body.toDate ?? "").trim();
       const ferr = ymdFieldError("Agreement from", fromDate, true);
       if (ferr) return sendApiError(res, 400, "AGREEMENT_FROM", ferr);
       const terr = ymdFieldError("Agreement to", toDate, true);
@@ -2819,6 +2827,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (nextStatus === "Vacated") {
         const vErr = assertVacatedToDateNotFuture(toDate);
         if (vErr) return sendApiError(res, 400, "VACATED_DATE_FUTURE", vErr);
+        toDate = capVacatedOnYmd(toDate);
       }
       if (nextStatus === "Active") {
         const check = await assertPremisesNotAlreadyAllocatedActive({ assetId: aid });
@@ -3021,12 +3030,19 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       // BR-PRE-023: prevent switching to Active when another active allocation exists for this premises.
       const resultingStatus = (updates.status !== undefined ? String(updates.status) : existingAllot.status) ?? "Active";
-      if (resultingStatus === "Vacated") {
-        const resultingTo = (updates.toDate !== undefined ? String(updates.toDate) : existingAllot.toDate) ?? "";
+      const effectiveStatus =
+        (updates.status !== undefined ? String(updates.status) : existingAllot.status) ?? "Active";
+      if (effectiveStatus === "Vacated") {
+        let resultingTo = (updates.toDate !== undefined ? String(updates.toDate) : existingAllot.toDate) ?? "";
+        if (updates.status === "Vacated" && updates.toDate === undefined && !resultingTo) {
+          resultingTo = todayYmdUtc();
+          updates.toDate = resultingTo;
+        }
         const vOnErr = ymdFieldError("Vacated on", resultingTo, true);
         if (vOnErr) return sendApiError(res, 400, "VACATED_ON", vOnErr);
         const vFut = assertVacatedToDateNotFuture(resultingTo);
         if (vFut) return sendApiError(res, 400, "VACATED_DATE_FUTURE", vFut);
+        updates.toDate = capVacatedOnYmd(resultingTo);
       }
       if (resultingStatus === "Active") {
         const check = await assertPremisesNotAlreadyAllocatedActive({ assetId: existingAllot.assetId, excludeAssetAllotmentId: id });

@@ -1,18 +1,14 @@
 /**
- * M-05: server-generated receipt PDF (branded header + line items + embedded QR).
- * Logo order: (1) Admin → Config upload (`uploads/branding/receipt-pdf-logo.*`), (2) `RECEIPT_PDF_LOGO_PATH`, (3) `RECEIPT_PDF_LOGO_URL`.
+ * M-05: server-generated receipt PDF — GAPLMB statutory layout (A4 duplicate slips).
+ * Logo optional via Admin Config / RECEIPT_PDF_LOGO_* (letterhead is text unless preprinted mode).
  */
-import fs from "fs";
-import path from "path";
 import QRCode from "qrcode";
 import type { InferSelectModel } from "drizzle-orm";
 import { iomsReceipts } from "@shared/db-schema";
-import { readUploadedReceiptLogoBuffer } from "./receipt-logo-storage";
-import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
 import { loadPdfDocumentConstructor } from "./pdfkit-loader";
 import { pdfSafeText } from "./pdf-safe-text";
-import { parseM03ReceiptBreakdown } from "@shared/m03-receipt-breakdown";
-import { formatInrPdf } from "@shared/format-inr";
+import { loadReceiptPdfLayoutContext } from "./receipt-pdf-context";
+import { drawGaplmbReceiptSlip } from "./receipt-pdf-layout";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
 
@@ -26,95 +22,51 @@ export type ReceiptPdfArrearsDisclosure = {
   note: string;
 };
 
-async function loadOptionalReceiptLogo(): Promise<Buffer | null> {
-  const uploaded = await readUploadedReceiptLogoBuffer();
-  if (uploaded) return uploaded;
-
-  const filePath = process.env.RECEIPT_PDF_LOGO_PATH?.trim();
-  if (filePath) {
-    const abs = path.isAbsolute(filePath) ? filePath : path.join(process.cwd(), filePath);
-    try {
-      if (fs.existsSync(abs)) return fs.readFileSync(abs);
-    } catch {
-      /* ignore */
-    }
-  }
-  const url = process.env.RECEIPT_PDF_LOGO_URL?.trim();
-  if (url?.startsWith("http://") || url?.startsWith("https://")) {
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 8000);
-      const res = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (res.ok) return Buffer.from(await res.arrayBuffer());
-    } catch {
-      /* ignore */
-    }
-  }
-  return null;
-}
+const A4_MARGIN = 36;
+const SLIP_HEIGHT = 368;
+const FIRST_SLIP_Y = 40;
+const SECOND_SLIP_Y = 418;
 
 export async function buildIomsReceiptPdf(params: {
   receipt: ReceiptRow;
   yardName?: string | null;
   verifyBaseUrl: string;
-  /** Optional M-03 rent arrears line (after prior dishonour for same invoice). */
   arrearsDisclosure?: ReceiptPdfArrearsDisclosure | null;
-  /** US-M05-004: render authorised duplicate watermark/label. */
   duplicateLabel?: string | null;
 }): Promise<Buffer> {
-  const { receipt, yardName, verifyBaseUrl, arrearsDisclosure, duplicateLabel } = params;
-  let payerDisplayName: string;
-  let unifiedEntityDisplayName: string | null | undefined;
-  try {
-    const enriched = await attachPayerDisplayNames([receipt]);
-    const row0 = enriched[0];
-    payerDisplayName = row0?.payerDisplayName ?? String(receipt.payerName ?? receipt.payerRefId ?? "—");
-    unifiedEntityDisplayName = row0?.unifiedEntityDisplayName;
-  } catch {
-    payerDisplayName = String(receipt.payerName ?? receipt.payerRefId ?? "—");
-    unifiedEntityDisplayName = undefined;
-  }
-  const unifiedEntityPdfLine =
-    (unifiedEntityDisplayName ?? receipt.unifiedEntityId)?.trim() || null;
+  const { receipt, verifyBaseUrl, arrearsDisclosure, duplicateLabel } = params;
   const printMode = (process.env.RECEIPT_PDF_PRINT_MODE ?? "full").trim().toLowerCase();
   const bodyOnly = printMode === "body-only" || printMode === "preprinted";
   const signatoryName = process.env.RECEIPT_PDF_SIGNATORY_NAME?.trim();
+
+  let layoutCtx = await loadReceiptPdfLayoutContext(receipt);
+  if (arrearsDisclosure && arrearsDisclosure.approxInterestInr > 0.005) {
+    layoutCtx = {
+      ...layoutCtx,
+      remarks: `${layoutCtx.remarks} (Prior dishonour: approx. arrears interest ${arrearsDisclosure.approxInterestInr.toFixed(2)} INR — not in total above.)`,
+    };
+  }
+
   const PDFDocument = await loadPdfDocumentConstructor().catch((e) => {
     console.error("[receipt-pdf] pdfkit module load failed", e);
     throw e;
   });
+
   const verifyUrl = `${verifyBaseUrl.replace(/\/$/, "")}/verify/${encodeURIComponent(receipt.receiptNo)}`;
-  let qrPng: Buffer;
-  let logoBuf: Buffer | null;
+  let qrPng: Buffer | null = null;
   try {
-    [qrPng, logoBuf] = await Promise.all([
-      QRCode.toBuffer(verifyUrl, { type: "png", margin: 1, width: 200 }),
-      bodyOnly ? Promise.resolve(null as Buffer | null) : loadOptionalReceiptLogo(),
-    ]);
+    qrPng = await QRCode.toBuffer(verifyUrl, { type: "png", margin: 1, width: 160 });
   } catch (e) {
-    console.error("[receipt-pdf] QR or logo preparation failed", e);
-    throw e;
+    console.warn("[receipt-pdf] QR generation failed", e);
   }
 
-  const doc = new PDFDocument({ margin: 48, size: "A4" });
+  const doc = new PDFDocument({ size: "A4", margin: A4_MARGIN });
   const chunks: Buffer[] = [];
   doc.on("data", (c: Buffer) => chunks.push(c));
 
   await new Promise<void>((resolve, reject) => {
     doc.on("end", () => resolve());
     doc.on("error", reject);
-
-    if (!bodyOnly && logoBuf) {
-      try {
-        const logoW = 132;
-        const x = (doc.page.width - logoW) / 2;
-        doc.image(logoBuf, x, doc.y, { width: logoW });
-        doc.moveDown(2.2);
-      } catch {
-        /* unsupported or corrupt logo buffer — continue without image */
-      }
-    }
 
     if (duplicateLabel) {
       doc
@@ -126,127 +78,42 @@ export async function buildIomsReceiptPdf(params: {
         .text(pdfSafeText(String(duplicateLabel).slice(0, 40)), 0, doc.page.height / 2 - 40, { align: "center" })
         .opacity(1)
         .restore();
-      doc.moveDown(0.2);
     }
 
-    if (!bodyOnly) {
-      doc
-        .fontSize(18)
-        .text(pdfSafeText("Goa Agricultural Produce and Livestock Marketing Board (GAPLMB)"), { align: "center" });
-      doc.moveDown(0.25);
-      doc
-        .fontSize(11)
-        .fillColor("#444")
-        .text(pdfSafeText("Integrated Online Management System - Receipt"), { align: "center" });
-      doc.fillColor("#000");
-      doc.moveDown(1.2);
-    } else {
-      doc.fontSize(12).text(pdfSafeText("Receipt (body)"), { align: "left" });
-      doc.moveDown(0.6);
-    }
-    doc.fontSize(10).text(pdfSafeText(`Yard / location: ${yardName ?? receipt.yardId}`));
-    doc.text(pdfSafeText(`Receipt no.: ${receipt.receiptNo}`));
-    doc.text(pdfSafeText(`Date: ${String(receipt.createdAt ?? "").slice(0, 19).replace("T", " ")}`));
-    doc.text(pdfSafeText(`Status: ${receipt.status}`));
-    if ((receipt as { isGracePeriod?: boolean | null }).isGracePeriod) {
-      doc
-        .moveDown(0.25)
-        .fontSize(9)
-        .fillColor("#b45309")
-        .text(
-          pdfSafeText(
-            "Grace period transaction: licence renewal required before transaction window end date (see policy).",
-          ),
-        );
-      doc.fillColor("#000");
-    }
-    doc.moveDown(0.6);
-    doc.fontSize(11).text(pdfSafeText("Payer"), { underline: true });
-    doc.fontSize(10).text(pdfSafeText(payerDisplayName));
-    if (receipt.payerType) doc.text(pdfSafeText(`Type: ${receipt.payerType}`));
-    if (unifiedEntityPdfLine) doc.text(pdfSafeText(`Unified entity: ${unifiedEntityPdfLine}`));
-    doc.moveDown(0.8);
-    doc.fontSize(11).text(pdfSafeText("Amounts"), { underline: true });
-    doc.fontSize(10);
-    doc.text(pdfSafeText(`Revenue head: ${receipt.revenueHead}`));
-    doc.text(pdfSafeText(`Base amount: ${formatInrPdf(receipt.amount ?? 0)}`));
-    if (Number(receipt.cgst ?? 0) > 0 || Number(receipt.sgst ?? 0) > 0) {
-      doc.text(
-        pdfSafeText(
-          `CGST: ${formatInrPdf(receipt.cgst ?? 0)}   SGST: ${formatInrPdf(receipt.sgst ?? 0)}`,
-        ),
-      );
-    }
-    doc.fontSize(12).text(pdfSafeText(`Total: ${formatInrPdf(receipt.totalAmount ?? 0)}`), { continued: false });
-    const m03Br = parseM03ReceiptBreakdown((receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson);
-    if (m03Br && ((m03Br.rentAmount ?? 0) > 0.005 || (m03Br.interestAmount ?? 0) > 0.005)) {
-      doc.moveDown(0.25);
-      doc.fontSize(9).fillColor("#444");
-      if (m03Br.rentAmount != null && m03Br.rentAmount > 0.005) {
-        doc.text(pdfSafeText(`Rent / tax component: ${formatInrPdf(m03Br.rentAmount)}`));
-      }
-      if (m03Br.interestAmount != null && m03Br.interestAmount > 0.005) {
-        doc.text(pdfSafeText(`Arrears interest (M-03 ledger): ${formatInrPdf(m03Br.interestAmount)}`));
-      }
-      doc.fillColor("#000");
-    }
-    doc.moveDown(0.35);
-    const tds = Number(receipt.tdsAmount ?? 0);
-    if (tds > 0) {
-      doc
-        .fontSize(9)
-        .fillColor("#444")
-        .text(
-          pdfSafeText(
-            `TDS u/s 194-I (on rent component): ${formatInrPdf(tds)} - shown for statutory disclosure; total above is gross invoice amount.`,
-          ),
-        );
-      doc.fillColor("#000");
-    }
-    if (arrearsDisclosure) {
-      doc.moveDown(0.25);
-      doc
-        .fontSize(9)
-        .fillColor("#444")
-        .text(
-          pdfSafeText(
-            `Arrears interest (after prior dishonour, ${arrearsDisclosure.overdueDays} day(s) from due ${arrearsDisclosure.dueDateIso} to ${arrearsDisclosure.asOfIso} at ${arrearsDisclosure.ratePercentPerAnnum}% p.a. on ${formatInrPdf(arrearsDisclosure.principalInr)}): approx ${formatInrPdf(arrearsDisclosure.approxInterestInr)} - not included in total above.`,
-          ),
-        );
-      doc.fillColor("#000");
-    }
-    doc.moveDown(0.4);
-    doc.fontSize(10).text(pdfSafeText(`Payment mode: ${receipt.paymentMode}`));
-    if (receipt.chequeNo) doc.text(pdfSafeText(`Cheque no.: ${receipt.chequeNo}`));
-    if (receipt.bankName) doc.text(pdfSafeText(`Bank: ${receipt.bankName}`));
-    if (receipt.gatewayRef) doc.text(pdfSafeText(`Reference: ${receipt.gatewayRef}`));
-    doc.moveDown(1);
-    doc.fontSize(9).fillColor("#555").text(pdfSafeText("Verify this receipt (QR):"), { continued: false });
-    doc.fillColor("#000");
-    try {
-      doc.image(qrPng, { fit: [120, 120] });
-    } catch {
-      doc.fontSize(9).text("(QR image unavailable)");
-    }
-    doc.moveDown(0.3);
-    const verifyLine = pdfSafeText(verifyUrl);
-    try {
-      doc.fontSize(8).fillColor("#666").text(verifyLine, { link: verifyUrl, underline: true });
-    } catch {
-      doc.fontSize(8).fillColor("#666").text(verifyLine);
-    }
-    doc.fillColor("#000");
-    doc.moveDown(1);
-    if (signatoryName) {
-      doc.fontSize(9).text(pdfSafeText(`Authorised signatory: ${signatoryName}`), { align: "right" });
-      doc.moveDown(0.5);
-    }
-    doc.fontSize(8).text(
-      pdfSafeText("This document was generated by the IOMS server. For queries, contact GAPLMB accounts."),
-      {
-        align: "center",
-      },
+    const leftX = doc.page.margins.left;
+    const rightX = doc.page.width - doc.page.margins.right;
+    const contentWidth = rightX - leftX;
+    const slipOpts = {
+      bodyOnly,
+      signatoryName: signatoryName || null,
+      qrPng: bodyOnly ? null : qrPng,
+      verifyUrl: bodyOnly ? null : verifyUrl,
+    };
+
+    drawGaplmbReceiptSlip(
+      doc,
+      layoutCtx,
+      { x: leftX, y: FIRST_SLIP_Y, width: contentWidth, height: SLIP_HEIGHT },
+      slipOpts,
     );
+    drawGaplmbReceiptSlip(
+      doc,
+      layoutCtx,
+      { x: leftX, y: SECOND_SLIP_Y, width: contentWidth, height: SLIP_HEIGHT },
+      slipOpts,
+    );
+
+    doc
+      .font("Helvetica")
+      .fontSize(7)
+      .fillColor("#666")
+      .text(
+        pdfSafeText("Duplicate copy on the same A4 sheet for office / lessee use. Generated by IOMS."),
+        leftX,
+        doc.page.height - doc.page.margins.bottom - 14,
+        { width: contentWidth, align: "center" },
+      );
+    doc.fillColor("#000");
     doc.end();
   });
 

@@ -26,7 +26,9 @@ interface Asset {
 }
 interface VacantRow {
   asset: Asset;
-  lastAllotment: { allotteeName: string; fromDate: string; toDate: string; id: string } | null;
+  lastAllotment: { allotteeName: string; fromDate: string; toDate: string; id: string; status?: string } | null;
+  /** Vacated date (today or earlier); from server when tenancy was Vacated/Vacating. */
+  vacatedOn: string | null;
   lastRentAmount: number | null;
 }
 
@@ -73,7 +75,7 @@ export default function AssetsVacant() {
   const sourceRows = useMemo((): Record<string, unknown>[] => {
     return (vacant ?? []).map((row) => {
       const fromDate = row.lastAllotment?.fromDate;
-      const toDate = row.lastAllotment?.toDate;
+      const vacatedYmd = row.vacatedOn?.slice(0, 10) ?? null;
       return {
         id: row.asset.id,
         assetIdSort: row.asset.assetId,
@@ -88,8 +90,8 @@ export default function AssetsVacant() {
         previousAllottee: row.lastAllotment?.allotteeName ?? "—",
         agreementFromSort: fromDate?.slice(0, 10) ?? "",
         agreementFromDate: fromDate ? formatYmdToDisplay(fromDate) : "—",
-        vacatedOnSort: toDate?.slice(0, 10) ?? "",
-        vacatedOn: toDate ? formatYmdToDisplay(toDate) : "—",
+        vacatedOnSort: vacatedYmd ?? "",
+        vacatedOn: vacatedYmd ? formatYmdToDisplay(vacatedYmd) : "—",
         lastRentSort: row.lastRentAmount ?? null,
         _lastRent: row.lastRentAmount != null ? formatInr(row.lastRentAmount) : "—",
       };
@@ -119,7 +121,7 @@ export default function AssetsVacant() {
               Shop Vacant (M-02)
             </CardTitle>
             <p className="text-sm text-muted-foreground mt-1">
-              Vacated assets: previous allottee, agreement period end (vacated date), and last rent.
+              Vacated assets: previous allottee, vacated date (today or an earlier date only), agreement from, and last rent.
             </p>
           </div>
           <Select value={yardId || "all"} onValueChange={(v) => handleYardChange(v === "all" ? "" : v)}>

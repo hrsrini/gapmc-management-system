@@ -87,6 +87,28 @@ export function assertVacatedToDateNotFuture(toYmd: string, todayYmd = todayYmdU
   return null;
 }
 
+/** Cap vacated-on display/storage to today when agreement `toDate` is still in the future. */
+export function capVacatedOnYmd(toYmd: string, todayYmd = todayYmdUtc()): string {
+  const s = String(toYmd ?? "").trim().slice(0, 10);
+  const today = String(todayYmd).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return today;
+  return s > today ? today : s;
+}
+
+/** Vacated date for Shop Vacant register: latest Vacated/Vacating row only (not future agreement end). */
+export function resolveVacatedDisplayYmd(
+  allotments: ReadonlyArray<{ status: string; toDate: string }>,
+  todayYmd = todayYmdUtc(),
+): string | null {
+  const ended = allotments.filter((a) => {
+    const st = String(a.status ?? "").trim();
+    return st === "Vacated" || st === "Vacating";
+  });
+  if (ended.length === 0) return null;
+  const pick = [...ended].sort((a, b) => String(b.toDate).localeCompare(String(a.toDate)))[0]!;
+  return capVacatedOnYmd(pick.toDate, todayYmd);
+}
+
 /** True if `fromYmd` is strictly before `boundaryYmd` (YYYY-MM-DD). */
 export function ymdBefore(a: string, b: string): boolean {
   return String(a).trim() < String(b).trim();

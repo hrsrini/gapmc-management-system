@@ -1,0 +1,208 @@
+import { eq } from "drizzle-orm";
+import type { InferSelectModel } from "drizzle-orm";
+import {
+  assetAllotments,
+  assets,
+  entityAllotments,
+  iomsReceipts,
+  rentInvoices,
+  traderLicences,
+  yards,
+} from "@shared/db-schema";
+import { parseM03ReceiptBreakdown } from "@shared/m03-receipt-breakdown";
+import { parseUnifiedEntityId } from "@shared/unified-entity-id";
+import { db } from "./db";
+import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
+import { formatBillingMonthLabel } from "./pre-receipt-pdf";
+import {
+  formatInrAmountWordsReceiptFace,
+  formatReceiptDateDmYyyy,
+  getReceiptPdfBranding,
+  mapReceiptPaymentModeLabel,
+  marketFeeReceiptTitleForYard,
+  rentReceiptTitleForYard,
+} from "./receipt-pdf-shared";
+
+type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
+
+export type ReceiptPdfParticularRow = {
+  sn: number;
+  label: string;
+  amount: number;
+};
+
+export type ReceiptPdfLayoutContext = {
+  payerDisplayName: string;
+  licenceNo: string | null;
+  branding: ReturnType<typeof getReceiptPdfBranding>;
+  receiptTitle: string;
+  receiptNo: string;
+  dateLabel: string;
+  paymentModeLabel: string;
+  remarks: string;
+  amountWords: string;
+  rows: ReceiptPdfParticularRow[];
+  totalAmount: number;
+  isGracePeriod: boolean;
+  revenueHead: string;
+};
+
+async function resolveLicenceNo(receipt: ReceiptRow): Promise<string | null> {
+  const ids = new Set<string>();
+  const ref = (receipt.payerRefId ?? "").trim();
+  const typ = String(receipt.payerType ?? "").trim().toLowerCase();
+  if (ref && (typ === "traderlicence" || typ === "tenantlicence" || !typ)) ids.add(ref);
+  const ue = parseUnifiedEntityId(String(receipt.unifiedEntityId ?? "").trim());
+  if (ue?.kind === "TA") ids.add(ue.refId);
+  if (ids.size === 0) return null;
+  const idList = Array.from(ids);
+  for (const id of idList) {
+    const [row] = await db
+      .select({ licenceNo: traderLicences.licenceNo })
+      .from(traderLicences)
+      .where(eq(traderLicences.id, id))
+      .limit(1);
+    if (row?.licenceNo?.trim()) return row.licenceNo.trim();
+  }
+  return null;
+}
+
+async function premisesRefForInvoice(inv: {
+  allotmentId: string;
+  allotmentKind: string;
+  assetId: string;
+}): Promise<string> {
+  const kind = String(inv.allotmentKind ?? "").trim();
+  if (kind === "Entity") {
+    const [ea] = await db
+      .select({ premisesRefNo: entityAllotments.premisesRefNo })
+      .from(entityAllotments)
+      .where(eq(entityAllotments.id, inv.allotmentId))
+      .limit(1);
+    if (ea?.premisesRefNo?.trim()) return ea.premisesRefNo.trim();
+  } else {
+    const [aa] = await db
+      .select({ premisesRefNo: assetAllotments.premisesRefNo })
+      .from(assetAllotments)
+      .where(eq(assetAllotments.id, inv.allotmentId))
+      .limit(1);
+    if (aa?.premisesRefNo?.trim()) return aa.premisesRefNo.trim();
+  }
+  const [asset] = await db
+    .select({ assetId: assets.assetId })
+    .from(assets)
+    .where(eq(assets.id, inv.assetId))
+    .limit(1);
+  return asset?.assetId?.trim() || "premises";
+}
+
+async function buildRemarks(receipt: ReceiptRow): Promise<string> {
+  const mode = String(receipt.paymentMode ?? "").trim();
+  const payWord = mode === "Cash" ? "Cash" : mode === "Cheque" || mode === "DD" ? "Cheque" : mode || "payment";
+  if (String(receipt.sourceModule ?? "") === "M-03" && receipt.sourceRecordId) {
+    const [inv] = await db
+      .select({
+        periodMonth: rentInvoices.periodMonth,
+        allotmentId: rentInvoices.allotmentId,
+        allotmentKind: rentInvoices.allotmentKind,
+        assetId: rentInvoices.assetId,
+      })
+      .from(rentInvoices)
+      .where(eq(rentInvoices.id, receipt.sourceRecordId))
+      .limit(1);
+    if (inv) {
+      const month = formatBillingMonthLabel(inv.periodMonth, String(receipt.createdAt ?? ""));
+      const premises = await premisesRefForInvoice(inv);
+      return `Being amount received towards Rent,CGST,SGST for the month of ${month} of ${premises}.`;
+    }
+  }
+  const rh = String(receipt.revenueHead ?? "").trim();
+  if (rh === "MarketFee") {
+    return `Market fee payment (${payWord}).`;
+  }
+  return `Being amount received towards ${rh || "payment"}.`;
+}
+
+function buildParticularRows(receipt: ReceiptRow): ReceiptPdfParticularRow[] {
+  const rh = String(receipt.revenueHead ?? "").trim();
+  const m03Br = parseM03ReceiptBreakdown((receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson);
+  const rows: Omit<ReceiptPdfParticularRow, "sn">[] = [];
+
+  if (rh === "MarketFee") {
+    rows.push({ label: "Market Fee", amount: Number(receipt.amount ?? 0) });
+  } else if (rh === "RentArrearsInterest") {
+    const interest = Number(receipt.amount ?? 0);
+    if (interest > 0.005) rows.push({ label: "Interest on Rent", amount: interest });
+  } else {
+    const rentBase =
+      m03Br?.rentAmount != null && Number.isFinite(m03Br.rentAmount)
+        ? Number(m03Br.rentAmount)
+        : Number(receipt.amount ?? 0);
+    if (rentBase > 0.005) rows.push({ label: "Rent", amount: rentBase });
+    const cgst = Number(receipt.cgst ?? 0);
+    const sgst = Number(receipt.sgst ?? 0);
+    if (cgst > 0.005) rows.push({ label: "CGST", amount: cgst });
+    if (sgst > 0.005) rows.push({ label: "SGST", amount: sgst });
+    const tds = Number(receipt.tdsAmount ?? 0);
+    if (tds > 0.005) rows.push({ label: "TDS", amount: -tds });
+    const interest = m03Br?.interestAmount != null ? Number(m03Br.interestAmount) : 0;
+    if (interest > 0.005) rows.push({ label: "Interest on Rent", amount: interest });
+  }
+
+  if (rows.length === 0) {
+    rows.push({ label: rh || "Amount", amount: Number(receipt.totalAmount ?? receipt.amount ?? 0) });
+  }
+
+  return rows.map((r, i) => ({ sn: i + 1, ...r }));
+}
+
+function receiptTitle(receipt: ReceiptRow, yardCode: string | null, yardName: string | null): string {
+  const rh = String(receipt.revenueHead ?? "").trim();
+  if (rh === "MarketFee") return marketFeeReceiptTitleForYard(yardCode);
+  if (rh === "Rent" || rh === "GSTInvoice" || rh === "RentArrearsInterest") {
+    return rentReceiptTitleForYard(yardCode, yardName);
+  }
+  return process.env.RECEIPT_PDF_GENERIC_TITLE?.trim() || "Official Receipt";
+}
+
+export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<ReceiptPdfLayoutContext> {
+  const [yard] = await db
+    .select({
+      name: yards.name,
+      code: yards.code,
+      address: yards.address,
+      phone: yards.phone,
+    })
+    .from(yards)
+    .where(eq(yards.id, receipt.yardId))
+    .limit(1);
+
+  let payerDisplayName = String(receipt.payerName ?? receipt.payerRefId ?? "—");
+  try {
+    const enriched = await attachPayerDisplayNames([receipt]);
+    payerDisplayName = enriched[0]?.payerDisplayName ?? payerDisplayName;
+  } catch {
+    /* use fallback */
+  }
+
+  const licenceNo = await resolveLicenceNo(receipt);
+  const remarks = await buildRemarks(receipt);
+  const totalAmount = Number(receipt.totalAmount ?? 0);
+  const branding = getReceiptPdfBranding(yard?.address ?? null, yard?.name ?? null);
+
+  return {
+    payerDisplayName,
+    licenceNo,
+    branding,
+    receiptTitle: receiptTitle(receipt, yard?.code ?? null, yard?.name ?? null),
+    receiptNo: receipt.receiptNo,
+    dateLabel: formatReceiptDateDmYyyy(receipt.createdAt),
+    paymentModeLabel: mapReceiptPaymentModeLabel(receipt.paymentMode),
+    remarks,
+    amountWords: formatInrAmountWordsReceiptFace(totalAmount),
+    rows: buildParticularRows(receipt),
+    totalAmount,
+    isGracePeriod: Boolean((receipt as { isGracePeriod?: boolean | null }).isGracePeriod),
+    revenueHead: String(receipt.revenueHead ?? ""),
+  };
+}

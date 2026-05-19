@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { Link } from 'wouter';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/AppShell';
@@ -16,13 +16,6 @@ import type { ReportTableColumn } from '@/components/reports/ReportDataTable';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog';
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -34,8 +27,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import {
   Plus,
-  Eye,
-  Printer,
+  Download,
   XCircle,
   Trash2,
   Receipt as ReceiptIcon,
@@ -45,7 +37,6 @@ import {
 } from 'lucide-react';
 import { legacyRowMatchesSelectedApiYard } from '@/lib/legacyYardMatch';
 import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
-import { formatDisplayDate } from '@/lib/dateFormat';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/context/AuthContext';
@@ -82,18 +73,41 @@ export default function ReceiptList() {
   const canDelete = can('M-05', 'Delete');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
-  const [viewReceipt, setViewReceipt] = useState<Receipt | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Receipt | null>(null);
-  const [autoPrint, setAutoPrint] = useState(false);
+  const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!viewReceipt || !autoPrint) return;
-    const t = setTimeout(() => {
-      window.print();
-      setAutoPrint(false);
-    }, 300);
-    return () => clearTimeout(t);
-  }, [viewReceipt, autoPrint]);
+  const downloadReceiptPdf = useCallback(
+    async (receipt: Receipt) => {
+      if (!isIomsUnifiedReceiptNo(receipt.receiptNo)) return;
+      setPdfLoadingId(receipt.id);
+      try {
+        const res = await fetch(`/api/ioms/receipts/${encodeURIComponent(receipt.id)}/pdf`, {
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t || res.statusText);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `receipt-${receipt.receiptNo.replace(/[^\w.-]+/g, '_')}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast({ title: 'PDF downloaded', description: 'Server-generated receipt PDF.' });
+      } catch (e: unknown) {
+        toast({
+          title: 'PDF download failed',
+          description: e instanceof Error ? e.message : 'Could not download receipt PDF.',
+          variant: 'destructive',
+        });
+      } finally {
+        setPdfLoadingId(null);
+      }
+    },
+    [toast],
+  );
 
   const { data: receipts, isLoading, isError, refetch } = useQuery<Receipt[]>({
     queryKey: ['/api/receipts'],
@@ -117,7 +131,6 @@ export default function ReceiptList() {
     onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: ['/api/receipts'] });
       setDeleteTarget((t) => (t?.id === id ? null : t));
-      if (viewReceipt?.id === id) setViewReceipt(null);
       toast({ title: 'Receipt deleted', description: 'The receipt record was removed.' });
     },
     onError: () => {
@@ -167,34 +180,23 @@ export default function ReceiptList() {
       issuedBy: receipt.issuedBy,
       _actions: (
         <div className="flex items-center justify-end gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              setViewReceipt(receipt);
-              setAutoPrint(false);
-            }}
-            data-testid={`button-view-${receipt.id}`}
-            aria-label="View receipt"
-          >
-            <Eye className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              if (isIomsUnifiedReceiptNo(receipt.receiptNo)) {
-                window.open(`/receipts/ioms/${receipt.id}?print=1`, "_blank", "noopener,noreferrer");
-                return;
-              }
-              setViewReceipt(receipt);
-              setAutoPrint(true);
-            }}
-            data-testid={`button-print-${receipt.id}`}
-            aria-label="Print receipt"
-          >
-            <Printer className="h-4 w-4" />
-          </Button>
+          {isIomsUnifiedReceiptNo(receipt.receiptNo) && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => void downloadReceiptPdf(receipt)}
+              disabled={pdfLoadingId === receipt.id}
+              data-testid={`button-download-pdf-${receipt.id}`}
+              aria-label="Download receipt PDF"
+              title="Download PDF"
+            >
+              {pdfLoadingId === receipt.id ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+            </Button>
+          )}
           {receipt.status === 'Active' && !isIomsUnifiedReceiptNo(receipt.receiptNo) && (
             <Button
               variant="ghost"
@@ -224,7 +226,7 @@ export default function ReceiptList() {
         </div>
       ),
     }));
-  }, [filteredReceipts, voidMutation, canDelete, deleteMutation.isPending]);
+  }, [filteredReceipts, voidMutation, canDelete, deleteMutation.isPending, downloadReceiptPdf, pdfLoadingId]);
 
   const filterKey = `${selectedYard}|${selectedType}`;
 
@@ -354,100 +356,6 @@ export default function ReceiptList() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-
-        <Dialog open={!!viewReceipt} onOpenChange={(open) => !open && setViewReceipt(null)}>
-          <DialogContent className="max-w-lg receipt-print-content">
-            <DialogHeader className="no-print">
-              <DialogTitle>Receipt</DialogTitle>
-            </DialogHeader>
-            {viewReceipt && (
-              <div className="space-y-4">
-                <div className="border-b pb-3 flex justify-between items-start">
-                  <div>
-                    <p className="text-2xl font-bold font-mono">{viewReceipt.receiptNo}</p>
-                    <p className="text-sm text-muted-foreground">{viewReceipt.yardName}</p>
-                  </div>
-                  <Badge variant={viewReceipt.status === 'Voided' ? 'destructive' : 'default'}>
-                    {viewReceipt.status}
-                  </Badge>
-                </div>
-                <div className="grid gap-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Date</span>
-                    <span>{formatDisplayDate(viewReceipt.receiptDate)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Type</span>
-                    <span>{viewReceipt.type}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Trader</span>
-                    <span className="font-medium">{viewReceipt.traderName}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Head</span>
-                    <span>{viewReceipt.head}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Amount</span>
-                    <span>{viewReceipt.amount != null ? formatInr(viewReceipt.amount) : "—"}</span>
-                  </div>
-                  {viewReceipt.cgst != null && viewReceipt.cgst > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">CGST</span>
-                      <span>{formatInr(viewReceipt.cgst)}</span>
-                    </div>
-                  )}
-                  {viewReceipt.sgst != null && viewReceipt.sgst > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">SGST</span>
-                      <span>{formatInr(viewReceipt.sgst)}</span>
-                    </div>
-                  )}
-                  {viewReceipt.interest != null && viewReceipt.interest > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Interest</span>
-                      <span>{formatInr(viewReceipt.interest)}</span>
-                    </div>
-                  )}
-                  {viewReceipt.tdsAmount != null && viewReceipt.tdsAmount > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">TDS</span>
-                      <span>{formatInr(viewReceipt.tdsAmount)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between pt-2 border-t font-semibold text-base">
-                    <span>Total</span>
-                    <span>{formatInr(viewReceipt.total)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Payment</span>
-                    <span>{viewReceipt.paymentMode}</span>
-                  </div>
-                  {viewReceipt.transactionRef && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Ref</span>
-                      <span className="font-mono text-xs">{viewReceipt.transactionRef}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between pt-1">
-                    <span className="text-muted-foreground">Issued by</span>
-                    <span>{viewReceipt.issuedBy}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-            <DialogFooter className="no-print">
-              <Button variant="outline" onClick={() => setViewReceipt(null)}>
-                Close
-              </Button>
-              <Button onClick={() => window.print()} data-testid="button-dialog-print">
-                <Printer className="h-4 w-4 mr-2" />
-                Print
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </div>
     </AppShell>
   );

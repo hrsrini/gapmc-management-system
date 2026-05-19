@@ -261,8 +261,14 @@ export function registerRentIomsRoutes(app: Express) {
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
         return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       }
-      const [yard] = await db.select({ name: yards.name, code: yards.code }).from(yards).where(eq(yards.id, inv.yardId)).limit(1);
+      const [yard] = await db
+        .select({ name: yards.name, code: yards.code, address: yards.address })
+        .from(yards)
+        .where(eq(yards.id, inv.yardId))
+        .limit(1);
       const yardName = String(yard?.name?.trim() || yard?.code?.trim() || inv.yardId);
+      const yardCode = yard?.code?.trim() || null;
+      const yardAddress = yard?.address?.trim() || null;
       const [asset] = await db
         .select({ assetId: assets.assetId })
         .from(assets)
@@ -287,13 +293,21 @@ export function registerRentIomsRoutes(app: Express) {
           .limit(1);
         if (aa?.allotteeName) allotmentLabel = aa.allotteeName;
       }
+      const { getMergedSystemConfig } = await import("./system-config");
+      const sysCfg = await getMergedSystemConfig();
+      const cgstPercent = parseFloat(String(sysCfg.rent_invoice_cgst_percent ?? ""));
+      const sgstPercent = parseFloat(String(sysCfg.rent_invoice_sgst_percent ?? ""));
       const { buildRentInvoicePdfA4 } = await import("./rent-invoice-pdf");
       const buf = await buildRentInvoicePdfA4({
         invoice: inv,
         yardName,
+        yardCode,
+        yardAddress,
         counterpartyName: counterparty.payerName,
         assetCode,
         allotmentLabel,
+        cgstPercent: Number.isFinite(cgstPercent) ? cgstPercent : null,
+        sgstPercent: Number.isFinite(sgstPercent) ? sgstPercent : null,
       });
       const safeNo = String(inv.invoiceNo ?? id).replace(/[^\w.-]+/g, "_");
       res.setHeader("Content-Type", "application/pdf");

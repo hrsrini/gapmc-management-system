@@ -41,6 +41,7 @@ import {
   localCalendarYmd,
   RENT_REVISION_MODES,
 } from "@shared/premises-allocation";
+import { buildAssetDisplayByRowId, formatPremisesAssetLabel } from "@/lib/asset-premises-display";
 
 interface Entity {
   id: string;
@@ -161,8 +162,11 @@ export default function EntityDetail() {
       return res.json();
     },
   });
-  const assets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
-  const assetDisplayById = useMemo(() => Object.fromEntries(assets.map((a) => [a.id, a.assetId])), [assets]);
+  const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
+  const { data: allPremisesAssets = [] } = useQuery<AssetRef[]>({
+    queryKey: ["/api/ioms/assets"],
+  });
+  const assetDisplayById = useMemo(() => buildAssetDisplayByRowId(allPremisesAssets), [allPremisesAssets]);
   const vacantByAssetPk = useMemo(() => Object.fromEntries(vacantRows.map((r) => [r.asset.id, r])), [vacantRows]);
 
   const [open, setOpen] = useState(false);
@@ -370,7 +374,7 @@ export default function EntityDetail() {
       return {
         id: a.id,
         approvalStatus: appr,
-        assetDisplay: assetDisplayById[a.assetId] ?? a.assetId,
+        assetDisplay: formatPremisesAssetLabel(a.assetId, assetDisplayById, a.premisesRefNo),
         allotteeName: a.allotteeName,
         fromDate: a.fromDate,
         toDate: a.toDate,
@@ -624,7 +628,7 @@ export default function EntityDetail() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__pick__">Select…</SelectItem>
-                  {assets.map((a) => (
+                  {vacantAssets.map((a) => (
                     <SelectItem key={a.id} value={a.id}>
                       {a.assetId}
                       {a.assetType ? ` · ${a.assetType}` : ""}
@@ -770,7 +774,7 @@ export default function EntityDetail() {
               <DialogHeader>
                 <DialogTitle>Manage premises allocation</DialogTitle>
                 <p className="text-sm text-muted-foreground font-mono">
-                  {assetDisplayById[manageRow.assetId] ?? manageRow.assetId}
+                  {formatPremisesAssetLabel(manageRow.assetId, assetDisplayById, manageRow.premisesRefNo)}
                   {manageRow.premisesRefNo?.trim() ? ` · ${manageRow.premisesRefNo}` : ""}
                 </p>
               </DialogHeader>
