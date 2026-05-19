@@ -28,14 +28,17 @@ import {
 import { Input } from "@/components/ui/input";
 import { formatInr } from "@/lib/formatInr";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { formatUnifiedEntityOptionLabel } from "@shared/unified-entity-display";
 
 interface UnifiedEntityRow {
-  id: string; // TA:<id> | TB:<id> | AH:<id>
+  id: string;
   kind: "TrackA" | "TrackB" | "AdHoc";
   refId: string;
   yardId: string;
   name: string;
   status: string;
+  publicEntityCode?: string | null;
+  displayEntityId?: string | null;
 }
 
 interface DueRentInvoice {
@@ -224,7 +227,11 @@ export default function OutstandingDues() {
     return Object.fromEntries(
       unified.map((u) => [
         u.id,
-        `${u.id} — ${u.name} (${u.kind === "TrackA" ? "Track A" : u.kind === "TrackB" ? "Track B" : "Ad-hoc"})`,
+        formatUnifiedEntityOptionLabel({
+          kind: u.kind,
+          publicEntityCode: u.publicEntityCode,
+          name: u.name,
+        }),
       ]),
     );
   }, [unified]);

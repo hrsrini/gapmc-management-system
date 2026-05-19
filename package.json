@@ -78,6 +78,7 @@
     "db:cancel-m03-duplicate-invoices": "dotenv -e .env -- tsx scripts/cancel-m03-duplicate-invoices.ts",
     "db:apply-rent-invoice-premises-month-unique": "dotenv -e .env -- tsx scripts/apply-rent-invoice-premises-month-unique.ts",
     "db:apply-m03-rent-invoice-sequential-no": "dotenv -e .env -- tsx scripts/apply-m03-rent-invoice-sequential-no.ts",
+    "db:apply-m03-rent-invoice-billing-types": "dotenv -e .env -- tsx scripts/apply-m03-rent-invoice-billing-types.ts",
     "db:apply-m08-milestones-final-account": "dotenv -e .env -- tsx scripts/apply-m08-milestones-final-account.ts",
     "db:apply-m07-fleet-extensions": "dotenv -e .env -- tsx scripts/apply-m07-fleet-extensions.ts",
     "db:apply-m10-portal-users": "dotenv -e .env -- tsx scripts/apply-m10-portal-users.ts",

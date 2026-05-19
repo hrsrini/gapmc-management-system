@@ -19,6 +19,8 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, ArrowLeft, Loader2, AlertCircle } from "lucide-react";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
+import { formatInr } from "@/lib/formatInr";
+import type { RentBillingType } from "@shared/rent-invoice-billing";
 import type { AssetAllotmentRow, EntityAllotmentRow, YardRef } from "./rent-allotments-ui";
 import {
   activeAssetAllotmentsInYard,
@@ -49,6 +51,26 @@ interface InvoiceRentContextResponse {
   matchedRevisionId: string | null;
   matchedInvoiceId: string | null;
   blockingInvoice?: { id: string; invoiceNo: string | null } | null;
+  agreementFrom?: string | null;
+  agreementTo?: string | null;
+  suggestedBillingType?: RentBillingType;
+  defaultOccupancy?: { occupancyFrom: string; occupancyTo: string } | null;
+}
+
+interface RentInvoiceCalculateResponse {
+  billingType: RentBillingType;
+  rentAmount: number;
+  baseMonthlyRent: number;
+  daysInMonth: number;
+  billableDays: number;
+  billingFactor: number;
+  occupancyFrom: string | null;
+  occupancyTo: string | null;
+  cgst: number;
+  sgst: number;
+  totalAmount: number;
+  summaryLines: Array<{ label: string; value: string }>;
+  overlappingInvoice?: { id: string; invoiceNo: string | null } | null;
 }
 
 type Selection = "" | `trader:${string}` | `entity:${string}`;
@@ -100,6 +122,9 @@ export default function IomsRentInvoiceForm() {
   /** Composite key so trader vs entity rows never collide in the picker. */
   const [selection, setSelection] = useState<Selection>("");
   const [periodMonth, setPeriodMonth] = useState("");
+  const [billingType, setBillingType] = useState<RentBillingType>("FullMonth");
+  const [occupancyFrom, setOccupancyFrom] = useState("");
+  const [occupancyTo, setOccupancyTo] = useState("");
   const [rentAmount, setRentAmount] = useState("");
   /** When false, UI/server prefer resolver output for allotment + period; true uses typed rent. */
   const [rentOverride, setRentOverride] = useState(false);
@@ -188,6 +213,9 @@ export default function IomsRentInvoiceForm() {
   useEffect(() => {
     setRentOverride(false);
     setRentAmount("");
+    setBillingType("FullMonth");
+    setOccupancyFrom("");
+    setOccupancyTo("");
   }, [selection]);
 
   useEffect(() => {
@@ -210,6 +238,64 @@ export default function IomsRentInvoiceForm() {
     },
   });
 
+  useEffect(() => {
+    if (!rentResolve?.suggestedBillingType) return;
+    setBillingType(rentResolve.suggestedBillingType);
+    if (rentResolve.defaultOccupancy) {
+      setOccupancyFrom(rentResolve.defaultOccupancy.occupancyFrom);
+      setOccupancyTo(rentResolve.defaultOccupancy.occupancyTo);
+    }
+  }, [rentResolve?.suggestedBillingType, rentResolve?.defaultOccupancy]);
+
+  useEffect(() => {
+    if (billingType === "FullMonth" && rentResolve?.defaultOccupancy) {
+      setOccupancyFrom(rentResolve.defaultOccupancy.occupancyFrom);
+      setOccupancyTo(rentResolve.defaultOccupancy.occupancyTo);
+    }
+  }, [billingType, rentResolve?.defaultOccupancy]);
+
+  const {
+    data: billingCalc,
+    isFetching: billingCalcFetching,
+    isError: billingCalcIsError,
+    error: billingCalcError,
+  } = useQuery<RentInvoiceCalculateResponse>({
+    queryKey: [
+      "/api/ioms/rent/invoices/calculate",
+      selectedAllotmentId,
+      periodYmTrim,
+      billingType,
+      occupancyFrom,
+      occupancyTo,
+    ],
+    enabled:
+      Boolean(selectedAllotmentId) &&
+      isValidInvoicePeriodYm(periodYmTrim) &&
+      !rentOverride &&
+      (billingType === "FullMonth" || (occupancyFrom.length >= 10 && occupancyTo.length >= 10)),
+    queryFn: async () => {
+      const res = await fetch("/api/ioms/rent/invoices/calculate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          allotmentId: selectedAllotmentId,
+          periodMonth: periodYmTrim,
+          billingType,
+          occupancyFrom: occupancyFrom || undefined,
+          occupancyTo: occupancyTo || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { message?: string }).message ?? (data as { error?: string }).error ?? res.statusText);
+      }
+      return data as RentInvoiceCalculateResponse;
+    },
+  });
+
+  const occupancyOverlapBlocked = billingCalc?.overlappingInvoice != null;
+
   const hasResolvedRent =
     rentResolve != null &&
     Number.isFinite(rentResolve.resolvedRent) &&
@@ -220,11 +306,15 @@ export default function IomsRentInvoiceForm() {
 
   useEffect(() => {
     if (rentOverride) return;
+    if (billingCalc?.rentAmount != null && Number.isFinite(billingCalc.rentAmount)) {
+      setRentAmount(formatResolvedRentInput(billingCalc.rentAmount));
+      return;
+    }
     if (!hasResolvedRent || !rentResolve) return;
     setRentAmount(formatResolvedRentInput(rentResolve.resolvedRent));
-  }, [rentResolve, hasResolvedRent, rentOverride, selectedAllotmentId, periodYmTrim]);
+  }, [billingCalc?.rentAmount, rentResolve, hasResolvedRent, rentOverride, selectedAllotmentId, periodYmTrim]);
 
-  const rentLocked = hasResolvedRent && !rentOverride;
+  const rentLocked = (hasResolvedRent || Boolean(billingCalc)) && !rentOverride;
 
   const rentNum = Number(rentAmount) || 0;
   const nonGstNum = Number(nonGstAmount) || 0;
@@ -241,11 +331,16 @@ export default function IomsRentInvoiceForm() {
     return Number.isFinite(n) && n >= 0 ? n : parseFloat(SYSTEM_CONFIG_DEFAULTS.rent_invoice_sgst_percent);
   })();
 
-  const { cgst: cgstNum, sgst: sgstNum } = useMemo(
-    () => computeRentInvoiceGstInr(rentNum, gstExemptPreview, rentCgstPct, rentSgstPct),
-    [rentNum, gstExemptPreview, rentCgstPct, rentSgstPct],
-  );
-  const totalAmount = rentInvoiceTotalInr(rentNum, nonGstNum, cgstNum, sgstNum);
+  const { cgst: cgstNum, sgst: sgstNum } = useMemo(() => {
+    if (!rentOverride && billingCalc && !gstExemptPreview) {
+      return { cgst: billingCalc.cgst, sgst: billingCalc.sgst };
+    }
+    return computeRentInvoiceGstInr(rentNum, gstExemptPreview, rentCgstPct, rentSgstPct);
+  }, [rentNum, gstExemptPreview, rentCgstPct, rentSgstPct, rentOverride, billingCalc]);
+  const totalAmount =
+    !rentOverride && billingCalc && nonGstNum <= 0
+      ? billingCalc.totalAmount
+      : rentInvoiceTotalInr(rentNum, nonGstNum, cgstNum, sgstNum);
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -308,11 +403,27 @@ export default function IomsRentInvoiceForm() {
       });
       return;
     }
-    if (premisesMonthBlocked && blockingInvoice) {
+    if (occupancyOverlapBlocked && billingCalc?.overlappingInvoice) {
+      toast({
+        title: "Overlapping invoice",
+        description: "Another invoice exists for this allotment, month, and overlapping occupancy dates.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (premisesMonthBlocked && blockingInvoice && billingType === "FullMonth") {
       toast({
         title: "Invoice already exists",
         description:
           "Only one rent invoice is allowed per premises for each billing month. Cancel or adjust the existing invoice first.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (billingCalcIsError && !rentOverride) {
+      toast({
+        title: "Billing calculation failed",
+        description: billingCalcError instanceof Error ? billingCalcError.message : "Check billing type and dates.",
         variant: "destructive",
       });
       return;
@@ -348,6 +459,9 @@ export default function IomsRentInvoiceForm() {
       periodMonth: periodYmTrim,
       rentAmount: rentNum,
       useManualRentAmount,
+      billingType,
+      occupancyFrom: occupancyFrom.trim() || billingCalc?.occupancyFrom || undefined,
+      occupancyTo: occupancyTo.trim() || billingCalc?.occupancyTo || undefined,
       nonGstCharges: nonGstNum > 0 ? [{ label: nonGstLabel.trim(), amount: nonGstNum }] : [],
       cgst: cgstNum,
       sgst: sgstNum,
@@ -507,6 +621,24 @@ export default function IomsRentInvoiceForm() {
               </div>
             )}
 
+            <div className="space-y-2">
+              <Label>Billing type *</Label>
+              <Select
+                value={billingType}
+                onValueChange={(v) => setBillingType(v as RentBillingType)}
+                disabled={!selectedAllotmentId}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="FullMonth">Full month rent</SelectItem>
+                  <SelectItem value="Prorated">Prorated / partial month</SelectItem>
+                  <SelectItem value="Overstay">Overstay / fine rent</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Period (YYYY-MM) *</Label>
@@ -517,7 +649,7 @@ export default function IomsRentInvoiceForm() {
                   required
                   autoComplete="off"
                 />
-                {premisesMonthBlocked && blockingInvoice ? (
+                {premisesMonthBlocked && blockingInvoice && billingType === "FullMonth" ? (
                   <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive flex gap-2">
                     <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                     <div>
@@ -534,12 +666,31 @@ export default function IomsRentInvoiceForm() {
                     </div>
                   </div>
                 ) : null}
+                {occupancyOverlapBlocked && billingCalc?.overlappingInvoice ? (
+                  <p className="text-xs text-destructive">
+                    Overlapping invoice: {billingCalc.overlappingInvoice.invoiceNo ?? billingCalc.overlappingInvoice.id}
+                  </p>
+                ) : null}
               </div>
+              {(billingType === "Prorated" || billingType === "Overstay") && (
+                <>
+                  <div className="space-y-2">
+                    <Label>Occupancy from *</Label>
+                    <Input type="date" value={occupancyFrom} onChange={(e) => setOccupancyFrom(e.target.value)} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Occupancy to *</Label>
+                    <Input type="date" value={occupancyTo} onChange={(e) => setOccupancyTo(e.target.value)} />
+                  </div>
+                </>
+              )}
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <Label>Rent amount (₹){!rentLocked ? " *" : ""}</Label>
                   <div className="flex items-center gap-2 shrink-0">
-                    {rentResolveFetching && isValidInvoicePeriodYm(periodYmTrim) && selectedAllotmentId ? (
+                    {(rentResolveFetching || billingCalcFetching) &&
+                    isValidInvoicePeriodYm(periodYmTrim) &&
+                    selectedAllotmentId ? (
                       <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
                         <Loader2 className="h-3 w-3 animate-spin" />
                         Resolving…
@@ -557,6 +708,11 @@ export default function IomsRentInvoiceForm() {
                     ) : null}
                   </div>
                 </div>
+                {billingCalcIsError && !rentOverride ? (
+                  <p className="text-xs text-destructive">
+                    {billingCalcError instanceof Error ? billingCalcError.message : "Billing calculation failed."}
+                  </p>
+                ) : null}
                 {rentLocked ? (
                   <>
                     <Input type="text" readOnly className="bg-muted font-medium" value={rentAmount} />
@@ -593,6 +749,32 @@ export default function IomsRentInvoiceForm() {
                 )}
               </div>
             </div>
+
+            {billingCalc && !rentOverride ? (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-2">
+                <div className="font-medium">Rent calculation summary</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {billingCalc.summaryLines.map((line) => (
+                    <div key={line.label} className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">{line.label}</span>
+                      <span className="font-medium tabular-nums">
+                        {line.label.toLowerCase().includes("rent") || line.label.toLowerCase().includes("factor")
+                          ? formatInr(Number(line.value))
+                          : line.value}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between gap-2 sm:col-span-2 border-t pt-2">
+                    <span className="text-muted-foreground">GST total</span>
+                    <span className="font-medium">{formatInr(billingCalc.cgst + billingCalc.sgst)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2 sm:col-span-2">
+                    <span className="font-medium">Invoice total</span>
+                    <span className="font-semibold">{formatInr(billingCalc.totalAmount)}</span>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -649,7 +831,10 @@ export default function IomsRentInvoiceForm() {
             </div>
 
             <div className="flex gap-2 pt-2">
-              <Button type="submit" disabled={createMutation.isPending || premisesMonthBlocked}>
+              <Button
+                type="submit"
+                disabled={createMutation.isPending || premisesMonthBlocked || occupancyOverlapBlocked}
+              >
                 {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Create draft invoice
               </Button>

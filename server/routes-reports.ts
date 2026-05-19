@@ -33,8 +33,9 @@ import {
   ltcClaims,
 } from "@shared/db-schema";
 import { maskPanForExport } from "@shared/india-validation";
-import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
+import { attachPayerDisplayNames, finalizeEntityDisplayName } from "./ioms-receipt-payer-display";
 import { enrichRentSummaryRows } from "./rent-summary-report-enrich";
+import { enrichReceiptRegisterRows, formatCreatedAtCsv } from "./report-csv-format";
 
 function escapeCsvCell(val: unknown): string {
   if (val == null) return "";
@@ -492,33 +493,36 @@ export function registerReportsRoutes(app: Express) {
       const base = db.select().from(iomsReceipts).orderBy(desc(iomsReceipts.createdAt));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
       const listWithPayer = await attachPayerDisplayNames(list);
+      const listEnriched = await enrichReceiptRegisterRows(listWithPayer);
 
       if (format === "csv") {
         const headers = [
-          "id",
           "receiptNo",
-          "yardId",
+          "yardName",
           "revenueHead",
           "payerName",
-          "unifiedEntityId",
+          "entityName",
           "amount",
           "totalAmount",
           "paymentMode",
           "status",
           "createdAt",
         ];
-        const rows = listWithPayer.map((r) => [
-          r.id,
+        const rows = listEnriched.map((r) => [
           r.receiptNo,
-          r.yardId,
+          r.yardName,
           r.revenueHead,
           r.payerDisplayName,
-          r.unifiedEntityId,
+          finalizeEntityDisplayName([
+            r.entityDisplayName,
+            r.unifiedEntityDisplayName,
+            r.payerDisplayName,
+          ]),
           r.amount,
           r.totalAmount,
           r.paymentMode,
           r.status,
-          r.createdAt,
+          formatCreatedAtCsv(r.createdAt),
         ]);
         const csv = [headers.join(","), ...rows.map(toCsvRow)].join("\r\n");
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -557,17 +561,18 @@ export function registerReportsRoutes(app: Express) {
             ? await dataQ
             : await dataQ.limit(pageSize).offset((page - 1) * pageSize);
         const rowsWithPayer = await attachPayerDisplayNames(rows);
-        return res.json({ total, page, pageSize, rows: rowsWithPayer });
+        const rowsEnriched = await enrichReceiptRegisterRows(rowsWithPayer);
+        return res.json({ total, page, pageSize, rows: rowsEnriched });
       }
 
       const summary = {
-        count: listWithPayer.length,
-        totalAmount: listWithPayer.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0),
-        byStatus: listWithPayer.reduce((acc, r) => {
+        count: listEnriched.length,
+        totalAmount: listEnriched.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0),
+        byStatus: listEnriched.reduce((acc, r) => {
           acc[r.status] = (acc[r.status] ?? 0) + 1;
           return acc;
         }, {} as Record<string, number>),
-        rows: listWithPayer,
+        rows: listEnriched,
       };
       res.json(summary);
     } catch (e) {

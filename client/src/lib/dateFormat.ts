@@ -79,6 +79,17 @@ export function formatYearMonthToDisplay(ym: string | null | undefined): string 
   return part;
 }
 
+/** Billing month YYYY-MM → "May 2026" for tables and labels. */
+export function formatYearMonthLabel(ym: string | null | undefined): string {
+  if (ym == null || String(ym).trim() === '') return '—';
+  const part = String(ym).trim().slice(0, 7);
+  const m = /^(\d{4})-(\d{2})$/.exec(part);
+  if (!m) return part;
+  const monthIdx = Number(m[2]) - 1;
+  if (monthIdx < 0 || monthIdx > 11) return part;
+  return `${MONTHS[monthIdx]} ${m[1]}`;
+}
+
 /** Date-only YYYY-MM-DD or ISO date-time string for detail views. */
 export function formatApiDateOrDateTime(value: string | null | undefined): string {
   if (value == null || String(value).trim() === '') return '—';

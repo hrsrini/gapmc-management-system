@@ -21,6 +21,7 @@ import {
   tallyLedgers,
   measurementUnits,
   commodities,
+  rentBillingConfig,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import {
@@ -880,6 +881,130 @@ export function registerAdminRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update SLA config");
+    }
+  });
+
+  // ----- M-03 rent billing config (prorata / overstay) -----
+  app.get("/api/admin/rent-billing-config", async (_req, res) => {
+    try {
+      const list = await db.select().from(rentBillingConfig).orderBy(desc(rentBillingConfig.effectiveFrom));
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      const pg = e as { code?: string };
+      if (pg?.code === "42P01") {
+        return sendApiError(
+          res,
+          503,
+          "RENT_BILLING_CONFIG_SCHEMA_MISSING",
+          "Run: npm run db:apply-m03-rent-invoice-billing-types",
+        );
+      }
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch rent billing config");
+    }
+  });
+
+  app.post("/api/admin/rent-billing-config", async (req, res) => {
+    try {
+      const body = req.body as Record<string, unknown>;
+      const effectiveFrom = String(body.effectiveFrom ?? "").trim().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) {
+        return sendApiError(res, 400, "EFFECTIVE_FROM", "effectiveFrom must be YYYY-MM-DD");
+      }
+      const prorataFactor = Number(body.prorataFactor ?? 1);
+      const overstayFactor = Number(body.overstayFactor ?? 2);
+      if (!Number.isFinite(prorataFactor) || prorataFactor <= 0) {
+        return sendApiError(res, 400, "PRORATA_FACTOR", "prorataFactor must be > 0");
+      }
+      if (!Number.isFinite(overstayFactor) || overstayFactor <= 0) {
+        return sendApiError(res, 400, "OVERSTAY_FACTOR", "overstayFactor must be > 0");
+      }
+      const prorataDaysBasis = String(body.prorataDaysBasis ?? "Calendar") === "Fixed" ? "Fixed" : "Calendar";
+      const overstayDaysBasis = String(body.overstayDaysBasis ?? "Calendar") === "Fixed" ? "Fixed" : "Calendar";
+      const prorataFixedDays =
+        body.prorataFixedDays != null && String(body.prorataFixedDays).trim() !== ""
+          ? Number(body.prorataFixedDays)
+          : null;
+      const overstayFixedDays =
+        body.overstayFixedDays != null && String(body.overstayFixedDays).trim() !== ""
+          ? Number(body.overstayFixedDays)
+          : null;
+      const id = nanoid();
+      const ts = now();
+      await db.insert(rentBillingConfig).values({
+        id,
+        effectiveFrom,
+        prorataFactor,
+        prorataDaysBasis,
+        prorataFixedDays: prorataDaysBasis === "Fixed" ? prorataFixedDays : null,
+        overstayFactor,
+        overstayDaysBasis,
+        overstayFixedDays: overstayDaysBasis === "Fixed" ? overstayFixedDays : null,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      const [row] = await db.select().from(rentBillingConfig).where(eq(rentBillingConfig.id, id));
+      writeAuditLog(req, { module: "M-10", action: "CreateRentBillingConfig", recordId: id, afterValue: row }).catch(
+        (err) => console.error("Audit log failed:", err),
+      );
+      res.status(201).json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create rent billing config");
+    }
+  });
+
+  app.put("/api/admin/rent-billing-config/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const [existing] = await db.select().from(rentBillingConfig).where(eq(rentBillingConfig.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "RENT_BILLING_CONFIG_NOT_FOUND", "Not found");
+      const body = req.body as Record<string, unknown>;
+      const updates: Record<string, unknown> = { updatedAt: now() };
+      if (body.effectiveFrom !== undefined) {
+        const ef = String(body.effectiveFrom).trim().slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(ef)) {
+          return sendApiError(res, 400, "EFFECTIVE_FROM", "effectiveFrom must be YYYY-MM-DD");
+        }
+        updates.effectiveFrom = ef;
+      }
+      if (body.prorataFactor !== undefined) updates.prorataFactor = Number(body.prorataFactor);
+      if (body.overstayFactor !== undefined) updates.overstayFactor = Number(body.overstayFactor);
+      if (body.prorataDaysBasis !== undefined) {
+        updates.prorataDaysBasis = String(body.prorataDaysBasis) === "Fixed" ? "Fixed" : "Calendar";
+      }
+      if (body.overstayDaysBasis !== undefined) {
+        updates.overstayDaysBasis = String(body.overstayDaysBasis) === "Fixed" ? "Fixed" : "Calendar";
+      }
+      if (body.prorataFixedDays !== undefined) {
+        updates.prorataFixedDays =
+          body.prorataFixedDays == null || String(body.prorataFixedDays).trim() === ""
+            ? null
+            : Number(body.prorataFixedDays);
+      }
+      if (body.overstayFixedDays !== undefined) {
+        updates.overstayFixedDays =
+          body.overstayFixedDays == null || String(body.overstayFixedDays).trim() === ""
+            ? null
+            : Number(body.overstayFixedDays);
+      }
+      await db
+        .update(rentBillingConfig)
+        .set(updates as Record<string, string | number | null>)
+        .where(eq(rentBillingConfig.id, id));
+      const [row] = await db.select().from(rentBillingConfig).where(eq(rentBillingConfig.id, id));
+      if (!row) return sendApiError(res, 404, "RENT_BILLING_CONFIG_NOT_FOUND", "Not found");
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "UpdateRentBillingConfig",
+        recordId: id,
+        beforeValue: existing,
+        afterValue: row,
+      }).catch((err) => console.error("Audit log failed:", err));
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update rent billing config");
     }
   });
 }

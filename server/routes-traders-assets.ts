@@ -73,6 +73,11 @@ import { registerEntityAllotmentRoutes } from "./entity-allotment-routes";
 import { assertPremisesNotAlreadyAllocatedActive } from "./premises-allocation-guard";
 import { buildPreReceiptPdfA4Double } from "./pre-receipt-pdf";
 import {
+  billingMonthWithinAllotment,
+  findDuplicatePreReceiptForMonth,
+  resolvePreReceiptIssueContext,
+} from "./pre-receipt-issue";
+import {
   contentTypeForAssetAllotmentAgreement,
   extFromAssetAllotmentAgreementMime,
   isAllowedAssetAllotmentAgreementFileName,
@@ -509,52 +514,69 @@ export function registerTradersAssetsRoutes(app: Express) {
       ]);
 
       const list = [
-        ...lics.map((l) => ({
-          id: `TA:${l.id}`,
-          kind: "TrackA",
-          refId: l.id,
-          yardId: l.yardId,
-          name: l.firmName,
-          status: l.status,
-          pan: l.pan,
-          gstin: l.gstin,
-          mobile: l.mobile,
-          email: l.email,
-          address: l.address,
-        })),
-        ...ents.map((e) => ({
-          id: `TB:${e.id}`,
-          kind: "TrackB",
-          refId: e.id,
-          yardId: e.yardId,
-          name: e.name,
-          status: e.status,
-          pan: e.pan,
-          gstin: e.gstin,
-          mobile: e.mobile,
-          email: e.email,
-          address: e.address,
-          subType: e.subType,
-        })),
-        ...adHocs.map((a) => ({
-          id: `AH:${a.id}`,
-          kind: "AdHoc",
-          refId: a.id,
-          yardId: a.yardId,
-          name: a.name,
-          status: a.status,
-          pan: a.pan,
-          gstin: a.gstin,
-          mobile: a.mobile,
-          email: a.email,
-          address: a.address,
-        })),
+        ...lics.map((l) => {
+          const publicEntityCode = l.entityPublicCode?.trim() || null;
+          return {
+            id: `TA:${l.id}`,
+            kind: "TrackA" as const,
+            refId: l.id,
+            yardId: l.yardId,
+            name: l.firmName,
+            status: l.status,
+            pan: l.pan,
+            gstin: l.gstin,
+            mobile: l.mobile,
+            email: l.email,
+            address: l.address,
+            licenceNo: l.licenceNo,
+            publicEntityCode,
+            displayEntityId: publicEntityCode ? `TA : ${publicEntityCode}` : null,
+          };
+        }),
+        ...ents.map((e) => {
+          const publicEntityCode = e.entityCode?.trim() || null;
+          return {
+            id: `TB:${e.id}`,
+            kind: "TrackB" as const,
+            refId: e.id,
+            yardId: e.yardId,
+            name: e.name,
+            status: e.status,
+            pan: e.pan,
+            gstin: e.gstin,
+            mobile: e.mobile,
+            email: e.email,
+            address: e.address,
+            subType: e.subType,
+            publicEntityCode,
+            displayEntityId: publicEntityCode ? `TB : ${publicEntityCode}` : null,
+          };
+        }),
+        ...adHocs.map((a) => {
+          const publicEntityCode = a.entityCode?.trim() || null;
+          return {
+            id: `AH:${a.id}`,
+            kind: "AdHoc" as const,
+            refId: a.id,
+            yardId: a.yardId,
+            name: a.name,
+            status: a.status,
+            pan: a.pan,
+            gstin: a.gstin,
+            mobile: a.mobile,
+            email: a.email,
+            address: a.address,
+            publicEntityCode,
+            displayEntityId: publicEntityCode ? `AH : ${publicEntityCode}` : null,
+          };
+        }),
       ]
         .filter((r) => inScope(r.yardId))
         .filter((r) => (yardId ? r.yardId === yardId : true))
         .filter((r) => {
           if (!q) return true;
-          const hay = `${r.id} ${r.name ?? ""} ${r.mobile ?? ""} ${r.email ?? ""} ${r.pan ?? ""} ${r.gstin ?? ""}`.toLowerCase();
+          const hay =
+            `${r.id} ${r.displayEntityId ?? ""} ${r.publicEntityCode ?? ""} ${r.name ?? ""} ${r.mobile ?? ""} ${r.email ?? ""} ${r.pan ?? ""} ${r.gstin ?? ""} ${(r as { licenceNo?: string }).licenceNo ?? ""}`.toLowerCase();
           return hay.includes(q);
         });
 
@@ -1148,10 +1170,124 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (entityId) list = list.filter((r) => r.entityId === entityId);
       if (yardId) list = list.filter((r) => r.yardId === yardId);
       if (status) list = list.filter((r) => r.status === status);
-      res.json(list);
+
+      const entityIds = Array.from(new Set(list.map((r) => r.entityId).filter(Boolean)));
+      const yardIds = Array.from(new Set(list.map((r) => r.yardId).filter(Boolean)));
+      const receiptIds = Array.from(
+        new Set(list.map((r) => r.settledReceiptId).filter((x): x is string => Boolean(x))),
+      );
+      const yardNameById = new Map<string, string>();
+      if (yardIds.length > 0) {
+        const yardRows = await db
+          .select({ id: yards.id, name: yards.name, code: yards.code })
+          .from(yards)
+          .where(inArray(yards.id, yardIds));
+        for (const y of yardRows) {
+          yardNameById.set(y.id, String(y.name?.trim() || y.code?.trim() || y.id));
+        }
+      }
+      const entityById = new Map<string, { entityCode: string | null; name: string }>();
+      if (entityIds.length > 0) {
+        const entRows = await db
+          .select({ id: entities.id, entityCode: entities.entityCode, name: entities.name })
+          .from(entities)
+          .where(inArray(entities.id, entityIds));
+        for (const e of entRows) {
+          entityById.set(e.id, {
+            entityCode: e.entityCode?.trim() || null,
+            name: String(e.name ?? "").trim(),
+          });
+        }
+      }
+      const receiptNoById = new Map<string, string>();
+      if (receiptIds.length > 0) {
+        const recRows = await db
+          .select({ id: iomsReceipts.id, receiptNo: iomsReceipts.receiptNo })
+          .from(iomsReceipts)
+          .where(inArray(iomsReceipts.id, receiptIds));
+        for (const rec of recRows) {
+          receiptNoById.set(rec.id, String(rec.receiptNo ?? "").trim());
+        }
+      }
+
+      res.json(
+        list.map((r) => {
+          const ent = entityById.get(r.entityId);
+          const code = ent?.entityCode ?? null;
+          const settledReceiptNo = r.settledReceiptId
+            ? receiptNoById.get(r.settledReceiptId) ?? null
+            : null;
+          return {
+            ...r,
+            entityCode: code,
+            entityName: ent?.name ?? null,
+            entityDisplay: code
+              ? `${code} — ${ent?.name ?? ""}`.trim()
+              : ent?.name?.trim() || null,
+            yardName: yardNameById.get(r.yardId) ?? null,
+            settledReceiptNo,
+          };
+        }),
+      );
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch pre-receipts");
+    }
+  });
+
+  app.get("/api/ioms/pre-receipts/issue-context", async (req, res) => {
+    try {
+      const entityId = String(req.query.entityId ?? "").trim();
+      if (!entityId) return sendApiError(res, 400, "ENTITY_ID_REQUIRED", "entityId is required");
+      const [ent] = await db.select().from(entities).where(eq(entities.id, entityId)).limit(1);
+      if (!ent) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      if (!yardInScope(req, ent.yardId)) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      if (!isTrackBGovtSubType(ent.subType)) {
+        return sendApiError(
+          res,
+          400,
+          "PRE_RECEIPT_ENTITY_NOT_GOVT",
+          "Pre-receipts apply only to Govt Track B entities.",
+        );
+      }
+      const allotments = await db
+        .select()
+        .from(entityAllotments)
+        .where(
+          and(
+            eq(entityAllotments.entityId, entityId),
+            eq(entityAllotments.status, "Active"),
+            eq(entityAllotments.approvalStatus, "Approved"),
+          ),
+        )
+        .orderBy(desc(entityAllotments.toDate));
+      const allot = allotments[0];
+      if (!allot) {
+        return sendApiError(
+          res,
+          400,
+          "PRE_RECEIPT_NO_ALLOTMENT",
+          "No active approved premises allocation for this entity. Complete premises allocation before issuing a pre-receipt.",
+        );
+      }
+      const ctx = await resolvePreReceiptIssueContext(entityId);
+      if (!ctx) {
+        return sendApiError(
+          res,
+          400,
+          "PRE_RECEIPT_ALLOTMENT_INVALID",
+          "Active allocation has no valid monthly rent or premises details.",
+        );
+      }
+      return res.json({
+        entityId,
+        ...ctx,
+        agreementFrom: allot.fromDate,
+        agreementTo: allot.toDate,
+      });
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to resolve pre-receipt issue context");
     }
   });
 
@@ -1183,7 +1319,28 @@ export function registerTradersAssetsRoutes(app: Express) {
       const [row] = await db.select().from(preReceipts).where(eq(preReceipts.id, id)).limit(1);
       if (!row) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
       if (!yardInScope(req, row.yardId)) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
-      return res.json(row);
+      const [ent] = await db
+        .select({ entityCode: entities.entityCode, name: entities.name })
+        .from(entities)
+        .where(eq(entities.id, row.entityId))
+        .limit(1);
+      const code = ent?.entityCode?.trim() || null;
+      let settledReceiptNo: string | null = null;
+      if (row.settledReceiptId) {
+        const [rec] = await db
+          .select({ receiptNo: iomsReceipts.receiptNo })
+          .from(iomsReceipts)
+          .where(eq(iomsReceipts.id, row.settledReceiptId))
+          .limit(1);
+        settledReceiptNo = rec?.receiptNo?.trim() || null;
+      }
+      return res.json({
+        ...row,
+        entityCode: code,
+        entityName: ent?.name?.trim() || null,
+        entityDisplay: code ? `${code} — ${ent?.name ?? ""}`.trim() : ent?.name?.trim() || null,
+        settledReceiptNo,
+      });
     } catch (e) {
       console.error(e);
       return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch pre-receipt");
@@ -1207,9 +1364,45 @@ export function registerTradersAssetsRoutes(app: Express) {
           { entityId, subType: ent.subType },
         );
       }
-      const rentBRaw = body.rentBillingMonth != null ? String(body.rentBillingMonth).trim() : "";
-      if (rentBRaw && !/^\d{4}-\d{2}$/.test(rentBRaw)) {
-        return sendApiError(res, 400, "PRE_RECEIPT_BILLING_MONTH", "rentBillingMonth must be YYYY-MM when provided.");
+      const rentBRaw = body.rentBillingMonth != null ? String(body.rentBillingMonth).trim().slice(0, 7) : "";
+      if (!rentBRaw) {
+        return sendApiError(res, 400, "PRE_RECEIPT_BILLING_MONTH_REQUIRED", "Billing month (YYYY-MM) is required.");
+      }
+      if (!/^\d{4}-\d{2}$/.test(rentBRaw)) {
+        return sendApiError(res, 400, "PRE_RECEIPT_BILLING_MONTH", "rentBillingMonth must be YYYY-MM.");
+      }
+      const issueCtx = await resolvePreReceiptIssueContext(entityId);
+      if (!issueCtx) {
+        return sendApiError(
+          res,
+          400,
+          "PRE_RECEIPT_NO_ALLOTMENT",
+          "No active approved premises allocation with monthly rent for this entity.",
+        );
+      }
+      const [allotRow] = await db
+        .select({ fromDate: entityAllotments.fromDate, toDate: entityAllotments.toDate })
+        .from(entityAllotments)
+        .where(eq(entityAllotments.id, issueCtx.allotmentId))
+        .limit(1);
+      if (allotRow && !billingMonthWithinAllotment(rentBRaw, allotRow.fromDate, allotRow.toDate)) {
+        return sendApiError(
+          res,
+          400,
+          "PRE_RECEIPT_BILLING_OUTSIDE_AGREEMENT",
+          "Billing month falls outside the active agreement period for this premises.",
+          { rentBillingMonth: rentBRaw, agreementFrom: allotRow.fromDate, agreementTo: allotRow.toDate },
+        );
+      }
+      const dup = await findDuplicatePreReceiptForMonth(entityId, rentBRaw);
+      if (dup) {
+        return sendApiError(
+          res,
+          409,
+          "PRE_RECEIPT_DUPLICATE_MONTH",
+          "A pre-receipt already exists for this entity and billing month.",
+          { existingId: dup.id, existingPreReceiptNo: dup.preReceiptNo },
+        );
       }
       const id = nanoid();
       const preNoRaw = String(body.preReceiptNo ?? "").trim();
@@ -1219,11 +1412,11 @@ export function registerTradersAssetsRoutes(app: Express) {
         preReceiptNo: preNo,
         entityId,
         yardId: ent.yardId,
-        rentPremisesType: body.rentPremisesType != null ? String(body.rentPremisesType).trim() || null : null,
-        rentPremisesRef: body.rentPremisesRef != null ? String(body.rentPremisesRef).trim() || null : null,
-        rentBillingMonth: rentBRaw || null,
-        purpose: body.purpose ? String(body.purpose) : null,
-        amount: body.amount != null ? Number(body.amount) : 0,
+        rentPremisesType: issueCtx.rentPremisesType,
+        rentPremisesRef: issueCtx.rentPremisesRef,
+        rentBillingMonth: rentBRaw,
+        purpose: null,
+        amount: issueCtx.amount,
         status: "Issued",
         issuedAt: now(),
         dispatchedAt: null,

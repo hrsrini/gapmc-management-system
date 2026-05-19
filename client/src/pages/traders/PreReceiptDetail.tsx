@@ -13,6 +13,7 @@ import { useAuth } from "@/context/AuthContext";
 import { fetchApiGet, readApiErrorEnvelope } from "@/lib/queryClient";
 import { AlertCircle, ArrowLeft, Download, FileText, Loader2 } from "lucide-react";
 import { formatInr } from "@/lib/formatInr";
+import { formatEntityMasterLabel } from "@shared/unified-entity-display";
 import {
   Select,
   SelectContent,
@@ -25,6 +26,9 @@ interface PreReceipt {
   id: string;
   preReceiptNo?: string | null;
   entityId: string;
+  entityCode?: string | null;
+  entityName?: string | null;
+  entityDisplay?: string | null;
   yardId: string;
   rentPremisesType?: string | null;
   rentPremisesRef?: string | null;
@@ -37,6 +41,7 @@ interface PreReceipt {
   acknowledgedAt?: string | null;
   settledAt?: string | null;
   settledReceiptId?: string | null;
+  settledReceiptNo?: string | null;
   remarks?: string | null;
   updatedAt?: string | null;
 }
@@ -73,13 +78,20 @@ export default function PreReceiptDetail() {
   });
 
   const entityLabelById = useMemo(
-    () => Object.fromEntries(entities.map((e) => [e.id, `${e.entityCode ?? e.id} — ${e.name}`])),
+    () => Object.fromEntries(entities.map((e) => [e.id, formatEntityMasterLabel(e.entityCode, e.name)])),
     [entities],
   );
-  const receiptLabelById = useMemo(
-    () => Object.fromEntries(receipts.map((r) => [r.id, r.receiptNo])),
-    [receipts],
-  );
+  const entityDisplay = useMemo(() => {
+    if (!row) return "—";
+    return row.entityDisplay ?? entityLabelById[row.entityId] ?? "—";
+  }, [row, entityLabelById]);
+
+  const settledReceiptNo = useMemo(() => {
+    if (!row) return null;
+    if (row.settledReceiptNo?.trim()) return row.settledReceiptNo.trim();
+    if (!row.settledReceiptId) return null;
+    return receipts.find((r) => r.id === row.settledReceiptId)?.receiptNo ?? null;
+  }, [row, receipts]);
   const yardLabelById = useMemo(() => {
     const m: Record<string, string> = {};
     for (const y of yards) {
@@ -207,7 +219,7 @@ export default function PreReceiptDetail() {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
             <div>
-              <span className="text-muted-foreground">Entity:</span> {entityLabelById[row.entityId] ?? row.entityId}
+              <span className="text-muted-foreground">Entity:</span> {entityDisplay}
             </div>
             <div>
               <span className="text-muted-foreground">Yard:</span> {yardLabelById[row.yardId] ?? row.yardId}
@@ -333,9 +345,9 @@ export default function PreReceiptDetail() {
                     ))}
                   </SelectContent>
                 </Select>
-                {settledReceiptId ? (
+                {settledReceiptNo ? (
                   <p className="text-xs text-muted-foreground">
-                    Receipt: {receiptLabelById[settledReceiptId] ?? settledReceiptId} (ID)
+                    Receipt: <span className="font-mono">{settledReceiptNo}</span>
                   </p>
                 ) : null}
                 {status === "Settled" && !settledReceiptId ? (

@@ -27,9 +27,10 @@ import {
 } from "@/components/ui/select";
 import { Link } from "wouter";
 import { PanInput } from "@/components/inputs/PanInput";
+import { formatDisplayEntityId } from "@shared/unified-entity-display";
 
 interface UnifiedEntityRow {
-  id: string; // TA:<id> | TB:<id> | AH:<id>
+  id: string; // TA:<id> | TB:<id> | AH:<id> (API linkage only)
   kind: "TrackA" | "TrackB" | "AdHoc";
   refId: string;
   yardId: string;
@@ -40,6 +41,9 @@ interface UnifiedEntityRow {
   pan?: string | null;
   gstin?: string | null;
   subType?: string | null;
+  publicEntityCode?: string | null;
+  displayEntityId?: string | null;
+  licenceNo?: string | null;
 }
 
 const columns: ReportTableColumn[] = [
@@ -50,7 +54,7 @@ const columns: ReportTableColumn[] = [
   { key: "mobile", header: "Mobile" },
   { key: "pan", header: "PAN" },
   { key: "gstin", header: "GSTIN" },
-  { key: "id", header: "Unified ID" },
+  { key: "displayEntityId", header: "Entity ID", sortField: "publicEntityCode" },
   { key: "_actions", header: "Actions" },
 ];
 
@@ -133,6 +137,7 @@ export default function UnifiedEntities() {
       mobile: r.mobile ?? "—",
       pan: r.pan ?? "—",
       gstin: r.gstin ?? "—",
+      displayEntityId: r.displayEntityId ?? formatDisplayEntityId(r.kind, r.publicEntityCode) ?? "—",
       _actions: (
         <Button variant="outline" size="sm" asChild>
           <Link href={`/traders/dues?unifiedId=${encodeURIComponent(r.id)}`}>
@@ -183,7 +188,7 @@ export default function UnifiedEntities() {
             <ClientDataGrid
               columns={columns}
               sourceRows={rows}
-              searchKeys={["name", "id", "kind", "yardDisplay", "yardId", "mobile", "pan", "gstin", "status"]}
+              searchKeys={["name", "displayEntityId", "publicEntityCode", "kind", "yardDisplay", "yardId", "mobile", "pan", "gstin", "status", "licenceNo"]}
               searchPlaceholder="Filter…"
               defaultSortKey="name"
               defaultSortDir="asc"

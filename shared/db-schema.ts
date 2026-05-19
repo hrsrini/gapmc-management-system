@@ -942,6 +942,16 @@ export const rentInvoices = gapmc.table("rent_invoices", {
   assetId: text("asset_id").notNull(),
   yardId: text("yard_id").notNull(),
   periodMonth: text("period_month").notNull(),
+  /** FullMonth | Prorated | Overstay */
+  billingType: text("billing_type").notNull().default("FullMonth"),
+  occupancyFrom: text("occupancy_from"),
+  occupancyTo: text("occupancy_to"),
+  daysInMonth: integer("days_in_month"),
+  billableDays: integer("billable_days"),
+  billingFactor: doublePrecision("billing_factor"),
+  baseMonthlyRent: doublePrecision("base_monthly_rent"),
+  /** Snapshot of rent_billing_config at invoice creation. */
+  billingConfigJson: text("billing_config_json"),
   rentAmount: doublePrecision("rent_amount").notNull(),
   /** US-M03-007: JSON text array of non-GST charge lines (e.g. garbage/verandah/open-space). */
   nonGstChargesJson: text("non_gst_charges_json"),
@@ -961,6 +971,20 @@ export const rentInvoices = gapmc.table("rent_invoices", {
   approvedAt: text("approved_at"),
   workflowRevisionCount: integer("workflow_revision_count").default(0),
   dvReturnRemarks: text("dv_return_remarks"),
+});
+
+/** M-03: Effective-dated prorata / overstay billing configuration. */
+export const rentBillingConfig = gapmc.table("rent_billing_config", {
+  id: text("id").primaryKey(),
+  effectiveFrom: text("effective_from").notNull(),
+  prorataFactor: doublePrecision("prorata_factor").notNull().default(1),
+  prorataDaysBasis: text("prorata_days_basis").notNull().default("Calendar"),
+  prorataFixedDays: integer("prorata_fixed_days"),
+  overstayFactor: doublePrecision("overstay_factor").notNull().default(2),
+  overstayDaysBasis: text("overstay_days_basis").notNull().default("Calendar"),
+  overstayFixedDays: integer("overstay_fixed_days"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
 });
 
 export const rentDepositLedger = gapmc.table("rent_deposit_ledger", {

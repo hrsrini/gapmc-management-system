@@ -2497,7 +2497,27 @@ export function registerMarketIomsRoutes(app: Express) {
       const yardLabel = yard?.name ? `${yard.name} (${yard.code})` : lic.yardId;
       const traderLabel = lic.licenceNo ? `${lic.licenceNo}${lic.firmName ? ` — ${lic.firmName}` : ""}` : (lic.firmName ?? lic.id);
       const lines = await db.select().from(marketMonthlyReturnLines).where(eq(marketMonthlyReturnLines.returnId, id));
-      const pdf = await buildMarketReturnPdf({ ret, lines, yardLabel, traderLabel });
+      const lineCommodityIds = [...new Set(lines.map((l) => String(l.commodityId ?? "")).filter(Boolean))];
+      const commodityById: Record<string, { name: string; unit: string | null }> = {};
+      if (lineCommodityIds.length > 0) {
+        const commodityRows = await db
+          .select({
+            id: commodities.id,
+            name: commodities.name,
+            unitLegacy: commodities.unit,
+            unitName: measurementUnits.name,
+          })
+          .from(commodities)
+          .leftJoin(measurementUnits, eq(commodities.unitId, measurementUnits.id))
+          .where(inArray(commodities.id, lineCommodityIds));
+        for (const c of commodityRows) {
+          commodityById[c.id] = {
+            name: c.name,
+            unit: c.unitName ?? c.unitLegacy ?? null,
+          };
+        }
+      }
+      const pdf = await buildMarketReturnPdf({ ret, lines, yardLabel, traderLabel, commodityById });
       const safeName = (ret.acknowledgementRef ?? ret.id).replace(/[^\w.-]+/g, "_");
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="market-return-${safeName}.pdf"`);
@@ -2596,6 +2616,29 @@ export function registerMarketIomsRoutes(app: Express) {
             effectiveLines.push({ ...l, closingQty });
           }
         }
+      }
+
+      for (const l of effectiveLines) {
+        const salesQty = Number(l.salesQty ?? 0) || 0;
+        if (!Number.isFinite(salesQty) || salesQty < 0 || !Number.isInteger(salesQty)) {
+          return sendApiError(
+            res,
+            400,
+            "MKT_RETURN_SALES_QTY_INTEGER",
+            "Sales quantity must be a whole number (no decimals).",
+          );
+        }
+        const maxSales = (Number(l.openingQty ?? 0) || 0) + (Number(l.purchaseQty ?? 0) || 0);
+        if (salesQty > maxSales + 1e-9) {
+          return sendApiError(
+            res,
+            400,
+            "MKT_RETURN_SALES_QTY_EXCEEDS_STOCK",
+            "Sales quantity cannot exceed opening quantity plus purchase quantity for a commodity.",
+          );
+        }
+        l.salesQty = salesQty;
+        l.closingQty = maxSales - salesQty;
       }
 
       const totalPurchaseValueInr = effectiveLines.reduce((s, l) => s + (Number(l.purchaseValueInr ?? 0) || 0), 0);

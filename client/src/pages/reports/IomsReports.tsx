@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { FileText, Receipt, Banknote, Download, UserCircle, BarChart3, Table2, Truck, Clock } from "lucide-react";
 import { formatYearMonthToDisplay } from "@/lib/dateFormat";
 import { formatInr } from "@/lib/formatInr";
+import { finalizeEntityDisplayName } from "@shared/receipt-entity-display";
 import {
   ReportDataTable,
   type ReportPagedParams,
@@ -117,6 +118,7 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
         { key: "yardName", header: "Yard", sortField: "yardId" },
         { key: "revenueHead", header: "Head" },
         { key: "payerDisplayName", header: "Payer", sortField: "payerName" },
+        { key: "entityDisplayName", header: "Entity" },
         { key: "totalAmount", header: "Total" },
         { key: "paymentMode", header: "Mode" },
         { key: "status", header: "Status" },
@@ -270,13 +272,23 @@ export default function IomsReports() {
       const yardName =
         previewKind === "rent"
           ? String(r.yardName ?? "").trim() || (id ? (yardLabelById.get(id) ?? id) : "—")
-          : id
-            ? (yardLabelById.get(id) ?? id)
-            : "—";
+          : String(r.yardName ?? "").trim() || (id ? (yardLabelById.get(id) ?? id) : "—");
       const out: Record<string, unknown> = { ...r, yardName };
       if (previewKind === "receipt") {
-        const pr = r as { payerDisplayName?: string | null; payerName?: string | null };
+        const pr = r as {
+          payerDisplayName?: string | null;
+          payerName?: string | null;
+          entityDisplayName?: string | null;
+          unifiedEntityDisplayName?: string | null;
+          unifiedEntityId?: string | null;
+        };
         out.payerDisplayName = (pr.payerDisplayName ?? pr.payerName)?.trim() || "—";
+        out.entityDisplayName = finalizeEntityDisplayName([
+          pr.entityDisplayName,
+          pr.unifiedEntityDisplayName,
+          pr.payerDisplayName,
+          pr.payerName,
+        ]);
       }
       if (previewKind === "rent") {
         const pm = String(r.periodMonth ?? "").trim();

@@ -60,6 +60,16 @@ import {
   normalizeRentInvoiceAssetId,
   RENT_INVOICE_PREMISES_MONTH_DUPLICATE_MESSAGE,
 } from "./rent-invoice-premises-month-uniqueness";
+import {
+  defaultOccupancyForBillingType,
+  inferBillingTypeForMonth,
+  type RentBillingType,
+} from "@shared/rent-invoice-billing";
+import {
+  buildRentInvoiceBillingCalculation,
+  fetchAllotmentAgreement,
+  findOverlappingRentInvoiceForAllotment,
+} from "./rent-invoice-billing-service";
 
 function currentYearMonthUtc(): string {
   const d = new Date();
@@ -242,6 +252,59 @@ export function registerRentIomsRoutes(app: Express) {
     }
   });
 
+  app.get("/api/ioms/rent/invoices/:id/pdf", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, id)).limit(1);
+      if (!inv) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
+        return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      }
+      const [yard] = await db.select({ name: yards.name, code: yards.code }).from(yards).where(eq(yards.id, inv.yardId)).limit(1);
+      const yardName = String(yard?.name?.trim() || yard?.code?.trim() || inv.yardId);
+      const [asset] = await db
+        .select({ assetId: assets.assetId })
+        .from(assets)
+        .where(eq(assets.id, inv.assetId))
+        .limit(1);
+      const assetCode = String(asset?.assetId ?? inv.assetId);
+      const counterparty = await resolveRentInvoiceCounterparty(inv);
+      let allotmentLabel = inv.allotmentId;
+      const [ea] = await db
+        .select({ allotteeName: entityAllotments.allotteeName, premisesRefNo: entityAllotments.premisesRefNo })
+        .from(entityAllotments)
+        .where(eq(entityAllotments.id, inv.allotmentId))
+        .limit(1);
+      if (ea) {
+        const ref = ea.premisesRefNo?.trim();
+        allotmentLabel = `${ea.allotteeName}${ref ? ` · ${ref}` : ""}`;
+      } else {
+        const [aa] = await db
+          .select({ allotteeName: assetAllotments.allotteeName })
+          .from(assetAllotments)
+          .where(eq(assetAllotments.id, inv.allotmentId))
+          .limit(1);
+        if (aa?.allotteeName) allotmentLabel = aa.allotteeName;
+      }
+      const { buildRentInvoicePdfA4 } = await import("./rent-invoice-pdf");
+      const buf = await buildRentInvoicePdfA4({
+        invoice: inv,
+        yardName,
+        counterpartyName: counterparty.payerName,
+        assetCode,
+        allotmentLabel,
+      });
+      const safeNo = String(inv.invoiceNo ?? id).replace(/[^\w.-]+/g, "_");
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="rent-invoice-${safeNo}.pdf"`);
+      return res.send(buf);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate rent invoice PDF");
+    }
+  });
+
   /** Outstanding rent (excludes arrears-interest-only receipts) for ledger payment UI. */
   app.get("/api/ioms/rent/invoices/:id/ledger-payment-context", async (req, res) => {
     try {
@@ -266,6 +329,77 @@ export function registerRentIomsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load payment context");
+    }
+  });
+
+  app.post("/api/ioms/rent/invoices/calculate", async (req, res) => {
+    try {
+      const body = req.body as Record<string, unknown>;
+      const allotmentId = String(body.allotmentId ?? "").trim();
+      const periodMonth = String(body.periodMonth ?? "").trim().slice(0, 7);
+      const billingType = String(body.billingType ?? "FullMonth").trim() as RentBillingType;
+      if (!allotmentId) return sendApiError(res, 400, "ALLOTMENT_ID", "allotmentId is required");
+      if (!isValidYearMonthYm(periodMonth)) {
+        return sendApiError(res, 400, "PERIOD_MONTH", "periodMonth must be YYYY-MM");
+      }
+      if (!["FullMonth", "Prorated", "Overstay"].includes(billingType)) {
+        return sendApiError(res, 400, "BILLING_TYPE", "billingType must be FullMonth, Prorated, or Overstay");
+      }
+      const assetRow = await fetchYardScopeForAllotmentId(allotmentId);
+      if (!assetRow) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(assetRow.yardId)) {
+        return sendApiError(res, 403, "RENT_CALC_YARD_DENIED", "You do not have access to this yard");
+      }
+      let occupancyFrom = body.occupancyFrom != null ? String(body.occupancyFrom).trim() : null;
+      let occupancyTo = body.occupancyTo != null ? String(body.occupancyTo).trim() : null;
+      const agreement = await fetchAllotmentAgreement(allotmentId);
+      if (!agreement) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
+      if (!occupancyFrom || !occupancyTo) {
+        const defaults = defaultOccupancyForBillingType({
+          billingType,
+          periodMonth,
+          agreementFrom: agreement.fromDate,
+          agreementTo: agreement.toDate,
+        });
+        if (!defaults) {
+          return sendApiError(res, 400, "BILLING_OCCUPANCY", "Cannot derive occupancy dates for this billing type and month.");
+        }
+        occupancyFrom = defaults.occupancyFrom;
+        occupancyTo = defaults.occupancyTo;
+      }
+      const built = await buildRentInvoiceBillingCalculation({
+        allotmentId,
+        periodMonth,
+        billingType,
+        occupancyFrom,
+        occupancyTo,
+      });
+      if (!built.ok) return sendApiError(res, 400, "RENT_BILLING_CALC", built.error);
+      const overlap = await findOverlappingRentInvoiceForAllotment({
+        allotmentId,
+        periodMonth,
+        occupancyFrom: built.calculation.occupancyFrom!,
+        occupancyTo: built.calculation.occupancyTo!,
+      });
+      const mergedCfg = await getMergedSystemConfig();
+      const gstExempt = false;
+      const cgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_cgst_percent");
+      const sgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_sgst_percent");
+      const g = computeRentInvoiceGstInr(built.calculation.rentAmount, gstExempt, cgstPct, sgstPct);
+      return res.json({
+        ...built.calculation,
+        agreementFrom: built.agreementFrom,
+        agreementTo: built.agreementTo,
+        monthlyRent: built.monthlyRent,
+        cgst: g.cgst,
+        sgst: g.sgst,
+        totalAmount: rentInvoiceTotalInr(built.calculation.rentAmount, 0, g.cgst, g.sgst),
+        overlappingInvoice: overlap,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to calculate rent invoice");
     }
   });
 
@@ -322,7 +456,87 @@ export function registerRentIomsRoutes(app: Express) {
 
       const allotmentId = String((body as Record<string, unknown>).allotmentId ?? "").trim();
       const useManualRentAmount = Boolean((body as Record<string, unknown>).useManualRentAmount ?? false);
+      let billingTypeInsert: RentBillingType = "FullMonth";
+      let occupancyFromInsert: string | null = null;
+      let occupancyToInsert: string | null = null;
+      let daysInMonthInsert: number | null = null;
+      let billableDaysInsert: number | null = null;
+      let billingFactorInsert: number | null = null;
+      let baseMonthlyRentInsert: number | null = null;
+      let billingConfigJsonInsert: string | null = null;
+
       if (allotmentId && !useManualRentAmount) {
+        const agreement = await fetchAllotmentAgreement(allotmentId);
+        if (!agreement) {
+          return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Allotment not found");
+        }
+        let billingType = String((body as Record<string, unknown>).billingType ?? "").trim() as RentBillingType;
+        if (!["FullMonth", "Prorated", "Overstay"].includes(billingType)) {
+          billingType = inferBillingTypeForMonth({
+            periodMonth,
+            agreementFrom: agreement.fromDate,
+            agreementTo: agreement.toDate,
+          });
+        }
+        let occupancyFrom =
+          (body as Record<string, unknown>).occupancyFrom != null
+            ? String((body as Record<string, unknown>).occupancyFrom).trim()
+            : null;
+        let occupancyTo =
+          (body as Record<string, unknown>).occupancyTo != null
+            ? String((body as Record<string, unknown>).occupancyTo).trim()
+            : null;
+        if (!occupancyFrom || !occupancyTo) {
+          const defaults = defaultOccupancyForBillingType({
+            billingType,
+            periodMonth,
+            agreementFrom: agreement.fromDate,
+            agreementTo: agreement.toDate,
+          });
+          if (!defaults) {
+            return sendApiError(
+              res,
+              400,
+              "BILLING_OCCUPANCY",
+              "Cannot derive occupancy dates for this billing type and month.",
+            );
+          }
+          occupancyFrom = defaults.occupancyFrom;
+          occupancyTo = defaults.occupancyTo;
+        }
+        const built = await buildRentInvoiceBillingCalculation({
+          allotmentId,
+          periodMonth,
+          billingType,
+          occupancyFrom,
+          occupancyTo,
+        });
+        if (!built.ok) return sendApiError(res, 400, "RENT_BILLING_CALC", built.error);
+        const overlap = await findOverlappingRentInvoiceForAllotment({
+          allotmentId,
+          periodMonth,
+          occupancyFrom: built.calculation.occupancyFrom!,
+          occupancyTo: built.calculation.occupancyTo!,
+        });
+        if (overlap) {
+          return sendApiError(
+            res,
+            409,
+            "RENT_INVOICE_OCCUPANCY_OVERLAP",
+            "A rent invoice already exists for this allotment, billing month, and overlapping occupancy dates.",
+            { existingId: overlap.id, existingInvoiceNo: overlap.invoiceNo },
+          );
+        }
+        rentAmount = built.calculation.rentAmount;
+        billingTypeInsert = built.calculation.billingType;
+        occupancyFromInsert = built.calculation.occupancyFrom;
+        occupancyToInsert = built.calculation.occupancyTo;
+        daysInMonthInsert = built.calculation.daysInMonth;
+        billableDaysInsert = built.calculation.billableDays;
+        billingFactorInsert = built.calculation.billingFactor;
+        baseMonthlyRentInsert = built.calculation.baseMonthlyRent;
+        billingConfigJsonInsert = JSON.stringify(built.calculation.configSnapshot);
+      } else if (allotmentId && useManualRentAmount) {
         const resolved = await resolveRentForAllotmentPeriodMonth(allotmentId, periodMonth);
         if (
           Number.isFinite(resolved.rentAmount) &&
@@ -379,9 +593,11 @@ export function registerRentIomsRoutes(app: Express) {
       if (!assetIdCanonical) {
         return sendApiError(res, 400, "RENT_INVOICE_ASSET_REQUIRED", "Premises (asset) is required for the rent invoice.");
       }
-      const premisesClash = await findBlockingRentInvoiceForPremisesMonth(assetIdCanonical, periodMonth);
-      if (premisesClash) {
-        return sendApiError(res, 409, "RENT_INVOICE_PREMISES_MONTH_DUPLICATE", RENT_INVOICE_PREMISES_MONTH_DUPLICATE_MESSAGE);
+      if (!occupancyFromInsert || !occupancyToInsert) {
+        const premisesClash = await findBlockingRentInvoiceForPremisesMonth(assetIdCanonical, periodMonth);
+        if (premisesClash) {
+          return sendApiError(res, 409, "RENT_INVOICE_PREMISES_MONTH_DUPLICATE", RENT_INVOICE_PREMISES_MONTH_DUPLICATE_MESSAGE);
+        }
       }
       const manualInvoiceNo = body.invoiceNo ? String(body.invoiceNo).trim() : "";
       const [row] = await db.transaction(async (tx) => {
@@ -397,6 +613,14 @@ export function registerRentIomsRoutes(app: Express) {
           assetId: assetIdCanonical,
           yardId,
           periodMonth,
+          billingType: billingTypeInsert,
+          occupancyFrom: occupancyFromInsert,
+          occupancyTo: occupancyToInsert,
+          daysInMonth: daysInMonthInsert,
+          billableDays: billableDaysInsert,
+          billingFactor: billingFactorInsert,
+          baseMonthlyRent: baseMonthlyRentInsert,
+          billingConfigJson: billingConfigJsonInsert,
           rentAmount,
           nonGstChargesJson: nonGst.json,
           cgst,
@@ -442,6 +666,22 @@ export function registerRentIomsRoutes(app: Express) {
           return sendApiError(res, 400, "RENT_CONTEXT_MONTH", "periodMonth must be YYYY-MM");
         }
         const resolved = await resolveRentForAllotmentPeriodMonth(allotmentId, pm);
+        const agreement = await fetchAllotmentAgreement(allotmentId);
+        const suggestedBillingType = agreement
+          ? inferBillingTypeForMonth({
+              periodMonth: pm,
+              agreementFrom: agreement.fromDate,
+              agreementTo: agreement.toDate,
+            })
+          : "FullMonth";
+        const defaultOccupancy = agreement
+          ? defaultOccupancyForBillingType({
+              billingType: suggestedBillingType,
+              periodMonth: pm,
+              agreementFrom: agreement.fromDate,
+              agreementTo: agreement.toDate,
+            })
+          : null;
         const blockingInvoice =
           assetRow.assetId != null
             ? await findBlockingRentInvoiceForPremisesMonth(assetRow.assetId, pm)
@@ -454,6 +694,10 @@ export function registerRentIomsRoutes(app: Express) {
           matchedRevisionId: resolved.matchedRevisionId,
           matchedInvoiceId: resolved.matchedInvoiceId,
           blockingInvoice,
+          agreementFrom: agreement?.fromDate ?? null,
+          agreementTo: agreement?.toDate ?? null,
+          suggestedBillingType,
+          defaultOccupancy,
         });
       }
 

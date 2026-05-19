@@ -70,6 +70,34 @@ function monthDefault(): string {
   return new Date().toISOString().slice(0, 7);
 }
 
+interface CommodityRef {
+  id: string;
+  name: string;
+  unit?: string | null;
+}
+
+/** Whole numbers only — strips non-digits. */
+function sanitizeWholeQtyInput(value: string): string {
+  if (value === "") return "";
+  return value.replace(/\D/g, "");
+}
+
+function parseWholeQty(raw: string): number {
+  const t = raw.trim();
+  if (t === "") return 0;
+  const n = Number.parseInt(t, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function formatWholeQty(value: number): string {
+  return Math.round(value).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
+
+function maxSaleQty(openingQty: number, purchaseQty: number): number {
+  const available = (Number(openingQty) || 0) + (Number(purchaseQty) || 0);
+  return Math.max(0, Math.floor(available));
+}
+
 export default function MarketReturns() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -84,11 +112,15 @@ export default function MarketReturns() {
   const { data: licences = [], isLoading: licLoading } = useQuery<TraderLicenceRef[]>({
     queryKey: ["/api/ioms/traders/licences"],
   });
-  const { data: commodities = [] } = useQuery<Array<{ id: string; name: string }>>({
+  const { data: commodities = [] } = useQuery<CommodityRef[]>({
     queryKey: ["/api/ioms/commodities"],
   });
   const commodityNameById = useMemo(
     () => new Map(commodities.map((c) => [c.id, c.name] as const)),
+    [commodities],
+  );
+  const commodityUnitById = useMemo(
+    () => new Map(commodities.map((c) => [c.id, c.unit?.trim() || "—"] as const)),
     [commodities],
   );
 
@@ -158,7 +190,7 @@ export default function MarketReturns() {
       const data = (await r.json()) as { lines?: Array<{ commodityId: string; salesQty?: number | null }> };
       const next: Record<string, string> = {};
       for (const line of data.lines ?? []) {
-        const qty = Number(line.salesQty ?? 0);
+        const qty = Math.trunc(Number(line.salesQty ?? 0) || 0);
         if (qty > 0) next[line.commodityId] = String(qty);
       }
       if (!cancelled && Object.keys(next).length > 0) {
@@ -170,21 +202,29 @@ export default function MarketReturns() {
     };
   }, [returnForPeriod?.id, step]);
 
-  const linesWithSales = useMemo((): Array<PreviewLine & { sales: number; closing: number }> => {
+  const linesWithSales = useMemo((): Array<
+    PreviewLine & { sales: number; closing: number; maxSales: number; salesOverMax: boolean }
+  > => {
     const base = preview?.lines ?? [];
     return base.map((l) => {
       const raw = salesByCommodity[l.commodityId] ?? "";
-      const sales = raw.trim() === "" ? 0 : Number(raw);
-      const safeSales = Number.isFinite(sales) && sales >= 0 ? sales : 0;
-      const closing = (Number(l.openingQty ?? 0) || 0) + (Number(l.purchaseQty ?? 0) || 0) - safeSales;
-      return { ...l, sales: safeSales, closing };
+      const sales = parseWholeQty(raw);
+      const maxSales = maxSaleQty(l.openingQty, l.purchaseQty);
+      const salesOverMax = sales > maxSales;
+      const closing = maxSales - sales;
+      return { ...l, sales, closing, maxSales, salesOverMax };
     });
   }, [preview?.lines, salesByCommodity]);
+
+  const hasSalesValidationErrors = linesWithSales.some((l) => l.salesOverMax);
 
   const submitMutation = useMutation({
     mutationFn: async () => {
       if (!preview) throw new Error("Preview not loaded.");
       if (!canCreate) throw new Error("Insufficient permissions.");
+      if (hasSalesValidationErrors) {
+        throw new Error("Sale quantity cannot exceed opening qty + purchase qty for any commodity.");
+      }
       const body = {
         traderLicenceId,
         period,
@@ -327,7 +367,8 @@ export default function MarketReturns() {
                       !previewEnabled ||
                       previewLoading ||
                       previewIsError ||
-                      step < 2
+                      step < 2 ||
+                      hasSalesValidationErrors
                     }
                     onClick={() => submitMutation.mutate()}
                   >
@@ -370,7 +411,8 @@ export default function MarketReturns() {
             <CardHeader>
               <CardTitle className="text-base">Step 2: Review purchases (auto-filled)</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Purchases are aggregated from Approved yard transactions + Verified checkpost inward entries.
+                Purchases are aggregated from Approved yard transactions + Verified checkpost inward entries. Enter sale
+                quantities as whole numbers only; sales cannot exceed opening qty + purchase qty for each commodity.
               </p>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -392,10 +434,11 @@ export default function MarketReturns() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Commodity</TableHead>
+                        <TableHead>Unit</TableHead>
                         <TableHead className="text-right">Opening qty</TableHead>
                         <TableHead className="text-right">Purchase qty</TableHead>
                         <TableHead className="text-right">Purchase value (₹)</TableHead>
-                        <TableHead className="text-right">Sales qty</TableHead>
+                        <TableHead className="text-right">Sale qty</TableHead>
                         <TableHead className="text-right">Closing qty</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -403,20 +446,45 @@ export default function MarketReturns() {
                       {linesWithSales.map((l) => (
                         <TableRow key={l.commodityId}>
                           <TableCell>{commodityNameById.get(l.commodityId) ?? l.commodityId}</TableCell>
-                          <TableCell className="text-right">{Number(l.openingQty ?? 0)}</TableCell>
-                          <TableCell className="text-right">{Number(l.purchaseQty ?? 0)}</TableCell>
+                          <TableCell className="text-muted-foreground">{commodityUnitById.get(l.commodityId) ?? "—"}</TableCell>
+                          <TableCell className="text-right">{formatWholeQty(l.openingQty ?? 0)}</TableCell>
+                          <TableCell className="text-right">{formatWholeQty(l.purchaseQty ?? 0)}</TableCell>
                           <TableCell className="text-right">{formatInr(l.purchaseValueInr ?? 0)}</TableCell>
                           <TableCell className="text-right">
-                            <Input
-                              value={salesByCommodity[l.commodityId] ?? ""}
-                              onChange={(e) => setSalesByCommodity((m) => ({ ...m, [l.commodityId]: e.target.value }))}
-                              inputMode="decimal"
-                              className="h-8 text-right"
-                              placeholder="0"
-                              disabled={!canCreate}
-                            />
+                            <div className="flex flex-col items-end gap-1">
+                              <Input
+                                value={salesByCommodity[l.commodityId] ?? ""}
+                                onChange={(e) =>
+                                  setSalesByCommodity((m) => ({
+                                    ...m,
+                                    [l.commodityId]: sanitizeWholeQtyInput(e.target.value),
+                                  }))
+                                }
+                                onBlur={() => {
+                                  const raw = salesByCommodity[l.commodityId] ?? "";
+                                  const sales = parseWholeQty(raw);
+                                  if (sales > l.maxSales) {
+                                    setSalesByCommodity((m) => ({
+                                      ...m,
+                                      [l.commodityId]: l.maxSales > 0 ? String(l.maxSales) : "",
+                                    }));
+                                  }
+                                }}
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                className={`h-8 w-28 text-right ${l.salesOverMax ? "border-destructive" : ""}`}
+                                placeholder="0"
+                                disabled={!canCreate}
+                                aria-invalid={l.salesOverMax}
+                              />
+                              {l.salesOverMax && (
+                                <span className="text-xs text-destructive">
+                                  Max {formatWholeQty(l.maxSales)} (opening + purchase)
+                                </span>
+                              )}
+                            </div>
                           </TableCell>
-                          <TableCell className="text-right">{Number(l.closing ?? 0)}</TableCell>
+                          <TableCell className="text-right">{formatWholeQty(l.closing ?? 0)}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

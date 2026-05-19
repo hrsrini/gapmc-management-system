@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Settings, AlertCircle, ImageIcon, Trash2, Upload } from "lucide-react";
+import { Settings, AlertCircle, ImageIcon, Trash2, Upload, Calculator } from "lucide-react";
+import { Link } from "wouter";
 import { useState, useEffect, useRef } from "react";
 import { apiRequest, fetchApiGet, queryClient, readApiErrorMessage } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -162,7 +163,8 @@ export default function AdminConfig() {
   return (
     <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/locations" }, { label: "Default Values" }]}>
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div>
           <CardTitle className="flex items-center gap-2">
             <Settings className="h-5 w-5" />
             System Config
@@ -176,6 +178,13 @@ export default function AdminConfig() {
             retention count snapshot via{" "}
             <code className="text-xs bg-muted px-1 rounded">GET /api/admin/data-retention-summary</code> (no deletes).
           </p>
+          </div>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/admin/rent-billing-config">
+              <Calculator className="h-4 w-4 mr-1" />
+              M-03 rent billing (prorata / overstay)
+            </Link>
+          </Button>
         </CardHeader>
         <CardContent className="space-y-4">
           {isLoading ? (

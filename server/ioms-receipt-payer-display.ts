@@ -1,7 +1,10 @@
-import { inArray } from "drizzle-orm";
+import { inArray, or } from "drizzle-orm";
 import { db } from "./db";
 import { traderLicences, entities, adHocEntities } from "@shared/db-schema";
+import { finalizeEntityDisplayName, isTechnicalEntityToken } from "@shared/receipt-entity-display";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
+
+export { finalizeEntityDisplayName, isTechnicalEntityToken } from "@shared/receipt-entity-display";
 
 export type PayerDisplayFields = {
   payerName: string | null;
@@ -12,9 +15,24 @@ export type PayerDisplayFields = {
 
 export type WithPayerDisplayName = {
   payerDisplayName: string;
+  /** Resolved entity / occupant name (never TA:/TB:/AH: tokens or raw record ids). */
+  entityDisplayName: string;
   /** When `unifiedEntityId` is set: friendly label (e.g. Track A: firm) or raw id if unresolved. */
   unifiedEntityDisplayName?: string | null;
 };
+
+function normalizePayerType(typ: string): string {
+  const t = typ.trim().toLowerCase();
+  if (t === "traderlicence" || t === "tenantlicence") return "TraderLicence";
+  if (t === "entity") return "Entity";
+  return typ.trim();
+}
+
+function looksLikeOpaqueRecordId(s: string): boolean {
+  const t = s.trim();
+  if (t.length < 10) return false;
+  return /^[a-zA-Z0-9_-]+$/.test(t);
+}
 
 function addUnifiedRefIds(raw: string | null | undefined, traderIds: Set<string>, entityIds: Set<string>, adHocIds: Set<string>) {
   const u = parseUnifiedEntityId(String(raw ?? "").trim());
@@ -22,12 +40,6 @@ function addUnifiedRefIds(raw: string | null | undefined, traderIds: Set<string>
   if (u.kind === "TA") traderIds.add(u.refId);
   else if (u.kind === "TB") entityIds.add(u.refId);
   else adHocIds.add(u.refId);
-}
-
-function looksLikeOpaqueRecordId(s: string): boolean {
-  const t = s.trim();
-  if (t.length < 10) return false;
-  return /^[a-zA-Z0-9_-]+$/.test(t);
 }
 
 /**
@@ -46,10 +58,14 @@ export async function attachPayerDisplayNames<T extends PayerDisplayFields>(
 
   for (const r of rows) {
     const ref = (r.payerRefId ?? "").trim();
-    const typ = (r.payerType ?? "").trim();
+    const typ = normalizePayerType(String(r.payerType ?? ""));
     if (ref) {
       if (typ === "TraderLicence" || typ === "TenantLicence") traderIds.add(ref);
       else if (typ === "Entity") entityIds.add(ref);
+      else {
+        traderIds.add(ref);
+        entityIds.add(ref);
+      }
     }
     const ue = (r as { unifiedEntityId?: string | null }).unifiedEntityId;
     addUnifiedRefIds(ue, traderIds, entityIds, adHocIds);
@@ -71,23 +87,30 @@ export async function attachPayerDisplayNames<T extends PayerDisplayFields>(
   const tid = Array.from(traderIds);
   if (tid.length > 0) {
     const licRows = await db
-      .select({ id: traderLicences.id, firmName: traderLicences.firmName })
+      .select({ id: traderLicences.id, firmName: traderLicences.firmName, licenceNo: traderLicences.licenceNo })
       .from(traderLicences)
-      .where(inArray(traderLicences.id, tid));
+      .where(or(inArray(traderLicences.id, tid), inArray(traderLicences.licenceNo, tid)));
     for (const x of licRows) {
-      traderMap.set(x.id, (x.firmName?.trim() && x.firmName) || x.id);
+      const label =
+        (x.firmName?.trim() && x.firmName) || (x.licenceNo?.trim() && x.licenceNo) || x.id;
+      traderMap.set(x.id, label);
+      if (x.licenceNo?.trim()) traderMap.set(x.licenceNo.trim(), label);
     }
   }
 
   const entityMap = new Map<string, string>();
+  const entityCodeMap = new Map<string, string>();
   const eid = Array.from(entityIds);
   if (eid.length > 0) {
     const entRows = await db
-      .select({ id: entities.id, name: entities.name })
+      .select({ id: entities.id, entityCode: entities.entityCode, name: entities.name })
       .from(entities)
-      .where(inArray(entities.id, eid));
+      .where(or(inArray(entities.id, eid), inArray(entities.entityCode, eid)));
     for (const x of entRows) {
-      entityMap.set(x.id, (x.name?.trim() && x.name) || x.id);
+      const label = (x.name?.trim() && x.name) || x.id;
+      entityMap.set(x.id, label);
+      const code = x.entityCode != null ? String(x.entityCode).trim() : "";
+      if (code) entityCodeMap.set(code, label);
     }
   }
 
@@ -103,30 +126,38 @@ export async function attachPayerDisplayNames<T extends PayerDisplayFields>(
     }
   }
 
+  function resolveTraderRef(refId: string): string | null {
+    return traderMap.get(refId) ?? null;
+  }
+
+  function resolveEntityRef(refId: string): string | null {
+    return entityMap.get(refId) ?? entityCodeMap.get(refId) ?? null;
+  }
+
   function resolveFromUnifiedString(raw: string): string | null {
     const u = parseUnifiedEntityId(raw.trim());
     if (!u) return null;
-    if (u.kind === "TA") return traderMap.get(u.refId) ?? null;
-    if (u.kind === "TB") return entityMap.get(u.refId) ?? null;
+    if (u.kind === "TA") return resolveTraderRef(u.refId);
+    if (u.kind === "TB") return resolveEntityRef(u.refId);
     return adHocMap.get(u.refId) ?? null;
   }
 
   function resolvePlainId(id: string): string | null {
-    return traderMap.get(id) ?? entityMap.get(id) ?? adHocMap.get(id) ?? null;
+    return resolveTraderRef(id) ?? resolveEntityRef(id) ?? adHocMap.get(id) ?? null;
   }
 
   return rows.map((r) => {
     const ref = (r.payerRefId ?? "").trim();
-    const typ = (r.payerType ?? "").trim();
+    const typ = normalizePayerType(String(r.payerType ?? ""));
     const pn = (r.payerName ?? "").trim();
     const ueRaw = String((r as { unifiedEntityId?: string | null }).unifiedEntityId ?? "").trim();
 
     let fromTypeRef: string | null = null;
     if (ref && (typ === "TraderLicence" || typ === "TenantLicence")) {
-      fromTypeRef = traderMap.get(ref) ?? null;
+      fromTypeRef = resolveTraderRef(ref);
     } else if (ref && typ === "Entity") {
-      fromTypeRef = entityMap.get(ref) ?? null;
-    } else if (ref && (!typ || typ === "Other")) {
+      fromTypeRef = resolveEntityRef(ref);
+    } else if (ref) {
       fromTypeRef = resolvePlainId(ref);
     }
 
@@ -139,30 +170,51 @@ export async function attachPayerDisplayNames<T extends PayerDisplayFields>(
     }
 
     let payerDisplayName: string;
-    if (pn && ref && pn !== ref && typ) {
+    if (pn && ref && pn !== ref && typ && !isTechnicalEntityToken(pn)) {
       payerDisplayName = pn;
     } else if (fromTypeRef) {
       payerDisplayName = fromTypeRef;
     } else if (fromUnifiedOrPlain) {
       payerDisplayName = fromUnifiedOrPlain;
-    } else if (pn) {
+    } else if (pn && !isTechnicalEntityToken(pn)) {
       payerDisplayName = pn;
-    } else if (ref) {
+    } else if (ref && !isTechnicalEntityToken(ref)) {
       payerDisplayName = ref;
     } else {
       payerDisplayName = "—";
     }
 
+    let entityResolved: string | null = null;
+    if (ueRaw) entityResolved = resolveFromUnifiedString(ueRaw);
+    if (!entityResolved && ref) {
+      if (typ === "TraderLicence" || typ === "TenantLicence") entityResolved = resolveTraderRef(ref);
+      else if (typ === "Entity") entityResolved = resolveEntityRef(ref);
+      else entityResolved = resolvePlainId(ref);
+    }
+    if (!entityResolved) entityResolved = fromUnifiedOrPlain ?? fromTypeRef;
+
     let unifiedEntityDisplayName: string | null = null;
     if (ueRaw) {
       const u = parseUnifiedEntityId(ueRaw);
-      const resolved = resolveFromUnifiedString(ueRaw);
+      const resolved = entityResolved;
       if (u?.kind === "TA" && resolved) unifiedEntityDisplayName = `Track A: ${resolved}`;
       else if (u?.kind === "TB" && resolved) unifiedEntityDisplayName = `Track B: ${resolved}`;
       else if (u?.kind === "AH" && resolved) unifiedEntityDisplayName = `Ad hoc: ${resolved}`;
-      else unifiedEntityDisplayName = ueRaw;
+      else if (resolved) unifiedEntityDisplayName = resolved;
     }
 
-    return { ...r, payerDisplayName, ...(ueRaw ? { unifiedEntityDisplayName } : {}) };
+    const entityDisplayName = finalizeEntityDisplayName([
+      entityResolved,
+      unifiedEntityDisplayName,
+      payerDisplayName,
+      pn,
+    ]);
+
+    return {
+      ...r,
+      payerDisplayName,
+      entityDisplayName,
+      ...(ueRaw ? { unifiedEntityDisplayName } : {}),
+    };
   });
 }

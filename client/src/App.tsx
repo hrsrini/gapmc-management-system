@@ -37,6 +37,7 @@ import AdminSidebarMenuPage from "@/pages/admin/AdminSidebarMenuPage";
 import AdminAudit from "@/pages/admin/AdminAudit";
 import AdminPermissionMatrix from "@/pages/admin/AdminPermissionMatrix";
 import AdminSlaConfig from "@/pages/admin/AdminSlaConfig";
+import AdminRentBillingConfig from "@/pages/admin/AdminRentBillingConfig";
 import AdminFinanceMappings from "@/pages/admin/AdminFinanceMappings";
 import AdminMeasurementUnits from "@/pages/admin/AdminMeasurementUnits";
 import HrEmployees from "@/pages/hr/HrEmployees";
@@ -391,6 +392,9 @@ function Router() {
       </Route>
       <Route path="/admin/sla-config">
         <AdminRoute><AdminSlaConfig /></AdminRoute>
+      </Route>
+      <Route path="/admin/rent-billing-config">
+        <AdminRoute><AdminRentBillingConfig /></AdminRoute>
       </Route>
       <Route path="/admin/finance-mappings">
         <AdminRoute><AdminFinanceMappings /></AdminRoute>

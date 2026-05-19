@@ -18,8 +18,9 @@ import {
 } from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { FileText, ArrowLeft, ShieldCheck, CheckCircle, AlertCircle, SendHorizontal, Banknote, Ban, StickyNote } from "lucide-react";
-import { formatApiDateOrDateTime, formatYearMonthToDisplay } from "@/lib/dateFormat";
+import { FileText, ArrowLeft, ShieldCheck, CheckCircle, AlertCircle, SendHorizontal, Banknote, Ban, StickyNote, Download } from "lucide-react";
+import { buildRentInvoiceBillingBreakdown } from "@shared/rent-invoice-billing-display";
+import { formatApiDateOrDateTime, formatYearMonthToDisplay, formatYmdToDisplay } from "@/lib/dateFormat";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
 import { formatInr } from "@/lib/formatInr";
@@ -35,6 +36,14 @@ interface RentInvoice {
   assetId: string;
   yardId: string;
   periodMonth: string;
+  billingType?: string | null;
+  occupancyFrom?: string | null;
+  occupancyTo?: string | null;
+  baseMonthlyRent?: number | null;
+  daysInMonth?: number | null;
+  billableDays?: number | null;
+  billingFactor?: number | null;
+  billingConfigJson?: string | null;
   rentAmount: number;
   cgst: number;
   sgst: number;
@@ -216,6 +225,12 @@ export default function IomsRentInvoiceDetail() {
       setCnAmount(String(invoice.totalAmount));
     }
   }, [invoice?.id, invoice?.totalAmount]);
+
+  const billingBreakdown = useMemo(
+    () => (invoice ? buildRentInvoiceBillingBreakdown(invoice) : null),
+    [invoice],
+  );
+
   if (!id) return null;
   if (isLoading || invoice === undefined) {
     return (
@@ -287,6 +302,39 @@ export default function IomsRentInvoiceDetail() {
             {invoice.invoiceNo ?? invoice.id}
           </CardTitle>
           <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                try {
+                  const res = await fetch(`/api/ioms/rent/invoices/${encodeURIComponent(id!)}/pdf`, {
+                    credentials: "include",
+                  });
+                  if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error((err as { error?: string }).error ?? res.statusText);
+                  }
+                  const blob = await res.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `rent-invoice-${(invoice.invoiceNo ?? id).replace(/[^\w.-]+/g, "_")}.pdf`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  toast({ title: "Download started" });
+                } catch (e) {
+                  toast({
+                    title: "PDF failed",
+                    description: e instanceof Error ? e.message : "Could not download PDF.",
+                    variant: "destructive",
+                  });
+                }
+              }}
+            >
+              <Download className="h-4 w-4 mr-1" />
+              PDF
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setLocation("/rent/ioms")}>
               <ArrowLeft className="h-4 w-4 mr-1" /> Back
             </Button>
@@ -308,7 +356,42 @@ export default function IomsRentInvoiceDetail() {
               <br />
               <Badge variant={overdue ? "destructive" : "secondary"}>{invoice.status}</Badge>
             </div>
-            <div><span className="text-muted-foreground">Rent</span><br />{formatInr(invoice.rentAmount)}</div>
+            <div>
+              <span className="text-muted-foreground">Billing type</span>
+              <br />
+              {billingBreakdown?.billingTypeLabel ?? "Full month rent"}
+            </div>
+            {billingBreakdown?.occupancyFrom && billingBreakdown?.occupancyTo ? (
+              <div className="md:col-span-2">
+                <span className="text-muted-foreground">Occupancy period</span>
+                <br />
+                {formatYmdToDisplay(billingBreakdown.occupancyFrom)} — {formatYmdToDisplay(billingBreakdown.occupancyTo)}
+              </div>
+            ) : null}
+          </div>
+
+          {billingBreakdown && (
+            <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+              <p className="font-medium text-sm">Rent calculation summary</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                {billingBreakdown.summaryLines.map((line) => {
+                  const isMoney =
+                    /rent|gst|total|fine/i.test(line.label) && !/factor|days/i.test(line.label);
+                  return (
+                    <div key={line.label} className="flex justify-between gap-3">
+                      <span className="text-muted-foreground">{line.label}</span>
+                      <span className="font-medium tabular-nums">
+                        {isMoney ? formatInr(Number(line.value)) : line.value}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div><span className="text-muted-foreground">Rent (taxable)</span><br />{formatInr(invoice.rentAmount)}</div>
             <div><span className="text-muted-foreground">CGST / SGST</span><br />{formatInr(invoice.cgst)} / {formatInr(invoice.sgst)}</div>
             <div><span className="text-muted-foreground">Total</span><br />{formatInr(invoice.totalAmount)}</div>
             {invoice.tdsApplicable ? (
