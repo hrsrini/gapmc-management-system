@@ -2461,7 +2461,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
       const vacant: Array<{
         asset: (typeof allAssets)[0];
-        lastAllotment: { allotteeName: string; toDate: string; daUser: string | null; id: string } | null;
+        lastAllotment: { allotteeName: string; fromDate: string; toDate: string; id: string } | null;
         lastRentAmount: number | null;
       }> = [];
       for (const asset of allAssets) {
@@ -2470,7 +2470,12 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (latest && latest.status === "Active") continue;
         if (activeEntityOccupied.has(asset.id)) continue;
         const lastAllotment = latest
-          ? { allotteeName: latest.allotteeName, toDate: latest.toDate, daUser: latest.daUser, id: latest.id }
+          ? {
+              allotteeName: latest.allotteeName,
+              fromDate: latest.fromDate,
+              toDate: latest.toDate,
+              id: latest.id,
+            }
           : null;
         const lastRentAmount = lastAllotment ? (latestRentByAllotment[lastAllotment.id] ?? null) : null;
         vacant.push({ asset, lastAllotment, lastRentAmount });

@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatInr } from "@/lib/formatInr";
+import { formatYmdToDisplay } from "@/lib/dateFormat";
 import { AlertCircle, Store } from "lucide-react";
 
 interface Asset {
@@ -25,7 +26,7 @@ interface Asset {
 }
 interface VacantRow {
   asset: Asset;
-  lastAllotment: { allotteeName: string; toDate: string; daUser: string | null; id: string } | null;
+  lastAllotment: { allotteeName: string; fromDate: string; toDate: string; id: string } | null;
   lastRentAmount: number | null;
 }
 
@@ -40,9 +41,9 @@ const columns: ReportTableColumn[] = [
   { key: "assetType", header: "Type" },
   { key: "complexName", header: "Complex" },
   { key: "previousAllottee", header: "Previous allottee" },
-  { key: "vacatedOn", header: "Vacated on" },
-  { key: "daUser", header: "Officer (DA)" },
-  { key: "_lastRent", header: "Last rent", sortField: "lastRentSort" },
+  { key: "agreementFromDate", header: "Agreement From Date", sortField: "agreementFromSort" },
+  { key: "vacatedOn", header: "Vacated date", sortField: "vacatedOnSort" },
+  { key: "_lastRent", header: "Previous rent (₹)", sortField: "lastRentSort" },
 ];
 
 export default function AssetsVacant() {
@@ -71,6 +72,7 @@ export default function AssetsVacant() {
 
   const sourceRows = useMemo((): Record<string, unknown>[] => {
     return (vacant ?? []).map((row) => {
+      const fromDate = row.lastAllotment?.fromDate;
       const toDate = row.lastAllotment?.toDate;
       return {
         id: row.asset.id,
@@ -84,11 +86,12 @@ export default function AssetsVacant() {
         assetType: row.asset.assetType,
         complexName: row.asset.complexName ?? "—",
         previousAllottee: row.lastAllotment?.allotteeName ?? "—",
-        vacatedOn: toDate ? toDate.slice(0, 10) : "—",
-        daUser: row.lastAllotment?.daUser ?? "—",
+        agreementFromSort: fromDate?.slice(0, 10) ?? "",
+        agreementFromDate: fromDate ? formatYmdToDisplay(fromDate) : "—",
+        vacatedOnSort: toDate?.slice(0, 10) ?? "",
+        vacatedOn: toDate ? formatYmdToDisplay(toDate) : "—",
         lastRentSort: row.lastRentAmount ?? null,
-        _lastRent:
-          row.lastRentAmount != null ? `${formatInr(row.lastRentAmount)}` : "—",
+        _lastRent: row.lastRentAmount != null ? formatInr(row.lastRentAmount) : "—",
       };
     });
   }, [vacant, yardById]);
@@ -116,7 +119,7 @@ export default function AssetsVacant() {
               Shop Vacant (M-02)
             </CardTitle>
             <p className="text-sm text-muted-foreground mt-1">
-              Vacated assets: previous allottee, officer, last rent.
+              Vacated assets: previous allottee, agreement period end (vacated date), and last rent.
             </p>
           </div>
           <Select value={yardId || "all"} onValueChange={(v) => handleYardChange(v === "all" ? "" : v)}>
@@ -140,8 +143,16 @@ export default function AssetsVacant() {
             <ClientDataGrid
               columns={columns}
               sourceRows={sourceRows}
-              searchKeys={["assetIdSort", "yardName", "assetType", "complexName", "previousAllottee", "vacatedOn", "daUser"]}
-              defaultSortKey="vacatedOn"
+              searchKeys={[
+                "assetIdSort",
+                "yardName",
+                "assetType",
+                "complexName",
+                "previousAllottee",
+                "agreementFromDate",
+                "vacatedOn",
+              ]}
+              defaultSortKey="vacatedOnSort"
               defaultSortDir="desc"
               emptyMessage="No vacant assets."
               resetPageDependency={yardId}

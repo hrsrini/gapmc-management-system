@@ -73,6 +73,7 @@
     "db:apply-m04-purchase-trader-snapshots": "dotenv -e .env -- tsx scripts/apply-m04-purchase-trader-snapshots.ts",
     "db:apply-m04-purchase-transaction-sequence": "dotenv -e .env -- tsx scripts/apply-m04-purchase-transaction-sequence.ts",
     "db:apply-m04-purchase-transaction-no-backfill": "dotenv -e .env -- tsx scripts/apply-m04-purchase-transaction-no-backfill.ts",
+    "db:apply-m04-market-return-trader-period-unique": "dotenv -e .env -- tsx scripts/apply-m04-market-return-trader-period-unique.ts",
     "db:delete-m03-zero-rent-invoices": "dotenv -e .env -- tsx scripts/delete-m03-zero-rent-invoices.ts",
     "db:cancel-m03-duplicate-invoices": "dotenv -e .env -- tsx scripts/cancel-m03-duplicate-invoices.ts",
     "db:apply-rent-invoice-premises-month-unique": "dotenv -e .env -- tsx scripts/apply-rent-invoice-premises-month-unique.ts",

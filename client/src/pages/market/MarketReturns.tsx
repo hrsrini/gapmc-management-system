@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -141,6 +141,35 @@ export default function MarketReturns() {
     enabled: step >= 2 && previewEnabled,
   });
 
+  const returnForPeriod = useMemo(
+    () => (myReturns ?? []).find((r) => r.period === period) ?? null,
+    [myReturns, period],
+  );
+  const returnLocked = returnForPeriod != null && ["Verified", "Approved"].includes(returnForPeriod.status);
+
+  useEffect(() => {
+    if (!returnForPeriod?.id || step < 2) return;
+    let cancelled = false;
+    (async () => {
+      const r = await fetch(`/api/ioms/market/returns/${encodeURIComponent(returnForPeriod.id)}`, {
+        credentials: "include",
+      });
+      if (!r.ok || cancelled) return;
+      const data = (await r.json()) as { lines?: Array<{ commodityId: string; salesQty?: number | null }> };
+      const next: Record<string, string> = {};
+      for (const line of data.lines ?? []) {
+        const qty = Number(line.salesQty ?? 0);
+        if (qty > 0) next[line.commodityId] = String(qty);
+      }
+      if (!cancelled && Object.keys(next).length > 0) {
+        setSalesByCommodity((prev) => ({ ...prev, ...next }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [returnForPeriod?.id, step]);
+
   const linesWithSales = useMemo((): Array<PreviewLine & { sales: number; closing: number }> => {
     const base = preview?.lines ?? [];
     return base.map((l) => {
@@ -181,10 +210,16 @@ export default function MarketReturns() {
       }
       return r.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: { updated?: boolean }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/market/returns"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/market/returns", traderLicenceId] });
-      toast({ title: "Return submitted", description: "Monthly return submitted successfully." });
+      const updated = Boolean(data?.updated);
+      toast({
+        title: updated ? "Return updated" : "Return submitted",
+        description: updated
+          ? `Cumulative totals for ${period} were refreshed from current purchases.`
+          : "Monthly return submitted successfully.",
+      });
       setStep(3);
     },
     onError: (e: Error) => toast({ title: "Submit failed", description: e.message, variant: "destructive" }),
@@ -261,6 +296,19 @@ export default function MarketReturns() {
                   <Label>Period (YYYY-MM)</Label>
                   <Input value={period} onChange={(e) => { setPeriod(e.target.value); setStep(1); }} placeholder="2026-04" />
                 </div>
+                {returnForPeriod && !returnLocked && (
+                  <div className="md:col-span-3 flex items-center gap-2 rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-950 dark:text-blue-100">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    A return for {period} already exists ({returnForPeriod.status}). Submitting will update cumulative
+                    purchase value, market fee, and late interest from current transactions.
+                  </div>
+                )}
+                {returnLocked && (
+                  <div className="md:col-span-3 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    Return for {period} is {returnForPeriod?.status} and cannot be changed here.
+                  </div>
+                )}
                 <div className="md:col-span-3 flex flex-wrap gap-2">
                   <Button
                     type="button"
@@ -272,11 +320,19 @@ export default function MarketReturns() {
                   </Button>
                   <Button
                     type="button"
-                    disabled={!traderLicenceId || !previewEnabled || previewLoading || previewIsError}
+                    disabled={
+                      !canCreate ||
+                      returnLocked ||
+                      !traderLicenceId ||
+                      !previewEnabled ||
+                      previewLoading ||
+                      previewIsError ||
+                      step < 2
+                    }
                     onClick={() => submitMutation.mutate()}
                   >
                     <SendHorizontal className="h-4 w-4 mr-1" />
-                    Submit return
+                    {returnForPeriod && !returnLocked ? "Update return" : "Submit return"}
                   </Button>
                 </div>
               </div>

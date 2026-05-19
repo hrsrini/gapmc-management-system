@@ -121,6 +121,14 @@ export function registerMarketIomsRoutes(app: Express) {
           closing_qty double precision DEFAULT 0
         )
       `);
+      try {
+        await db.execute(sql`
+          CREATE UNIQUE INDEX IF NOT EXISTS market_monthly_returns_trader_period_uidx
+          ON gapmc.market_monthly_returns (trader_licence_id, period)
+        `);
+      } catch (e) {
+        console.warn("market_monthly_returns trader+period unique index not created (duplicate rows may exist):", e);
+      }
     })();
     return ensureMarketReturnsTablesPromise;
   }
@@ -190,6 +198,58 @@ export function registerMarketIomsRoutes(app: Express) {
     const d1 = new Date(`${String(submittedAtIso).slice(0, 10)}T12:00:00.000Z`).getTime();
     const diff = Math.floor((d1 - d0) / 86400000);
     return diff > 0 ? diff : 0;
+  }
+
+  /** One row per trader+period when duplicates exist (keeps most recently updated). */
+  function dedupeMarketReturnsByPeriod<T extends { period: string; updatedAt?: string | null; createdAt?: string | null }>(
+    rows: T[],
+  ): T[] {
+    const byPeriod = new Map<string, T>();
+    for (const r of rows) {
+      const prev = byPeriod.get(r.period);
+      const rTs = r.updatedAt ?? r.createdAt ?? "";
+      const pTs = prev ? (prev.updatedAt ?? prev.createdAt ?? "") : "";
+      if (!prev || rTs.localeCompare(pTs) > 0) byPeriod.set(r.period, r);
+    }
+    return Array.from(byPeriod.values()).sort((a, b) => b.period.localeCompare(a.period));
+  }
+
+  /** Cumulative market fee for the month from Approved purchases + Verified checkpost inward. */
+  async function computeReturnMarketFeeForPeriod(args: {
+    traderLicenceId: string;
+    period: string;
+    totalPurchaseValueInr: number;
+  }): Promise<number> {
+    const { traderLicenceId, period, totalPurchaseValueInr } = args;
+    const { from, to } = monthToRange(period);
+    const [purchaseRow] = await db
+      .select({ sumFee: sql<number>`coalesce(sum(${purchaseTransactions.marketFeeAmount}), 0)` })
+      .from(purchaseTransactions)
+      .where(
+        and(
+          eq(purchaseTransactions.traderLicenceId, traderLicenceId),
+          eq(purchaseTransactions.status, "Approved"),
+          gte(purchaseTransactions.transactionDate, from),
+          lt(purchaseTransactions.transactionDate, to),
+        ),
+      );
+    const [inwardRow] = await db
+      .select({ sumFee: sql<number>`coalesce(sum(${checkPostInwardCommodities.marketFeeAmount}), 0)` })
+      .from(checkPostInwardCommodities)
+      .innerJoin(checkPostInward, eq(checkPostInwardCommodities.inwardId, checkPostInward.id))
+      .where(
+        and(
+          eq(checkPostInward.traderLicenceId, traderLicenceId),
+          eq(checkPostInward.status, "Verified"),
+          gte(checkPostInward.entryDate, from),
+          lt(checkPostInward.entryDate, to),
+        ),
+      );
+    const fromTransactions =
+      (Number(purchaseRow?.sumFee ?? 0) || 0) + (Number(inwardRow?.sumFee ?? 0) || 0);
+    if (fromTransactions > 0) return Math.round(fromTransactions * 100) / 100;
+    if (totalPurchaseValueInr > 0) return Number(((totalPurchaseValueInr * 1) / 100).toFixed(2));
+    return 0;
   }
 
   async function allocateMarketReturnAckRef(params: { yardId: string; period: string }): Promise<string> {
@@ -2369,7 +2429,7 @@ export function registerMarketIomsRoutes(app: Express) {
         list = [];
       }
       const filtered = period ? list.filter((r) => r.period === period) : list;
-      res.json(filtered);
+      res.json(dedupeMarketReturnsByPeriod(filtered));
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch market returns");
@@ -2449,9 +2509,10 @@ export function registerMarketIomsRoutes(app: Express) {
   });
 
   /**
-   * Create or submit a monthly return.
+   * Create or submit a monthly return (upsert per trader + YYYY-MM period).
+   * - At most one return per trader per calendar month; resubmit updates cumulative totals.
    * - If status=Draft: save lines (no ack ref)
-   * - If status=Submitted: generate acknowledgementRef and lock the record for later verify/approve
+   * - If status=Submitted: generate acknowledgementRef on first submit; reuse on update
    */
   app.post("/api/ioms/market/returns", async (req, res) => {
     try {
@@ -2476,9 +2537,26 @@ export function registerMarketIomsRoutes(app: Express) {
       const scopeRetPost = await assertTraderLicenceAccessibleInUserScope(db, req, lic);
       if (!scopeRetPost.ok) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
 
-      const id = nanoid();
+      const [existingReturn] = await db
+        .select()
+        .from(marketMonthlyReturns)
+        .where(and(eq(marketMonthlyReturns.traderLicenceId, traderLicenceId), eq(marketMonthlyReturns.period, period)))
+        .orderBy(desc(marketMonthlyReturns.updatedAt))
+        .limit(1);
+
+      if (existingReturn && ["Verified", "Approved"].includes(existingReturn.status)) {
+        return sendApiError(
+          res,
+          409,
+          "MKT_RETURN_LOCKED",
+          `A return for ${period} is already ${existingReturn.status} and cannot be changed.`,
+        );
+      }
+
+      const isUpdate = Boolean(existingReturn);
+      const id = existingReturn?.id ?? nanoid();
       const ts = nowIso();
-      const ackRef = status === "Submitted" ? await allocateMarketReturnAckRef({ yardId: lic.yardId, period }) : null;
+      const createdAt = existingReturn?.createdAt ?? ts;
 
       if (!Array.isArray(linesRaw)) {
         return sendApiError(res, 400, "MKT_RETURN_LINES", "lines must be an array");
@@ -2499,50 +2577,102 @@ export function registerMarketIomsRoutes(app: Express) {
       if (status === "Submitted") {
         const preview = await buildReturnPreview({ traderLicenceId, period });
         const byCommodity = new Map(preview.map((p) => [p.commodityId, p]));
-        effectiveLines = effectiveLines.map((l) => {
-          const p = byCommodity.get(l.commodityId);
-          const openingQty = p ? p.openingQty : l.openingQty;
-          const purchaseQty = p ? p.purchaseQty : 0;
-          const purchaseValueInr = p ? p.purchaseValueInr : 0;
-          const closingQty = openingQty + purchaseQty - l.salesQty;
-          return { ...l, openingQty, purchaseQty, purchaseValueInr, closingQty };
+        const salesByCommodity = new Map(lines.map((l) => [l.commodityId, l.salesQty]));
+        effectiveLines = preview.map((p) => {
+          const salesQty = salesByCommodity.get(p.commodityId) ?? 0;
+          const closingQty = p.openingQty + p.purchaseQty - salesQty;
+          return {
+            commodityId: p.commodityId,
+            openingQty: p.openingQty,
+            purchaseQty: p.purchaseQty,
+            purchaseValueInr: p.purchaseValueInr,
+            salesQty,
+            closingQty,
+          };
         });
+        for (const l of lines) {
+          if (!byCommodity.has(l.commodityId)) {
+            const closingQty = l.openingQty + l.purchaseQty - l.salesQty;
+            effectiveLines.push({ ...l, closingQty });
+          }
+        }
       }
 
       const totalPurchaseValueInr = effectiveLines.reduce((s, l) => s + (Number(l.purchaseValueInr ?? 0) || 0), 0);
-      // Default 1% fee per workbook statement; can be made configurable later.
-      const totalMarketFeeInr = Number(((totalPurchaseValueInr * 1) / 100).toFixed(2));
+      const totalMarketFeeInr = await computeReturnMarketFeeForPeriod({
+        traderLicenceId,
+        period,
+        totalPurchaseValueInr,
+      });
 
       const cfg = await getMergedSystemConfig();
       const deadlineDay = parseSystemConfigNumber(cfg, "market_return_deadline_day");
       const interestRate = parseSystemConfigNumber(cfg, "market_return_interest_percent_per_annum");
       const deadlineDate = deadlineIsoForPeriod(period, deadlineDay);
-      const daysLate = status === "Submitted" ? daysLateForSubmission(deadlineDate, ts) : 0;
+
+      let submittedAt: string | null = null;
+      if (status === "Submitted") {
+        submittedAt =
+          existingReturn?.status === "Submitted" && existingReturn.submittedAt
+            ? existingReturn.submittedAt
+            : ts;
+      } else if (existingReturn?.submittedAt) {
+        submittedAt = existingReturn.submittedAt;
+      }
+
+      const daysLate =
+        status === "Submitted" && submittedAt ? daysLateForSubmission(deadlineDate, submittedAt) : 0;
       const lateSubmissionFlag = daysLate > 0;
       const interestAmountInr =
         status === "Submitted" && daysLate > 0
           ? Number(((totalMarketFeeInr * (interestRate / 100)) / 365 * daysLate).toFixed(2))
           : 0;
 
+      let ackRef: string | null = existingReturn?.acknowledgementRef ?? null;
+      if (status === "Submitted" && !ackRef) {
+        ackRef = await allocateMarketReturnAckRef({ yardId: lic.yardId, period });
+      }
+
       await db.transaction(async (tx) => {
-        await tx.insert(marketMonthlyReturns).values({
-          id,
-          traderLicenceId,
-          period,
-          status,
-          acknowledgementRef: ackRef,
-          filingMode,
-          filedByUserId: req.user?.id ?? null,
-          totalPurchaseValueInr,
-          totalMarketFeeInr,
-          lateSubmissionFlag,
-          deadlineDate,
-          daysLate,
-          interestAmountInr,
-          submittedAt: status === "Submitted" ? ts : null,
-          createdAt: ts,
-          updatedAt: ts,
-        });
+        if (isUpdate) {
+          await tx
+            .update(marketMonthlyReturns)
+            .set({
+              status,
+              acknowledgementRef: ackRef,
+              filingMode,
+              filedByUserId: req.user?.id ?? null,
+              totalPurchaseValueInr,
+              totalMarketFeeInr,
+              lateSubmissionFlag,
+              deadlineDate,
+              daysLate,
+              interestAmountInr,
+              submittedAt,
+              updatedAt: ts,
+            })
+            .where(eq(marketMonthlyReturns.id, id));
+          await tx.delete(marketMonthlyReturnLines).where(eq(marketMonthlyReturnLines.returnId, id));
+        } else {
+          await tx.insert(marketMonthlyReturns).values({
+            id,
+            traderLicenceId,
+            period,
+            status,
+            acknowledgementRef: ackRef,
+            filingMode,
+            filedByUserId: req.user?.id ?? null,
+            totalPurchaseValueInr,
+            totalMarketFeeInr,
+            lateSubmissionFlag,
+            deadlineDate,
+            daysLate,
+            interestAmountInr,
+            submittedAt,
+            createdAt,
+            updatedAt: ts,
+          });
+        }
         for (const l of effectiveLines) {
           await tx.insert(marketMonthlyReturnLines).values({
             id: nanoid(),
@@ -2558,15 +2688,19 @@ export function registerMarketIomsRoutes(app: Express) {
       });
 
       const [row] = await db.select().from(marketMonthlyReturns).where(eq(marketMonthlyReturns.id, id)).limit(1);
+      const lineRows = await db.select().from(marketMonthlyReturnLines).where(eq(marketMonthlyReturnLines.returnId, id));
       if (row) {
-        writeAuditLog(req, { module: "Market", action: "CreateReturn", recordId: id, afterValue: row }).catch((e) =>
-          console.error("Audit log failed:", e),
-        );
+        writeAuditLog(req, {
+          module: "Market",
+          action: isUpdate ? "UpdateReturn" : "CreateReturn",
+          recordId: id,
+          afterValue: row,
+        }).catch((e) => console.error("Audit log failed:", e));
       }
-      res.status(201).json({ ...row, lines: await db.select().from(marketMonthlyReturnLines).where(eq(marketMonthlyReturnLines.returnId, id)) });
+      res.status(isUpdate ? 200 : 201).json({ ...row, lines: lineRows, updated: isUpdate });
     } catch (e) {
       console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create market return");
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to save market return");
     }
   });
 
