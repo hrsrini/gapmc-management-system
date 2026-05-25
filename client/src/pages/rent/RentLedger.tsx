@@ -33,6 +33,15 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { formatInr } from "@/lib/formatInr";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/context/AuthContext";
+import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
+import {
+  buildCounterDuesPaymentApiBody,
+  defaultPaymentPreferenceValue,
+  validatePaymentPreference,
+  type PaymentPreferenceValue,
+} from "@/lib/duesCounterPayment";
 
 interface LedgerEntry {
   id: string;
@@ -92,6 +101,7 @@ function ledgerPaymentStatusLabel(e: LedgerEntry, paidReceiptId: string | null):
 interface LedgerPaymentContext {
   invoiceId: string;
   invoiceNo: string | null;
+  yardId: string;
   outstandingRent: number;
   isGovtEntity: boolean;
   status: string;
@@ -124,7 +134,11 @@ const columns: ReportTableColumn[] = [
 
 type PayMode = "rent_only" | "interest_only" | "combined";
 
+type LedgerPayStep = "ledger" | "payment";
+
 export default function RentLedger() {
+  const { user } = useAuth();
+  const { data: yards = [] } = useScopedActiveYards();
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const unifiedEntityFromUrl = searchParams.get("unifiedEntityId")?.trim() ?? "";
@@ -162,8 +176,10 @@ export default function RentLedger() {
     invoiceId: string;
     selectedInterestIds: string[];
   } | null>(null);
+  const [payStep, setPayStep] = useState<LedgerPayStep>("ledger");
   const [payMode, setPayMode] = useState<PayMode>("interest_only");
   const [rentAmountInput, setRentAmountInput] = useState("");
+  const [paymentPref, setPaymentPref] = useState<PaymentPreferenceValue>(() => defaultPaymentPreferenceValue());
   const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
 
   const downloadReceiptPdf = useCallback(
@@ -215,6 +231,23 @@ export default function RentLedger() {
     enabled: Boolean(paymentContextUrl),
   });
 
+  const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
+  const receivedAtLabel = useMemo(() => {
+    const yardId = paymentContext?.yardId ?? "";
+    if (!yardId) return "—";
+    return yards.find((y) => y.id === yardId)?.name ?? yardId;
+  }, [paymentContext?.yardId, yards]);
+
+  const unpaidInterestForInvoice = useMemo(() => {
+    if (!payDialog) return [];
+    return list.filter(
+      (e) =>
+        e.entryType === "Interest" &&
+        String(e.invoiceId ?? "") === payDialog.invoiceId &&
+        String(e.interestPaymentStatus ?? "").trim() !== "Paid",
+    );
+  }, [list, payDialog]);
+
   const openPayInterest = useCallback((row: LedgerEntry) => {
     const invId = String(row.invoiceId ?? "").trim();
     if (!invId) {
@@ -223,8 +256,20 @@ export default function RentLedger() {
     }
     setPayMode("interest_only");
     setRentAmountInput("");
+    setPayStep("ledger");
+    setPaymentPref(defaultPaymentPreferenceValue());
     setPayDialog({ invoiceId: invId, selectedInterestIds: [row.id] });
   }, [toast]);
+
+  const ledgerPayAmountDefault = useMemo(() => {
+    if (!payDialog) return 0;
+    if (payMode === "interest_only") {
+      return unpaidInterestForInvoice
+        .filter((r) => payDialog.selectedInterestIds.includes(r.id))
+        .reduce((s, r) => s + Number(r.debit ?? 0), 0);
+    }
+    return Number(rentAmountInput) || 0;
+  }, [payDialog, payMode, rentAmountInput, unpaidInterestForInvoice]);
 
   const payMutation = useMutation({
     mutationFn: async () => {
@@ -236,13 +281,19 @@ export default function RentLedger() {
       if ((payMode === "interest_only" || payMode === "combined") && payDialog.selectedInterestIds.length === 0) {
         throw new Error("Select at least one interest line.");
       }
+      const pref = { ...paymentPref, paidAmount: paymentPref.paidAmount || String(ledgerPayAmountDefault) };
+      const prefErr = validatePaymentPreference(pref);
+      if (prefErr) throw new Error(prefErr);
+      const payAmt = Number(pref.paidAmount || ledgerPayAmountDefault);
+      if (!Number.isFinite(payAmt) || payAmt <= 0) throw new Error("Enter a valid payment amount.");
+      const payBody = buildCounterDuesPaymentApiBody(pref, payAmt);
       const res = await apiRequest("POST", "/api/ioms/rent/ledger/record-payment", {
         invoiceId: payDialog.invoiceId,
         mode: payMode,
         rentAmount: payMode === "interest_only" ? undefined : rentAmt,
         interestLedgerEntryIds:
           payMode === "rent_only" ? undefined : payDialog.selectedInterestIds,
-        paymentMode: "Cash",
+        ...payBody,
       });
       return (await res.json()) as { receiptId: string; receiptNo: string; ledgerMessages?: string[] };
     },
@@ -251,6 +302,8 @@ export default function RentLedger() {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/invoices"] });
       queryClient.invalidateQueries({ queryKey: [paymentContextUrl] });
       setPayDialog(null);
+      setPayStep("ledger");
+      setPaymentPref(defaultPaymentPreferenceValue());
       toast({
         title: "Payment recorded",
         description: `${data.receiptNo}${data.ledgerMessages?.length ? ` — ${data.ledgerMessages.join(" ")}` : ""}`,
@@ -264,16 +317,6 @@ export default function RentLedger() {
       });
     },
   });
-
-  const unpaidInterestForInvoice = useMemo(() => {
-    if (!payDialog) return [];
-    return list.filter(
-      (e) =>
-        e.entryType === "Interest" &&
-        String(e.invoiceId ?? "") === payDialog.invoiceId &&
-        String(e.interestPaymentStatus ?? "").trim() !== "Paid",
-    );
-  }, [list, payDialog]);
 
   const sourceRows = useMemo((): Record<string, unknown>[] => {
     return list.map((e) => {
@@ -442,81 +485,147 @@ export default function RentLedger() {
         </CardContent>
       </Card>
 
-      <Dialog open={Boolean(payDialog)} onOpenChange={(o) => !o && setPayDialog(null)}>
-        <DialogContent className="max-w-md">
+      <Dialog
+        open={Boolean(payDialog)}
+        onOpenChange={(o) => {
+          if (!o) {
+            setPayDialog(null);
+            setPayStep("ledger");
+            setPaymentPref(defaultPaymentPreferenceValue());
+          }
+        }}
+      >
+        <DialogContent className={payStep === "payment" ? "max-w-2xl max-h-[90vh]" : "max-w-md"}>
           <DialogHeader>
             <DialogTitle>Record rent / interest payment</DialogTitle>
           </DialogHeader>
           {payDialog ? (
-            <div className="grid gap-4 text-sm">
-              <p className="text-muted-foreground">
-                Invoice{" "}
-                <span className="font-mono text-foreground">
-                  {paymentContext?.invoiceNo ?? payDialog.invoiceId.slice(0, 8)}…
-                </span>
-                {paymentContext != null ? (
-                  <>
-                    {" "}
-                    — outstanding rent{" "}
-                    <span className="font-medium text-foreground">{formatInr(out)}</span>
-                  </>
-                ) : null}
-              </p>
-              <div className="grid gap-2">
-                <Label>Payment type</Label>
-                <Select
-                  value={payMode}
-                  onValueChange={(v) => setPayMode(v as PayMode)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="interest_only">Interest only</SelectItem>
-                    {allowCombined ? <SelectItem value="combined">Rent + interest (one receipt)</SelectItem> : null}
-                    {allowCombined ? <SelectItem value="rent_only">Rent only</SelectItem> : null}
-                  </SelectContent>
-                </Select>
-              </div>
-              {(payMode === "rent_only" || payMode === "combined") && (
+            payStep === "ledger" ? (
+              <div className="grid gap-4 text-sm">
+                <p className="text-muted-foreground">
+                  Invoice{" "}
+                  <span className="font-mono text-foreground">
+                    {paymentContext?.invoiceNo ?? payDialog.invoiceId.slice(0, 8)}…
+                  </span>
+                  {paymentContext != null ? (
+                    <>
+                      {" "}
+                      — outstanding rent{" "}
+                      <span className="font-medium text-foreground">{formatInr(out)}</span>
+                    </>
+                  ) : null}
+                </p>
                 <div className="grid gap-2">
-                  <Label htmlFor="rent-amt">Rent amount (₹)</Label>
-                  <Input
-                    id="rent-amt"
-                    inputMode="decimal"
-                    value={rentAmountInput}
-                    onChange={(ev) => setRentAmountInput(ev.target.value)}
-                    placeholder={allowCombined ? `Max ${formatInr(out)}` : "Amount"}
-                  />
+                  <Label>Settlement type</Label>
+                  <Select value={payMode} onValueChange={(v) => setPayMode(v as PayMode)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="interest_only">Interest only</SelectItem>
+                      {allowCombined ? <SelectItem value="combined">Rent + interest (one receipt)</SelectItem> : null}
+                      {allowCombined ? <SelectItem value="rent_only">Rent only</SelectItem> : null}
+                    </SelectContent>
+                  </Select>
                 </div>
-              )}
-              {(payMode === "interest_only" || payMode === "combined") && (
-                <div className="grid gap-2">
-                  <Label>Unpaid interest lines</Label>
-                  <div className="max-h-40 overflow-y-auto rounded border p-2 space-y-2">
-                    {unpaidInterestForInvoice.map((row) => (
-                      <label key={row.id} className="flex items-center gap-2 cursor-pointer">
-                        <Checkbox
-                          checked={payDialog.selectedInterestIds.includes(row.id)}
-                          onCheckedChange={(c) => toggleInterestId(row.id, c === true)}
-                        />
-                        <span className="tabular-nums">
-                          {formatInr(Number(row.debit ?? 0))} — {row.entryDate.slice(0, 10)}
-                        </span>
-                      </label>
-                    ))}
+                {(payMode === "rent_only" || payMode === "combined") && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="rent-amt">Rent amount (₹)</Label>
+                    <Input
+                      id="rent-amt"
+                      inputMode="decimal"
+                      value={rentAmountInput}
+                      onChange={(ev) => setRentAmountInput(ev.target.value)}
+                      placeholder={allowCombined ? `Max ${formatInr(out)}` : "Amount"}
+                    />
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+                {(payMode === "interest_only" || payMode === "combined") && (
+                  <div className="grid gap-2">
+                    <Label>Unpaid interest lines</Label>
+                    <div className="max-h-40 overflow-y-auto rounded border p-2 space-y-2">
+                      {unpaidInterestForInvoice.map((row) => (
+                        <label key={row.id} className="flex items-center gap-2 cursor-pointer">
+                          <Checkbox
+                            checked={payDialog.selectedInterestIds.includes(row.id)}
+                            onCheckedChange={(c) => toggleInterestId(row.id, c === true)}
+                          />
+                          <span className="tabular-nums">
+                            {formatInr(Number(row.debit ?? 0))} — {row.entryDate.slice(0, 10)}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <PaymentPreferenceForm
+                value={paymentPref}
+                onChange={setPaymentPref}
+                receivedByLabel={receivedByLabel}
+                receivedAtLabel={receivedAtLabel}
+                summaryAmount={String(Math.round(ledgerPayAmountDefault * 100) / 100)}
+              />
+            )
           ) : null}
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setPayDialog(null)}>
+          <DialogFooter className="gap-2 sm:gap-0 flex-wrap">
+            {payStep === "payment" ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setPayStep("ledger");
+                  setPaymentPref((p) => ({
+                    ...p,
+                    paidAmount: String(Math.round(ledgerPayAmountDefault * 100) / 100),
+                  }));
+                }}
+              >
+                Back
+              </Button>
+            ) : null}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setPayDialog(null);
+                setPayStep("ledger");
+                setPaymentPref(defaultPaymentPreferenceValue());
+              }}
+            >
               Cancel
             </Button>
-            <Button onClick={() => payMutation.mutate()} disabled={payMutation.isPending}>
-              {payMutation.isPending ? "Saving…" : "Create receipt & post ledger"}
-            </Button>
+            {payStep === "ledger" ? (
+              <Button
+                onClick={() => {
+                  const rentAmt = payMode === "interest_only" ? 0 : Number(rentAmountInput);
+                  if ((payMode === "rent_only" || payMode === "combined") && (!Number.isFinite(rentAmt) || rentAmt <= 0)) {
+                    toast({ title: "Rent amount", description: "Enter a valid rent amount.", variant: "destructive" });
+                    return;
+                  }
+                  if (
+                    (payMode === "interest_only" || payMode === "combined") &&
+                    payDialog &&
+                    payDialog.selectedInterestIds.length === 0
+                  ) {
+                    toast({ title: "Interest lines", description: "Select at least one interest line.", variant: "destructive" });
+                    return;
+                  }
+                  const def = Math.round(ledgerPayAmountDefault * 100) / 100;
+                  if (def <= 0) {
+                    toast({ title: "Amount", description: "Payment amount must be greater than zero.", variant: "destructive" });
+                    return;
+                  }
+                  setPaymentPref(defaultPaymentPreferenceValue(def));
+                  setPayStep("payment");
+                }}
+              >
+                Continue
+              </Button>
+            ) : (
+              <Button onClick={() => payMutation.mutate()} disabled={payMutation.isPending}>
+                {payMutation.isPending ? "Saving…" : "Confirm payment"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

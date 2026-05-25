@@ -6,9 +6,8 @@ import type { Express, Request } from "express";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import QRCode from "qrcode";
 import { db } from "./db";
-import { yards, receiptSequence, iomsReceipts, paymentGatewayLog, rentInvoices } from "@shared/db-schema";
+import { yards, receiptSequence, iomsReceipts, paymentGatewayLog, rentInvoices, manualReceiptTypes, tallyLedgers } from "@shared/db-schema";
 import { buildIomsReceiptPdf } from "./receipt-pdf";
-import { attachCreatedByDisplayNames } from "./ioms-receipt-created-by-display";
 import { attachCreatedByDisplayNames } from "./ioms-receipt-created-by-display";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
 import {
@@ -81,7 +80,7 @@ function allowAuthenticatedPaymentCallbackSimulate(): boolean {
 /** Phase 1 (client): in-app cash / cheque (+ DD); electronic gateway later. */
 const PHASE1_PAYMENT_MODES = new Set(["Cash", "Cheque", "DD"]);
 
-class ReceiptPaymentModeError extends Error {
+export class ReceiptPaymentModeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ReceiptPaymentModeError";
@@ -111,6 +110,16 @@ function assertPhase1PaymentMode(mode: string): void {
   if (!PHASE1_PAYMENT_MODES.has(m)) {
     throw new ReceiptPaymentModeError(`Phase 1: paymentMode must be Cash, Cheque, or DD (got "${m || "empty"}").`);
   }
+}
+
+/** Counter dues (M-02 outstanding): cash, cheque, DD, or counter-recorded NEFT/RTGS (Online + UTR). */
+function assertCounterDuesPaymentMode(mode: string): void {
+  if (process.env.RECEIPT_ALLOW_ANY_PAYMENT_MODE === "true") return;
+  const m = String(mode ?? "").trim();
+  if (m === "Cash" || m === "Cheque" || m === "DD" || m === "Online") return;
+  throw new ReceiptPaymentModeError(
+    `Counter payment: paymentMode must be Cash, Cheque, DD, or Online (got "${m || "empty"}").`,
+  );
 }
 
 const REVENUE_HEAD_CODES: Record<string, string> = {
@@ -191,8 +200,27 @@ export async function createIomsReceipt(params: {
   /** When set, stored as total_amount (e.g. GST base+tax + interest > amount+cgst+sgst). */
   totalAmountOverride?: number | null;
   createdBy: string;
+  /** Outstanding-dues counter pay: allows Online with UTR (not gateway-only). */
+  counterDuesPayment?: boolean;
+  chequeNo?: string | null;
+  bankName?: string | null;
+  chequeDate?: string | null;
+  gatewayRef?: string | null;
+  /** Calendar date YYYY-MM-DD for receipt timestamp (counter payment date). */
+  paymentDateYmd?: string | null;
+  manualReceiptTypeId?: string | null;
+  payerPartyType?: string | null;
+  payerAddress?: string | null;
+  payerContact?: string | null;
+  premisesAssetId?: string | null;
+  applicationRef?: string | null;
+  narration?: string | null;
 }): Promise<{ id: string; receiptNo: string }> {
-  assertPhase1PaymentMode(params.paymentMode);
+  if (params.counterDuesPayment) {
+    assertCounterDuesPaymentMode(params.paymentMode);
+  } else {
+    assertPhase1PaymentMode(params.paymentMode);
+  }
   const baseTotal = Math.round((params.amount + (params.cgst ?? 0) + (params.sgst ?? 0)) * 100) / 100;
   const totalAmount =
     params.totalAmountOverride != null && Number.isFinite(params.totalAmountOverride)
@@ -200,7 +228,9 @@ export async function createIomsReceipt(params: {
       : baseTotal;
   const receiptNo = await generateNextReceiptNo(params.yardId, params.revenueHead);
   const id = nanoid();
-  const now = new Date().toISOString();
+  const ymd = params.paymentDateYmd != null ? String(params.paymentDateYmd).trim().slice(0, 10) : "";
+  const now =
+    ymd && /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? `${ymd}T12:00:00.000Z` : new Date().toISOString();
   const unifiedEntityId = normalizeReceiptUnifiedEntityId(params.unifiedEntityId);
 
   await db.insert(iomsReceipts).values({
@@ -218,10 +248,21 @@ export async function createIomsReceipt(params: {
     totalAmount,
     tdsAmount: Number(params.tdsAmount ?? 0) || 0,
     paymentMode: params.paymentMode,
+    gatewayRef: params.gatewayRef ?? null,
+    chequeNo: params.chequeNo ?? null,
+    bankName: params.bankName ?? null,
+    chequeDate: params.chequeDate ?? null,
     sourceModule: params.sourceModule ?? null,
     sourceRecordId: params.sourceRecordId ?? null,
     m03BreakdownJson: params.m03BreakdownJson != null && String(params.m03BreakdownJson).trim() !== "" ? String(params.m03BreakdownJson) : null,
     unifiedEntityId,
+    manualReceiptTypeId: params.manualReceiptTypeId ?? null,
+    payerPartyType: params.payerPartyType ?? null,
+    payerAddress: params.payerAddress ?? null,
+    payerContact: params.payerContact ?? null,
+    premisesAssetId: params.premisesAssetId ?? null,
+    applicationRef: params.applicationRef ?? null,
+    narration: params.narration ?? null,
     qrCodeUrl: `/api/ioms/receipts/public/qr?receiptNo=${encodeURIComponent(receiptNo)}`,
     pdfUrl: null,
     status: "Pending",
@@ -562,6 +603,27 @@ export function registerReceiptsIomsRoutes(app: Express) {
             enrich.allotmentReferenceNo = await resolveRentPremisesAssetId(inv);
           }
           payload = { ...payload, ...enrich };
+        }
+      }
+      const manualTypeId = String(row.manualReceiptTypeId ?? "").trim();
+      if (manualTypeId) {
+        const [mrt] = await db
+          .select({
+            ledgerName: manualReceiptTypes.ledgerName,
+            payeeRule: manualReceiptTypes.payeeRule,
+            tallyLedgerName: tallyLedgers.ledgerName,
+          })
+          .from(manualReceiptTypes)
+          .leftJoin(tallyLedgers, eq(manualReceiptTypes.tallyLedgerId, tallyLedgers.id))
+          .where(eq(manualReceiptTypes.id, manualTypeId))
+          .limit(1);
+        if (mrt) {
+          payload = {
+            ...payload,
+            manualReceiptTypeLedgerName: mrt.ledgerName,
+            manualReceiptPayeeRule: mrt.payeeRule,
+            manualTallyLedgerName: mrt.tallyLedgerName ?? null,
+          };
         }
       }
       res.json(payload);

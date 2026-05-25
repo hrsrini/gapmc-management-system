@@ -29,6 +29,14 @@ import { Input } from "@/components/ui/input";
 import { formatInr } from "@/lib/formatInr";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { formatUnifiedEntityOptionLabel } from "@shared/unified-entity-display";
+import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
+import {
+  buildCounterDuesPaymentApiBody,
+  defaultPaymentPreferenceValue,
+  validatePaymentPreference,
+  type PaymentPreferenceValue,
+} from "@/lib/duesCounterPayment";
+import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
 
 interface UnifiedEntityRow {
   id: string;
@@ -101,7 +109,8 @@ const columns: ReportTableColumn[] = [
 export default function OutstandingDues() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
+  const { data: yards = [] } = useScopedActiveYards();
   const canMarkPaid = can("M-03", "Update");
   const canPayMarketFee = can("M-04", "Create") || can("M-04", "Update");
 
@@ -143,26 +152,52 @@ export default function OutstandingDues() {
   }, [dues]);
 
   const [payOpen, setPayOpen] = useState(false);
+  const [payStep, setPayStep] = useState<"summary" | "payment">("summary");
   const [payKind, setPayKind] = useState<"rent" | "market">("rent");
   const [payInvoice, setPayInvoice] = useState<DueRentInvoice | null>(null);
   const [payMarket, setPayMarket] = useState<DueMarketFeePurchase | null>(null);
+  const [payYardId, setPayYardId] = useState("");
   const [payAmount, setPayAmount] = useState("");
+  const [paymentPref, setPaymentPref] = useState<PaymentPreferenceValue>(() => defaultPaymentPreferenceValue());
   const [onlineReceiptHref, setOnlineReceiptHref] = useState<string>("");
+
+  const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
+  const receivedAtLabel = useMemo(() => {
+    if (!payYardId) return "—";
+    return yards.find((y) => y.id === payYardId)?.name ?? payYardId;
+  }, [payYardId, yards]);
+
+  const openPayDialog = (kind: "rent" | "market", invoice: DueRentInvoice | null, market: DueMarketFeePurchase | null, outstanding: number, yardId: string) => {
+    setPayKind(kind);
+    setPayInvoice(invoice);
+    setPayMarket(market);
+    setPayYardId(yardId);
+    setPayAmount(String(Math.max(0, outstanding)));
+    setPaymentPref(defaultPaymentPreferenceValue(outstanding));
+    setPayStep("summary");
+    setPayOpen(true);
+  };
 
   const payMutation = useMutation({
     mutationFn: async () => {
-      const amt = Number(payAmount);
+      const prefErr = validatePaymentPreference({ ...paymentPref, paidAmount: paymentPref.paidAmount || payAmount });
+      if (prefErr) throw new Error(prefErr);
+      const amt = Number(paymentPref.paidAmount || payAmount);
       if (!Number.isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
+      const payBody = buildCounterDuesPaymentApiBody({ ...paymentPref, paidAmount: String(amt) }, amt);
       if (payKind === "rent") {
         if (!payInvoice) throw new Error("Select an invoice");
         const res = await fetch("/api/ioms/dues/pay-rent-invoice", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ invoiceId: payInvoice.invoiceId, amount: amt }),
+          body: JSON.stringify({ invoiceId: payInvoice.invoiceId, ...payBody }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
+        if (!res.ok) {
+          const msg = (data as { message?: string; error?: string }).message ?? (data as { error?: string }).error;
+          throw new Error(msg ?? res.statusText);
+        }
         return { kind: "rent" as const, receiptNo: (data as { receiptNo?: string }).receiptNo ?? "" };
       }
       if (!payMarket) throw new Error("Select a purchase");
@@ -170,10 +205,13 @@ export default function OutstandingDues() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ purchaseTransactionId: payMarket.purchaseTransactionId, amount: amt }),
+        body: JSON.stringify({ purchaseTransactionId: payMarket.purchaseTransactionId, ...payBody }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
+      if (!res.ok) {
+        const msg = (data as { message?: string; error?: string }).message ?? (data as { error?: string }).error;
+        throw new Error(msg ?? res.statusText);
+      }
       return { kind: "market" as const, receiptNo: (data as { receiptNo?: string }).receiptNo ?? "" };
     },
     onSuccess: (r) => {
@@ -183,9 +221,12 @@ export default function OutstandingDues() {
         description: r.receiptNo ? `Receipt ${r.receiptNo}.` : "Payment saved.",
       });
       setPayOpen(false);
+      setPayStep("summary");
       setPayInvoice(null);
       setPayMarket(null);
+      setPayYardId("");
       setPayAmount("");
+      setPaymentPref(defaultPaymentPreferenceValue());
     },
     onError: (e: Error) => toast({ title: "Payment failed", description: e.message, variant: "destructive" }),
   });
@@ -265,13 +306,7 @@ export default function OutstandingDues() {
             <Button
               size="sm"
               disabled={!canPayMarketFee}
-              onClick={() => {
-                setPayKind("market");
-                setPayMarket(d);
-                setPayInvoice(null);
-                setPayAmount(String(Math.max(0, d.outstandingAmount)));
-                setPayOpen(true);
-              }}
+              onClick={() => openPayDialog("market", null, d, d.outstandingAmount, d.yardId)}
             >
               <CheckCircle className="h-4 w-4 mr-1" />
               Pay
@@ -316,13 +351,7 @@ export default function OutstandingDues() {
           <Button
             size="sm"
             disabled={!canMarkPaid}
-            onClick={() => {
-              setPayKind("rent");
-              setPayInvoice(d);
-              setPayMarket(null);
-              setPayAmount(String(Math.max(0, d.outstandingAmount)));
-              setPayOpen(true);
-            }}
+            onClick={() => openPayDialog("rent", d, null, d.outstandingAmount, d.yardId)}
           >
             <CheckCircle className="h-4 w-4 mr-1" />
             Pay
@@ -412,87 +441,126 @@ export default function OutstandingDues() {
         onOpenChange={(open) => {
           setPayOpen(open);
           if (!open) {
+            setPayStep("summary");
             setPayInvoice(null);
             setPayMarket(null);
+            setPayYardId("");
             setPayAmount("");
+            setPaymentPref(defaultPaymentPreferenceValue());
             setOnlineReceiptHref("");
           }
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className={payStep === "payment" ? "sm:max-w-2xl max-h-[90vh]" : "sm:max-w-md"}>
           <DialogHeader>
             <DialogTitle>{payKind === "rent" ? "Pay rent invoice" : "Pay market fee (M-04)"}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
-            {payKind === "rent" && payInvoice?.invoiceId ? (
-              <Alert className="border-amber-500/30 bg-muted/40">
-                <AlertTitle className="text-sm">After a cheque/DD dishonour</AlertTitle>
-                <AlertDescription className="text-xs text-muted-foreground space-y-1">
-                  <p>
-                    If this invoice had a reversed receipt earlier, the replacement receipt may show an{" "}
-                    <strong>arrears interest disclosure</strong> (not added to the receipt total). Open the new receipt
-                    from the register after you pay here, or review the invoice workflow.
-                  </p>
-                  <Link
-                    className="text-primary font-medium hover:underline inline-block"
-                    href={`/rent/ioms/invoices/${encodeURIComponent(payInvoice.invoiceId)}`}
-                  >
-                    Rent invoice detail
-                  </Link>
-                </AlertDescription>
-              </Alert>
+          {payStep === "summary" ? (
+            <div className="space-y-3">
+              {payKind === "rent" && payInvoice?.invoiceId ? (
+                <Alert className="border-amber-500/30 bg-muted/40">
+                  <AlertTitle className="text-sm">After a cheque/DD dishonour</AlertTitle>
+                  <AlertDescription className="text-xs text-muted-foreground space-y-1">
+                    <p>
+                      If this invoice had a reversed receipt earlier, the replacement receipt may show an{" "}
+                      <strong>arrears interest disclosure</strong> (not added to the receipt total). Open the new receipt
+                      from the register after you pay here, or review the invoice workflow.
+                    </p>
+                    <Link
+                      className="text-primary font-medium hover:underline inline-block"
+                      href={`/rent/ioms/invoices/${encodeURIComponent(payInvoice.invoiceId)}`}
+                    >
+                      Rent invoice detail
+                    </Link>
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              <div className="text-sm">
+                {payKind === "rent" ? (
+                  <>
+                    <span className="text-muted-foreground">Invoice:</span>{" "}
+                    <span className="font-mono">{payInvoice?.invoiceNo ?? payInvoice?.invoiceId}</span>
+                    <br />
+                    <span className="text-muted-foreground">Outstanding:</span>{" "}
+                    <span className="font-medium">{formatInr(Number(payInvoice?.outstandingAmount ?? 0))}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-muted-foreground">Purchase:</span>{" "}
+                    <span className="font-mono">{payMarket?.transactionNo ?? payMarket?.purchaseTransactionId}</span>
+                    <br />
+                    <span className="text-muted-foreground">Outstanding:</span>{" "}
+                    <span className="font-medium">{formatInr(Number(payMarket?.outstandingAmount ?? 0))}</span>
+                  </>
+                )}
+              </div>
+              <div className="space-y-1">
+                <Label>Amount</Label>
+                <Input value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder="e.g. 11800" />
+              </div>
+            </div>
+          ) : (
+            <PaymentPreferenceForm
+              value={paymentPref}
+              onChange={setPaymentPref}
+              receivedByLabel={receivedByLabel}
+              receivedAtLabel={receivedAtLabel}
+              summaryAmount={payAmount}
+            />
+          )}
+          <DialogFooter className="flex-wrap gap-2">
+            {payStep === "payment" ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setPayStep("summary");
+                  setPaymentPref((p) => ({ ...p, paidAmount: payAmount }));
+                }}
+              >
+                Back
+              </Button>
             ) : null}
-            <div className="text-sm">
-              {payKind === "rent" ? (
-                <>
-                  <span className="text-muted-foreground">Invoice:</span>{" "}
-                  <span className="font-mono">{payInvoice?.invoiceNo ?? payInvoice?.invoiceId}</span>
-                  <br />
-                  <span className="text-muted-foreground">Outstanding:</span>{" "}
-                  <span className="font-medium">{formatInr(Number(payInvoice?.outstandingAmount ?? 0))}</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-muted-foreground">Purchase:</span>{" "}
-                  <span className="font-mono">{payMarket?.transactionNo ?? payMarket?.purchaseTransactionId}</span>
-                  <br />
-                  <span className="text-muted-foreground">Outstanding:</span>{" "}
-                  <span className="font-medium">{formatInr(Number(payMarket?.outstandingAmount ?? 0))}</span>
-                </>
-              )}
-            </div>
-            <div className="space-y-1">
-              <Label>Amount</Label>
-              <Input value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder="e.g. 500" />
-            </div>
-          </div>
-          <DialogFooter>
             <Button variant="outline" onClick={() => setPayOpen(false)}>
               Cancel
             </Button>
-            <Button
-              variant="secondary"
-              onClick={() => onlineMutation.mutate()}
-              disabled={
-                onlineMutation.isPending ||
-                !Number.isFinite(Number(payAmount)) ||
-                Number(payAmount) <= 0 ||
-                (payKind === "rent" ? !payInvoice : !payMarket)
-              }
-            >
-              Pay online
-            </Button>
-            <Button
-              onClick={() => payMutation.mutate()}
-              disabled={
-                payMutation.isPending ||
-                !Number.isFinite(Number(payAmount)) ||
-                Number(payAmount) <= 0 ||
-                (payKind === "rent" ? !payInvoice : !payMarket)
-              }
-            >
-              Pay
-            </Button>
+            {payStep === "summary" ? (
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={() => onlineMutation.mutate()}
+                  disabled={
+                    onlineMutation.isPending ||
+                    !Number.isFinite(Number(payAmount)) ||
+                    Number(payAmount) <= 0 ||
+                    (payKind === "rent" ? !payInvoice : !payMarket)
+                  }
+                >
+                  Pay online
+                </Button>
+                <Button
+                  onClick={() => {
+                    const amt = Number(payAmount);
+                    if (!Number.isFinite(amt) || amt <= 0) {
+                      toast({ title: "Invalid amount", description: "Enter a valid amount.", variant: "destructive" });
+                      return;
+                    }
+                    setPaymentPref(defaultPaymentPreferenceValue(amt));
+                    setPayStep("payment");
+                  }}
+                  disabled={
+                    !Number.isFinite(Number(payAmount)) ||
+                    Number(payAmount) <= 0 ||
+                    (payKind === "rent" ? !payInvoice : !payMarket)
+                  }
+                >
+                  Pay
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => payMutation.mutate()} disabled={payMutation.isPending}>
+                Confirm payment
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

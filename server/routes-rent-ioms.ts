@@ -38,7 +38,14 @@ import { writeAuditLog } from "./audit";
 import { routeParamString } from "./route-params";
 import { resolveRentInvoiceTdsFields } from "./rent-invoice-tds";
 import { isValidYearMonthYm } from "./rent-gstr1";
-import { createIomsReceipt } from "./routes-receipts-ioms";
+import { createIomsReceipt, ReceiptPaymentModeError } from "./routes-receipts-ioms";
+import {
+  counterPaymentCreateParams,
+  counterPaymentPaidUpdate,
+  DuesCounterPaymentError,
+  parseCounterDuesPaymentBody,
+  type ParsedCounterDuesPayment,
+} from "./dues-counter-payment";
 import { assertTraderLicenceAccessibleInUserScope } from "./trader-licence-market-scope";
 import { applyM03ReceiptToRentDepositLedger } from "./rent-deposit-ledger-from-receipt";
 import { listRentDepositLedgerEnriched } from "./rent-deposit-ledger-display";
@@ -343,6 +350,7 @@ export function registerRentIomsRoutes(app: Express) {
       res.json({
         invoiceId: id,
         invoiceNo: inv.invoiceNo ?? null,
+        yardId: inv.yardId,
         outstandingRent,
         isGovtEntity: Boolean(inv.isGovtEntity),
         status: inv.status,
@@ -1405,10 +1413,19 @@ export function registerRentIomsRoutes(app: Express) {
       const body = req.body as Record<string, unknown>;
       const mode = String(body.mode ?? "").trim();
       const invoiceId = String(body.invoiceId ?? "").trim();
-      const paymentMode = String(body.paymentMode ?? "Cash").trim();
       if (!invoiceId || !["rent_only", "interest_only", "combined"].includes(mode)) {
         return sendApiError(res, 400, "LEDGER_PAY_FIELDS", "invoiceId and mode (rent_only | interest_only | combined) are required");
       }
+      let counterPay: ParsedCounterDuesPayment;
+      try {
+        counterPay = parseCounterDuesPaymentBody(body);
+      } catch (e) {
+        if (e instanceof DuesCounterPaymentError) {
+          return sendApiError(res, 400, e.code, e.message);
+        }
+        throw e;
+      }
+      const counterExtras = counterPaymentCreateParams(counterPay);
 
       const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
       if (!inv) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
@@ -1526,12 +1543,12 @@ export function registerRentIomsRoutes(app: Express) {
           cgst: 0,
           sgst: 0,
           tdsAmount: 0,
-          paymentMode,
           sourceModule: "M-03",
           sourceRecordId: inv.id,
           unifiedEntityId: payer.unifiedEntityId,
           m03BreakdownJson: brJson,
           createdBy,
+          ...counterExtras,
         });
       } else if (mode === "rent_only") {
         const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
@@ -1546,11 +1563,11 @@ export function registerRentIomsRoutes(app: Express) {
           cgst: parts.cgst,
           sgst: parts.sgst,
           tdsAmount: 0,
-          paymentMode,
           sourceModule: "M-03",
           sourceRecordId: inv.id,
           unifiedEntityId: payer.unifiedEntityId,
           createdBy,
+          ...counterExtras,
         });
       } else {
         const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
@@ -1575,17 +1592,20 @@ export function registerRentIomsRoutes(app: Express) {
           cgst: parts.cgst,
           sgst: parts.sgst,
           tdsAmount: 0,
-          paymentMode,
           sourceModule: "M-03",
           sourceRecordId: inv.id,
           unifiedEntityId: payer.unifiedEntityId,
           m03BreakdownJson: brJson,
           totalAmountOverride: totalIn,
           createdBy,
+          ...counterExtras,
         });
       }
 
-      await db.update(iomsReceipts).set({ status: "Paid", gatewayRef: "Manual" }).where(eq(iomsReceipts.id, created.id));
+      await db
+        .update(iomsReceipts)
+        .set(counterPaymentPaidUpdate(counterPay))
+        .where(eq(iomsReceipts.id, created.id));
       const [paidRow] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, created.id)).limit(1);
       let ledgerMessages: string[] = [];
       if (paidRow) {
@@ -1611,6 +1631,9 @@ export function registerRentIomsRoutes(app: Express) {
         ledgerMessages,
       });
     } catch (e) {
+      if (e instanceof ReceiptPaymentModeError) {
+        return sendApiError(res, 400, "LEDGER_PAY_MODE_INVALID", e.message);
+      }
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to record ledger payment");
     }

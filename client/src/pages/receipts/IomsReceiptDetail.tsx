@@ -50,6 +50,14 @@ interface IomsReceipt {
   payerDisplayName?: string | null;
   payerType?: string | null;
   payerRefId?: string | null;
+  payerPartyType?: string | null;
+  payerAddress?: string | null;
+  payerContact?: string | null;
+  premisesAssetId?: string | null;
+  applicationRef?: string | null;
+  narration?: string | null;
+  manualReceiptTypeLedgerName?: string | null;
+  manualTallyLedgerName?: string | null;
   amount: number;
   cgst?: number | null;
   sgst?: number | null;
@@ -114,7 +122,7 @@ export default function IomsReceiptDetail() {
 
   const { data: assets = [] } = useQuery<{ id: string; assetId: string }[]>({
     queryKey: ["/api/ioms/assets"],
-    enabled: m03RentReceipt,
+    enabled: m03RentReceipt || Boolean(receipt?.premisesAssetId),
   });
   const assetById = useMemo(
     () => Object.fromEntries(assets.map((a) => [a.id, a.assetId])),
@@ -163,13 +171,28 @@ export default function IomsReceiptDetail() {
   const sourceLabel = useMemo(() => {
     if (!receipt?.sourceModule) return "";
     const mod = receipt.sourceModule.trim();
+    if (mod === "M-05-MANUAL" && receipt.manualReceiptTypeLedgerName?.trim()) {
+      return `${mod} · ${receipt.manualReceiptTypeLedgerName.trim()}`;
+    }
     if (mod === "M-03" && receipt.sourceInvoiceNo?.trim()) {
       const inv = receipt.sourceInvoiceNo.trim();
       const pm = receipt.sourceInvoicePeriodMonth?.trim();
       return pm ? `${mod} · ${inv} (${pm})` : `${mod} · ${inv}`;
     }
     return [mod, receipt.sourceRecordId?.trim()].filter(Boolean).join(" ");
-  }, [receipt?.sourceModule, receipt?.sourceRecordId, receipt?.sourceInvoiceNo, receipt?.sourceInvoicePeriodMonth]);
+  }, [
+    receipt?.sourceModule,
+    receipt?.sourceRecordId,
+    receipt?.sourceInvoiceNo,
+    receipt?.sourceInvoicePeriodMonth,
+    receipt?.manualReceiptTypeLedgerName,
+  ]);
+
+  const premisesLabel = useMemo(() => {
+    const pid = receipt?.premisesAssetId?.trim();
+    if (!pid) return null;
+    return assetById[pid] ?? pid;
+  }, [receipt?.premisesAssetId, assetById]);
 
   const canMockPay = can("M-05", "Create");
   const canUpdate = can("M-05", "Update");
@@ -462,6 +485,16 @@ export default function IomsReceiptDetail() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[receipt.yardId] ?? receipt.yardId}</div>
             <div><span className="text-muted-foreground">Revenue head</span><br />{receipt.revenueHead}</div>
+            {receipt.manualReceiptTypeLedgerName ? (
+              <div>
+                <span className="text-muted-foreground">Manual receipt type</span>
+                <br />
+                {receipt.manualReceiptTypeLedgerName}
+                {receipt.manualTallyLedgerName ? (
+                  <span className="text-muted-foreground text-xs block">Tally: {receipt.manualTallyLedgerName}</span>
+                ) : null}
+              </div>
+            ) : null}
             {m03RentReceipt ? (
               <div>
                 <span className="text-muted-foreground">Allotment Reference No.</span>
@@ -483,6 +516,41 @@ export default function IomsReceiptDetail() {
             {receipt.gatewayRef && <div><span className="text-muted-foreground">Gateway ref</span><br />{receipt.gatewayRef}</div>}
             {receipt.chequeNo && <div><span className="text-muted-foreground">Cheque no</span><br />{receipt.chequeNo} {receipt.bankName ? `(${receipt.bankName})` : ""}</div>}
             {receipt.sourceModule && <div><span className="text-muted-foreground">Source</span><br />{sourceLabel}</div>}
+            {premisesLabel ? (
+              <div>
+                <span className="text-muted-foreground">Premises</span>
+                <br />
+                {premisesLabel}
+              </div>
+            ) : null}
+            {receipt.payerAddress ? (
+              <div>
+                <span className="text-muted-foreground">Payer address</span>
+                <br />
+                {receipt.payerAddress}
+              </div>
+            ) : null}
+            {receipt.payerContact ? (
+              <div>
+                <span className="text-muted-foreground">Payer contact</span>
+                <br />
+                {receipt.payerContact}
+              </div>
+            ) : null}
+            {receipt.applicationRef ? (
+              <div>
+                <span className="text-muted-foreground">Application ref</span>
+                <br />
+                {receipt.applicationRef}
+              </div>
+            ) : null}
+            {receipt.narration ? (
+              <div className="md:col-span-2">
+                <span className="text-muted-foreground">Narration</span>
+                <br />
+                {receipt.narration}
+              </div>
+            ) : null}
             {receipt.unifiedEntityId && !m03RentReceipt ? (
               <div className="md:col-span-2">
                 <span className="text-muted-foreground">Unified entity</span>

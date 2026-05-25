@@ -31,6 +31,17 @@ interface ExpenditureHead {
   tallyLedgerId?: string | null;
 }
 
+interface ManualReceiptTypeRow {
+  id: string;
+  ledgerName: string;
+  revenueHead: string;
+  payeeRule: string;
+  requiresPremises: boolean;
+  showInDropdown: boolean;
+  tallyLedgerName?: string | null;
+  linkingNotes?: string | null;
+}
+
 export default function AdminFinanceMappings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -42,6 +53,10 @@ export default function AdminFinanceMappings() {
 
   const { data: heads = [], isLoading: headsLoading } = useQuery<ExpenditureHead[]>({
     queryKey: ["/api/ioms/expenditure-heads"],
+  });
+
+  const { data: manualTypes = [], isLoading: manualTypesLoading } = useQuery<ManualReceiptTypeRow[]>({
+    queryKey: ["/api/ioms/manual-receipt-types"],
   });
 
   const mutation = useMutation({
@@ -129,6 +144,30 @@ export default function AdminFinanceMappings() {
     }));
   }, [ledgers]);
 
+  const manualTypeColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "ledgerName", header: "Ledger name" },
+      { key: "revenueHead", header: "Revenue head" },
+      { key: "payeeRule", header: "Payee rule" },
+      { key: "requiresPremises", header: "Premises" },
+      { key: "showInDropdown", header: "Dropdown" },
+      { key: "tallyLedgerName", header: "Tally ledger" },
+    ],
+    [],
+  );
+
+  const manualTypeRows = useMemo((): Record<string, unknown>[] => {
+    return manualTypes.map((t) => ({
+      id: t.id,
+      ledgerName: t.ledgerName,
+      revenueHead: t.revenueHead,
+      payeeRule: t.payeeRule,
+      requiresPremises: t.requiresPremises ? "Yes" : "No",
+      showInDropdown: t.showInDropdown ? "Yes" : "No",
+      tallyLedgerName: t.tallyLedgerName ?? "—",
+    }));
+  }, [manualTypes]);
+
   return (
     <AppShell
       breadcrumbs={[
@@ -165,6 +204,31 @@ export default function AdminFinanceMappings() {
                 defaultSortKey="code"
                 defaultSortDir="asc"
                 emptyMessage="No expenditure heads."
+              />
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Manual receipt types (M-05)</CardTitle>
+            <CardDescription>
+              Seeded from Manual_Receipt_Scenarios.xlsx; Tally ledger name is the authoritative key per row.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="max-h-[360px] overflow-auto">
+            {manualTypesLoading || ledgersLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+              </div>
+            ) : (
+              <ClientDataGrid
+                columns={manualTypeColumns}
+                sourceRows={manualTypeRows}
+                searchKeys={["ledgerName", "revenueHead", "tallyLedgerName"]}
+                defaultSortKey="ledgerName"
+                defaultSortDir="asc"
+                emptyMessage="No manual receipt types — run db:seed-manual-receipt-types."
               />
             )}
           </CardContent>

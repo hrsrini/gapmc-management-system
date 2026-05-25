@@ -414,11 +414,44 @@ export const iomsReceipts = gapmc.table("ioms_receipts", {
   m03BreakdownJson: text("m03_breakdown_json"),
   /** M-02 unified entity id: TA:|TB:|AH: (optional; populated when known). */
   unifiedEntityId: text("unified_entity_id"),
+  /** M-05 manual receipt: FK to manual_receipt_types when sourceModule is M-05-MANUAL. */
+  manualReceiptTypeId: text("manual_receipt_type_id"),
+  /** Trader | Entity | Assistant | NewParty */
+  payerPartyType: text("payer_party_type"),
+  payerAddress: text("payer_address"),
+  payerContact: text("payer_contact"),
+  /** Premises (asset) id when scenario requires Premises ID link. */
+  premisesAssetId: text("premises_asset_id"),
+  /** Licence / application reference when scenario requires it. */
+  applicationRef: text("application_ref"),
+  /** Manual receipt narration (max 500 chars in UI). */
+  narration: text("narration"),
   qrCodeUrl: text("qr_code_url"),
   pdfUrl: text("pdf_url"),
   status: text("status").notNull(), // Pending | Paid | Failed | Reconciled | Reversed (cheque/DD dishonour)
   createdBy: text("created_by").notNull(),
   createdAt: text("created_at").notNull(),
+});
+
+/** M-05 manual receipt type master (from Tally / business scenario workbook). */
+export const manualReceiptTypes = gapmc.table("manual_receipt_types", {
+  id: text("id").primaryKey(),
+  /** Excel Sr. No. when present. */
+  sortOrder: integer("sort_order").notNull().default(0),
+  /** Authoritative label — matches Tally ledger name in workbook. */
+  ledgerName: text("ledger_name").notNull().unique(),
+  tallyLedgerId: text("tally_ledger_id"),
+  primaryGroup: text("primary_group"),
+  statementClass: text("statement_class"),
+  /** IOMS revenue head bucket for receipt numbering / reports. */
+  revenueHead: text("revenue_head").notNull(),
+  /** tenant_premises | party_trader_entity_new | party_with_assistant | trader_market_fee | trader_registration | trader_renewal | trader_upgradation | deposit */
+  payeeRule: text("payee_rule").notNull(),
+  requiresPremises: boolean("requires_premises").default(false).notNull(),
+  /** Show on New Receipt Form dropdown (workbook Dropdown_Reciets_Form). */
+  showInDropdown: boolean("show_in_dropdown").default(true).notNull(),
+  linkingNotes: text("linking_notes"),
+  isActive: boolean("is_active").default(true).notNull(),
 });
 
 // ----- M-01: Designation master (centralized titles / hierarchy) -----

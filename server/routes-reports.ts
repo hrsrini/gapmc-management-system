@@ -4,6 +4,7 @@
  */
 import type { Express } from "express";
 import { eq, desc, and, inArray, gte, lte, sql, or, ilike, ne } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import { sendApiError } from "./api-errors";
 import { parseReportPaging, parseReportSort, reportSearchPattern } from "./report-paging";
@@ -25,6 +26,7 @@ import {
   iomsReceipts,
   employees,
   tallyLedgers,
+  manualReceiptTypes,
   iomsRevenueHeadLedgerMap,
   expenditureHeads,
   checkPostInward,
@@ -712,6 +714,9 @@ export function registerReportsRoutes(app: Express) {
       const format = (req.query.format as string)?.toLowerCase();
       const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
 
+      const rhTallyLedgers = alias(tallyLedgers, "rh_tally_ledgers");
+      const manualTallyLedgers = alias(tallyLedgers, "manual_tally_ledgers");
+
       const receiptConditions = [];
       if (scopedIds && scopedIds.length > 0) receiptConditions.push(inArray(iomsReceipts.yardId, scopedIds));
       if (from) receiptConditions.push(gte(iomsReceipts.createdAt, from));
@@ -730,13 +735,15 @@ export function registerReportsRoutes(app: Express) {
           cgst: iomsReceipts.cgst,
           sgst: iomsReceipts.sgst,
           totalAmount: iomsReceipts.totalAmount,
-          tallyLedgerName: tallyLedgers.ledgerName,
-          tallyLedgerId: tallyLedgers.id,
-          tallyGroup: tallyLedgers.primaryGroup,
+          tallyLedgerName: sql<string>`coalesce(${manualTallyLedgers.ledgerName}, ${rhTallyLedgers.ledgerName})`,
+          tallyLedgerId: sql<string>`coalesce(${manualTallyLedgers.id}, ${rhTallyLedgers.id})`,
+          tallyGroup: sql<string>`coalesce(${manualTallyLedgers.primaryGroup}, ${rhTallyLedgers.primaryGroup})`,
         })
         .from(iomsReceipts)
+        .leftJoin(manualReceiptTypes, eq(iomsReceipts.manualReceiptTypeId, manualReceiptTypes.id))
+        .leftJoin(manualTallyLedgers, eq(manualReceiptTypes.tallyLedgerId, manualTallyLedgers.id))
         .leftJoin(iomsRevenueHeadLedgerMap, eq(iomsReceipts.revenueHead, iomsRevenueHeadLedgerMap.revenueHead))
-        .leftJoin(tallyLedgers, eq(iomsRevenueHeadLedgerMap.tallyLedgerId, tallyLedgers.id))
+        .leftJoin(rhTallyLedgers, eq(iomsRevenueHeadLedgerMap.tallyLedgerId, rhTallyLedgers.id))
         .orderBy(desc(iomsReceipts.createdAt));
 
       const receiptRows =

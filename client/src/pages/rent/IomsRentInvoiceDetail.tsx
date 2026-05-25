@@ -24,6 +24,7 @@ import { formatApiDateOrDateTime, formatYearMonthToDisplay, formatYmdToDisplay }
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
 import { formatInr } from "@/lib/formatInr";
+import { CounterPaymentDialog } from "@/components/payments/CounterPaymentDialog";
 import {
   entityIdFromRentInvoice,
   formatRentInvoiceAllotmentReference,
@@ -124,6 +125,8 @@ export default function IomsRentInvoiceDetail() {
   });
 
   const [sendBackOpen, setSendBackOpen] = useState(false);
+  const [markPaidOpen, setMarkPaidOpen] = useState(false);
+  const [markPaidAmount, setMarkPaidAmount] = useState("");
   const [returnRemarks, setReturnRemarks] = useState("");
   const [cnReason, setCnReason] = useState("");
   const [cnAmount, setCnAmount] = useState("");
@@ -132,6 +135,15 @@ export default function IomsRentInvoiceDetail() {
   const { data: creditNoteList = [] } = useQuery<CreditNoteRow[]>({
     queryKey: ["/api/ioms/rent/credit-notes"],
     enabled: !!id,
+  });
+  const paymentContextUrl = id ? `/api/ioms/rent/invoices/${encodeURIComponent(id)}/ledger-payment-context` : "";
+  const { data: paymentContext } = useQuery<{
+    outstandingRent: number;
+    invoiceNo?: string | null;
+    yardId: string;
+  }>({
+    queryKey: [paymentContextUrl],
+    enabled: Boolean(paymentContextUrl),
   });
   const creditNotesForInvoice = creditNoteList.filter((c) => c.invoiceId === id);
 
@@ -156,6 +168,31 @@ export default function IomsRentInvoiceDetail() {
     if (!invoice) return "";
     return formatRentInvoiceTenantCounterparty(invoice.tenantLicenceId, entityMaster, licenceById);
   }, [invoice, entityMaster, licenceById]);
+
+  const markPaidPayMutation = useMutation({
+    mutationFn: async (payBody: Record<string, unknown>) => {
+      const res = await fetch("/api/ioms/dues/pay-rent-invoice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ invoiceId: id, ...payBody }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
+      return data as { receiptNo?: string };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/invoices", id] });
+      queryClient.invalidateQueries({ queryKey: [paymentContextUrl] });
+      setMarkPaidOpen(false);
+      toast({
+        title: "Payment recorded",
+        description: data.receiptNo ? `Receipt ${data.receiptNo}. Invoice marked paid when fully settled.` : "Payment saved.",
+      });
+    },
+    onError: (e: Error) => toast({ title: "Payment failed", description: e.message, variant: "destructive" }),
+  });
 
   const statusMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -459,7 +496,16 @@ export default function IomsRentInvoiceDetail() {
               </Button>
             )}
             {canMarkPaid && (
-              <Button size="sm" variant="default" onClick={() => statusMutation.mutate({ status: "Paid" })} disabled={statusMutation.isPending}>
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => {
+                  const out = paymentContext?.outstandingRent ?? Number(invoice.totalAmount ?? 0);
+                  setMarkPaidAmount(String(Math.max(0, Math.round(out * 100) / 100)));
+                  setMarkPaidOpen(true);
+                }}
+                disabled={markPaidPayMutation.isPending}
+              >
                 <Banknote className="h-4 w-4 mr-1" /> Mark Paid
               </Button>
             )}
@@ -540,6 +586,38 @@ export default function IomsRentInvoiceDetail() {
           </CardContent>
         </Card>
       )}
+
+      <CounterPaymentDialog
+        open={markPaidOpen}
+        onOpenChange={setMarkPaidOpen}
+        title="Mark rent invoice paid"
+        yardId={paymentContext?.yardId ?? invoice.yardId}
+        amount={markPaidAmount}
+        onAmountChange={setMarkPaidAmount}
+        confirmPending={markPaidPayMutation.isPending}
+        canAdvanceFromSummary={
+          Number.isFinite(Number(markPaidAmount)) &&
+          Number(markPaidAmount) > 0 &&
+          (paymentContext?.outstandingRent ?? invoice.totalAmount) > 0.001
+        }
+        summaryContent={
+          <div className="text-sm space-y-1">
+            <p>
+              <span className="text-muted-foreground">Invoice:</span>{" "}
+              <span className="font-mono">{invoice.invoiceNo ?? invoice.id}</span>
+            </p>
+            <p>
+              <span className="text-muted-foreground">Outstanding:</span>{" "}
+              <span className="font-medium">
+                {formatInr(paymentContext?.outstandingRent ?? invoice.totalAmount)}
+              </span>
+            </p>
+          </div>
+        }
+        onConfirm={async (payBody) => {
+          await markPaidPayMutation.mutateAsync(payBody);
+        }}
+      />
 
       <Dialog open={sendBackOpen} onOpenChange={setSendBackOpen}>
         <DialogContent className="sm:max-w-md">

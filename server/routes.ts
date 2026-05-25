@@ -6,6 +6,7 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { registerAdminRoutes } from "./routes-admin";
 import { registerReceiptsIomsRoutes } from "./routes-receipts-ioms";
+import { registerManualReceiptRoutes } from "./routes-manual-receipts";
 import { registerHrRoutes } from "./routes-hr";
 import { registerTradersAssetsRoutes } from "./routes-traders-assets";
 import { registerRentIomsRoutes } from "./routes-rent-ioms";
@@ -402,6 +403,7 @@ export async function registerRoutes(
 
   // IOMS M-05: Receipts Online — central receipt engine
   registerReceiptsIomsRoutes(app);
+  registerManualReceiptRoutes(app);
 
   // IOMS M-01: HRMS
   registerHrRoutes(app);

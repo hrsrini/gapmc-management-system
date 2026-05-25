@@ -29,7 +29,14 @@ import {
 import { nanoid } from "nanoid";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { writeAuditLog } from "./audit";
-import { createIomsReceipt } from "./routes-receipts-ioms";
+import { createIomsReceipt, ReceiptPaymentModeError } from "./routes-receipts-ioms";
+import {
+  counterPaymentCreateParams,
+  counterPaymentPaidUpdate,
+  DuesCounterPaymentError,
+  parseCounterDuesPaymentBody,
+  type ParsedCounterDuesPayment,
+} from "./dues-counter-payment";
 import { tenantLicenceIsGstExempt, resolveGovtGstExemptCategoryId } from "./gst-exempt";
 import {
   assertRecordDoDvDaSeparation,
@@ -746,6 +753,15 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!invoiceId || !Number.isFinite(payAmount) || payAmount <= 0) {
         return sendApiError(res, 400, "DUES_PAY_FIELDS", "invoiceId and amount (number>0) are required");
       }
+      let counterPay: ParsedCounterDuesPayment;
+      try {
+        counterPay = parseCounterDuesPaymentBody(body);
+      } catch (e) {
+        if (e instanceof DuesCounterPaymentError) {
+          return sendApiError(res, 400, e.code, e.message);
+        }
+        throw e;
+      }
       const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
       if (!inv) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       const scopedIds = req.scopedLocationIds;
@@ -783,14 +799,17 @@ export function registerTradersAssetsRoutes(app: Express) {
         cgst: 0,
         sgst: 0,
         tdsAmount: 0,
-        paymentMode: "Cash",
         sourceModule: "M-03",
         sourceRecordId: inv.id,
         unifiedEntityId: payer.unifiedEntityId,
         createdBy,
+        ...counterPaymentCreateParams(counterPay),
       });
 
-      await db.update(iomsReceipts).set({ status: "Paid", gatewayRef: "Manual" }).where(eq(iomsReceipts.id, created.id));
+      await db
+        .update(iomsReceipts)
+        .set(counterPaymentPaidUpdate(counterPay))
+        .where(eq(iomsReceipts.id, created.id));
       const [paidRow] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, created.id)).limit(1);
       if (paidRow) {
         try {
@@ -807,6 +826,9 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       res.status(201).json({ receiptId: created.id, receiptNo: created.receiptNo, newOutstanding });
     } catch (e) {
+      if (e instanceof ReceiptPaymentModeError) {
+        return sendApiError(res, 400, "DUES_PAY_MODE_INVALID", e.message);
+      }
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to record payment");
     }
@@ -960,6 +982,15 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!Number.isFinite(payAmount) || payAmount <= 0) {
         return sendApiError(res, 400, "DUES_MARKET_PAY_AMOUNT", "amount must be a positive number");
       }
+      let counterPay: ParsedCounterDuesPayment;
+      try {
+        counterPay = parseCounterDuesPaymentBody(body);
+      } catch (e) {
+        if (e instanceof DuesCounterPaymentError) {
+          return sendApiError(res, 400, e.code, e.message);
+        }
+        throw e;
+      }
 
       const [pt] = await db
         .select()
@@ -1018,7 +1049,18 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       if (singlePendingInPlace) {
         const pr = pendingRecs[0]!;
-        await db.update(iomsReceipts).set({ status: "Paid", gatewayRef: "Manual" }).where(eq(iomsReceipts.id, pr.id));
+        await db
+          .update(iomsReceipts)
+          .set({
+            status: "Paid",
+            paymentMode: counterPay.paymentMode,
+            chequeNo: counterPay.chequeNo,
+            bankName: counterPay.bankName,
+            chequeDate: counterPay.chequeDateYmd,
+            ...(counterPay.gatewayRef != null ? { gatewayRef: counterPay.gatewayRef } : {}),
+            ...(counterPay.paymentDateYmd ? { createdAt: `${counterPay.paymentDateYmd}T12:00:00.000Z` } : {}),
+          })
+          .where(eq(iomsReceipts.id, pr.id));
         const [row] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, pr.id)).limit(1);
         if (row) {
           await writeAuditLog(req, {
@@ -1043,14 +1085,17 @@ export function registerTradersAssetsRoutes(app: Express) {
         payerType: "TraderLicence",
         payerRefId: pt.traderLicenceId,
         amount: payAmount,
-        paymentMode: "Cash",
         sourceModule: "M-04",
         sourceRecordId: pt.id,
         unifiedEntityId: unifiedEntityIdFromTrackA(pt.traderLicenceId),
         createdBy,
+        ...counterPaymentCreateParams(counterPay),
       });
 
-      await db.update(iomsReceipts).set({ status: "Paid", gatewayRef: "Manual" }).where(eq(iomsReceipts.id, created.id));
+      await db
+        .update(iomsReceipts)
+        .set(counterPaymentPaidUpdate(counterPay))
+        .where(eq(iomsReceipts.id, created.id));
 
       let remaining = payAmount;
       for (const pr of pendingRecs) {
@@ -1089,6 +1134,9 @@ export function registerTradersAssetsRoutes(app: Express) {
       const newOutstanding = Math.max(0, outstanding - payAmount);
       res.status(201).json({ receiptId: created.id, receiptNo: created.receiptNo, newOutstanding });
     } catch (e) {
+      if (e instanceof ReceiptPaymentModeError) {
+        return sendApiError(res, 400, "DUES_PAY_MODE_INVALID", e.message);
+      }
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to record market fee payment");
     }

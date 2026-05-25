@@ -55,10 +55,9 @@ interface EntitySubtypeRef {
 
 const columns: ReportTableColumn[] = [
   { key: "_code", header: "Entity ID" },
-  { key: "name", header: "Name" },
-  { key: "track", header: "Track" },
+  { key: "name", header: "Entity Name" },
   { key: "subType", header: "Sub-type" },
-  { key: "_billing", header: "Billing", sortField: "billingLabel" },
+  { key: "_billing", header: "Billing Type", sortField: "billingLabel" },
   { key: "yardName", header: "Yard" },
   { key: "mobile", header: "Mobile" },
   { key: "_status", header: "Status", sortField: "status" },
@@ -138,7 +137,6 @@ export default function Entities() {
           </Link>
         ),
         name: e.name,
-        track: e.track,
         subType: e.subType ?? "—",
         billingLabel,
         _billing: <Badge variant="outline">{billingLabel}</Badge>,
@@ -222,7 +220,7 @@ export default function Entities() {
             <ClientDataGrid
               columns={columns}
               sourceRows={sourceRows}
-              searchKeys={["code", "name", "track", "subType", "billingLabel", "yardName", "mobile", "status"]}
+              searchKeys={["code", "name", "subType", "billingLabel", "yardName", "mobile", "status"]}
               searchPlaceholder="Search entities…"
               defaultSortKey="name"
               defaultSortDir="asc"

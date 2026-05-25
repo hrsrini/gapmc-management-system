@@ -29,6 +29,7 @@ import LedgerReports from "@/pages/receipts/LedgerReports";
 import IomsReceiptList from "@/pages/receipts/IomsReceiptList";
 import IomsReceiptDetail from "@/pages/receipts/IomsReceiptDetail";
 import IomsReceiptReconciliation from "@/pages/receipts/IomsReceiptReconciliation";
+import IomsManualReceiptForm from "@/pages/receipts/IomsManualReceiptForm";
 import VerifyReceipt from "@/pages/VerifyReceipt";
 import Health from "@/pages/Health";
 import AdminRoles from "@/pages/admin/AdminRoles";
@@ -360,6 +361,9 @@ function Router() {
       </Route>
       <Route path="/receipts/new">
         <ProtectedRoute><RequirePermission module="M-05" action="Create"><ReceiptForm /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/receipts/ioms/new">
+        <ProtectedRoute><RequirePermission module="M-05" action="Create"><IomsManualReceiptForm /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/receipts/ledger">
         <ProtectedRoute><LedgerReports /></ProtectedRoute>
