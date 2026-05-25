@@ -4,7 +4,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BookOpen, AlertCircle, Receipt } from "lucide-react";
+import { BookOpen, AlertCircle, Download, Loader2, Receipt } from "lucide-react";
 import { Link } from "wouter";
 import {
   ReportDataTable,
@@ -38,6 +38,7 @@ interface LedgerEntry {
   id: string;
   tenantLicenceId: string;
   tenantLicenceDisplayName?: string | null;
+  licenceOrEntityIdDisplay?: string | null;
   unifiedEntityId?: string | null;
   unifiedEntityDisplayName?: string | null;
   assetId: string;
@@ -54,6 +55,38 @@ interface LedgerEntry {
   refDisplay?: string | null;
   interestPaymentStatus?: string | null;
   settledReceiptId?: string | null;
+  invoiceStatus?: string | null;
+  invoicePaidReceiptId?: string | null;
+  invoicePaidReceiptNo?: string | null;
+}
+
+function ledgerPaidReceiptId(e: LedgerEntry): string | null {
+  if (e.entryType === "Interest") {
+    if (String(e.interestPaymentStatus ?? "").trim() === "Paid" && e.settledReceiptId) {
+      return e.settledReceiptId;
+    }
+    return null;
+  }
+  if (e.receiptId) return e.receiptId;
+  const invId = String(e.invoiceId ?? "").trim();
+  if (!invId) return null;
+  if (e.invoicePaidReceiptId) return e.invoicePaidReceiptId;
+  return null;
+}
+
+function ledgerPaymentStatusLabel(e: LedgerEntry, paidReceiptId: string | null): string {
+  if (e.entryType === "Interest") {
+    return String(e.interestPaymentStatus ?? "").trim() === "Paid" ? "Paid" : "Unpaid";
+  }
+  if (
+    paidReceiptId ||
+    (e.entryType === "Collection" && e.receiptId) ||
+    (String(e.invoiceStatus ?? "").trim() === "Paid" && e.invoiceId)
+  ) {
+    return "Paid";
+  }
+  if (e.entryType === "Rent" && e.invoiceId) return "Unpaid";
+  return "—";
 }
 
 interface LedgerPaymentContext {
@@ -77,15 +110,15 @@ interface TraderReceiptRow {
 
 const columns: ReportTableColumn[] = [
   { key: "entryDate", header: "Entry date" },
-  { key: "tenantLicenceDisplay", header: "Tenant licence (no. / id)" },
-  { key: "unifiedEntityDisplay", header: "Unified entity (name)" },
-  { key: "assetDisplay", header: "Asset" },
+  { key: "licenceOrEntityIdDisplay", header: "License No/Entity ID" },
+  { key: "unifiedEntityDisplay", header: "Trader Name/Entity Name" },
+  { key: "assetDisplay", header: "Premise ID" },
   { key: "entryType", header: "Type" },
   { key: "_debit", header: "Debit", sortField: "debit" },
   { key: "_credit", header: "Credit", sortField: "credit" },
   { key: "_balance", header: "Balance", sortField: "balance" },
   { key: "refDisplay", header: "Invoice / Receipt" },
-  { key: "_payStatus", header: "Payment status" },
+  { key: "_payStatus", header: "Payment / receipt" },
   { key: "_actions", header: "Actions" },
 ];
 
@@ -131,6 +164,39 @@ export default function RentLedger() {
   } | null>(null);
   const [payMode, setPayMode] = useState<PayMode>("interest_only");
   const [rentAmountInput, setRentAmountInput] = useState("");
+  const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
+
+  const downloadReceiptPdf = useCallback(
+    async (receiptId: string, receiptNo: string) => {
+      setPdfLoadingId(receiptId);
+      try {
+        const res = await fetch(`/api/ioms/receipts/${encodeURIComponent(receiptId)}/pdf`, {
+          credentials: "include",
+        });
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t || res.statusText);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `receipt-${receiptNo.replace(/[^\w.-]+/g, "_")}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast({ title: "PDF downloaded", description: "Server-generated receipt PDF." });
+      } catch (e: unknown) {
+        toast({
+          title: "PDF download failed",
+          description: e instanceof Error ? e.message : "Could not download receipt PDF.",
+          variant: "destructive",
+        });
+      } finally {
+        setPdfLoadingId(null);
+      }
+    },
+    [toast],
+  );
 
   useEffect(() => {
     setTableParams((p) => ({ ...p, page: 1 }));
@@ -212,28 +278,33 @@ export default function RentLedger() {
   const sourceRows = useMemo((): Record<string, unknown>[] => {
     return list.map((e) => {
       const isInterest = e.entryType === "Interest";
-      const paid = String(e.interestPaymentStatus ?? "").trim() === "Paid";
-      const payStatus =
-        isInterest ? (paid ? "Paid" : "Unpaid") : "—";
+      const paidReceiptId = ledgerPaidReceiptId(e);
+      const payStatus = ledgerPaymentStatusLabel(e, paidReceiptId);
       const canPayInterest =
         isInterest &&
-        !paid &&
+        payStatus !== "Paid" &&
         e.invoiceId &&
         (Number(e.debit ?? 0) > 0.001);
-      const settledLink =
-        isInterest && paid && e.settledReceiptId ? (
-          <Link
-            href={`/receipts/ioms/${encodeURIComponent(e.settledReceiptId)}`}
-            className="text-primary hover:underline text-xs font-mono"
-          >
-            Receipt
-          </Link>
-        ) : null;
+      const receiptNo =
+        e.receiptNo?.trim() ||
+        e.invoicePaidReceiptNo?.trim() ||
+        paidReceiptId ||
+        "";
+      const showPaidReceipt = payStatus === "Paid" && paidReceiptId;
       return {
         id: e.id,
         entryDate: e.entryDate.slice(0, 10),
         tenantLicenceId: e.tenantLicenceId,
-        tenantLicenceDisplay: e.tenantLicenceDisplayName?.trim() || e.tenantLicenceId || "—",
+        licenceOrEntityIdDisplay:
+          e.licenceOrEntityIdDisplay?.trim() ||
+          e.tenantLicenceDisplayName?.trim() ||
+          e.tenantLicenceId ||
+          "—",
+        tenantLicenceDisplay:
+          e.licenceOrEntityIdDisplay?.trim() ||
+          e.tenantLicenceDisplayName?.trim() ||
+          e.tenantLicenceId ||
+          "—",
         unifiedEntityDisplay: e.unifiedEntityDisplayName?.trim() || "—",
         assetDisplay: e.assetDisplay?.trim() || "—",
         entryType: e.entryType === "Collection" ? "Rent" : e.entryType,
@@ -247,7 +318,32 @@ export default function RentLedger() {
         _payStatus: (
           <div className="flex flex-col gap-0.5 text-sm">
             <span>{payStatus}</span>
-            {settledLink}
+            {showPaidReceipt ? (
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  disabled={pdfLoadingId === paidReceiptId}
+                  aria-label="Download receipt PDF"
+                  title="Download receipt PDF"
+                  onClick={() => void downloadReceiptPdf(paidReceiptId, receiptNo)}
+                >
+                  {pdfLoadingId === paidReceiptId ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+                <Link
+                  href={`/receipts/ioms/${encodeURIComponent(paidReceiptId)}`}
+                  className="text-primary hover:underline text-xs"
+                >
+                  Receipt
+                </Link>
+              </div>
+            ) : null}
           </div>
         ),
         _actions: canPayInterest ? (
@@ -259,13 +355,14 @@ export default function RentLedger() {
         ),
       };
     });
-  }, [list, openPayInterest]);
+  }, [list, openPayInterest, downloadReceiptPdf, pdfLoadingId]);
 
   const { rows, total } = useMemo(
     () =>
       sliceClientReport(sourceRows, tableParams, [
         "entryDate",
         "tenantLicenceId",
+        "licenceOrEntityIdDisplay",
         "tenantLicenceDisplay",
         "unifiedEntityId",
         "unifiedEntityDisplay",
@@ -339,7 +436,7 @@ export default function RentLedger() {
               params={tableParams}
               onParamsChange={mergeParams}
               isLoading={false}
-              searchPlaceholder="Search date, licence no/id, firm name, TA id, asset code, type, amounts, invoice…"
+              searchPlaceholder="Search date, licence/entity id, trader/entity name, premise id, type, amounts, invoice…"
             />
           )}
         </CardContent>

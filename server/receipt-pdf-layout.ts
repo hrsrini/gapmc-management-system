@@ -9,6 +9,18 @@ import type { ReceiptPdfLayoutContext, ReceiptPdfParticularRow } from "./receipt
 type PdfDoc = InstanceType<typeof PDFDocument>;
 
 const PAD = 8;
+/** Empty space between Officer Incharge and the board signature line (sign / stamp / seal). */
+const SIGNATURE_STAMP_GAP = 52;
+const USERNAME_LINE_H = 10;
+const BOARD_LINE_H = 12;
+const OFFICER_LINE_H = 10;
+const GAP_USERNAME_TO_BOARD = 8;
+/** ~one printed text line on receipt face (8.5–7.5 pt). */
+const TEXT_LINE = 12;
+/** Move Officer Incharge + board line up (fit A4). */
+const LIFT_SIGNATURE_BLOCK = TEXT_LINE * 3;
+/** Username sits at slip bottom (no extra lift; board block still lifted). */
+const LIFT_USERNAME = 0;
 const ROW_H = 14;
 const HEADER_H = 16;
 const TOTAL_ROW_H = 18;
@@ -132,7 +144,7 @@ export function drawGaplmbReceiptSlip(
   doc.text(pdfSafeText(`Date : ${ctx.dateLabel}`), rightX, cy, { width: rightW, align: "right" });
   cy += 13;
 
-  doc.text(pdfSafeText(`Received with thanks From : ${ctx.payerDisplayName}`), innerX, cy, {
+  doc.text(pdfSafeText(ctx.receivedFromLine), innerX, cy, {
     width: halfW + 20,
     align: "left",
   });
@@ -167,37 +179,51 @@ export function drawGaplmbReceiptSlip(
 
   cy = drawParticularsTable(doc, ctx.rows, ctx.totalAmount, innerX, cy, innerW);
 
-  const footerY = Math.min(y + height - PAD - 36, cy);
+  const slipBottom = y + height - PAD;
+  const usernameY = slipBottom - USERNAME_LINE_H - LIFT_USERNAME;
+  const boardLineY = usernameY - GAP_USERNAME_TO_BOARD - BOARD_LINE_H - (LIFT_SIGNATURE_BLOCK - LIFT_USERNAME);
+  const officerLineY = boardLineY - SIGNATURE_STAMP_GAP - OFFICER_LINE_H;
+
+  const footerBlockTop = Math.min(cy + 6, officerLineY);
   doc.font("Helvetica").fontSize(7);
   const note =
     ctx.revenueHead === "MarketFee"
       ? "Please note: 1. This receipt is proof of Market Fee payment. 2.Cheques subject to realisation."
       : "Please note: 2.Cheques subject to realisation.";
-  doc.text(pdfSafeText(note), innerX, footerY, { width: innerW * 0.55, align: "left" });
+  doc.text(pdfSafeText(note), innerX, footerBlockTop, { width: innerW * 0.55, align: "left" });
 
   const sigX = innerX + innerW * 0.42;
   const sigW = innerW * 0.58;
-  doc.text(pdfSafeText("Officer Incharge"), sigX, footerY, { width: sigW, align: "right" });
+  doc.text(pdfSafeText("Officer Incharge"), sigX, officerLineY, { width: sigW, align: "right" });
+
   doc.font("Helvetica-Bold").fontSize(7);
   doc.text(
     pdfSafeText("For THE GOA AGRICULTURAL PRODUCE & LIVESTOCK MARKETING BOARD"),
     sigX,
-    footerY + 22,
+    boardLineY,
+    { width: sigW, align: "right" },
+  );
+
+  doc.font("Helvetica").fontSize(7.5);
+  doc.text(
+    pdfSafeText(`Username : ${ctx.generatedByUsername}`),
+    sigX,
+    usernameY,
     { width: sigW, align: "right" },
   );
 
   if (opts.signatoryName?.trim()) {
-    doc.font("Helvetica").fontSize(6.5).fillColor("#444");
-    doc.text(pdfSafeText(opts.signatoryName.trim()), sigX, footerY + 38, { width: sigW, align: "right" });
+    doc.fontSize(6.5).fillColor("#444");
+    doc.text(pdfSafeText(opts.signatoryName.trim()), sigX, usernameY - 11, { width: sigW, align: "right" });
     doc.fillColor("#000");
   }
 
   if (opts.qrPng && opts.verifyUrl) {
     try {
       const qrSize = 44;
-      doc.image(opts.qrPng, innerX, footerY + 8, { width: qrSize, height: qrSize });
+      doc.image(opts.qrPng, innerX, footerBlockTop + 8, { width: qrSize, height: qrSize });
       doc.fontSize(5.5).fillColor("#666");
-      doc.text(pdfSafeText("Verify"), innerX, footerY + qrSize + 10, { width: qrSize, align: "center" });
+      doc.text(pdfSafeText("Verify"), innerX, footerBlockTop + qrSize + 10, { width: qrSize, align: "center" });
       doc.fillColor("#000");
     } catch {
       /* skip QR */

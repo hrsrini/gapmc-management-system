@@ -31,6 +31,8 @@ import { Badge } from "@/components/ui/badge";
 import { trackBShortBillingLabel } from "@shared/track-b-entity";
 import { sanitizeMobile10Input } from "@shared/india-validation";
 import { PanInput } from "@/components/inputs/PanInput";
+import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
 
 interface Entity {
   id: string;
@@ -81,10 +83,9 @@ export default function Entities() {
   const { data: subtypes } = useQuery<EntitySubtypeRef>({
     queryKey: ["/api/ioms/reference/entity-subtypes"],
   });
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/yards"],
-  });
+  const { data: yards = [] } = useScopedActiveYards();
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const yardOptions = useMemo(() => filterYardTypeLocations(yards), [yards]);
 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -268,7 +269,7 @@ export default function Entities() {
                 <SelectTrigger><SelectValue placeholder="Select yard" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__pick__">Select…</SelectItem>
-                  {yards.map((y) => (
+                  {yardOptions.map((y) => (
                     <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>
                   ))}
                 </SelectContent>

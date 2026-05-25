@@ -138,7 +138,6 @@ export const SIDEBAR_MENU_GROUPS: SidebarMenuGroup[] = [
     group: "Receipts",
     items: [
       { title: "All Receipts", icon: Receipt, href: "/receipts", requirePermission: { module: "M-05", action: "Read" } },
-      { title: "Create Receipt", icon: PlusCircle, href: "/receipts/new", requirePermission: { module: "M-05", action: "Create" } },
       { title: "Ledger Reports", icon: BookOpen, href: "/receipts/ledger", requirePermission: { module: "M-05", action: "Read" } },
       { title: "IOMS Receipts (M-05)", icon: Receipt, href: "/receipts/ioms", requirePermission: { module: "M-05", action: "Read" } },
       { title: "Receipt reconciliation", icon: FileSignature, href: "/receipts/ioms/reconciliation", requirePermission: { module: "M-05", action: "Read" } },

@@ -14,6 +14,7 @@ import { fetchApiGet, readApiErrorEnvelope } from "@/lib/queryClient";
 import { AlertCircle, ArrowLeft, Download, FileText, Loader2 } from "lucide-react";
 import { formatInr } from "@/lib/formatInr";
 import { formatEntityMasterLabel } from "@shared/unified-entity-display";
+import { formatApiDateOrDateTime, formatYearMonthLabel } from "@/lib/dateFormat";
 import {
   Select,
   SelectContent,
@@ -32,18 +33,16 @@ interface PreReceipt {
   yardId: string;
   rentPremisesType?: string | null;
   rentPremisesRef?: string | null;
+  rentPremisesId?: string | null;
+  rentAllotmentReferenceNo?: string | null;
   rentBillingMonth?: string | null;
-  purpose?: string | null;
   amount: number;
   status: string;
   issuedAt?: string | null;
-  dispatchedAt?: string | null;
-  acknowledgedAt?: string | null;
-  settledAt?: string | null;
   settledReceiptId?: string | null;
   settledReceiptNo?: string | null;
-  remarks?: string | null;
-  updatedAt?: string | null;
+  agreementFrom?: string | null;
+  agreementTo?: string | null;
 }
 interface EntityRef {
   id: string;
@@ -86,6 +85,9 @@ export default function PreReceiptDetail() {
     return row.entityDisplay ?? entityLabelById[row.entityId] ?? "—";
   }, [row, entityLabelById]);
 
+  const premisesId = row?.rentPremisesId?.trim() || row?.rentPremisesRef?.trim() || "—";
+  const allotmentRefNo = row?.rentAllotmentReferenceNo?.trim() || "—";
+
   const settledReceiptNo = useMemo(() => {
     if (!row) return null;
     if (row.settledReceiptNo?.trim()) return row.settledReceiptNo.trim();
@@ -102,20 +104,21 @@ export default function PreReceiptDetail() {
 
   const [status, setStatus] = useState<string>("Issued");
   const [settledReceiptId, setSettledReceiptId] = useState<string>("");
-  const [purpose, setPurpose] = useState("");
-  const [amount, setAmount] = useState("");
-  const [rentPremisesType, setRentPremisesType] = useState("");
-  const [rentPremisesRef, setRentPremisesRef] = useState("");
   const [rentBillingMonth, setRentBillingMonth] = useState("");
+
+  const agreementMonthMin = row?.agreementFrom?.trim().slice(0, 7) ?? "";
+  const agreementMonthMax = row?.agreementTo?.trim().slice(0, 7) ?? "";
+
+  const billingOutsideAgreement = useMemo(() => {
+    const ym = rentBillingMonth.trim().slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(ym) || !agreementMonthMin || !agreementMonthMax) return false;
+    return ym < agreementMonthMin || ym > agreementMonthMax;
+  }, [rentBillingMonth, agreementMonthMin, agreementMonthMax]);
 
   useEffect(() => {
     if (!row) return;
     setStatus(row.status);
     setSettledReceiptId(row.settledReceiptId ?? "");
-    setPurpose(row.purpose ?? "");
-    setAmount(String(row.amount ?? ""));
-    setRentPremisesType(row.rentPremisesType ?? "");
-    setRentPremisesRef(row.rentPremisesRef ?? "");
     setRentBillingMonth(row.rentBillingMonth ?? "");
   }, [row]);
 
@@ -225,59 +228,40 @@ export default function PreReceiptDetail() {
               <span className="text-muted-foreground">Yard:</span> {yardLabelById[row.yardId] ?? row.yardId}
             </div>
             <div>
-              <span className="text-muted-foreground">Amount:</span> {formatInr(Number(row.amount ?? 0))}
+              <span className="text-muted-foreground">Rent amount (₹):</span> {formatInr(Number(row.amount ?? 0))}
             </div>
             <div>
               <span className="text-muted-foreground">Status:</span>{" "}
               <Badge variant="secondary">{row.status}</Badge>
             </div>
-            <div className="md:col-span-2">
-              <span className="text-muted-foreground">Purpose:</span> {row.purpose ?? "—"}
+            <div>
+              <span className="text-muted-foreground">Premises ID:</span>{" "}
+              <span className="font-mono">{premisesId}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">Print — premises type:</span> {row.rentPremisesType ?? "—"}
+              <span className="text-muted-foreground">Allotment Reference No.:</span>{" "}
+              <span className="font-mono">{allotmentRefNo}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">Print — premises ref:</span> {row.rentPremisesRef ?? "—"}
+              <span className="text-muted-foreground">Premises type:</span> {row.rentPremisesType ?? "—"}
             </div>
             <div>
-              <span className="text-muted-foreground">Print — billing month:</span> {row.rentBillingMonth ?? "—"}
+              <span className="text-muted-foreground">Billing month:</span> {formatYearMonthLabel(row.rentBillingMonth)}
             </div>
+            {agreementMonthMin && agreementMonthMax ? (
+              <div className="md:col-span-2 text-xs text-muted-foreground">
+                Agreement period: {formatApiDateOrDateTime(row.agreementFrom)} — {formatApiDateOrDateTime(row.agreementTo)}
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-md border p-4 space-y-3">
-            <p className="text-sm font-medium">Pre-receipt text and PDF (A4, two copies per sheet)</p>
+            <p className="text-sm font-medium">Pre-receipt print (A4, two copies per sheet)</p>
             <p className="text-xs text-muted-foreground">
-              Amount in words and the rent sentence use these fields. Run{" "}
-              <code className="text-xs">npm run db:apply-pre-receipt-print-fields</code> once if the database was created before print columns existed.
+              Rent, premises type, premises ID, and allotment reference are taken from the active approved premises
+              allocation. Only the billing month may be changed, and it must fall within the agreement period.
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="space-y-1 md:col-span-2">
-                <Label>Purpose</Label>
-                <Input value={purpose} onChange={(e) => setPurpose(e.target.value)} disabled={!canUpdate} />
-              </div>
-              <div className="space-y-1">
-                <Label>Amount (₹)</Label>
-                <Input value={amount} onChange={(e) => setAmount(e.target.value)} disabled={!canUpdate} inputMode="decimal" />
-              </div>
-              <div className="space-y-1">
-                <Label>Premises type (PDF)</Label>
-                <Input
-                  value={rentPremisesType}
-                  onChange={(e) => setRentPremisesType(e.target.value)}
-                  disabled={!canUpdate}
-                  placeholder="e.g. Godown"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>Premises No. / ref (PDF)</Label>
-                <Input
-                  value={rentPremisesRef}
-                  onChange={(e) => setRentPremisesRef(e.target.value)}
-                  disabled={!canUpdate}
-                  placeholder="e.g. G-12"
-                />
-              </div>
               <div className="space-y-1">
                 <Label>Billing month (YYYY-MM)</Label>
                 <Input
@@ -285,34 +269,29 @@ export default function PreReceiptDetail() {
                   value={rentBillingMonth}
                   onChange={(e) => setRentBillingMonth(e.target.value)}
                   disabled={!canUpdate}
+                  min={agreementMonthMin || undefined}
+                  max={agreementMonthMax || undefined}
                 />
+                {billingOutsideAgreement && rentBillingMonth ? (
+                  <p className="text-xs text-destructive">Billing month is outside the agreement period.</p>
+                ) : null}
               </div>
             </div>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              disabled={!canUpdate || updateMutation.isPending}
+              disabled={!canUpdate || updateMutation.isPending || billingOutsideAgreement}
               onClick={() => {
-                const amt = Number(amount);
-                if (!Number.isFinite(amt) || amt < 0) {
-                  toast({ title: "Invalid amount", variant: "destructive" });
-                  return;
-                }
-                if (rentBillingMonth && !/^\d{4}-\d{2}$/.test(rentBillingMonth)) {
+                const ym = rentBillingMonth.trim().slice(0, 7);
+                if (!/^\d{4}-\d{2}$/.test(ym)) {
                   toast({ title: "Billing month", description: "Use YYYY-MM (month picker).", variant: "destructive" });
                   return;
                 }
-                updateMutation.mutate({
-                  purpose: purpose.trim() || null,
-                  amount: amt,
-                  rentPremisesType: rentPremisesType.trim() || null,
-                  rentPremisesRef: rentPremisesRef.trim() || null,
-                  rentBillingMonth: rentBillingMonth.trim() || null,
-                });
+                updateMutation.mutate({ rentBillingMonth: ym });
               }}
             >
-              {updateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save print fields"}
+              {updateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save billing month"}
             </Button>
           </div>
 
@@ -362,27 +341,13 @@ export default function PreReceiptDetail() {
                 type="button"
                 disabled={!canUpdate || updateMutation.isPending}
                 onClick={() => {
-                  const amt = Number(amount);
-                  if (!Number.isFinite(amt) || amt < 0) {
-                    toast({ title: "Invalid amount", variant: "destructive" });
-                    return;
-                  }
-                  if (rentBillingMonth && !/^\d{4}-\d{2}$/.test(rentBillingMonth)) {
-                    toast({ title: "Billing month", description: "Use YYYY-MM.", variant: "destructive" });
-                    return;
-                  }
                   updateMutation.mutate({
                     status,
                     settledReceiptId: status === "Settled" ? settledReceiptId : undefined,
-                    purpose: purpose.trim() || null,
-                    amount: amt,
-                    rentPremisesType: rentPremisesType.trim() || null,
-                    rentPremisesRef: rentPremisesRef.trim() || null,
-                    rentBillingMonth: rentBillingMonth.trim() || null,
                   });
                 }}
               >
-                {updateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                {updateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save status"}
               </Button>
               <Button type="button" variant="outline" asChild>
                 <Link href="/traders/pre-receipts">Pre-receipts (Govt)</Link>
@@ -394,4 +359,3 @@ export default function PreReceiptDetail() {
     </AppShell>
   );
 }
-

@@ -52,21 +52,17 @@ function drawPartyInBox(
   h: number,
   title: string,
   name: string,
-  address: string,
+  locationName: string,
   stateLine: string,
 ): void {
   const innerW = w - PAD * 2;
-  let cy = y + 4;
   doc.font("Helvetica-Bold").fontSize(FS_LABEL).fillColor("#000000");
-  doc.text(pdfSafeText(title), x + PAD, cy, { width: innerW, lineBreak: false });
-  cy += 9;
+  doc.text(pdfSafeText(title), x + PAD, y + 4, { width: innerW, lineBreak: false });
   doc.font("Helvetica-Bold").fontSize(FS_VALUE);
-  doc.text(pdfSafeText(name), x + PAD, cy, { width: innerW, lineGap: 0.5 });
-  cy = doc.y + 3;
+  doc.text(pdfSafeText(name), x + PAD, y + 14, { width: innerW, lineBreak: false });
   doc.font("Helvetica").fontSize(FS_VALUE);
-  doc.text(pdfSafeText(address), x + PAD, cy, { width: innerW, height: Math.max(10, h - 28), lineGap: 0.5 });
-  cy = Math.min(y + h - 12, doc.y + 2);
-  doc.text(pdfSafeText(stateLine), x + PAD, cy, { width: innerW, lineBreak: false });
+  doc.text(pdfSafeText(locationName), x + PAD, y + 26, { width: innerW, lineBreak: false });
+  doc.text(pdfSafeText(stateLine), x + PAD, y + 38, { width: innerW, lineBreak: false });
 }
 
 function drawParticularsTable(
@@ -161,73 +157,77 @@ function drawParticularsTable(
 
 function drawTaxSummaryTable(doc: PdfDoc, ctx: RentInvoicePdfContext, x: number, y: number, w: number): number {
   const hsnW = 76;
-  const taxW = (w - hsnW) / 5;
+  const restW = w - hsnW;
+  const taxableW = restW * 0.22;
+  const centralW = restW * 0.28;
+  const stateW = restW * 0.28;
+  const totalTaxW = restW - taxableW - centralW - stateW;
   const headerH = 24;
   const rowH = 18;
   const tableH = headerH + rowH * 2;
 
+  const cHsn = x;
+  const cTaxable = x + hsnW;
+  const cCentral = cTaxable + taxableW;
+  const cState = cCentral + centralW;
+  const cTotalTax = cState + stateW;
+  const midCentral = centralW / 2;
+  const midState = stateW / 2;
+
   strokeBox(doc, x, y, w, tableH);
 
-  const cols = [
-    x,
-    x + hsnW,
-    x + hsnW + taxW,
-    x + hsnW + taxW * 2,
-    x + hsnW + taxW * 3,
-    x + hsnW + taxW * 4,
-    x + w,
-  ];
-  for (let i = 1; i < cols.length - 1; i++) vLine(doc, cols[i]!, y, tableH);
+  // Column rules: HSN | Taxable | Central (rate|amt) | State (rate|amt) | Total tax — no rule between Central & State
+  vLine(doc, cTaxable, y, tableH);
+  vLine(doc, cCentral, y, tableH);
+  vLine(doc, cTotalTax, y, tableH);
+  vLine(doc, cCentral + midCentral, y, headerH + rowH);
+  vLine(doc, cState + midState, y, headerH + rowH);
   hLine(doc, x, y + headerH, w);
   hLine(doc, x, y + headerH + rowH, w);
 
-  const midTax = taxW / 2;
-  vLine(doc, cols[2]! + midTax, y, headerH + rowH);
-  vLine(doc, cols[3]! + midTax, y, headerH + rowH);
-
   doc.font("Helvetica-Bold").fontSize(6.5);
-  doc.text("HSN/SAC", cols[0]! + PAD, y + 4, { width: hsnW - PAD, lineBreak: false });
-  doc.text("Taxable Value", cols[1]! + PAD, y + 9, { width: taxW - PAD, lineBreak: false });
-  doc.text("Central Tax", cols[2]! + PAD, y + 4, { width: taxW - PAD, align: "center", lineBreak: false });
-  doc.text("State Tax", cols[3]! + PAD, y + 4, { width: taxW - PAD, align: "center", lineBreak: false });
-  doc.text("Total Tax Amount", cols[4]! + PAD, y + 9, { width: taxW - PAD, lineBreak: false });
+  doc.text("HSN/SAC", cHsn + PAD, y + 4, { width: hsnW - PAD, lineBreak: false });
+  doc.text("Taxable Value", cTaxable + PAD, y + 9, { width: taxableW - PAD, lineBreak: false });
+  doc.text("Central Tax", cCentral + PAD, y + 4, { width: centralW - PAD, align: "center", lineBreak: false });
+  doc.text("State Tax", cState + PAD, y + 4, { width: stateW - PAD, align: "center", lineBreak: false });
+  doc.text("Total Tax Amount", cTotalTax + PAD, y + 9, { width: totalTaxW - PAD, lineBreak: false });
 
   doc.font("Helvetica").fontSize(6);
-  doc.text("Rate", cols[2]! + PAD, y + 14, { width: midTax - PAD, lineBreak: false });
-  doc.text("Amount", cols[2]! + midTax + PAD, y + 14, { width: midTax - PAD, lineBreak: false });
-  doc.text("Rate", cols[3]! + PAD, y + 14, { width: midTax - PAD, lineBreak: false });
-  doc.text("Amount", cols[3]! + midTax + PAD, y + 14, { width: midTax - PAD, lineBreak: false });
+  doc.text("Rate", cCentral + PAD, y + 14, { width: midCentral - PAD, lineBreak: false });
+  doc.text("Amount", cCentral + midCentral + PAD, y + 14, { width: midCentral - PAD, lineBreak: false });
+  doc.text("Rate", cState + PAD, y + 14, { width: midState - PAD, lineBreak: false });
+  doc.text("Amount", cState + midState + PAD, y + 14, { width: midState - PAD, lineBreak: false });
 
   const dataY = y + headerH + 5;
   const rateStr = (r: number) => (r % 1 === 0 ? `${r}%` : `${r.toFixed(2)}%`);
   doc.font("Helvetica").fontSize(FS_VALUE);
-  doc.text(pdfSafeText(ctx.hsnSac), cols[0]! + PAD, dataY, { width: hsnW - PAD, lineBreak: false });
-  doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.taxableValue)), cols[1]! + PAD, dataY, {
-    width: taxW - PAD,
+  doc.text(pdfSafeText(ctx.hsnSac), cHsn + PAD, dataY, { width: hsnW - PAD, lineBreak: false });
+  doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.taxableValue)), cTaxable + PAD, dataY, {
+    width: taxableW - PAD,
     align: "right",
     lineBreak: false,
   });
   if (ctx.isGstExempt) {
-    doc.text("-", cols[2]! + PAD, dataY, { width: midTax - PAD, lineBreak: false });
-    doc.text("-", cols[2]! + midTax + PAD, dataY, { width: midTax - PAD, align: "right", lineBreak: false });
-    doc.text("-", cols[3]! + PAD, dataY, { width: midTax - PAD, lineBreak: false });
-    doc.text("-", cols[3]! + midTax + PAD, dataY, { width: midTax - PAD, align: "right", lineBreak: false });
-    doc.text("-", cols[4]! + PAD, dataY, { width: taxW - PAD, align: "right", lineBreak: false });
+    doc.text("-", cCentral + PAD, dataY, { width: midCentral - PAD, lineBreak: false });
+    doc.text("-", cCentral + midCentral + PAD, dataY, { width: midCentral - PAD, align: "right", lineBreak: false });
+    doc.text("-", cState + PAD, dataY, { width: midState - PAD, lineBreak: false });
+    doc.text("-", cState + midState + PAD, dataY, { width: midState - PAD, align: "right", lineBreak: false });
+    doc.text("-", cTotalTax + PAD, dataY, { width: totalTaxW - PAD, align: "right", lineBreak: false });
   } else {
-    doc.text(pdfSafeText(rateStr(ctx.cgstRate)), cols[2]! + PAD, dataY, { width: midTax - PAD, lineBreak: false });
-    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.cgstAmount)), cols[2]! + midTax + PAD, dataY, {
-      width: midTax - PAD,
+    doc.text(pdfSafeText(rateStr(ctx.cgstRate)), cCentral + PAD, dataY, { width: midCentral - PAD, lineBreak: false });
+    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.cgstAmount)), cCentral + midCentral + PAD, dataY, {
+      width: midCentral - PAD,
       align: "right",
       lineBreak: false,
     });
-    doc.text(pdfSafeText(rateStr(ctx.sgstRate)), cols[3]! + PAD, dataY, { width: midTax - PAD, lineBreak: false });
-    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.sgstAmount)), cols[3]! + midTax + PAD, dataY, {
-      width: midTax - PAD,
+    doc.text(pdfSafeText(rateStr(ctx.sgstRate)), cState + PAD, dataY, { width: midState - PAD, lineBreak: false });
+    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.sgstAmount)), cState + midState + PAD, dataY, {
+      width: midState - PAD,
       align: "right",
       lineBreak: false,
     });
-    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.totalTaxAmount)), cols[4]! + PAD, dataY, {
-      width: taxW - PAD,
+    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.totalTaxAmount)), cTotalTax + PAD, dataY, {
+      width: totalTaxW - PAD,
       align: "right",
       lineBreak: false,
     });
@@ -235,25 +235,25 @@ function drawTaxSummaryTable(doc: PdfDoc, ctx: RentInvoicePdfContext, x: number,
 
   const totalY = y + headerH + rowH + 5;
   doc.font("Helvetica-Bold").fontSize(FS_VALUE);
-  doc.text("Total", cols[0]! + PAD, totalY, { width: hsnW - PAD, lineBreak: false });
-  doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.taxableValue)), cols[1]! + PAD, totalY, {
-    width: taxW - PAD,
+  doc.text("Total", cHsn + PAD, totalY, { width: hsnW - PAD, lineBreak: false });
+  doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.taxableValue)), cTaxable + PAD, totalY, {
+    width: taxableW - PAD,
     align: "right",
     lineBreak: false,
   });
   if (!ctx.isGstExempt) {
-    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.cgstAmount)), cols[2]! + midTax + PAD, totalY, {
-      width: midTax - PAD,
+    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.cgstAmount)), cCentral + midCentral + PAD, totalY, {
+      width: midCentral - PAD,
       align: "right",
       lineBreak: false,
     });
-    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.sgstAmount)), cols[3]! + midTax + PAD, totalY, {
-      width: midTax - PAD,
+    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.sgstAmount)), cState + midState + PAD, totalY, {
+      width: midState - PAD,
       align: "right",
       lineBreak: false,
     });
-    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.totalTaxAmount)), cols[4]! + PAD, totalY, {
-      width: taxW - PAD,
+    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(ctx.totalTaxAmount)), cTotalTax + PAD, totalY, {
+      width: totalTaxW - PAD,
       align: "right",
       lineBreak: false,
     });
@@ -271,7 +271,7 @@ export function drawGsambRentTaxInvoice(doc: PdfDoc, ctx: RentInvoicePdfContext,
   let y = startY;
 
   const titleH = 18;
-  const headerTopH = 58;
+  const headerTopH = 72;
   const headerMidH = PARTY_ROW_H * 2;
   const wordsH = 26;
   const taxTableH = 24 + 18 * 2;
@@ -295,13 +295,15 @@ export function drawGsambRentTaxInvoice(doc: PdfDoc, ctx: RentInvoicePdfContext,
   strokeBox(doc, x, y, w, headerTopH);
   vLine(doc, x + leftW, y, headerTopH);
 
-  doc.font("Helvetica-Bold").fontSize(9);
-  doc.text(pdfSafeText(ctx.sellerTitle), x + PAD, y + 4, { width: leftW - PAD * 2, lineBreak: false });
+  const sellerY = y + 4;
+  doc.font("Helvetica-Bold").fontSize(7.5);
+  doc.text(pdfSafeText(ctx.sellerTitle), x + PAD, sellerY, { width: leftW - PAD * 2, lineGap: 0.5 });
+  let detailY = doc.y + 4;
   doc.font("Helvetica").fontSize(FS_VALUE);
-  doc.text(pdfSafeText(ctx.sellerAddress), x + PAD, y + 16, { width: leftW - PAD * 2, lineGap: 0.5 });
-  const gstY = Math.min(y + headerTopH - 22, doc.y + 2);
-  doc.text(pdfSafeText(`GSTIN/UIN: ${ctx.gstin}`), x + PAD, gstY, { width: leftW - PAD * 2, lineBreak: false });
-  doc.text(pdfSafeText(`State Name: ${ctx.stateName}, Code: ${ctx.stateCode}`), x + PAD, gstY + 11, {
+  doc.text(pdfSafeText(ctx.sellerAddress), x + PAD, detailY, { width: leftW - PAD * 2, lineBreak: false });
+  detailY += 12;
+  doc.text(pdfSafeText(`GSTIN/UIN: ${ctx.gstin}`), x + PAD, detailY, { width: leftW - PAD * 2, lineBreak: false });
+  doc.text(pdfSafeText(`State Name: ${ctx.stateName}, Code: ${ctx.stateCode}`), x + PAD, detailY + 11, {
     width: leftW - PAD * 2,
     lineBreak: false,
   });
@@ -387,7 +389,7 @@ export function drawGsambRentTaxInvoice(doc: PdfDoc, ctx: RentInvoicePdfContext,
   const sigX = x + w * 0.55 + PAD;
   const sigW = w * 0.45 - PAD * 2;
   doc.font("Helvetica").fontSize(FS_VALUE);
-  doc.text(pdfSafeText(`for ${ctx.signatoryFor}`), sigX, y + footH - 28, { width: sigW, align: "right", lineBreak: false });
+  doc.text(pdfSafeText(ctx.signatoryFor), sigX, y + footH - 28, { width: sigW, align: "right", lineBreak: false });
   doc.text("Authorised Signatory", sigX, y + footH - 14, { width: sigW, align: "right", lineBreak: false });
   y += footH;
 

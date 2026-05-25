@@ -79,6 +79,7 @@ import {
   billingMonthWithinAllotment,
   findDuplicatePreReceiptForMonth,
   resolvePreReceiptIssueContext,
+  resolvePreReceiptPrintFields,
 } from "./pre-receipt-issue";
 import {
   contentTypeForAssetAllotmentAgreement,
@@ -353,6 +354,10 @@ export function registerTradersAssetsRoutes(app: Express) {
       const body = req.body;
       const yardId = String(body.yardId ?? "");
       if (!yardInScope(req, yardId)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      const yardTypeCheck = await assertPremisesYardLocation(yardId);
+      if (!yardTypeCheck.ok) {
+        return sendApiError(res, 400, yardTypeCheck.code, yardTypeCheck.message);
+      }
       const panNorm = body.pan != null && String(body.pan).trim() !== "" ? normalizePanInput(String(body.pan)) : null;
       if (panNorm && (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm))) {
         return sendApiError(res, 400, "ENTITY_PAN_FORMAT", "PAN must match ABCDE1234F.");
@@ -464,6 +469,10 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (body.yardId !== undefined) {
         const yid = String(body.yardId);
         if (!yardInScope(req, yid)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
+        const yardTypeCheck = await assertPremisesYardLocation(yid);
+        if (!yardTypeCheck.ok) {
+          return sendApiError(res, 400, yardTypeCheck.code, yardTypeCheck.message);
+        }
         updates.yardId = yid;
       }
       if (body.entityCode !== undefined) {
@@ -1282,12 +1291,7 @@ export function registerTradersAssetsRoutes(app: Express) {
           "Active allocation has no valid monthly rent or premises details.",
         );
       }
-      return res.json({
-        entityId,
-        ...ctx,
-        agreementFrom: allot.fromDate,
-        agreementTo: allot.toDate,
-      });
+      return res.json({ entityId, ...ctx });
     } catch (e) {
       console.error(e);
       return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to resolve pre-receipt issue context");
@@ -1304,7 +1308,15 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!ent) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
       const [yard] = await db.select().from(yards).where(eq(yards.id, pre.yardId)).limit(1);
       const yardDisplay = String(yard?.name?.trim() || yard?.code?.trim() || pre.yardId);
-      const buf = await buildPreReceiptPdfA4Double({ pre, entityName: ent.name, yardDisplayName: yardDisplay });
+      const printFields = await resolvePreReceiptPrintFields(pre.entityId);
+      const pdfPre = printFields
+        ? {
+            ...pre,
+            rentPremisesType: printFields.rentPremisesType,
+            rentPremisesRef: printFields.rentPremisesId,
+          }
+        : pre;
+      const buf = await buildPreReceiptPdfA4Double({ pre: pdfPre, entityName: ent.name, yardDisplayName: yardDisplay });
       const safeNo = String(pre.preReceiptNo ?? id).replace(/[^\w.-]+/g, "_");
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="pre-receipt-${safeNo}.pdf"`);
@@ -1337,12 +1349,17 @@ export function registerTradersAssetsRoutes(app: Express) {
           .limit(1);
         settledReceiptNo = rec?.receiptNo?.trim() || null;
       }
+      const printFields = await resolvePreReceiptPrintFields(row.entityId);
       return res.json({
         ...row,
         entityCode: code,
         entityName: ent?.name?.trim() || null,
         entityDisplay: code ? `${code} — ${ent?.name ?? ""}`.trim() : ent?.name?.trim() || null,
         settledReceiptNo,
+        rentPremisesId: printFields?.rentPremisesId ?? row.rentPremisesRef ?? null,
+        rentAllotmentReferenceNo: printFields?.rentAllotmentReferenceNo ?? null,
+        agreementFrom: printFields?.agreementFrom ?? null,
+        agreementTo: printFields?.agreementTo ?? null,
       });
     } catch (e) {
       console.error(e);
@@ -1416,7 +1433,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         entityId,
         yardId: ent.yardId,
         rentPremisesType: issueCtx.rentPremisesType,
-        rentPremisesRef: issueCtx.rentPremisesRef,
+        rentPremisesRef: issueCtx.rentPremisesId,
         rentBillingMonth: rentBRaw,
         purpose: null,
         amount: issueCtx.amount,
@@ -1450,12 +1467,6 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!ent) return sendApiError(res, 404, "PRE_RECEIPT_NOT_FOUND", "Not found");
       const body = req.body as Record<string, unknown>;
       const updates: Record<string, unknown> = { updatedAt: now() };
-      if (body.rentBillingMonth !== undefined && body.rentBillingMonth !== null && String(body.rentBillingMonth).trim() !== "") {
-        const m = String(body.rentBillingMonth).trim();
-        if (!/^\d{4}-\d{2}$/.test(m)) {
-          return sendApiError(res, 400, "PRE_RECEIPT_BILLING_MONTH", "rentBillingMonth must be YYYY-MM.");
-        }
-      }
       if (body.status !== undefined) {
         const next = String(body.status);
         const cur = String(existing.status);
@@ -1486,7 +1497,7 @@ export function registerTradersAssetsRoutes(app: Express) {
               // Auto-create IOMS receipt on settlement when not provided.
               const created = await createIomsReceipt({
                 yardId: existing.yardId,
-                revenueHead: "M-02-PRE-RECEIPT",
+                revenueHead: "Rent",
                 payerName: ent.name,
                 payerType: "Entity",
                 payerRefId: ent.id,
@@ -1504,14 +1515,48 @@ export function registerTradersAssetsRoutes(app: Express) {
           }
         }
       }
-      (["purpose", "amount", "remarks", "rentPremisesType", "rentPremisesRef", "rentBillingMonth"] as const).forEach((k) => {
-        if (body[k] === undefined) return;
-        if (body[k] === null || body[k] === "") {
-          updates[k] = null;
-          return;
+      if (body.remarks !== undefined) {
+        updates.remarks = body.remarks == null || body.remarks === "" ? null : String(body.remarks);
+      }
+      if (body.rentBillingMonth !== undefined) {
+        const m =
+          body.rentBillingMonth == null || body.rentBillingMonth === ""
+            ? null
+            : String(body.rentBillingMonth).trim().slice(0, 7);
+        if (m && !/^\d{4}-\d{2}$/.test(m)) {
+          return sendApiError(res, 400, "PRE_RECEIPT_BILLING_MONTH", "rentBillingMonth must be YYYY-MM.");
         }
-        updates[k] = k === "amount" ? Number(body[k]) : String(body[k]);
-      });
+        if (m) {
+          const printFields = await resolvePreReceiptPrintFields(existing.entityId);
+          if (
+            printFields &&
+            !billingMonthWithinAllotment(m, printFields.agreementFrom, printFields.agreementTo)
+          ) {
+            return sendApiError(
+              res,
+              400,
+              "PRE_RECEIPT_BILLING_OUTSIDE_AGREEMENT",
+              "Billing month falls outside the active agreement period for this premises.",
+              {
+                rentBillingMonth: m,
+                agreementFrom: printFields.agreementFrom,
+                agreementTo: printFields.agreementTo,
+              },
+            );
+          }
+          const dup = await findDuplicatePreReceiptForMonth(existing.entityId, m, id);
+          if (dup) {
+            return sendApiError(
+              res,
+              409,
+              "PRE_RECEIPT_DUPLICATE_MONTH",
+              "A pre-receipt already exists for this entity and billing month.",
+              { existingId: dup.id, existingPreReceiptNo: dup.preReceiptNo },
+            );
+          }
+        }
+        updates.rentBillingMonth = m;
+      }
       try {
         await db.update(preReceipts).set(updates as Record<string, string | number | null>).where(eq(preReceipts.id, id));
       } catch (e) {

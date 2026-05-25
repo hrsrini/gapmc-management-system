@@ -42,6 +42,13 @@ import {
   RENT_REVISION_MODES,
 } from "@shared/premises-allocation";
 import { buildAssetDisplayByRowId, formatPremisesAssetLabel } from "@/lib/asset-premises-display";
+import {
+  PREMISES_ALLOCATION_COLUMNS,
+  PREMISES_ALLOCATION_SEARCH_KEYS,
+  allocationApprovalBadge,
+  allocationTenancyBadge,
+  formatAllocationMoney,
+} from "@/lib/premises-allocation-table";
 
 interface Entity {
   id: string;
@@ -104,17 +111,6 @@ function userTierSet(user: AuthUser | null): Set<string> {
   return new Set((user?.roles ?? []).map((r) => String(r.tier ?? "").trim()).filter(Boolean));
 }
 
-const allotmentColumns: ReportTableColumn[] = [
-  { key: "assetDisplay", header: "Premises" },
-  { key: "allotteeName", header: "Allottee" },
-  { key: "fromDate", header: "Agreement from" },
-  { key: "toDate", header: "Agreement to" },
-  { key: "monthlyRent", header: "Monthly rent" },
-  { key: "_approval", header: "Approval", sortField: "approvalStatus" },
-  { key: "_tenancy", header: "Tenancy", sortField: "status" },
-  { key: "premisesRef", header: "Ref" },
-  { key: "_actions", header: "" },
-];
 
 export default function EntityDetail() {
   const { id } = useParams<{ id: string }>();
@@ -379,12 +375,11 @@ export default function EntityDetail() {
         fromDate: a.fromDate,
         toDate: a.toDate,
         status: a.status,
-        monthlyRent: a.monthlyRent != null ? `${formatInr(Number(a.monthlyRent))}` : "—",
+        monthlyRent: formatAllocationMoney(a.monthlyRent),
+        securityDeposit: formatAllocationMoney(a.securityDeposit),
         premisesRef: a.premisesRefNo?.trim() ? a.premisesRefNo : "—",
-        _approval: (
-          <Badge variant={appr === "Approved" ? "default" : appr === "Rejected" ? "destructive" : "secondary"}>{appr}</Badge>
-        ),
-        _tenancy: <Badge variant={a.status === "Active" ? "default" : "outline"}>{a.status}</Badge>,
+        _approval: allocationApprovalBadge(appr),
+        _tenancy: allocationTenancyBadge(a.status),
         _actions: (
           <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setManageRow(a)}>
             <Pencil className="h-4 w-4" />
@@ -472,7 +467,10 @@ export default function EntityDetail() {
                         >
                           Rent deposit ledger (M-03)
                         </Link>
-                        <Link className="text-primary font-medium hover:underline" href="/rent/ioms/invoices">
+                        <Link
+                          className="text-primary font-medium hover:underline"
+                          href={`/rent/ioms?unifiedEntityId=${encodeURIComponent(unifiedEntityIdFromTrackB(entity.id))}`}
+                        >
                           Rent / GST invoices (M-03)
                         </Link>
                       </>
@@ -597,9 +595,9 @@ export default function EntityDetail() {
             </CardHeader>
             <CardContent>
               <ClientDataGrid
-                columns={allotmentColumns}
+                columns={PREMISES_ALLOCATION_COLUMNS}
                 sourceRows={allotmentRows}
-                searchKeys={["assetDisplay", "allotteeName", "fromDate", "toDate", "status", "approvalStatus", "premisesRef"]}
+                searchKeys={PREMISES_ALLOCATION_SEARCH_KEYS}
                 searchPlaceholder="Search allocations…"
                 defaultSortKey="fromDate"
                 defaultSortDir="desc"

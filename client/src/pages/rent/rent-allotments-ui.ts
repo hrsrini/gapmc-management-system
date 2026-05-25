@@ -1,3 +1,5 @@
+import { formatAllotmentReferenceNo } from "@/lib/asset-premises-display";
+
 /** Client helpers for M-03 rent UI — Track A asset allotments + Track B entity premises. */
 
 export interface AssetAllotmentRow {
@@ -10,6 +12,7 @@ export interface AssetAllotmentRow {
   toDate: string;
   status: string;
   approvalStatus?: string | null;
+  premisesRefNo?: string | null;
 }
 
 export interface YardRef {
@@ -79,15 +82,56 @@ export function allotmentAssetIdByPk(
 ): Map<string, { assetId: string; label: string }> {
   const m = new Map<string, { assetId: string; label: string }>();
   for (const a of assetAllotments) {
-    const label = a.allotteeName ? `${a.allotteeName} (trader allotment)` : a.id;
-    m.set(a.id, { assetId: a.assetId, label });
+    const ref = a.premisesRefNo?.trim();
+    m.set(a.id, { assetId: a.assetId, label: ref || a.id });
   }
   for (const e of entityAllotments) {
     const ref = e.premisesRefNo?.trim();
-    const label = `${e.allotteeName}${ref ? ` · ${ref}` : ""} (Track B premises)`;
-    m.set(e.id, { assetId: e.assetId, label });
+    m.set(e.id, { assetId: e.assetId, label: ref || e.id });
   }
   return m;
+}
+
+/** Premises name + allotment ref (no duplicate entity / trader name). */
+export function formatRentInvoiceAllotmentReference(
+  allotmentId: string,
+  entityAllotments: EntityAllotmentRow[],
+  assetAllotments: AssetAllotmentRow[],
+  /** Human-readable `assets.asset_id` keyed by `assets.id` (allotment `assetId` FK). */
+  assetPublicByPk?: Record<string, string>,
+  /** Invoice `assetId` FK when allotment row is not yet in cached lists. */
+  fallbackAssetRowId?: string,
+): string {
+  const byPk = assetPublicByPk ?? {};
+  const eRow = entityAllotments.find((e) => e.id === allotmentId);
+  if (eRow) {
+    return formatAllotmentReferenceNo(eRow.assetId, byPk, eRow.premisesRefNo);
+  }
+  const aRow = assetAllotments.find((a) => a.id === allotmentId);
+  if (aRow) {
+    return formatAllotmentReferenceNo(aRow.assetId, byPk, aRow.premisesRefNo);
+  }
+  if (fallbackAssetRowId?.trim()) {
+    return formatAllotmentReferenceNo(fallbackAssetRowId, byPk, null);
+  }
+  return allotmentId;
+}
+
+/** Tenant / counterparty once — entity name or licence, without TB:/TA: technical id suffix. */
+export function formatRentInvoiceTenantCounterparty(
+  tenantLicenceId: string,
+  entityMaster: { name?: string | null; entityCode?: string | null } | null | undefined,
+  licenceById: Record<string, string>,
+): string {
+  const tl = tenantLicenceId.trim();
+  if (tl.startsWith("TB:")) {
+    const ec = entityMaster?.entityCode?.trim();
+    const nm = entityMaster?.name?.trim();
+    if (nm && ec && ec !== nm) return `${nm} (${ec})`;
+    return nm ?? ec ?? "—";
+  }
+  const lk = tl.startsWith("TA:") ? tl.slice(3) : tl;
+  return licenceById[lk] ?? tl;
 }
 
 export function entityIdFromRentInvoice(inv: {

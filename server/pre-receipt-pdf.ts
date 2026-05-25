@@ -126,12 +126,13 @@ function drawOneReceiptBlock(
   doc.font("Helvetica-Bold").text(`${billingLabel}.`, { width: contentWidth, align: "left" });
   doc.moveDown(1.2);
 
-  const rowY = doc.y;
+  const SIGNATURE_STAMP_GAP = 44;
+  const sigBlockY = doc.y + SIGNATURE_STAMP_GAP;
   doc.font("Helvetica").fontSize(11);
-  doc.text(`Date:- ${dateLabel}`, leftX, rowY, { width: contentWidth * 0.55 });
-  doc.text(supervisorTitle, leftX + contentWidth * 0.45, rowY, { width: contentWidth * 0.55, align: "right" });
-  doc.text(`Place :- ${placeLine}`, leftX, rowY + 16, { width: contentWidth * 0.55 });
-  doc.font("Helvetica-Bold").text(yardCaps, leftX + contentWidth * 0.45, rowY + 16, { width: contentWidth * 0.55, align: "right" });
+  doc.text(`Date:- ${dateLabel}`, leftX, sigBlockY, { width: contentWidth * 0.55 });
+  doc.text(supervisorTitle, leftX + contentWidth * 0.45, sigBlockY, { width: contentWidth * 0.55, align: "right" });
+  doc.text(`Place :- ${placeLine}`, leftX, sigBlockY + 16, { width: contentWidth * 0.55 });
+  doc.font("Helvetica-Bold").text(yardCaps, leftX + contentWidth * 0.45, sigBlockY + 16, { width: contentWidth * 0.55, align: "right" });
 }
 
 export async function buildPreReceiptPdfA4Double(input: PreReceiptPdfBuildInput): Promise<Buffer> {
@@ -179,10 +180,10 @@ export async function buildPreReceiptPdfA4Double(input: PreReceiptPdfBuildInput)
       yardCaps,
       leftX,
       contentWidth,
-      startY: 52,
+      startY: 48,
     });
 
-    const secondStart = 430;
+    const secondStart = 400;
     drawOneReceiptBlock(doc, {
       amountDigits,
       amountWordsLine,

@@ -24,7 +24,11 @@ import { formatApiDateOrDateTime, formatYearMonthToDisplay, formatYmdToDisplay }
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
 import { formatInr } from "@/lib/formatInr";
-import { entityIdFromRentInvoice } from "./rent-allotments-ui";
+import {
+  entityIdFromRentInvoice,
+  formatRentInvoiceAllotmentReference,
+  formatRentInvoiceTenantCounterparty,
+} from "./rent-allotments-ui";
 
 interface RentInvoice {
   id: string;
@@ -137,29 +141,20 @@ export default function IomsRentInvoiceDetail() {
     licences.map((l) => [l.id, l.licenceNo ? `${l.licenceNo}${l.firmName ? ` — ${l.firmName}` : ""}` : (l.firmName ?? l.id)]),
   );
 
-  const allocationLabel = useMemo(() => {
+  const allotmentReferenceNo = useMemo(() => {
     if (!invoice) return "";
-    const eRow = entityAllotments.find((e) => e.id === invoice.allotmentId);
-    if (eRow) {
-      const ref = eRow.premisesRefNo?.trim();
-      return `${eRow.allotteeName}${ref ? ` · ${ref}` : ""} (Track B premises)`;
-    }
-    const aRow = allotments.find((a) => a.id === invoice.allotmentId);
-    if (aRow?.allotteeName) return `${aRow.id} — ${aRow.allotteeName} (trader allotment)`;
-    return invoice.allotmentId;
-  }, [invoice, entityAllotments, allotments]);
+    return formatRentInvoiceAllotmentReference(
+      invoice.allotmentId,
+      entityAllotments,
+      allotments,
+      assetById,
+      invoice.assetId,
+    );
+  }, [invoice, entityAllotments, allotments, assetById]);
 
   const tenantLabel = useMemo(() => {
     if (!invoice) return "";
-    const tl = invoice.tenantLicenceId?.trim() ?? "";
-    if (tl.startsWith("TB:")) {
-      const ec = entityMaster?.entityCode?.trim();
-      const nm = entityMaster?.name?.trim();
-      if (nm || ec) return `${nm ?? ec ?? ""}${nm && ec && ec !== nm ? ` (${ec})` : ""} · ${tl}`;
-      return tl;
-    }
-    const lk = tl.startsWith("TA:") ? tl.slice(3) : tl;
-    return licenceById[lk] ?? tl;
+    return formatRentInvoiceTenantCounterparty(invoice.tenantLicenceId, entityMaster, licenceById);
   }, [invoice, entityMaster, licenceById]);
 
   const statusMutation = useMutation({
@@ -345,7 +340,11 @@ export default function IomsRentInvoiceDetail() {
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[invoice.yardId] ?? invoice.yardId}</div>
             <div><span className="text-muted-foreground">Period</span><br />{formatYearMonthToDisplay(invoice.periodMonth)}</div>
             <div><span className="text-muted-foreground">Asset</span><br />{assetById[invoice.assetId] ?? invoice.assetId}</div>
-            <div><span className="text-muted-foreground">Allotment</span><br />{allocationLabel}</div>
+            <div>
+              <span className="text-muted-foreground">Allotment Reference No.</span>
+              <br />
+              {allotmentReferenceNo}
+            </div>
             <div>
               <span className="text-muted-foreground">Tenant / counterparty</span>
               <br />

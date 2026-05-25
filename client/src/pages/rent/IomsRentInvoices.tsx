@@ -11,7 +11,8 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Link } from "wouter";
+import { Link, useSearchParams } from "wouter";
+import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 import { formatInr } from "@/lib/formatInr";
 import { FileText, AlertCircle, CheckCircle, ShieldCheck, Plus, Download, CalendarClock, Percent, Loader2 } from "lucide-react";
 interface RentInvoice {
@@ -34,6 +35,17 @@ export default function IomsRentInvoices() {
   const { user, can } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const unifiedEntityFilter = searchParams.get("unifiedEntityId")?.trim() ?? "";
+  const invoicesApiUrl = useMemo(() => {
+    if (!unifiedEntityFilter) return "/api/ioms/rent/invoices";
+    return `/api/ioms/rent/invoices?unifiedEntityId=${encodeURIComponent(unifiedEntityFilter)}`;
+  }, [unifiedEntityFilter]);
+  const entityFilterLink = useMemo(() => {
+    const parsed = parseUnifiedEntityId(unifiedEntityFilter);
+    if (parsed?.kind === "TB") return `/traders/entities/${encodeURIComponent(parsed.refId)}`;
+    return null;
+  }, [unifiedEntityFilter]);
   const [gstr1From, setGstr1From] = useState("");
   const [gstr1To, setGstr1To] = useState("");
   const [gstr1Loading, setGstr1Loading] = useState(false);
@@ -46,7 +58,7 @@ export default function IomsRentInvoices() {
     (roles.includes("ADMIN") || roles.includes("DO") || roles.includes("DA")) &&
     (can("M-03", "Create") || can("M-03", "Update") || can("M-03", "Approve"));
   const { data: list, isLoading, isError } = useQuery<RentInvoice[]>({
-    queryKey: ["/api/ioms/rent/invoices"],
+    queryKey: [invoicesApiUrl],
   });
   const { data: assets = [] } = useQuery<AssetRef[]>({
     queryKey: ["/api/ioms/assets"],
@@ -329,6 +341,19 @@ export default function IomsRentInvoices() {
             </CardTitle>
             <p className="text-sm text-muted-foreground mt-1">
             Rent/GST invoices from allotments; distinct from existing Rent & Tax invoices.
+            {unifiedEntityFilter ? (
+              <span className="block mt-1">
+                Filtered for entity <span className="font-mono text-foreground">{unifiedEntityFilter}</span>
+                {entityFilterLink ? (
+                  <>
+                    {" "}
+                    (<Link href={entityFilterLink} className="text-primary hover:underline">entity profile</Link>)
+                  </>
+                ) : null}
+                .{" "}
+                <Link href="/rent/ioms" className="text-primary hover:underline">Show all invoices</Link>
+              </span>
+            ) : null}
             {canVerify && <span className="block mt-1">You can verify Draft → Verified.</span>}
             {canApprove && <span className="block mt-1">You can approve Verified → Approved.</span>}
             </p>

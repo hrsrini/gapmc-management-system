@@ -19,6 +19,18 @@ import { Input } from "@/components/ui/input";
 import { formatInr } from "@/lib/formatInr";
 import { Label } from "@/components/ui/label";
 
+function isM03RentReceipt(r: IomsReceipt): boolean {
+  const mod = String(r.sourceModule ?? "").trim();
+  const rh = String(r.revenueHead ?? "").trim();
+  return mod === "M-03" && Boolean(r.sourceRecordId?.trim()) && (rh === "Rent" || rh === "GSTInvoice");
+}
+
+interface LinkedRentInvoice {
+  id: string;
+  allotmentId: string;
+  assetId: string;
+}
+
 interface RentArrearsDisclosure {
   approxInterestInr: number;
   overdueDays: number;
@@ -51,6 +63,8 @@ interface IomsReceipt {
   sourceRecordId?: string | null;
   sourceInvoiceNo?: string | null;
   sourceInvoicePeriodMonth?: string | null;
+  /** M-03 rent receipt: premises code + allotment ref from linked invoice. */
+  allotmentReferenceNo?: string | null;
   unifiedEntityId?: string | null;
   unifiedEntityDisplayName?: string | null;
   qrCodeUrl?: string | null;
@@ -88,6 +102,34 @@ export default function IomsReceiptDetail() {
     queryKey: ["/api/yards"],
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+
+  const m03RentReceipt = receipt ? isM03RentReceipt(receipt) : false;
+  const linkedInvoiceId = m03RentReceipt ? receipt?.sourceRecordId?.trim() ?? "" : "";
+
+  const { data: linkedInvoice } = useQuery<LinkedRentInvoice>({
+    queryKey: ["/api/ioms/rent/invoices", linkedInvoiceId],
+    queryFn: () => fetchApiGet<LinkedRentInvoice>(`/api/ioms/rent/invoices/${encodeURIComponent(linkedInvoiceId)}`),
+    enabled: m03RentReceipt && Boolean(linkedInvoiceId),
+  });
+
+  const { data: assets = [] } = useQuery<{ id: string; assetId: string }[]>({
+    queryKey: ["/api/ioms/assets"],
+    enabled: m03RentReceipt,
+  });
+  const assetById = useMemo(
+    () => Object.fromEntries(assets.map((a) => [a.id, a.assetId])),
+    [assets],
+  );
+
+  const allotmentReferenceDisplay = useMemo(() => {
+    if (!m03RentReceipt) return "";
+    const fromApi = receipt?.allotmentReferenceNo?.trim();
+    if (fromApi) return fromApi;
+    if (linkedInvoice?.assetId) {
+      return assetById[linkedInvoice.assetId]?.trim() || linkedInvoice.assetId;
+    }
+    return "";
+  }, [m03RentReceipt, receipt?.allotmentReferenceNo, linkedInvoice, assetById]);
 
   const taLicenceId = useMemo(() => {
     if (!receipt) return null as string | null;
@@ -420,7 +462,19 @@ export default function IomsReceiptDetail() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[receipt.yardId] ?? receipt.yardId}</div>
             <div><span className="text-muted-foreground">Revenue head</span><br />{receipt.revenueHead}</div>
-            <div><span className="text-muted-foreground">Payer</span><br />{payerResolvedLabel}</div>
+            {m03RentReceipt ? (
+              <div>
+                <span className="text-muted-foreground">Allotment Reference No.</span>
+                <br />
+                {allotmentReferenceDisplay || "—"}
+              </div>
+            ) : (
+              <div>
+                <span className="text-muted-foreground">Payer</span>
+                <br />
+                {payerResolvedLabel}
+              </div>
+            )}
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant={receipt.status === "Paid" ? "default" : "secondary"}>{receipt.status}</Badge></div>
             <div><span className="text-muted-foreground">Amount</span><br />{formatInr(receipt.amount)}</div>
             <div><span className="text-muted-foreground">CGST / SGST</span><br />{formatInr((receipt.cgst ?? 0))} / {formatInr((receipt.sgst ?? 0))}</div>
@@ -429,7 +483,7 @@ export default function IomsReceiptDetail() {
             {receipt.gatewayRef && <div><span className="text-muted-foreground">Gateway ref</span><br />{receipt.gatewayRef}</div>}
             {receipt.chequeNo && <div><span className="text-muted-foreground">Cheque no</span><br />{receipt.chequeNo} {receipt.bankName ? `(${receipt.bankName})` : ""}</div>}
             {receipt.sourceModule && <div><span className="text-muted-foreground">Source</span><br />{sourceLabel}</div>}
-            {receipt.unifiedEntityId ? (
+            {receipt.unifiedEntityId && !m03RentReceipt ? (
               <div className="md:col-span-2">
                 <span className="text-muted-foreground">Unified entity</span>
                 <br />

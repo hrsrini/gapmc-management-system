@@ -8,6 +8,24 @@ const KIND_PREFIX: Record<UnifiedEntityKindLabel, string> = {
   AdHoc: "AH",
 };
 
+/**
+ * Unified entity master column: licence number (Track A) or public entity code (Track B / ad-hoc).
+ * No `TA:` / `TB:` prefix — e.g. `GAPMC/…` or `ENT-2026-00004`.
+ */
+export function formatLicenceOrEntityIdDisplay(
+  kind: UnifiedEntityKindLabel,
+  args: { licenceNo?: string | null; publicEntityCode?: string | null },
+): string {
+  if (kind === "TrackA") {
+    const lic = String(args.licenceNo ?? "").trim();
+    if (lic) return lic;
+    const code = String(args.publicEntityCode ?? "").trim();
+    return code || "—";
+  }
+  const code = String(args.publicEntityCode ?? "").trim();
+  return code || "—";
+}
+
 /** e.g. `TB : ENT-2026-00001` */
 export function formatDisplayEntityId(
   kind: UnifiedEntityKindLabel,

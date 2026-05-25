@@ -41,7 +41,8 @@ interface EntityRef {
 
 interface PreReceiptIssueContext {
   rentPremisesType: string;
-  rentPremisesRef: string;
+  rentPremisesId: string;
+  rentAllotmentReferenceNo: string;
   amount: number;
   agreementFrom: string;
   agreementTo: string;
@@ -132,7 +133,6 @@ export default function PreReceipts() {
   const [open, setOpen] = useState(false);
   const [entityId, setEntityId] = useState("");
   const [rentPremisesType, setRentPremisesType] = useState("");
-  const [rentPremisesRef, setRentPremisesRef] = useState("");
   const [rentBillingMonth, setRentBillingMonth] = useState("");
   const [amount, setAmount] = useState("");
   const [agreementFrom, setAgreementFrom] = useState("");
@@ -159,14 +159,12 @@ export default function PreReceipts() {
   useEffect(() => {
     if (!entityId || !issueContext) {
       setRentPremisesType("");
-      setRentPremisesRef("");
       setAmount("");
       setAgreementFrom("");
       setAgreementTo("");
       return;
     }
     setRentPremisesType(issueContext.rentPremisesType ?? "");
-    setRentPremisesRef(issueContext.rentPremisesRef ?? "");
     setAmount(String(issueContext.amount ?? ""));
     setAgreementFrom(issueContext.agreementFrom ?? "");
     setAgreementTo(issueContext.agreementTo ?? "");
@@ -176,7 +174,6 @@ export default function PreReceipts() {
     setEntityId("");
     setRentBillingMonth("");
     setRentPremisesType("");
-    setRentPremisesRef("");
     setAmount("");
     setAgreementFrom("");
     setAgreementTo("");
@@ -275,6 +272,7 @@ export default function PreReceipts() {
       ),
       entityLabel: p.entityDisplay ?? entityLabelById[p.entityId] ?? "—",
       premisesId: p.rentPremisesRef?.trim() || "—",
+      allotmentRef: p.rentPremisesRef?.trim() || "—",
       yardName: p.yardName?.trim() || "—",
       billingMonthLabel: formatYearMonthLabel(p.rentBillingMonth),
       billingMonthSort: p.rentBillingMonth ?? "",
@@ -422,8 +420,12 @@ export default function PreReceipts() {
                     <span className="font-medium">{rentPremisesType || "—"}</span>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">Premises ref (PDF):</span>{" "}
-                    <span className="font-medium">{rentPremisesRef || "—"}</span>
+                    <span className="text-muted-foreground">Premises ID:</span>{" "}
+                    <span className="font-medium font-mono">{issueContext.rentPremisesId || "—"}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Allotment Reference No.:</span>{" "}
+                    <span className="font-medium font-mono">{issueContext.rentAllotmentReferenceNo || "—"}</span>
                   </div>
                   <div>
                     <span className="text-muted-foreground">Rent amount (₹):</span>{" "}
@@ -438,7 +440,13 @@ export default function PreReceipts() {
 
                 <div className="space-y-1">
                   <Label>Billing month *</Label>
-                  <Input type="month" value={rentBillingMonth} onChange={(e) => setRentBillingMonth(e.target.value)} />
+                  <Input
+                    type="month"
+                    value={rentBillingMonth}
+                    onChange={(e) => setRentBillingMonth(e.target.value)}
+                    min={agreementFrom.slice(0, 7) || undefined}
+                    max={agreementTo.slice(0, 7) || undefined}
+                  />
                   {duplicateForMonth && (
                     <p className="text-xs text-destructive">
                       A pre-receipt already exists for this entity and month (

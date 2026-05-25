@@ -34,8 +34,18 @@ export function legacyRentRowMatchesApiYard(
   return false;
 }
 
+/** `yards.type` = Yard (excludes CheckPost and HO). */
+export function isYardLocationType(type: string | null | undefined): boolean {
+  return String(type ?? "").trim().toLowerCase() === "yard";
+}
+
+/** Operational yard dropdowns (entities, traders, premises) — not checkposts or head office. */
+export function filterYardTypeLocations(yards: ApiYardRef[]): ApiYardRef[] {
+  return yards.filter((y) => isYardLocationType(y.type));
+}
+
 export function filterApiYardsForLegacyRentReports(yards: ApiYardRef[]): ApiYardRef[] {
-  return yards.filter((y) => String(y.type ?? "").toLowerCase() === "yard");
+  return filterYardTypeLocations(yards);
 }
 
 /** Map IOMS yard → legacy `gapmc.traders` / `invoices` integer `yard_id` (via static location codes). */

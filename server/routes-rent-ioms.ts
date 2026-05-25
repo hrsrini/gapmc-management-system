@@ -42,7 +42,8 @@ import { createIomsReceipt } from "./routes-receipts-ioms";
 import { assertTraderLicenceAccessibleInUserScope } from "./trader-licence-market-scope";
 import { applyM03ReceiptToRentDepositLedger } from "./rent-deposit-ledger-from-receipt";
 import { listRentDepositLedgerEnriched } from "./rent-deposit-ledger-display";
-import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
+import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB, unifiedEntityIdFromAdHoc } from "@shared/unified-entity-id";
+import { ledgerRowMatchesUnifiedEntityFilter } from "./rent-ledger-scope";
 import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
 import { normalizeRentRevisionBasis, yearMonthMinusOne } from "@shared/rent-revision-basis";
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
@@ -168,11 +169,32 @@ export function registerRentIomsRoutes(app: Express) {
     try {
       const yardId = req.query.yardId as string | undefined;
       const status = req.query.status as string | undefined;
+      const unifiedRaw = String(req.query.unifiedEntityId ?? "").trim();
       const conditions = [];
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0) conditions.push(inArray(rentInvoices.yardId, scopedIds));
       if (yardId) conditions.push(eq(rentInvoices.yardId, yardId));
       if (status) conditions.push(eq(rentInvoices.status, status));
+      if (unifiedRaw) {
+        const parsed = parseUnifiedEntityId(unifiedRaw);
+        if (!parsed) {
+          return sendApiError(res, 400, "INVOICE_UNIFIED_ID", "unifiedEntityId must be TA:<id> | TB:<id> | AH:<id>");
+        }
+        if (parsed.kind === "TB") {
+          conditions.push(
+            or(
+              eq(rentInvoices.tenantLicenceId, unifiedEntityIdFromTrackB(parsed.refId)),
+              eq(rentInvoices.entityId, parsed.refId),
+            )!,
+          );
+        } else if (parsed.kind === "TA") {
+          conditions.push(
+            or(eq(rentInvoices.tenantLicenceId, parsed.refId), eq(rentInvoices.tenantLicenceId, unifiedEntityIdFromTrackA(parsed.refId)))!,
+          );
+        } else {
+          conditions.push(eq(rentInvoices.tenantLicenceId, unifiedEntityIdFromAdHoc(parsed.refId)));
+        }
+      }
       const base = db.select().from(rentInvoices).orderBy(desc(rentInvoices.periodMonth));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
       res.json(list);
@@ -276,23 +298,8 @@ export function registerRentIomsRoutes(app: Express) {
         .limit(1);
       const assetCode = String(asset?.assetId ?? inv.assetId);
       const counterparty = await resolveRentInvoiceCounterparty(inv);
-      let allotmentLabel = inv.allotmentId;
-      const [ea] = await db
-        .select({ allotteeName: entityAllotments.allotteeName, premisesRefNo: entityAllotments.premisesRefNo })
-        .from(entityAllotments)
-        .where(eq(entityAllotments.id, inv.allotmentId))
-        .limit(1);
-      if (ea) {
-        const ref = ea.premisesRefNo?.trim();
-        allotmentLabel = `${ea.allotteeName}${ref ? ` · ${ref}` : ""}`;
-      } else {
-        const [aa] = await db
-          .select({ allotteeName: assetAllotments.allotteeName })
-          .from(assetAllotments)
-          .where(eq(assetAllotments.id, inv.allotmentId))
-          .limit(1);
-        if (aa?.allotteeName) allotmentLabel = aa.allotteeName;
-      }
+      const { resolveRentAllotmentReferenceNo } = await import("./rent-allotment-reference");
+      const allotmentLabel = await resolveRentAllotmentReferenceNo(inv);
       const { getMergedSystemConfig } = await import("./system-config");
       const sysCfg = await getMergedSystemConfig();
       const cgstPercent = parseFloat(String(sysCfg.rent_invoice_cgst_percent ?? ""));
@@ -1295,13 +1302,22 @@ export function registerRentIomsRoutes(app: Express) {
       let tid: string | null = tenantLicenceId || null;
       if (unifiedRaw) {
         const parsed = parseUnifiedEntityId(unifiedRaw);
-        if (!parsed || parsed.kind !== "TA") {
-          return sendApiError(res, 400, "LEDGER_UNIFIED_ID", "unifiedEntityId must be TA:<trader_licence_id>");
+        if (!parsed) {
+          return sendApiError(res, 400, "LEDGER_UNIFIED_ID", "unifiedEntityId must be TA:<id> | TB:<id> | AH:<id>");
+        }
+        if (parsed.kind !== "TA") {
+          const rows = await db
+            .select()
+            .from(iomsReceipts)
+            .where(eq(iomsReceipts.unifiedEntityId, unifiedRaw))
+            .orderBy(desc(iomsReceipts.createdAt))
+            .limit(200);
+          return res.json(rows);
         }
         tid = parsed.refId;
       }
       if (!tid) {
-        return sendApiError(res, 400, "LEDGER_TENANT_REQUIRED", "tenantLicenceId or unifiedEntityId (TA:) is required");
+        return sendApiError(res, 400, "LEDGER_TENANT_REQUIRED", "tenantLicenceId or unifiedEntityId is required");
       }
       const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, tid)).limit(1);
       if (!lic) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
@@ -1331,15 +1347,7 @@ export function registerRentIomsRoutes(app: Express) {
         if (!parsed) {
           return sendApiError(res, 400, "LEDGER_UNIFIED_ID", "unifiedEntityId must be TA:<id> | TB:<id> | AH:<id>");
         }
-        if (parsed.kind !== "TA") {
-          return sendApiError(
-            res,
-            400,
-            "LEDGER_UNIFIED_TRACK",
-            "Rent deposit ledger is Track A (tenant licence) scoped — use unifiedEntityId TA:<trader_licence_id>.",
-          );
-        }
-        list = list.filter((r) => r.tenantLicenceId === parsed.refId);
+        list = list.filter((r) => ledgerRowMatchesUnifiedEntityFilter(r, unifiedRaw));
       } else if (tenantLicenceId) {
         list = list.filter((r) => r.tenantLicenceId === tenantLicenceId);
       }
@@ -1608,12 +1616,20 @@ export function registerRentIomsRoutes(app: Express) {
     }
   });
 
+  /** Parse DD-MM-YYYY or YYYY-MM-DD to API calendar date. */
+  function normalizeAgeingAsOfDate(raw: string): string {
+    const t = String(raw ?? "").trim();
+    const dmy = /^(\d{2})-(\d{2})-(\d{4})$/.exec(t);
+    if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t.slice(0, 10))) return t.slice(0, 10);
+    return new Date().toISOString().slice(0, 10);
+  }
+
   /** US-M03-006: past-due outstanding rent with simple ageing buckets (days after period-month end). */
   app.get("/api/ioms/rent/reports/ageing", async (req, res) => {
     try {
       const asOfRaw = String(req.query.asOf ?? "").trim();
-      const asOfDate =
-        asOfRaw && /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : new Date().toISOString().slice(0, 10);
+      const asOfDate = asOfRaw ? normalizeAgeingAsOfDate(asOfRaw) : new Date().toISOString().slice(0, 10);
       const yardQ = String(req.query.yardId ?? "").trim();
       const format = String(req.query.format ?? "").toLowerCase();
       const conditions = [inArray(rentInvoices.status, ["Approved", "Overdue"])];
@@ -1629,6 +1645,8 @@ export function registerRentIomsRoutes(app: Express) {
         invoiceNo: string;
         periodMonth: string;
         dueDate: string;
+        /** Invoice total (amount due for the period). */
+        dueAmount: number;
         daysPastDue: number;
         ageingBucket: string;
         outstandingAmount: number;
@@ -1654,6 +1672,7 @@ export function registerRentIomsRoutes(app: Express) {
           invoiceNo: (inv.invoiceNo ?? inv.id) as string,
           periodMonth: String(inv.periodMonth),
           dueDate: due,
+          dueAmount: Math.round(Number(inv.totalAmount ?? 0) * 100) / 100,
           daysPastDue,
           ageingBucket,
           outstandingAmount: Math.round(outstanding * 100) / 100,
@@ -1673,6 +1692,10 @@ export function registerRentIomsRoutes(app: Express) {
       }));
 
       if (format === "csv") {
+        const formatCsvYmd = (ymd: string) => {
+          const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd).slice(0, 10));
+          return m ? `${m[3]}-${m[2]}-${m[1]}` : ymd;
+        };
         const header = [
           "asOfDate",
           "invoiceId",
@@ -1681,6 +1704,7 @@ export function registerRentIomsRoutes(app: Express) {
           "tenantLicenceId",
           "periodMonth",
           "dueDate",
+          "dueAmount",
           "daysPastDue",
           "ageingBucket",
           "outstandingAmount",
@@ -1688,13 +1712,14 @@ export function registerRentIomsRoutes(app: Express) {
         ];
         const dataLines = rows.map((r) =>
           toCsvRow([
-            asOfDate,
+            formatCsvYmd(asOfDate),
             r.invoiceId,
             r.invoiceNo,
             r.yardId,
             r.tenantLicenceId,
             r.periodMonth,
-            r.dueDate,
+            formatCsvYmd(r.dueDate),
+            r.dueAmount,
             r.daysPastDue,
             r.ageingBucket,
             r.outstandingAmount,

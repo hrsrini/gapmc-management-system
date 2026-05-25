@@ -1,4 +1,5 @@
-import { Switch, Route, Redirect } from "wouter";
+import { useEffect } from "react";
+import { Switch, Route, Redirect, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -117,6 +118,16 @@ import BugNew from "@/pages/bugs/BugNew";
 import BugDetail from "@/pages/bugs/BugDetail";
 import BugDashboard from "@/pages/bugs/BugDashboard";
 
+/** Legacy entity-profile link `/rent/ioms/invoices` → list with query string preserved. */
+function RentIomsInvoicesAliasRedirect() {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    const qs = typeof window !== "undefined" ? window.location.search : "";
+    setLocation(`/rent/ioms${qs}`);
+  }, [setLocation]);
+  return null;
+}
+
 function Router() {
   return (
     <Switch>
@@ -156,6 +167,9 @@ function Router() {
       </Route>
       <Route path="/rent/ioms">
         <ProtectedRoute><IomsRentInvoices /></ProtectedRoute>
+      </Route>
+      <Route path="/rent/ioms/invoices">
+        <RentIomsInvoicesAliasRedirect />
       </Route>
       <Route path="/rent/ioms/invoices/new">
         <ProtectedRoute><RequirePermission module="M-03" action="Create"><IomsRentInvoiceForm /></RequirePermission></ProtectedRoute>

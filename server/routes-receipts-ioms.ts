@@ -6,8 +6,10 @@ import type { Express, Request } from "express";
 import { eq, desc, and, sql, inArray } from "drizzle-orm";
 import QRCode from "qrcode";
 import { db } from "./db";
-import { yards, receiptSequence, iomsReceipts, paymentGatewayLog, rentInvoices, users } from "@shared/db-schema";
+import { yards, receiptSequence, iomsReceipts, paymentGatewayLog, rentInvoices } from "@shared/db-schema";
 import { buildIomsReceiptPdf } from "./receipt-pdf";
+import { attachCreatedByDisplayNames } from "./ioms-receipt-created-by-display";
+import { attachCreatedByDisplayNames } from "./ioms-receipt-created-by-display";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
 import {
   recordChequeDishonourLedgerForM03Receipt,
@@ -23,6 +25,7 @@ import { isPaymentWebhookHmacMandatory, verifyPaymentWebhookHmac } from "./payme
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-interest";
 import { getM03RentReceiptArrearsDisclosure, type RentReceiptArrearsDisclosure } from "./rent-receipt-arrears";
+import { resolveRentPremisesAssetId } from "./rent-allotment-reference";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 
 async function dishonourRecomputationHint(
@@ -282,7 +285,8 @@ export function registerReceiptsIomsRoutes(app: Express) {
         .orderBy(desc(iomsReceipts.createdAt))
         .limit(Math.min(Number(limit) || 100, 500));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
-      const enriched = await attachPayerDisplayNames(list);
+      const withPayer = await attachPayerDisplayNames(list);
+      const enriched = await attachCreatedByDisplayNames(withPayer);
       const m03InvoiceIds = Array.from(
         new Set(
           enriched
@@ -291,7 +295,12 @@ export function registerReceiptsIomsRoutes(app: Express) {
         ),
       );
       if (m03InvoiceIds.length === 0) {
-        res.json(enriched);
+        res.json(
+          enriched.map((r) => ({
+            ...r,
+            createdByName: r.createdByDisplayName,
+          })),
+        );
         return;
       }
       const invRows = await db
@@ -305,11 +314,12 @@ export function registerReceiptsIomsRoutes(app: Express) {
       const invById = new Map(invRows.map((x) => [x.id, x]));
       res.json(
         enriched.map((r) => {
-          if ((r.sourceModule ?? "").trim() !== "M-03" || !(r.sourceRecordId ?? "").trim()) return r;
+          const base = { ...r, createdByName: r.createdByDisplayName };
+          if ((r.sourceModule ?? "").trim() !== "M-03" || !(r.sourceRecordId ?? "").trim()) return base;
           const inv = invById.get(String(r.sourceRecordId).trim());
-          if (!inv) return r;
+          if (!inv) return base;
           return {
-            ...r,
+            ...base,
             sourceInvoiceNo: inv.invoiceNo ?? null,
             sourceInvoicePeriodMonth: inv.periodMonth ?? null,
           };
@@ -522,30 +532,36 @@ export function registerReceiptsIomsRoutes(app: Express) {
         return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
       }
       const rentArrearsDisclosure = await getM03RentReceiptArrearsDisclosure(row);
-      const [enriched] = await attachPayerDisplayNames([row]);
+      const [withPayer] = await attachPayerDisplayNames([row]);
+      const [enriched] = await attachCreatedByDisplayNames([withPayer]);
       let payload: Record<string, unknown> = rentArrearsDisclosure
-        ? { ...enriched, rentArrearsDisclosure }
-        : { ...enriched };
-      if (row.createdBy) {
-        const [u] = await db
-          .select({ name: users.name })
-          .from(users)
-          .where(eq(users.id, row.createdBy))
-          .limit(1);
-        if (u?.name) payload = { ...payload, createdByName: u.name };
-      }
-      if (row.sourceModule === "M-03" && row.sourceRecordId) {
+        ? { ...enriched, rentArrearsDisclosure, createdByName: enriched.createdByDisplayName }
+        : { ...enriched, createdByName: enriched.createdByDisplayName };
+      const sourceRecordId = String(row.sourceRecordId ?? "").trim();
+      const sourceModule = String(row.sourceModule ?? "").trim();
+      const isM03Linked = sourceModule === "M-03" && Boolean(sourceRecordId);
+      if (isM03Linked) {
         const [inv] = await db
-          .select({ invoiceNo: rentInvoices.invoiceNo, periodMonth: rentInvoices.periodMonth })
+          .select({
+            invoiceNo: rentInvoices.invoiceNo,
+            periodMonth: rentInvoices.periodMonth,
+            allotmentId: rentInvoices.allotmentId,
+            allotmentKind: rentInvoices.allotmentKind,
+            assetId: rentInvoices.assetId,
+          })
           .from(rentInvoices)
-          .where(eq(rentInvoices.id, row.sourceRecordId))
+          .where(eq(rentInvoices.id, sourceRecordId))
           .limit(1);
         if (inv) {
-          payload = {
-            ...payload,
+          const rh = String(row.revenueHead ?? "").trim();
+          const enrich: Record<string, unknown> = {
             sourceInvoiceNo: inv.invoiceNo ?? null,
             sourceInvoicePeriodMonth: inv.periodMonth ?? null,
           };
+          if (rh === "Rent" || rh === "GSTInvoice" || rh === "RentArrearsInterest") {
+            enrich.allotmentReferenceNo = await resolveRentPremisesAssetId(inv);
+          }
+          payload = { ...payload, ...enrich };
         }
       }
       res.json(payload);

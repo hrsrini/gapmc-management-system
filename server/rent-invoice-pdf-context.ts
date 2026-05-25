@@ -9,6 +9,8 @@ import {
   formatTaxInvoiceTaxWords,
   inferGstRatePercent,
   lastDayOfPeriodMonthYmd,
+  rentInvoicePdfBoardBanner,
+  rentInvoicePdfSignatoryLine,
 } from "./rent-invoice-pdf-shared";
 
 type RentInvoiceRow = InferSelectModel<typeof rentInvoices>;
@@ -23,6 +25,7 @@ export type RentInvoicePdfLine = {
 };
 
 export type RentInvoicePdfContext = {
+  boardBanner: string;
   sellerTitle: string;
   sellerAddress: string;
   gstin: string;
@@ -94,23 +97,20 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
   const stateCode = process.env.RENT_INVOICE_PDF_STATE_CODE?.trim() || "30";
   const pan = process.env.RENT_INVOICE_PDF_PAN?.trim() || "AAALT1317M";
 
-  const sellerTitle =
-    process.env.RENT_INVOICE_PDF_SELLER_TITLE?.trim() ||
-    (yardCode?.trim() ? `${yardCode.trim().toUpperCase()} GST` : yardName.toUpperCase());
+  const boardBanner = rentInvoicePdfBoardBanner();
+  const sellerTitle = process.env.RENT_INVOICE_PDF_SELLER_TITLE?.trim() || boardBanner;
   const sellerAddress =
     process.env.RENT_INVOICE_PDF_SELLER_ADDRESS?.trim() ||
-    yardAddress?.trim() ||
-    `${yardName.toUpperCase()}, ${branding.placeLine.toUpperCase()}`;
+    (yardAddress?.trim()
+      ? yardAddress.trim().toUpperCase()
+      : `${yardName.toUpperCase()}, ${branding.placeLine.toUpperCase()}`);
 
   const destination = yardName.toUpperCase();
-  const buyerAddressParts = [
-    counterpartyName !== allotmentLabel ? allotmentLabel : null,
-    assetCode?.trim() || null,
-    yardName.trim() || null,
-  ].filter((p): p is string => Boolean(p?.trim()));
+  /** Consignee / buyer: yard location name only (not allotment or asset codes). */
   const buyerAddress =
+    process.env.RENT_INVOICE_PDF_SHIP_TO_LOCATION?.trim() ||
     process.env.RENT_INVOICE_PDF_BUYER_ADDRESS?.trim() ||
-    (buyerAddressParts.length > 0 ? buyerAddressParts.join(", ") : yardName);
+    destination;
 
   const invoiceDateIso =
     invoice.approvedAt?.trim() ||
@@ -184,6 +184,7 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
   const totalTax = Math.round((cgst + sgst) * 100) / 100;
 
   return {
+    boardBanner,
     sellerTitle,
     sellerAddress,
     gstin: branding.gstin,
@@ -211,7 +212,7 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
     chargeableWords: formatTaxInvoiceChargeableWords(total),
     taxWords: formatTaxInvoiceTaxWords(totalTax),
     remarks,
-    signatoryFor: sellerTitle,
+    signatoryFor: rentInvoicePdfSignatoryLine(),
     isGstExempt,
   };
 }

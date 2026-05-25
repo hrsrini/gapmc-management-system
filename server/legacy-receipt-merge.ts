@@ -6,10 +6,11 @@ import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { iomsReceipts, yards } from "@shared/db-schema";
 import type { Receipt } from "@shared/schema";
+import { attachCreatedByDisplayNames, type WithCreatedByDisplayName } from "./ioms-receipt-created-by-display";
 import { attachPayerDisplayNames, type WithPayerDisplayName } from "./ioms-receipt-payer-display";
 
 type IomsReceiptRow = InferSelectModel<typeof iomsReceipts>;
-type IomsReceiptEnriched = IomsReceiptRow & WithPayerDisplayName;
+type IomsReceiptEnriched = IomsReceiptRow & WithPayerDisplayName & WithCreatedByDisplayName;
 
 /** Map IOMS yard `code` (uppercase) to legacy `gapmc.receipts.yard_id` integer where codes align. */
 const YARD_CODE_TO_LEGACY_INT: Record<string, number> = {
@@ -28,8 +29,15 @@ const YARD_CODE_TO_LEGACY_INT: Record<string, number> = {
   DODA: 13,
 };
 
-function revenueHeadToLegacyType(head: string): Receipt["type"] {
+/** Govt pre-receipt settlement receipts were stored as M-02-PRE-RECEIPT; treat as rent income. */
+function normalizeLegacyRevenueHead(head: string): string {
   const h = String(head ?? "").trim();
+  if (h === "M-02-PRE-RECEIPT") return "Rent";
+  return h;
+}
+
+function revenueHeadToLegacyType(head: string): Receipt["type"] {
+  const h = normalizeLegacyRevenueHead(head);
   if (h === "Rent" || h === "GSTInvoice") return "Rent";
   if (h === "MarketFee") return "Market Fee";
   if (h === "LicenceFee" || h === "SecurityDeposit") return "License Fee";
@@ -77,7 +85,7 @@ function mapEnrichedIomsRow(
     type: revenueHeadToLegacyType(r.revenueHead),
     traderId: String(r.payerRefId ?? r.unifiedEntityId ?? r.createdBy ?? ""),
     traderName: payerLabel,
-    head: r.revenueHead,
+    head: normalizeLegacyRevenueHead(r.revenueHead),
     amount: Number(r.amount ?? 0),
     ...(cgst > 0 ? { cgst } : {}),
     ...(sgst > 0 ? { sgst } : {}),
@@ -90,7 +98,7 @@ function mapEnrichedIomsRow(
     ...(r.gatewayRef ? { transactionRef: r.gatewayRef } : {}),
     yardId: legacyYardId,
     yardName,
-    issuedBy: r.createdBy,
+    issuedBy: r.createdByDisplayName,
     status: iomsStatusToLegacy(r.status),
     createdAt: r.createdAt,
   } as Receipt;
@@ -112,7 +120,8 @@ export async function fetchIomsReceiptsMappedToLegacy(scopedLocationIds: string[
   const yardList = await db.select({ id: yards.id, code: yards.code, name: yards.name }).from(yards);
   const yardById = new Map(yardList.map((y) => [y.id, { code: y.code, name: y.name }]));
 
-  const enriched = await attachPayerDisplayNames(rows);
+  const withPayer = await attachPayerDisplayNames(rows);
+  const enriched = await attachCreatedByDisplayNames(withPayer);
   return (enriched as IomsReceiptEnriched[]).map((r) => mapEnrichedIomsRow(r, yardById));
 }
 
@@ -121,7 +130,8 @@ export async function fetchSingleIomsReceiptAsLegacy(id: string): Promise<Receip
   if (!row) return null;
   const yardList = await db.select({ id: yards.id, code: yards.code, name: yards.name }).from(yards);
   const yardById = new Map(yardList.map((y) => [y.id, { code: y.code, name: y.name }]));
-  const [enriched] = await attachPayerDisplayNames([row]);
+  const [withPayer] = await attachPayerDisplayNames([row]);
+  const [enriched] = await attachCreatedByDisplayNames([withPayer]);
   return mapEnrichedIomsRow(enriched as IomsReceiptEnriched, yardById);
 }
 

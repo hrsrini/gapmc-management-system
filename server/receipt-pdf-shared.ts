@@ -1,18 +1,17 @@
 import { integerInrToWords } from "./inr-amount-words";
 import { formatInrPdf } from "@shared/format-inr";
 
-/** Receipt face date: D-M-YYYY (e.g. 10-5-2025) per GAPLMB sample. */
+/** Receipt face date: DD-MM-YYYY (e.g. 21-05-2025) per GAPLMB sample. */
 export function formatReceiptDateDmYyyy(isoLike: string | null | undefined): string {
   const raw = String(isoLike ?? "").trim();
   const d = raw.slice(0, 10);
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-    const day = Number(d.slice(8, 10));
-    const month = Number(d.slice(5, 7));
-    const year = d.slice(0, 4);
-    return `${day}-${month}-${year}`;
+    return `${d.slice(8, 10)}-${d.slice(5, 7)}-${d.slice(0, 4)}`;
   }
   const n = new Date();
-  return `${n.getDate()}-${n.getMonth() + 1}-${n.getFullYear()}`;
+  const dd = String(n.getDate()).padStart(2, "0");
+  const mm = String(n.getMonth() + 1).padStart(2, "0");
+  return `${dd}-${mm}-${n.getFullYear()}`;
 }
 
 /** Words inside "A Sum Of ( INR … Only )" on statutory receipt. */

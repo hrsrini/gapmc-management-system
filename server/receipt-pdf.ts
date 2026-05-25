@@ -23,9 +23,11 @@ export type ReceiptPdfArrearsDisclosure = {
 };
 
 const A4_MARGIN = 36;
-const SLIP_HEIGHT = 368;
-const FIRST_SLIP_Y = 40;
-const SECOND_SLIP_Y = 418;
+/** Two slips + gap must stay above bottom margin on A4 (~842pt). */
+const SLIP_HEIGHT = 364;
+const SLIP_GAP = 8;
+const FIRST_SLIP_Y = 36;
+const SECOND_SLIP_Y = FIRST_SLIP_Y + SLIP_HEIGHT + SLIP_GAP;
 
 export async function buildIomsReceiptPdf(params: {
   receipt: ReceiptRow;

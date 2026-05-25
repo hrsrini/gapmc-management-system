@@ -1,4 +1,4 @@
-import { desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { db } from "./db";
 import {
   adHocEntities,
@@ -23,7 +23,44 @@ export type RentDepositLedgerEnriched = RentDepositLedgerRow & {
   refDisplay: string;
   unifiedEntityDisplayName: string;
   tenantLicenceDisplayName: string;
+  /** Licence no. (Track A) or ENT-… entity code (Track B). */
+  licenceOrEntityIdDisplay: string;
+  invoiceStatus?: string | null;
+  /** Latest Paid/Reconciled M-03 rent/GST receipt for this invoice (for Rent ledger lines). */
+  invoicePaidReceiptId?: string | null;
+  invoicePaidReceiptNo?: string | null;
 };
+
+/** Map invoice id → latest paid principal rent receipt (M-03). */
+async function paidRentReceiptsByInvoiceId(
+  invoiceIds: string[],
+): Promise<Map<string, { id: string; receiptNo: string }>> {
+  const out = new Map<string, { id: string; receiptNo: string }>();
+  if (invoiceIds.length === 0) return out;
+  const rows = await db
+    .select({
+      id: iomsReceipts.id,
+      receiptNo: iomsReceipts.receiptNo,
+      sourceRecordId: iomsReceipts.sourceRecordId,
+      createdAt: iomsReceipts.createdAt,
+    })
+    .from(iomsReceipts)
+    .where(
+      and(
+        eq(iomsReceipts.sourceModule, "M-03"),
+        inArray(iomsReceipts.sourceRecordId, invoiceIds),
+        inArray(iomsReceipts.status, ["Paid", "Reconciled"]),
+        or(eq(iomsReceipts.revenueHead, "Rent"), eq(iomsReceipts.revenueHead, "GSTInvoice")),
+      ),
+    )
+    .orderBy(desc(iomsReceipts.createdAt));
+  for (const r of rows) {
+    const invId = String(r.sourceRecordId ?? "").trim();
+    if (!invId || out.has(invId)) continue;
+    out.set(invId, { id: r.id, receiptNo: String(r.receiptNo ?? "").trim() || r.id });
+  }
+  return out;
+}
 
 function resolveInvoiceLabel(
   invoiceId: string | null | undefined,
@@ -54,6 +91,7 @@ export async function fetchRentDepositLedgerWithRefs(): Promise<
       ledger: rentDepositLedger,
       assetPremisesCode: assets.assetId,
       invoiceNo: rentInvoices.invoiceNo,
+      invoiceStatus: rentInvoices.status,
       invoicePeriodMonth: rentInvoices.periodMonth,
       invoiceTenantLicenceId: rentInvoices.tenantLicenceId,
       invoiceEntityId: rentInvoices.entityId,
@@ -84,6 +122,7 @@ export async function fetchRentDepositLedgerWithRefs(): Promise<
       invoiceNo,
       receiptNo,
       refDisplay,
+      invoiceStatus: j.invoiceStatus ?? null,
       invoiceTenantLicenceId: j.invoiceTenantLicenceId,
       invoiceEntityId: j.invoiceEntityId,
     };
@@ -95,7 +134,9 @@ export async function enrichRentDepositLedgerPartyNames<
     invoiceTenantLicenceId?: string | null;
     invoiceEntityId?: string | null;
   },
->(list: T[]): Promise<Array<T & { unifiedEntityDisplayName: string; tenantLicenceDisplayName: string }>> {
+>(list: T[]): Promise<
+  Array<T & { unifiedEntityDisplayName: string; tenantLicenceDisplayName: string; licenceOrEntityIdDisplay: string }>
+> {
   const tenantIds = Array.from(
     new Set(
       list
@@ -152,6 +193,7 @@ export async function enrichRentDepositLedgerPartyNames<
 
   const entityNameById = new Map<string, string>();
   const entityNameByEntityCode = new Map<string, string>();
+  const entityCodeById = new Map<string, string>();
   if (tbIds.length > 0) {
     const entRows = await db
       .select({ id: entities.id, entityCode: entities.entityCode, name: entities.name })
@@ -161,7 +203,10 @@ export async function enrichRentDepositLedgerPartyNames<
       const label = String(er.name ?? "").trim() || er.id;
       entityNameById.set(er.id, label);
       const code = er.entityCode != null ? String(er.entityCode).trim() : "";
-      if (code) entityNameByEntityCode.set(code, label);
+      if (code) {
+        entityNameByEntityCode.set(code, label);
+        entityCodeById.set(er.id, code);
+      }
     }
   }
   const adhocNameById = new Map<string, string>();
@@ -206,12 +251,50 @@ export async function enrichRentDepositLedgerPartyNames<
     })();
 
     const tenantLicenceDisplayName = (licNo ?? tidBare) || "—";
-    return { ...row, unifiedEntityDisplayName, tenantLicenceDisplayName };
+
+    const licenceOrEntityIdDisplay = (() => {
+      if (parsed?.kind === "TB") {
+        return entityCodeById.get(parsed.refId) ?? parsed.refId;
+      }
+      if (parsed?.kind === "TA") {
+        return licenceNoById.get(parsed.refId) ?? parsed.refId;
+      }
+      if (parsed?.kind === "AH") {
+        return parsed.refId;
+      }
+      if (invTbRef) {
+        const code = entityCodeById.get(invTbRef);
+        if (code) return code;
+      }
+      const tidParsed = /^(TA|TB|AH):/i.test(tidRaw) ? parseUnifiedEntityId(tidRaw) : null;
+      if (tidParsed?.kind === "TB") {
+        return entityCodeById.get(tidParsed.refId) ?? tidParsed.refId;
+      }
+      if (tidParsed?.kind === "TA") {
+        return licenceNoById.get(tidParsed.refId) ?? tidParsed.refId;
+      }
+      return tenantLicenceDisplayName;
+    })();
+
+    return { ...row, unifiedEntityDisplayName, tenantLicenceDisplayName, licenceOrEntityIdDisplay };
   });
 }
 
 export async function listRentDepositLedgerEnriched(): Promise<RentDepositLedgerEnriched[]> {
   const withRefs = await fetchRentDepositLedgerWithRefs();
-  const enriched = await enrichRentDepositLedgerPartyNames(withRefs);
+  const invIds = [
+    ...new Set(withRefs.map((r) => String(r.invoiceId ?? "").trim()).filter(Boolean)),
+  ] as string[];
+  const paidByInv = await paidRentReceiptsByInvoiceId(invIds);
+  const withPaid = withRefs.map((r) => {
+    const invId = String(r.invoiceId ?? "").trim();
+    const paid = invId ? paidByInv.get(invId) : undefined;
+    return {
+      ...r,
+      invoicePaidReceiptId: paid?.id ?? null,
+      invoicePaidReceiptNo: paid?.receiptNo ?? null,
+    };
+  });
+  const enriched = await enrichRentDepositLedgerPartyNames(withPaid);
   return enriched.map(({ invoiceTenantLicenceId: _t, invoiceEntityId: _e, ...row }) => row);
 }

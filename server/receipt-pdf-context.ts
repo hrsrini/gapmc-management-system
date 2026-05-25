@@ -1,18 +1,11 @@
 import { eq } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
-import {
-  assetAllotments,
-  assets,
-  entityAllotments,
-  iomsReceipts,
-  rentInvoices,
-  traderLicences,
-  yards,
-} from "@shared/db-schema";
+import { iomsReceipts, rentInvoices, traderLicences, users, yards } from "@shared/db-schema";
 import { parseM03ReceiptBreakdown } from "@shared/m03-receipt-breakdown";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 import { db } from "./db";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
+import { resolveRentPremisesAssetId } from "./rent-allotment-reference";
 import { formatBillingMonthLabel } from "./pre-receipt-pdf";
 import {
   formatInrAmountWordsReceiptFace,
@@ -33,6 +26,8 @@ export type ReceiptPdfParticularRow = {
 
 export type ReceiptPdfLayoutContext = {
   payerDisplayName: string;
+  /** M-03 rent/GST face line (replaces payer name when set). */
+  receivedFromLine: string;
   licenceNo: string | null;
   branding: ReturnType<typeof getReceiptPdfBranding>;
   receiptTitle: string;
@@ -45,6 +40,7 @@ export type ReceiptPdfLayoutContext = {
   totalAmount: number;
   isGracePeriod: boolean;
   revenueHead: string;
+  generatedByUsername: string;
 };
 
 async function resolveLicenceNo(receipt: ReceiptRow): Promise<string | null> {
@@ -67,35 +63,6 @@ async function resolveLicenceNo(receipt: ReceiptRow): Promise<string | null> {
   return null;
 }
 
-async function premisesRefForInvoice(inv: {
-  allotmentId: string;
-  allotmentKind: string;
-  assetId: string;
-}): Promise<string> {
-  const kind = String(inv.allotmentKind ?? "").trim();
-  if (kind === "Entity") {
-    const [ea] = await db
-      .select({ premisesRefNo: entityAllotments.premisesRefNo })
-      .from(entityAllotments)
-      .where(eq(entityAllotments.id, inv.allotmentId))
-      .limit(1);
-    if (ea?.premisesRefNo?.trim()) return ea.premisesRefNo.trim();
-  } else {
-    const [aa] = await db
-      .select({ premisesRefNo: assetAllotments.premisesRefNo })
-      .from(assetAllotments)
-      .where(eq(assetAllotments.id, inv.allotmentId))
-      .limit(1);
-    if (aa?.premisesRefNo?.trim()) return aa.premisesRefNo.trim();
-  }
-  const [asset] = await db
-    .select({ assetId: assets.assetId })
-    .from(assets)
-    .where(eq(assets.id, inv.assetId))
-    .limit(1);
-  return asset?.assetId?.trim() || "premises";
-}
-
 async function buildRemarks(receipt: ReceiptRow): Promise<string> {
   const mode = String(receipt.paymentMode ?? "").trim();
   const payWord = mode === "Cash" ? "Cash" : mode === "Cheque" || mode === "DD" ? "Cheque" : mode || "payment";
@@ -112,7 +79,7 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
       .limit(1);
     if (inv) {
       const month = formatBillingMonthLabel(inv.periodMonth, String(receipt.createdAt ?? ""));
-      const premises = await premisesRefForInvoice(inv);
+      const premises = await resolveRentPremisesAssetId(inv);
       return `Being amount received towards Rent,CGST,SGST for the month of ${month} of ${premises}.`;
     }
   }
@@ -190,8 +157,40 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
   const totalAmount = Number(receipt.totalAmount ?? 0);
   const branding = getReceiptPdfBranding(yard?.address ?? null, yard?.name ?? null);
 
+  let premisesId: string | null = null;
+  if (String(receipt.sourceModule ?? "").trim() === "M-03" && receipt.sourceRecordId) {
+    const rh = String(receipt.revenueHead ?? "").trim();
+    if (rh === "Rent" || rh === "GSTInvoice" || rh === "RentArrearsInterest") {
+      const [inv] = await db
+        .select({
+          allotmentId: rentInvoices.allotmentId,
+          allotmentKind: rentInvoices.allotmentKind,
+          assetId: rentInvoices.assetId,
+        })
+        .from(rentInvoices)
+        .where(eq(rentInvoices.id, receipt.sourceRecordId))
+        .limit(1);
+      if (inv) premisesId = await resolveRentPremisesAssetId(inv);
+    }
+  }
+
+  const receivedFromLine = premisesId?.trim()
+    ? `Allotment Ref. No. : ${premisesId.trim()}`
+    : `Received with thanks From : ${payerDisplayName}`;
+
+  let generatedByUsername = String(receipt.createdBy ?? "").trim() || "—";
+  if (receipt.createdBy) {
+    const [u] = await db
+      .select({ name: users.name })
+      .from(users)
+      .where(eq(users.id, receipt.createdBy))
+      .limit(1);
+    if (u?.name?.trim()) generatedByUsername = u.name.trim();
+  }
+
   return {
     payerDisplayName,
+    receivedFromLine,
     licenceNo,
     branding,
     receiptTitle: receiptTitle(receipt, yard?.code ?? null, yard?.name ?? null),
@@ -204,5 +203,6 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     totalAmount,
     isGracePeriod: Boolean((receipt as { isGracePeriod?: boolean | null }).isGracePeriod),
     revenueHead: String(receipt.revenueHead ?? ""),
+    generatedByUsername,
   };
 }

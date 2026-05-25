@@ -5,13 +5,20 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "./db";
 import { assets, entityAllotments, preReceipts } from "@shared/db-schema";
 
-export type PreReceiptIssueContext = {
+export type PreReceiptPrintFields = {
   allotmentId: string;
   rentPremisesType: string;
-  rentPremisesRef: string;
+  /** Human-readable premises id (`assets.asset_id`), e.g. VAL/SHOP-S1 — printed as Shop/Godown No. */
+  rentPremisesId: string;
+  /** Formal allotment reference, e.g. VAL/SHOP-S1-Y-VAL-01. */
+  rentAllotmentReferenceNo: string;
   amount: number;
   yardId: string;
+  agreementFrom: string;
+  agreementTo: string;
 };
+
+export type PreReceiptIssueContext = PreReceiptPrintFields;
 
 export function billingMonthWithinAllotment(ym: string, fromDate: string, toDate: string): boolean {
   const month = ym.trim().slice(0, 7);
@@ -22,7 +29,7 @@ export function billingMonthWithinAllotment(ym: string, fromDate: string, toDate
   return month >= start && month <= end;
 }
 
-export async function resolvePreReceiptIssueContext(entityId: string): Promise<PreReceiptIssueContext | null> {
+export async function resolvePreReceiptPrintFields(entityId: string): Promise<PreReceiptPrintFields | null> {
   const allotments = await db
     .select()
     .from(entityAllotments)
@@ -39,20 +46,25 @@ export async function resolvePreReceiptIssueContext(entityId: string): Promise<P
 
   const [asset] = await db.select().from(assets).where(eq(assets.id, allot.assetId)).limit(1);
   const premisesType = String(asset?.assetType ?? "").trim() || "Premises";
-  const ref =
-    String(allot.premisesRefNo ?? "").trim() ||
-    String(asset?.assetId ?? "").trim() ||
-    allot.assetId;
+  const premisesId = String(asset?.assetId ?? "").trim() || allot.assetId;
+  const allotmentRef = String(allot.premisesRefNo ?? "").trim() || premisesId;
   const amount = Number(allot.monthlyRent ?? 0);
   if (!Number.isFinite(amount) || amount <= 0) return null;
 
   return {
     allotmentId: allot.id,
     rentPremisesType: premisesType,
-    rentPremisesRef: ref,
+    rentPremisesId: premisesId,
+    rentAllotmentReferenceNo: allotmentRef,
     amount,
     yardId: String(asset?.yardId ?? "").trim(),
+    agreementFrom: allot.fromDate,
+    agreementTo: allot.toDate,
   };
+}
+
+export async function resolvePreReceiptIssueContext(entityId: string): Promise<PreReceiptIssueContext | null> {
+  return resolvePreReceiptPrintFields(entityId);
 }
 
 export async function findDuplicatePreReceiptForMonth(

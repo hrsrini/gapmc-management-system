@@ -69,6 +69,21 @@ export function lastDayOfPeriodMonthYmd(periodMonth: string): string {
   return `${y}-${mm}-${dd}`;
 }
 
+/** Letterhead line above "Tax Invoice" (static per GAPLMB sample). */
+export function rentInvoicePdfBoardBanner(): string {
+  return (
+    process.env.RENT_INVOICE_PDF_BOARD_BANNER?.trim() ||
+    "Goa State Agricultural Produce and Livestock Marketing Board - GST"
+  );
+}
+
+/** Footer signatory line (static "For GAPLMB GST", not yard code). */
+export function rentInvoicePdfSignatoryLine(): string {
+  const raw = process.env.RENT_INVOICE_PDF_SIGNATORY_FOR?.trim();
+  if (raw) return raw.startsWith("For ") || raw.startsWith("for ") ? raw : `For ${raw}`;
+  return "For GAPLMB GST";
+}
+
 export function inferGstRatePercent(taxAmount: number, taxableRent: number): number {
   const rent = Number(taxableRent);
   const tax = Number(taxAmount);

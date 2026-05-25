@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, Receipt, Banknote, Download, UserCircle, BarChart3, Table2, Truck, Clock } from "lucide-react";
-import { formatYearMonthToDisplay } from "@/lib/dateFormat";
+import { formatYearMonthToDisplay, formatYmdToDisplay, parseDisplayDateToYmd } from "@/lib/dateFormat";
 import { formatInr } from "@/lib/formatInr";
 import { finalizeEntityDisplayName } from "@shared/receipt-entity-display";
 import {
@@ -116,10 +116,9 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
       return [
         { key: "receiptNo", header: "Receipt no." },
         { key: "yardName", header: "Yard", sortField: "yardId" },
-        { key: "revenueHead", header: "Head" },
-        { key: "payerDisplayName", header: "Payer", sortField: "payerName" },
-        { key: "entityDisplayName", header: "Entity" },
-        { key: "totalAmount", header: "Total" },
+        { key: "revenueHead", header: "Revenue Head" },
+        { key: "entityDisplayName", header: "Trader Name/Entity Name" },
+        { key: "_total", header: "Total (₹)", sortField: "totalAmount" },
         { key: "paymentMode", header: "Mode" },
         { key: "status", header: "Status" },
         { key: "createdAt", header: "Created" },
@@ -160,6 +159,9 @@ function searchPlaceholderForKind(kind: ReportKind): string {
   if (kind === "rent") {
     return "Search invoice no., period, premises, occupant, amounts, status…";
   }
+  if (kind === "receipt") {
+    return "Search receipt no., yard, revenue head, trader/entity name, mode, status…";
+  }
   return "Search across columns (partial text or numbers)…";
 }
 
@@ -176,7 +178,12 @@ export default function IomsReports() {
   const [to, setTo] = useState("");
   const [yardId, setYardId] = useState<string>("all");
   const [previewKind, setPreviewKind] = useState<ReportKind>("licences");
-  const [ageingAsOf, setAgeingAsOf] = useState(() => new Date().toISOString().slice(0, 10));
+  const [ageingAsOfDisplay, setAgeingAsOfDisplay] = useState(() =>
+    formatYmdToDisplay(new Date().toISOString().slice(0, 10)),
+  );
+  const ageingAsOf = useMemo(() => {
+    return parseDisplayDateToYmd(ageingAsOfDisplay) ?? new Date().toISOString().slice(0, 10);
+  }, [ageingAsOfDisplay]);
   const [tableParams, setTableParams] = useState<ReportPagedParams>({
     page: 1,
     pageSize: 25,
@@ -208,6 +215,7 @@ export default function IomsReports() {
       invoiceNo: string;
       periodMonth: string;
       dueDate: string;
+      dueAmount: number;
       daysPastDue: number;
       ageingBucket: string;
       outstandingAmount: number;
@@ -282,13 +290,13 @@ export default function IomsReports() {
           unifiedEntityDisplayName?: string | null;
           unifiedEntityId?: string | null;
         };
-        out.payerDisplayName = (pr.payerDisplayName ?? pr.payerName)?.trim() || "—";
         out.entityDisplayName = finalizeEntityDisplayName([
           pr.entityDisplayName,
           pr.unifiedEntityDisplayName,
           pr.payerDisplayName,
           pr.payerName,
         ]);
+        out._total = formatRs(r.totalAmount);
       }
       if (previewKind === "rent") {
         const pm = String(r.periodMonth ?? "").trim();
@@ -543,13 +551,13 @@ export default function IomsReports() {
           <CardContent className="space-y-4">
             <div className="flex flex-wrap items-end gap-4">
               <div className="space-y-2">
-                <Label>As of (YYYY-MM-DD)</Label>
+                <Label>As of (DD-MM-YYYY)</Label>
                 <Input
                   className="w-44"
                   type="text"
-                  value={ageingAsOf}
-                  onChange={(e) => setAgeingAsOf(e.target.value)}
-                  placeholder="2026-04-25"
+                  value={ageingAsOfDisplay}
+                  onChange={(e) => setAgeingAsOfDisplay(e.target.value)}
+                  placeholder="20-05-2026"
                 />
               </div>
               <Button type="button" variant="outline" onClick={downloadRentAgeingCsv} className="shrink-0">
@@ -585,10 +593,10 @@ export default function IomsReports() {
                       <tr className="border-b bg-muted/30 text-left">
                         <th className="p-2">Invoice</th>
                         <th className="p-2">Period</th>
-                        <th className="p-2">Due</th>
+                        <th className="p-2">Due (Rs.)</th>
                         <th className="p-2">Days</th>
                         <th className="p-2">Bucket</th>
-                        <th className="p-2">Outstanding</th>
+                        <th className="p-2">Outstanding (Rs.)</th>
                         <th className="p-2">Status</th>
                       </tr>
                     </thead>
@@ -603,11 +611,11 @@ export default function IomsReports() {
                         ageingData.rows.map((r) => (
                           <tr key={r.invoiceId} className="border-b border-border/50">
                             <td className="p-2 font-mono text-xs">{r.invoiceNo}</td>
-                            <td className="p-2">{r.periodMonth}</td>
-                            <td className="p-2">{r.dueDate}</td>
+                            <td className="p-2">{formatYearMonthLabel(r.periodMonth)}</td>
+                            <td className="p-2 tabular-nums">{formatInr(r.dueAmount)}</td>
                             <td className="p-2">{r.daysPastDue}</td>
                             <td className="p-2">{r.ageingBucket}</td>
-                            <td className="p-2">{formatInr(r.outstandingAmount)}</td>
+                            <td className="p-2 tabular-nums">{formatInr(r.outstandingAmount)}</td>
                             <td className="p-2">{r.status}</td>
                           </tr>
                         ))

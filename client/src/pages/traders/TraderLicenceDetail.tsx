@@ -42,6 +42,13 @@ import { govtGstCategoriesForSelect } from "@/lib/govtGstExemptSelect";
 import { invalidateAssetAllotmentQueries } from "@/lib/invalidate-asset-allotments";
 import { inferAgreementTypeFromDates, RENT_REVISION_MODES } from "@shared/premises-allocation";
 import { buildAssetDisplayByRowId, formatPremisesAssetLabel } from "@/lib/asset-premises-display";
+import {
+  PREMISES_ALLOCATION_COLUMNS,
+  PREMISES_ALLOCATION_SEARCH_KEYS,
+  allocationApprovalBadge,
+  allocationTenancyBadge,
+  formatAllocationMoney,
+} from "@/lib/premises-allocation-table";
 
 interface Licence {
   id: string;
@@ -162,16 +169,6 @@ const blockingColumns: ReportTableColumn[] = [
   { key: "actionedAt", header: "Actioned at" },
 ];
 
-const allotmentColumns: ReportTableColumn[] = [
-  { key: "assetDisplay", header: "Premises / Asset" },
-  { key: "allotteeName", header: "Allottee" },
-  { key: "fromDate", header: "From" },
-  { key: "toDate", header: "To" },
-  { key: "_approval", header: "Approval", sortField: "approvalStatus" },
-  { key: "_status", header: "Tenancy", sortField: "status" },
-  { key: "securityDeposit", header: "Security deposit" },
-  { key: "_actions", header: "" },
-];
 
 interface RenewPreview {
   canRenew: boolean;
@@ -378,13 +375,11 @@ export default function TraderLicenceDetail() {
         toDate: a.toDate,
         status: a.status,
         approvalStatus: appr,
-        securityDeposit: a.securityDeposit != null ? `${formatInr(Number(a.securityDeposit))}` : "—",
-        _approval: (
-          <Badge variant={appr === "Approved" ? "default" : appr === "Rejected" ? "destructive" : "secondary"}>
-            {appr}
-          </Badge>
-        ),
-        _status: <Badge variant={a.status === "Active" ? "default" : "secondary"}>{a.status}</Badge>,
+        monthlyRent: formatAllocationMoney(a.monthlyRent),
+        securityDeposit: formatAllocationMoney(a.securityDeposit),
+        premisesRef: a.premisesRefNo?.trim() ? a.premisesRefNo : "—",
+        _approval: allocationApprovalBadge(appr),
+        _tenancy: allocationTenancyBadge(a.status),
         _actions: canUpdateLicence ? (
           <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setManageAllotment(a)}>
             <Pencil className="h-4 w-4" />
@@ -1027,9 +1022,9 @@ export default function TraderLicenceDetail() {
           </CardHeader>
           <CardContent>
             <ClientDataGrid
-              columns={allotmentColumns}
+              columns={PREMISES_ALLOCATION_COLUMNS}
               sourceRows={allotmentRows}
-              searchKeys={["assetDisplay", "allotteeName", "fromDate", "toDate", "status", "approvalStatus"]}
+              searchKeys={PREMISES_ALLOCATION_SEARCH_KEYS}
               searchPlaceholder="Search allotments…"
               defaultSortKey="fromDate"
               defaultSortDir="desc"

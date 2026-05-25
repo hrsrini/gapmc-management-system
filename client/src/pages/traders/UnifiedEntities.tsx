@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Link } from "wouter";
 import { PanInput } from "@/components/inputs/PanInput";
-import { formatDisplayEntityId } from "@shared/unified-entity-display";
+import { formatLicenceOrEntityIdDisplay } from "@shared/unified-entity-display";
 
 interface UnifiedEntityRow {
   id: string; // TA:<id> | TB:<id> | AH:<id> (API linkage only)
@@ -48,13 +48,13 @@ interface UnifiedEntityRow {
 
 const columns: ReportTableColumn[] = [
   { key: "kind", header: "Type", sortField: "kind" },
-  { key: "name", header: "Name" },
+  { key: "name", header: "Trader Name / Entity Name" },
   { key: "yardDisplay", header: "Yard", sortField: "yardId" },
   { key: "status", header: "Status", sortField: "status" },
   { key: "mobile", header: "Mobile" },
   { key: "pan", header: "PAN" },
   { key: "gstin", header: "GSTIN" },
-  { key: "displayEntityId", header: "Entity ID", sortField: "publicEntityCode" },
+  { key: "licenceOrEntityId", header: "License No. / Entity ID", sortField: "publicEntityCode" },
   { key: "_actions", header: "Actions" },
 ];
 
@@ -137,7 +137,10 @@ export default function UnifiedEntities() {
       mobile: r.mobile ?? "—",
       pan: r.pan ?? "—",
       gstin: r.gstin ?? "—",
-      displayEntityId: r.displayEntityId ?? formatDisplayEntityId(r.kind, r.publicEntityCode) ?? "—",
+      licenceOrEntityId: formatLicenceOrEntityIdDisplay(r.kind, {
+        licenceNo: r.licenceNo,
+        publicEntityCode: r.publicEntityCode,
+      }),
       _actions: (
         <Button variant="outline" size="sm" asChild>
           <Link href={`/traders/dues?unifiedId=${encodeURIComponent(r.id)}`}>
@@ -188,7 +191,7 @@ export default function UnifiedEntities() {
             <ClientDataGrid
               columns={columns}
               sourceRows={rows}
-              searchKeys={["name", "displayEntityId", "publicEntityCode", "kind", "yardDisplay", "yardId", "mobile", "pan", "gstin", "status", "licenceNo"]}
+              searchKeys={["name", "licenceOrEntityId", "publicEntityCode", "kind", "yardDisplay", "yardId", "mobile", "pan", "gstin", "status", "licenceNo"]}
               searchPlaceholder="Filter…"
               defaultSortKey="name"
               defaultSortDir="asc"

@@ -4,6 +4,20 @@ import { rentDepositLedger } from "@shared/db-schema";
 import type { InferSelectModel } from "drizzle-orm";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
 
+/** Match ledger row to `unifiedEntityId` query (TA / TB / AH), including legacy tenant_licence_id tokens. */
+export function ledgerRowMatchesUnifiedEntityFilter(
+  row: { unifiedEntityId?: string | null; tenantLicenceId?: string | null },
+  unifiedRaw: string,
+): boolean {
+  const parsed = parseUnifiedEntityId(unifiedRaw);
+  if (!parsed) return false;
+  const want = `${parsed.kind}:${parsed.refId}`;
+  const eff = ledgerRowEffectiveUnifiedEntityId(row);
+  if (eff && eff.toUpperCase() === want.toUpperCase()) return true;
+  if (parsed.kind === "TA" && String(row.tenantLicenceId ?? "").trim() === parsed.refId) return true;
+  return false;
+}
+
 type LedgerRow = InferSelectModel<typeof rentDepositLedger>;
 
 /** Prefer `unified_entity_id`; fallback to `tenant_licence_id` when it carries a `TA:|TB:|AH:` token (legacy / denormalized rows). */

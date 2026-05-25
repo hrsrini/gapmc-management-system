@@ -26,7 +26,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import {
-  Plus,
   Download,
   XCircle,
   Trash2,
@@ -69,7 +68,6 @@ const receiptColumns: ReportTableColumn[] = [
 export default function ReceiptList() {
   const { toast } = useToast();
   const { can } = useAuth();
-  const canCreate = can('M-05', 'Create');
   const canDelete = can('M-05', 'Delete');
   const [selectedYard, setSelectedYard] = useState<string>('all');
   const [selectedType, setSelectedType] = useState<string>('all');
@@ -252,22 +250,12 @@ export default function ReceiptList() {
   return (
     <AppShell breadcrumbs={[{ label: 'Receipts', href: '/receipts' }, { label: 'All Receipts' }]}>
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <ReceiptIcon className="h-6 w-6 text-primary" />
-              All Receipts
-            </h1>
-            <p className="text-muted-foreground">View and manage all receipts</p>
-          </div>
-          {canCreate && (
-            <Button asChild data-testid="button-new-receipt">
-              <Link href="/receipts/new">
-                <Plus className="h-4 w-4 mr-2" />
-                New Receipt
-              </Link>
-            </Button>
-          )}
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <ReceiptIcon className="h-6 w-6 text-primary" />
+            All Receipts
+          </h1>
+          <p className="text-muted-foreground">View and manage all receipts</p>
         </div>
 
         <Card>

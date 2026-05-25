@@ -68,6 +68,17 @@ export function formatYmdToDisplay(ymd: string | null | undefined): string {
   return formatIsoLikeForDisplay(String(ymd));
 }
 
+/** DD-MM-YYYY or YYYY-MM-DD → API calendar date YYYY-MM-DD. */
+export function parseDisplayDateToYmd(input: string | null | undefined): string | null {
+  const t = String(input ?? '').trim();
+  if (!t) return null;
+  const dmy = /^(\d{2})-(\d{2})-(\d{4})$/.exec(t);
+  if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t.slice(0, 10));
+  if (ymd) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
+  return null;
+}
+
 /**
  * Billing / period month YYYY-MM → first day shown as DD-MM-YYYY (e.g. 2024-06 → 01-06-2024).
  */
