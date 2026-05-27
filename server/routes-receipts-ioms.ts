@@ -24,7 +24,7 @@ import { isPaymentWebhookHmacMandatory, verifyPaymentWebhookHmac } from "./payme
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-interest";
 import { getM03RentReceiptArrearsDisclosure, type RentReceiptArrearsDisclosure } from "./rent-receipt-arrears";
-import { resolveRentPremisesAssetId } from "./rent-allotment-reference";
+import { resolveRentFormalAllotmentRefNo } from "./rent-allotment-reference";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 
 async function dishonourRecomputationHint(
@@ -600,7 +600,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
             sourceInvoicePeriodMonth: inv.periodMonth ?? null,
           };
           if (rh === "Rent" || rh === "GSTInvoice" || rh === "RentArrearsInterest") {
-            enrich.allotmentReferenceNo = await resolveRentPremisesAssetId(inv);
+            enrich.allotmentReferenceNo = await resolveRentFormalAllotmentRefNo(inv);
           }
           payload = { ...payload, ...enrich };
         }

@@ -5,7 +5,7 @@ import { parseM03ReceiptBreakdown } from "@shared/m03-receipt-breakdown";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 import { db } from "./db";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
-import { resolveRentPremisesAssetId } from "./rent-allotment-reference";
+import { resolveRentReceiptPremisesPrint } from "./rent-allotment-reference";
 import { formatBillingMonthLabel } from "./pre-receipt-pdf";
 import {
   formatInrAmountWordsReceiptFace,
@@ -26,7 +26,7 @@ export type ReceiptPdfParticularRow = {
 
 export type ReceiptPdfLayoutContext = {
   payerDisplayName: string;
-  /** M-03 rent/GST face line (replaces payer name when set). */
+  /** Payer / lessee name on receipt face. */
   receivedFromLine: string;
   licenceNo: string | null;
   branding: ReturnType<typeof getReceiptPdfBranding>;
@@ -40,6 +40,8 @@ export type ReceiptPdfLayoutContext = {
   totalAmount: number;
   isGracePeriod: boolean;
   revenueHead: string;
+  /** M-03 rent: formal allotment ref line below payer (e.g. VAL/SHOP-S5-Y-VAL-01). */
+  allotmentReferenceLine: string | null;
   generatedByUsername: string;
 };
 
@@ -79,8 +81,8 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
       .limit(1);
     if (inv) {
       const month = formatBillingMonthLabel(inv.periodMonth, String(receipt.createdAt ?? ""));
-      const premises = await resolveRentPremisesAssetId(inv);
-      return `Being amount received towards Rent,CGST,SGST for the month of ${month} of ${premises}.`;
+      const premises = await resolveRentReceiptPremisesPrint(inv);
+      return `Being amount received towards Rent,CGST,SGST for the month of ${month} of ${premises.premisesLabel}.`;
     }
   }
   const rh = String(receipt.revenueHead ?? "").trim();
@@ -157,7 +159,7 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
   const totalAmount = Number(receipt.totalAmount ?? 0);
   const branding = getReceiptPdfBranding(yard?.address ?? null, yard?.name ?? null);
 
-  let premisesId: string | null = null;
+  let allotmentReferenceLine: string | null = null;
   if (String(receipt.sourceModule ?? "").trim() === "M-03" && receipt.sourceRecordId) {
     const rh = String(receipt.revenueHead ?? "").trim();
     if (rh === "Rent" || rh === "GSTInvoice" || rh === "RentArrearsInterest") {
@@ -170,13 +172,14 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
         .from(rentInvoices)
         .where(eq(rentInvoices.id, receipt.sourceRecordId))
         .limit(1);
-      if (inv) premisesId = await resolveRentPremisesAssetId(inv);
+      if (inv) {
+        const premises = await resolveRentReceiptPremisesPrint(inv);
+        allotmentReferenceLine = `Allotment Ref. No. : ${premises.allotmentReferenceNo}`;
+      }
     }
   }
 
-  const receivedFromLine = premisesId?.trim()
-    ? `Allotment Ref. No. : ${premisesId.trim()}`
-    : `Received with thanks From : ${payerDisplayName}`;
+  const receivedFromLine = `Received with thanks From : ${payerDisplayName}`;
 
   let generatedByUsername = String(receipt.createdBy ?? "").trim() || "—";
   if (receipt.createdBy) {
@@ -191,6 +194,7 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
   return {
     payerDisplayName,
     receivedFromLine,
+    allotmentReferenceLine,
     licenceNo,
     branding,
     receiptTitle: receiptTitle(receipt, yard?.code ?? null, yard?.name ?? null),

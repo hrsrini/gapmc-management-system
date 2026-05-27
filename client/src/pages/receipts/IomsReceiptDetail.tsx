@@ -496,11 +496,18 @@ export default function IomsReceiptDetail() {
               </div>
             ) : null}
             {m03RentReceipt ? (
-              <div>
-                <span className="text-muted-foreground">Allotment Reference No.</span>
-                <br />
-                {allotmentReferenceDisplay || "—"}
-              </div>
+              <>
+                <div>
+                  <span className="text-muted-foreground">Payer</span>
+                  <br />
+                  {payerResolvedLabel}
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Allotment Reference No.</span>
+                  <br />
+                  {allotmentReferenceDisplay || "—"}
+                </div>
+              </>
             ) : (
               <div>
                 <span className="text-muted-foreground">Payer</span>

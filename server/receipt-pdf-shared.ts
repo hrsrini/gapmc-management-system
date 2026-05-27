@@ -70,10 +70,10 @@ export function getReceiptPdfBranding(yardAddress: string | null | undefined, ya
 export function rentReceiptTitleForYard(yardCode: string | null | undefined, yardName: string | null): string {
   const override = process.env.RECEIPT_PDF_RENT_TITLE?.trim();
   if (override) return override;
-  const code = String(yardCode ?? "").trim();
-  if (code) return `${code.toUpperCase()} - Rent Receipt`;
   const name = String(yardName ?? "").trim();
   if (name) return `${name} - Rent Receipt`;
+  const code = String(yardCode ?? "").trim();
+  if (code) return `${code.toUpperCase()} - Rent Receipt`;
   return "Rent Receipt";
 }
 

@@ -150,7 +150,15 @@ export function drawGaplmbReceiptSlip(
   });
   const lic = ctx.licenceNo?.trim() ? ctx.licenceNo.trim() : "—";
   doc.text(pdfSafeText(`Licence No:${lic}`), rightX, cy, { width: rightW, align: "right" });
-  cy += 14;
+  cy += 13;
+
+  if (ctx.allotmentReferenceLine?.trim()) {
+    doc.text(pdfSafeText(ctx.allotmentReferenceLine.trim()), innerX, cy, {
+      width: innerW,
+      align: "left",
+    });
+    cy += 13;
+  }
 
   doc.text(pdfSafeText(`A Sum Of ( INR ${ctx.amountWords} Only )`), innerX, cy, { width: innerW, align: "left" });
   cy += 13;
