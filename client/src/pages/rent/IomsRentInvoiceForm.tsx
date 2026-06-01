@@ -47,7 +47,7 @@ interface InvoiceRentContextResponse {
   allotmentId: string;
   periodMonth: string;
   resolvedRent: number;
-  source: "revision" | "invoice" | "none";
+  source: "revision" | "allotment" | "invoice_base" | "none";
   matchedRevisionId: string | null;
   matchedInvoiceId: string | null;
   blockingInvoice?: { id: string; invoiceNo: string | null } | null;
@@ -106,10 +106,12 @@ function rentResolvedSourceHint(source: InvoiceRentContextResponse["source"]): s
   switch (source) {
     case "revision":
       return "Approved rent revision effective for this billing month.";
-    case "invoice":
-      return "Rent carried from the latest prior invoice for this allotment.";
+    case "allotment":
+      return "Monthly rent configured on the premises allotment.";
+    case "invoice_base":
+      return "Monthly rent base from the latest prior invoice (not prorated amount).";
     default:
-      return "Monthly rent configured on the allotment.";
+      return "Monthly rent could not be resolved — check allotment configuration.";
   }
 }
 

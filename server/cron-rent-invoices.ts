@@ -1,7 +1,8 @@
 /**
  * M-03 Rent invoice auto-generation: 1st of each month at 00:01.
  * For each active allotment, creates a Draft rent invoice for the current month if none exists (idempotent).
- * Resolved rent uses approved revision, else last invoice for the allotment, else allocation monthly rent.
+ * Resolved monthly rent base uses approved revision or allotment monthly rent (not prior prorated invoice amount).
+ * Billing type (FullMonth / Prorated / Overstay) is inferred per agreement dates for each period month.
  * Rows with resolved rent/total at or below zero are skipped (no draft created).
  * No second non-Cancelled invoice for the same asset (`asset_id`) and `period_month` (cron + API).
  */
@@ -9,7 +10,7 @@ import { eq, and, gte, lte } from "drizzle-orm";
 import { db } from "./db";
 import { assetAllotments, assets, entities, entityAllotments, rentInvoices, yards } from "@shared/db-schema";
 import { allocateRentInvoiceNoInTx } from "./rent-invoice-number";
-import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
+import { buildMonthlyDraftRentBilling } from "./rent-invoice-billing-service";
 import { nanoid } from "nanoid";
 import { writeAuditLogSystem } from "./audit";
 import { tenantLicenceIsGstExempt } from "./gst-exempt";
@@ -96,7 +97,13 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
     const yardId = yardByAssetPk[allotment.assetId];
     if (!yardId) continue;
 
-    const { rentAmount } = await resolveRentForAllotmentPeriodMonth(allotment.id, periodMonth);
+    const built = await buildMonthlyDraftRentBilling(allotment.id, periodMonth);
+    if (!built.ok) {
+      skipped += 1;
+      continue;
+    }
+    const rentAmount = built.calculation.rentAmount;
+    const calc = built.calculation;
 
     const gstExempt = Boolean(allotment.traderLicenceId && (await tenantLicenceIsGstExempt(allotment.traderLicenceId)));
     const isGovtEntity = gstExempt;
@@ -146,6 +153,14 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
         assetId: assetPkTl,
         yardId,
         periodMonth,
+        billingType: calc.billingType,
+        occupancyFrom: calc.occupancyFrom,
+        occupancyTo: calc.occupancyTo,
+        daysInMonth: calc.daysInMonth,
+        billableDays: calc.billableDays,
+        billingFactor: calc.billingFactor,
+        baseMonthlyRent: calc.baseMonthlyRent,
+        billingConfigJson: JSON.stringify(calc.configSnapshot),
         rentAmount,
         nonGstChargesJson: null,
         cgst,
@@ -207,7 +222,14 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
     const yardId = yardByAssetPk[ea.assetId];
     if (!yardId) continue;
 
-    const { rentAmount } = await resolveRentForAllotmentPeriodMonth(ea.id, periodMonth);
+    const built = await buildMonthlyDraftRentBilling(ea.id, periodMonth);
+    if (!built.ok) {
+      skipped += 1;
+      continue;
+    }
+    const rentAmount = built.calculation.rentAmount;
+    const calc = built.calculation;
+
     const gstApplicableEntity = Boolean(ea.gstApplicable);
     const isGovtEntity = !gstApplicableEntity;
     let cgst = 0;
@@ -260,6 +282,14 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
         assetId: assetPkEnt,
         yardId,
         periodMonth,
+        billingType: calc.billingType,
+        occupancyFrom: calc.occupancyFrom,
+        occupancyTo: calc.occupancyTo,
+        daysInMonth: calc.daysInMonth,
+        billableDays: calc.billableDays,
+        billingFactor: calc.billingFactor,
+        baseMonthlyRent: calc.baseMonthlyRent,
+        billingConfigJson: JSON.stringify(calc.configSnapshot),
         rentAmount,
         nonGstChargesJson: null,
         cgst,

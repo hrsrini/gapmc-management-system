@@ -15,6 +15,10 @@ import {
   validateRentBillingInput,
 } from "@shared/rent-invoice-billing";
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
+import {
+  defaultOccupancyForBillingType,
+  inferBillingTypeForMonth,
+} from "@shared/rent-invoice-billing";
 
 export async function resolveRentBillingConfigForDate(asOfYmd: string): Promise<RentBillingConfigSnapshot> {
   const asOf = String(asOfYmd).trim().slice(0, 10);
@@ -165,4 +169,45 @@ export async function buildRentInvoiceBillingCalculation(args: {
     agreementFrom: agreement.fromDate,
     agreementTo: agreement.toDate,
   };
+}
+
+/** Infer billing type + occupancy and calculate rent for monthly draft generation (cron / API). */
+export async function buildMonthlyDraftRentBilling(
+  allotmentId: string,
+  periodMonth: string,
+): Promise<
+  | {
+      ok: true;
+      calculation: ReturnType<typeof calculateRentBillingAmount>;
+      monthlyRent: number;
+      agreementFrom: string;
+      agreementTo: string;
+    }
+  | { ok: false; error: string }
+> {
+  const agreement = await fetchAllotmentAgreement(allotmentId);
+  if (!agreement) return { ok: false, error: "Allotment not found." };
+
+  const billingType = inferBillingTypeForMonth({
+    periodMonth,
+    agreementFrom: agreement.fromDate,
+    agreementTo: agreement.toDate,
+  });
+  const defaults = defaultOccupancyForBillingType({
+    billingType,
+    periodMonth,
+    agreementFrom: agreement.fromDate,
+    agreementTo: agreement.toDate,
+  });
+  if (!defaults) {
+    return { ok: false, error: "Cannot derive occupancy dates for this billing month." };
+  }
+
+  return buildRentInvoiceBillingCalculation({
+    allotmentId,
+    periodMonth,
+    billingType,
+    occupancyFrom: defaults.occupancyFrom,
+    occupancyTo: defaults.occupancyTo,
+  });
 }
