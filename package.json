@@ -30,6 +30,8 @@
     "db:backup-full": "dotenv -e .env -- tsx scripts/build-backup-sql.ts",
     "db:purge-retain-core-dry": "dotenv -e .env -- tsx scripts/purge-gapmc-retain-core.ts --dry-run",
     "db:purge-retain-core": "dotenv -e .env -- tsx scripts/purge-gapmc-retain-core.ts --confirm",
+    "db:purge-dak-m09-dry": "dotenv -e .env -- tsx scripts/purge-dak-m09-all.ts --dry-run",
+    "db:purge-dak-m09": "dotenv -e .env -- tsx scripts/purge-dak-m09-all.ts --confirm",
     "db:verify-schema": "dotenv -e .env -- tsx scripts/verify-gapmc-schema.ts",
     "db:apply-land-immutable": "dotenv -e .env -- tsx scripts/apply-land-immutable.ts",
     "db:apply-dak-attachments": "dotenv -e .env -- tsx scripts/apply-dak-attachments.ts",
