@@ -84,6 +84,7 @@
     "db:apply-m04-market-return-trader-period-unique": "dotenv -e .env -- tsx scripts/apply-m04-market-return-trader-period-unique.ts",
     "db:delete-m03-zero-rent-invoices": "dotenv -e .env -- tsx scripts/delete-m03-zero-rent-invoices.ts",
     "db:cancel-m03-duplicate-invoices": "dotenv -e .env -- tsx scripts/cancel-m03-duplicate-invoices.ts",
+    "db:recalculate-rent-invoice-draft": "dotenv -e .env -- tsx scripts/recalculate-rent-invoice-draft.ts",
     "db:apply-rent-invoice-premises-month-unique": "dotenv -e .env -- tsx scripts/apply-rent-invoice-premises-month-unique.ts",
     "db:apply-m03-rent-invoice-sequential-no": "dotenv -e .env -- tsx scripts/apply-m03-rent-invoice-sequential-no.ts",
     "db:apply-m03-rent-invoice-billing-types": "dotenv -e .env -- tsx scripts/apply-m03-rent-invoice-billing-types.ts",

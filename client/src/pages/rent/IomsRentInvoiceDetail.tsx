@@ -18,8 +18,16 @@ import {
 } from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { FileText, ArrowLeft, ShieldCheck, CheckCircle, AlertCircle, SendHorizontal, Banknote, Ban, StickyNote, Download } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { FileText, ArrowLeft, ShieldCheck, CheckCircle, AlertCircle, SendHorizontal, Banknote, Ban, StickyNote, Download, Loader2, RefreshCw } from "lucide-react";
 import { buildRentInvoiceBillingBreakdown } from "@shared/rent-invoice-billing-display";
+import type { RentBillingType } from "@shared/rent-invoice-billing";
 import { formatApiDateOrDateTime, formatYearMonthToDisplay, formatYmdToDisplay } from "@/lib/dateFormat";
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
@@ -131,6 +139,7 @@ export default function IomsRentInvoiceDetail() {
   const [cnReason, setCnReason] = useState("");
   const [cnAmount, setCnAmount] = useState("");
   const [cnNo, setCnNo] = useState("");
+  const [draftBillingType, setDraftBillingType] = useState<RentBillingType>("FullMonth");
 
   const { data: creditNoteList = [] } = useQuery<CreditNoteRow[]>({
     queryKey: ["/api/ioms/rent/credit-notes"],
@@ -258,6 +267,39 @@ export default function IomsRentInvoiceDetail() {
     }
   }, [invoice?.id, invoice?.totalAmount]);
 
+  useEffect(() => {
+    const bt = invoice?.billingType;
+    if (bt === "FullMonth" || bt === "Prorated" || bt === "Overstay") {
+      setDraftBillingType(bt);
+    }
+  }, [invoice?.id, invoice?.billingType]);
+
+  const recalculateBillingMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/ioms/rent/invoices/${encodeURIComponent(id!)}/recalculate-billing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ billingType: draftBillingType }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { message?: string }).message ?? (data as { error?: string }).error ?? res.statusText);
+      }
+      return data as RentInvoice;
+    },
+    onSuccess: (row) => {
+      queryClient.setQueryData(["/api/ioms/rent/invoices", id], row);
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/rent/invoices"] });
+      toast({
+        title: "Billing recalculated",
+        description: `Rent ${formatInr(row.rentAmount)} · Total ${formatInr(row.totalAmount)}`,
+      });
+    },
+    onError: (e: Error) =>
+      toast({ title: "Recalculate failed", description: e.message, variant: "destructive" }),
+  });
+
   const billingBreakdown = useMemo(
     () => (invoice ? buildRentInvoiceBillingBreakdown(invoice) : null),
     [invoice],
@@ -307,6 +349,10 @@ export default function IomsRentInvoiceDetail() {
   const isDoOrAdmin = roles.includes("DO") || roles.includes("ADMIN");
   const canCreateCreditNote =
     (approved || overdue) && isDoOrAdmin && (can("M-03", "Create") || can("M-03", "Update"));
+  const canRecalculateBilling =
+    draft &&
+    isDoOrAdmin &&
+    (can("M-03", "Create") || can("M-03", "Update"));
 
   const nonGstLines: { label: string; amount: number }[] = (() => {
     const j = invoice.nonGstChargesJson;
@@ -405,6 +451,47 @@ export default function IomsRentInvoiceDetail() {
               </div>
             ) : null}
           </div>
+
+          {canRecalculateBilling && (
+            <div className="rounded-lg border border-dashed p-4 space-y-3">
+              <p className="font-medium text-sm">Edit draft billing</p>
+              <p className="text-xs text-muted-foreground">
+                Set billing type and recalculate rent, GST, and TDS from the allotment agreement and monthly rent.
+              </p>
+              <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                <div className="space-y-2 flex-1 max-w-xs">
+                  <Label>Billing type</Label>
+                  <Select
+                    value={draftBillingType}
+                    onValueChange={(v) => setDraftBillingType(v as RentBillingType)}
+                    disabled={recalculateBillingMutation.isPending}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="FullMonth">Full month rent</SelectItem>
+                      <SelectItem value="Prorated">Prorated / partial month</SelectItem>
+                      <SelectItem value="Overstay">Overstay / fine rent</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={recalculateBillingMutation.isPending}
+                  onClick={() => recalculateBillingMutation.mutate()}
+                >
+                  {recalculateBillingMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                  )}
+                  Recalculate
+                </Button>
+              </div>
+            </div>
+          )}
 
           {billingBreakdown && (
             <div className="rounded-lg border bg-muted/30 p-4 space-y-3">

@@ -78,6 +78,7 @@ import {
   fetchAllotmentAgreement,
   findOverlappingRentInvoiceForAllotment,
 } from "./rent-invoice-billing-service";
+import { recalculateDraftRentInvoiceBilling } from "./rent-invoice-recalculate-draft";
 
 function currentYearMonthUtc(): string {
   const d = new Date();
@@ -996,6 +997,58 @@ export function registerRentIomsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete rent revision");
+    }
+  });
+
+  app.post("/api/ioms/rent/invoices/:id/recalculate-billing", async (req, res) => {
+    try {
+      if (!canEditDraftRentInvoice(req.user)) {
+        return sendApiError(
+          res,
+          403,
+          "RENT_INVOICE_DRAFT_EDIT_DENIED",
+          "Only Data Originator or Admin can recalculate draft invoices",
+        );
+      }
+      const id = routeParamString(req.params.id);
+      const [existing] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, id)).limit(1);
+      if (!existing) {
+        return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      }
+      const scopedIds = req.scopedLocationIds;
+      if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(existing.yardId)) {
+        return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      }
+      const body = req.body as Record<string, unknown>;
+      const billingTypeRaw = body.billingType != null ? String(body.billingType).trim() : "";
+      const billingType =
+        billingTypeRaw && ["FullMonth", "Prorated", "Overstay"].includes(billingTypeRaw)
+          ? (billingTypeRaw as RentBillingType)
+          : undefined;
+      if (billingTypeRaw && !billingType) {
+        return sendApiError(res, 400, "BILLING_TYPE", "billingType must be FullMonth, Prorated, or Overstay");
+      }
+      const result = await recalculateDraftRentInvoiceBilling({
+        invoiceId: id,
+        billingType,
+        occupancyFrom: body.occupancyFrom != null ? String(body.occupancyFrom) : undefined,
+        occupancyTo: body.occupancyTo != null ? String(body.occupancyTo) : undefined,
+      });
+      if (!result.ok) {
+        const status = result.code === "RENT_INVOICE_NOT_FOUND" ? 404 : 400;
+        return sendApiError(res, status, result.code ?? "RENT_BILLING_RECALC", result.error);
+      }
+      writeAuditLog(req, {
+        module: "Rent/Tax",
+        action: "RecalculateBilling",
+        recordId: id,
+        beforeValue: existing,
+        afterValue: result.invoice,
+      }).catch((e) => console.error("Audit log failed:", e));
+      res.json(result.invoice);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to recalculate rent invoice billing");
     }
   });
 
