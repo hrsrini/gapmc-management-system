@@ -237,13 +237,47 @@ export async function listUndepositedReceipts(args: {
   }));
 }
 
+export async function listDeferredUndepositedReceipts(args: {
+  yardIds: string[];
+}): Promise<UndepositedReceiptRow[]> {
+  const today = new Date().toISOString().slice(0, 10);
+  const conds = [
+    inArray(iomsReceipts.status, ["Paid", "Reconciled"]),
+    eq(iomsReceipts.depositStatus, "Undeposited"),
+    inArray(iomsReceipts.paymentMode, ["Cash", "Cheque", "DD"]),
+    sql`${iomsReceipts.depositDeferredUntil} > ${today}`,
+  ];
+  if (args.yardIds.length > 0) conds.push(inArray(iomsReceipts.yardId, args.yardIds));
+
+  const rows = await db
+    .select()
+    .from(iomsReceipts)
+    .where(and(...conds))
+    .orderBy(iomsReceipts.depositDeferredUntil);
+
+  return rows.map((r) => ({
+    id: r.id,
+    receiptNo: r.receiptNo,
+    createdAt: r.createdAt,
+    payerName: r.payerName,
+    paymentMode: r.paymentMode,
+    totalAmount: Number(r.totalAmount ?? 0),
+    daysSinceIssue: daysSinceIssueYmd(r.createdAt),
+    yardId: r.yardId,
+    depositDeferredUntil: r.depositDeferredUntil,
+  }));
+}
+
 export async function computeCashInHandSummary(args: {
   yardIds: string[];
   asOfYmd?: string;
   maxCarryForwardDays?: number;
 }) {
   const maxDays = args.maxCarryForwardDays ?? 2;
-  const undeposited = await listUndepositedReceipts({ yardIds: args.yardIds });
+  const [undeposited, deferred] = await Promise.all([
+    listUndepositedReceipts({ yardIds: args.yardIds }),
+    listDeferredUndepositedReceipts({ yardIds: args.yardIds }),
+  ]);
   let hardCash = 0;
   let cheques = 0;
   let oldest: string | null = null;
@@ -262,7 +296,46 @@ export async function computeCashInHandSummary(args: {
     oldestUndepositedDate: oldest,
     maxCarryForwardDays: maxDays,
     receipts: details,
+    deferredReceipts: deferred.map((r) => ({
+      ...r,
+      depositOverdue: r.daysSinceIssue > maxDays,
+    })),
   };
+}
+
+export async function getReceiptDepositContext(receipt: {
+  id: string;
+  depositId?: string | null;
+  depositStatus?: string | null;
+  depositDeferredUntil?: string | null;
+}): Promise<{
+  depositRefNo: string | null;
+  depositRecordStatus: string | null;
+  hasDishonouredChequeOnDeposit: boolean;
+  depositRecordId: string | null;
+}> {
+  let depositRefNo: string | null = null;
+  let depositRecordStatus: string | null = null;
+  let hasDishonouredChequeOnDeposit = false;
+  let depositRecordId: string | null = null;
+
+  const depositId = String(receipt.depositId ?? "").trim();
+  if (depositId) {
+    const [dep] = await db.select().from(receiptDeposits).where(eq(receiptDeposits.id, depositId)).limit(1);
+    if (dep) {
+      depositRefNo = dep.depositRefNo;
+      depositRecordStatus = dep.status;
+      hasDishonouredChequeOnDeposit = Boolean(dep.hasDishonouredCheque);
+      depositRecordId = dep.id;
+    }
+  }
+
+  if (!depositRefNo) {
+    const refMap = await mapDepositRefByReceiptIds([receipt.id]);
+    depositRefNo = refMap.get(receipt.id) ?? null;
+  }
+
+  return { depositRefNo, depositRecordStatus, hasDishonouredChequeOnDeposit, depositRecordId };
 }
 
 export async function createReceiptDepositBatch(args: {

@@ -36,6 +36,8 @@ interface DepositRecord {
   depositDate: string;
   totalAmount: number;
   status: string;
+  hasDishonouredCheque?: boolean;
+  dishonourDate?: string | null;
   passbookReference?: string | null;
   passbookDate?: string | null;
   verifiedAt?: string | null;
@@ -151,6 +153,7 @@ export default function ReceiptDepositRegister() {
     { key: "bank", header: "Bank account" },
     { key: "_amount", header: "Amount" },
     { key: "_status", header: "Status" },
+    { key: "_flags", header: "Flags" },
     { key: "receiptCount", header: "Receipts" },
     { key: "_actions", header: "Actions" },
   ];
@@ -165,6 +168,11 @@ export default function ReceiptDepositRegister() {
         _amount: formatInr(d.totalAmount),
         status: d.status,
         _status: <Badge variant="secondary">{d.status}</Badge>,
+        _flags: d.hasDishonouredCheque ? (
+          <Badge variant="destructive">Dishonoured cheque</Badge>
+        ) : (
+          "—"
+        ),
         receiptCount: String(d.lines?.length ?? 0),
         _actions: (
           <div className="flex flex-wrap gap-1">

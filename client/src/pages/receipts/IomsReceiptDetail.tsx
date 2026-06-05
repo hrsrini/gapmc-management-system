@@ -19,6 +19,14 @@ import { Input } from "@/components/ui/input";
 import { formatInr } from "@/lib/formatInr";
 import { Label } from "@/components/ui/label";
 
+function depositStatusBadgeVariant(status: string | null | undefined): "default" | "secondary" | "destructive" | "outline" {
+  const s = String(status ?? "").trim();
+  if (s === "NotCleared") return "destructive";
+  if (s === "DepositSettled" || s === "AutoSettled") return "default";
+  if (s === "Undeposited") return "outline";
+  return "secondary";
+}
+
 function isM03RentReceipt(r: IomsReceipt): boolean {
   const mod = String(r.sourceModule ?? "").trim();
   const rh = String(r.revenueHead ?? "").trim();
@@ -85,6 +93,12 @@ interface IomsReceipt {
   dishonourReason?: string | null;
   rentRecomputationNote?: string | null;
   rentDishonourScaffold?: { bankChargeInr: number | null; bankChargeHint: string | null; voucherCreateHref: string | null } | null;
+  depositStatus?: string | null;
+  depositDeferredUntil?: string | null;
+  depositRefNo?: string | null;
+  depositRecordStatus?: string | null;
+  depositRecordId?: string | null;
+  hasDishonouredChequeOnDeposit?: boolean;
 }
 interface YardRef {
   id: string;
@@ -516,6 +530,41 @@ export default function IomsReceiptDetail() {
               </div>
             )}
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant={receipt.status === "Paid" ? "default" : "secondary"}>{receipt.status}</Badge></div>
+            {(receipt.depositStatus || receipt.paymentMode === "Cash" || receipt.paymentMode === "Cheque" || receipt.paymentMode === "DD") && (
+              <div>
+                <span className="text-muted-foreground">Bank deposit</span>
+                <br />
+                <Badge variant={depositStatusBadgeVariant(receipt.depositStatus)}>
+                  {receipt.depositStatus ?? "—"}
+                </Badge>
+                {receipt.depositStatus === "NotCleared" ? (
+                  <span className="text-destructive text-xs block mt-1">Cheque/DD not cleared after bank deposit</span>
+                ) : null}
+                {receipt.depositRefNo ? (
+                  <span className="text-xs block mt-1">
+                    Deposit ref:{" "}
+                    {receipt.depositRecordId ? (
+                      <Link className="text-primary hover:underline" href="/receipts/ioms/deposits">
+                        {receipt.depositRefNo}
+                      </Link>
+                    ) : (
+                      receipt.depositRefNo
+                    )}
+                    {receipt.depositRecordStatus ? (
+                      <span className="text-muted-foreground"> ({receipt.depositRecordStatus})</span>
+                    ) : null}
+                  </span>
+                ) : null}
+                {receipt.hasDishonouredChequeOnDeposit ? (
+                  <span className="text-destructive text-xs block mt-1">Linked deposit flagged for dishonoured cheque</span>
+                ) : null}
+                {receipt.depositDeferredUntil ? (
+                  <span className="text-muted-foreground text-xs block mt-1">
+                    Deferred until {receipt.depositDeferredUntil.slice(0, 10)}
+                  </span>
+                ) : null}
+              </div>
+            )}
             <div><span className="text-muted-foreground">Amount</span><br />{formatInr(receipt.amount)}</div>
             <div><span className="text-muted-foreground">CGST / SGST</span><br />{formatInr((receipt.cgst ?? 0))} / {formatInr((receipt.sgst ?? 0))}</div>
             <div><span className="text-muted-foreground">Total</span><br />{formatInr(receipt.totalAmount)}</div>

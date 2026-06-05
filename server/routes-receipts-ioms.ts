@@ -18,6 +18,7 @@ import {
   applyM03ReceiptToRentDepositLedgerWhenSettled,
   maybeMarkM03InvoicePaidFromSettledReceipts,
   handleDepositedChequeNotCleared,
+  getReceiptDepositContext,
 } from "./receipt-deposit-service";
 import { initialDepositStatusForPaymentMode } from "@shared/receipt-deposit";
 import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
@@ -639,6 +640,13 @@ export function registerReceiptsIomsRoutes(app: Express) {
           };
         }
       }
+      const depositCtx = await getReceiptDepositContext(row);
+      payload = {
+        ...payload,
+        depositStatus: row.depositStatus ?? null,
+        depositDeferredUntil: row.depositDeferredUntil ?? null,
+        ...depositCtx,
+      };
       res.json(payload);
     } catch (e) {
       console.error(e);

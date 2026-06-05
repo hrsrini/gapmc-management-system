@@ -129,6 +129,13 @@ export function registerReceiptDepositRoutes(app: Express) {
         await db.insert(gaplmbBankAccountRoles).values({ bankAccountId: id, roleTier: r });
       }
       const [row] = await db.select().from(gaplmbBankAccounts).where(eq(gaplmbBankAccounts.id, id)).limit(1);
+      if (row) {
+        await saveBankAccountVersionSnapshot({
+          bankAccountId: id,
+          changedBy: req.user?.id ?? null,
+          snapshot: { ...row, yardIds, roleTiers },
+        });
+      }
       writeAuditLog(req, { module: "Receipts", action: "Create", recordId: id, afterValue: row }).catch(() => {});
       res.status(201).json({ ...row, yardIds, roleTiers });
     } catch (e) {
