@@ -8,6 +8,9 @@ import { assets, rentInvoices } from "@shared/db-schema";
 export const RENT_INVOICE_PREMISES_MONTH_DUPLICATE_MESSAGE =
   "A rent invoice already exists for this premises and billing month. Cancel the existing invoice before creating or moving another invoice to this month.";
 
+export const RENT_INVOICE_CANCELLED_NO_PDF_MESSAGE =
+  "This invoice has been cancelled. PDF download and printing are not available. Generate a new invoice for this month if billing is still required.";
+
 /** All `rent_invoices.asset_id` values that refer to the same physical premises (PK + legacy premises code). */
 export async function assetIdKeysForPremisesLookup(assetId: string): Promise<string[]> {
   const raw = String(assetId ?? "").trim();

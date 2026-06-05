@@ -251,7 +251,12 @@ export function getModuleForPath(path: string): string | null {
   if (path.startsWith("/api/system")) return null;
   if (path.startsWith("/api/hr")) return "M-01";
   if (path.startsWith("/api/ioms/rent")) return "M-03";
-  if (path.startsWith("/api/ioms/receipts") || path.startsWith("/api/ioms/reports/tally-export")) return "M-05";
+  if (
+    path.startsWith("/api/ioms/receipts") ||
+    path.startsWith("/api/ioms/receipt-deposits") ||
+    path.startsWith("/api/ioms/reports/tally-export")
+  )
+    return "M-05";
   if (
     path.startsWith("/api/ioms/traders") ||
     path.startsWith("/api/ioms/assets") ||

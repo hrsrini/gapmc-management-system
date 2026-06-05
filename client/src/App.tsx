@@ -29,6 +29,10 @@ import LedgerReports from "@/pages/receipts/LedgerReports";
 import IomsReceiptList from "@/pages/receipts/IomsReceiptList";
 import IomsReceiptDetail from "@/pages/receipts/IomsReceiptDetail";
 import IomsReceiptReconciliation from "@/pages/receipts/IomsReceiptReconciliation";
+import ReceiptCashInHand from "@/pages/receipts/ReceiptCashInHand";
+import ReceiptDepositEntry from "@/pages/receipts/ReceiptDepositEntry";
+import ReceiptDepositRegister from "@/pages/receipts/ReceiptDepositRegister";
+import AdminBankAccounts from "@/pages/receipts/AdminBankAccounts";
 import IomsManualReceiptForm from "@/pages/receipts/IomsManualReceiptForm";
 import VerifyReceipt from "@/pages/VerifyReceipt";
 import Health from "@/pages/Health";
@@ -379,6 +383,27 @@ function Router() {
           </RequirePermission>
         </ProtectedRoute>
       </Route>
+      <Route path="/receipts/ioms/cash-in-hand">
+        <ProtectedRoute>
+          <RequirePermission module="M-05" action="Read">
+            <ReceiptCashInHand />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/receipts/ioms/deposit-entry">
+        <ProtectedRoute>
+          <RequirePermission module="M-05" action="Create">
+            <ReceiptDepositEntry />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/receipts/ioms/deposits">
+        <ProtectedRoute>
+          <RequirePermission module="M-05" action="Read">
+            <ReceiptDepositRegister />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
       <Route path="/receipts/ioms/:id">
         <ProtectedRoute><IomsReceiptDetail /></ProtectedRoute>
       </Route>
@@ -416,6 +441,9 @@ function Router() {
       </Route>
       <Route path="/admin/finance-mappings">
         <AdminRoute><AdminFinanceMappings /></AdminRoute>
+      </Route>
+      <Route path="/admin/bank-accounts">
+        <AdminRoute><AdminBankAccounts /></AdminRoute>
       </Route>
       <Route path="/admin/units">
         <AdminRoute><AdminMeasurementUnits /></AdminRoute>

@@ -44,8 +44,17 @@ interface PreReceiptIssueContext {
   rentPremisesId: string;
   rentAllotmentReferenceNo: string;
   amount: number;
+  monthlyRent?: number;
+  billingType?: "FullMonth" | "Prorated";
+  billableDays?: number;
+  daysInMonth?: number;
   agreementFrom: string;
   agreementTo: string;
+}
+
+function currentYearMonthYm(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 interface PreReceipt {
@@ -138,14 +147,24 @@ export default function PreReceipts() {
   const [agreementFrom, setAgreementFrom] = useState("");
   const [agreementTo, setAgreementTo] = useState("");
 
+  const billingMonthYm = rentBillingMonth.trim().slice(0, 7);
+  const hasBillingMonth = /^\d{4}-\d{2}$/.test(billingMonthYm);
+  const currentYm = useMemo(() => currentYearMonthYm(), []);
+  const billingMonthIsFuture = hasBillingMonth && billingMonthYm > currentYm;
+
   const { data: issueContext, isFetching: issueContextLoading } = useQuery<PreReceiptIssueContext>({
-    queryKey: ["/api/ioms/pre-receipts/issue-context", entityId],
-    enabled: open && Boolean(entityId),
+    queryKey: [
+      "/api/ioms/pre-receipts/issue-context",
+      entityId,
+      hasBillingMonth && !billingMonthIsFuture ? billingMonthYm : "",
+    ],
+    enabled: open && Boolean(entityId) && (!hasBillingMonth || !billingMonthIsFuture),
     queryFn: async () => {
-      const res = await fetch(
-        `/api/ioms/pre-receipts/issue-context?entityId=${encodeURIComponent(entityId)}`,
-        { credentials: "include" },
-      );
+      const params = new URLSearchParams({ entityId });
+      if (hasBillingMonth) params.set("rentBillingMonth", billingMonthYm);
+      const res = await fetch(`/api/ioms/pre-receipts/issue-context?${params.toString()}`, {
+        credentials: "include",
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(
@@ -197,6 +216,12 @@ export default function PreReceipts() {
     const end = agreementTo.slice(0, 7);
     return ym < start || ym > end;
   }, [rentBillingMonth, agreementFrom, agreementTo]);
+
+  const maxBillingMonth = useMemo(() => {
+    const end = agreementTo.slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(end)) return currentYm;
+    return end < currentYm ? end : currentYm;
+  }, [agreementTo, currentYm]);
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -430,7 +455,18 @@ export default function PreReceipts() {
                   <div>
                     <span className="text-muted-foreground">Rent amount (₹):</span>{" "}
                     <span className="font-medium">{amount ? formatInr(Number(amount)) : "—"}</span>
+                    {hasBillingMonth && issueContext?.billingType === "Prorated" && (
+                      <span className="text-xs text-muted-foreground ml-1">
+                        (prorated: {issueContext.billableDays ?? "—"} of {issueContext.daysInMonth ?? "—"} days)
+                      </span>
+                    )}
                   </div>
+                  {hasBillingMonth && issueContext?.monthlyRent != null && issueContext.billingType === "Prorated" && (
+                    <p className="text-xs text-muted-foreground">
+                      Full monthly rent is {formatInr(issueContext.monthlyRent)}; amount above is prorated for agreement
+                      dates within {formatYearMonthLabel(billingMonthYm)}.
+                    </p>
+                  )}
                   {agreementFrom && agreementTo && (
                     <p className="text-xs text-muted-foreground">
                       Agreement: {formatApiDateOrDateTime(agreementFrom)} — {formatApiDateOrDateTime(agreementTo)}
@@ -445,8 +481,14 @@ export default function PreReceipts() {
                     value={rentBillingMonth}
                     onChange={(e) => setRentBillingMonth(e.target.value)}
                     min={agreementFrom.slice(0, 7) || undefined}
-                    max={agreementTo.slice(0, 7) || undefined}
+                    max={maxBillingMonth || undefined}
                   />
+                  {billingMonthIsFuture && rentBillingMonth && (
+                    <p className="text-xs text-destructive">
+                      Pre-receipts cannot be issued for a future billing month. Select {formatYearMonthLabel(currentYm)}{" "}
+                      or earlier.
+                    </p>
+                  )}
                   {duplicateForMonth && (
                     <p className="text-xs text-destructive">
                       A pre-receipt already exists for this entity and month (
@@ -475,7 +517,8 @@ export default function PreReceipts() {
                 issueContextLoading ||
                 !issueContext ||
                 Boolean(duplicateForMonth) ||
-                billingOutsideAgreement
+                billingOutsideAgreement ||
+                billingMonthIsFuture
               }
               onClick={() => {
                 const ym = rentBillingMonth.trim().slice(0, 7);

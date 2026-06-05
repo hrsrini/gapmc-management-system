@@ -14,6 +14,12 @@ import {
   recordChequeDishonourLedgerForM03Receipt,
   applyM03ReceiptToRentDepositLedger,
 } from "./rent-deposit-ledger-from-receipt";
+import {
+  applyM03ReceiptToRentDepositLedgerWhenSettled,
+  maybeMarkM03InvoicePaidFromSettledReceipts,
+  handleDepositedChequeNotCleared,
+} from "./receipt-deposit-service";
+import { initialDepositStatusForPaymentMode } from "@shared/receipt-deposit";
 import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
 import { nanoid } from "nanoid";
 import { getRequestClientIp, writeAuditLog, writeAuditLogSystem } from "./audit";
@@ -221,7 +227,22 @@ export async function createIomsReceipt(params: {
   } else {
     assertPhase1PaymentMode(params.paymentMode);
   }
-  const baseTotal = Math.round((params.amount + (params.cgst ?? 0) + (params.sgst ?? 0)) * 100) / 100;
+
+  const { normalizeM03ReceiptGstFields } = await import("./m03-receipt-gst-display");
+  const gstNorm = await normalizeM03ReceiptGstFields({
+    revenueHead: params.revenueHead,
+    amount: params.amount,
+    cgst: params.cgst,
+    sgst: params.sgst,
+    sourceModule: params.sourceModule,
+    sourceRecordId: params.sourceRecordId,
+    m03BreakdownJson: params.m03BreakdownJson,
+  });
+  const amount = gstNorm.amount;
+  const cgst = gstNorm.cgst;
+  const sgst = gstNorm.sgst;
+
+  const baseTotal = Math.round((amount + cgst + sgst) * 100) / 100;
   const totalAmount =
     params.totalAmountOverride != null && Number.isFinite(params.totalAmountOverride)
       ? Math.round(Number(params.totalAmountOverride) * 100) / 100
@@ -242,9 +263,9 @@ export async function createIomsReceipt(params: {
     payerType: params.payerType ?? null,
     payerRefId: params.payerRefId ?? null,
     isGracePeriod: Boolean(params.isGracePeriod),
-    amount: params.amount,
-    cgst: params.cgst ?? 0,
-    sgst: params.sgst ?? 0,
+    amount,
+    cgst,
+    sgst,
     totalAmount,
     tdsAmount: Number(params.tdsAmount ?? 0) || 0,
     paymentMode: params.paymentMode,
@@ -349,16 +370,24 @@ export function registerReceiptsIomsRoutes(app: Express) {
           id: rentInvoices.id,
           invoiceNo: rentInvoices.invoiceNo,
           periodMonth: rentInvoices.periodMonth,
+          rentAmount: rentInvoices.rentAmount,
+          cgst: rentInvoices.cgst,
+          sgst: rentInvoices.sgst,
+          totalAmount: rentInvoices.totalAmount,
         })
         .from(rentInvoices)
         .where(inArray(rentInvoices.id, m03InvoiceIds));
       const invById = new Map(invRows.map((x) => [x.id, x]));
+      const { buildInvoiceGstMap, withResolvedM03ReceiptGst } = await import("./m03-receipt-gst-display");
+      const gstById = buildInvoiceGstMap(invRows);
       res.json(
         enriched.map((r) => {
-          const base = { ...r, createdByName: r.createdByDisplayName };
+          let base = { ...r, createdByName: r.createdByDisplayName };
           if ((r.sourceModule ?? "").trim() !== "M-03" || !(r.sourceRecordId ?? "").trim()) return base;
-          const inv = invById.get(String(r.sourceRecordId).trim());
+          const invId = String(r.sourceRecordId).trim();
+          const inv = invById.get(invId);
           if (!inv) return base;
+          base = withResolvedM03ReceiptGst(base, gstById.get(invId) ?? null);
           return {
             ...base,
             sourceInvoiceNo: inv.invoiceNo ?? null,
@@ -372,52 +401,24 @@ export function registerReceiptsIomsRoutes(app: Express) {
     }
   });
 
-  // US-M05-002: cash-in-hand / deposit dashboard (scoped)
-  // Query: yardId (optional), date=YYYY-MM-DD (optional; defaults today)
+  // US-M05-002: cash-in-hand — delegates to §8.4 register (see /api/ioms/receipt-deposits/cash-in-hand)
   app.get("/api/ioms/receipts/dashboard/cash-in-hand", async (req, res) => {
     try {
       const yardId = String(req.query.yardId ?? "").trim();
-      const date = String(req.query.date ?? new Date().toISOString().slice(0, 10)).trim(); // YYYY-MM-DD
-      const iso = /^\d{4}-\d{2}-\d{2}$/;
-      if (!iso.test(date)) return sendApiError(res, 400, "RECEIPT_DASH_DATE", "date must be YYYY-MM-DD");
       const scopedIds = req.scopedLocationIds;
       if (yardId && scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
         return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "You do not have access to this yard");
       }
-
-      const conds = [
-        inArray(iomsReceipts.status, ["Paid", "Reconciled"]),
-        eq(sql`substring(${iomsReceipts.createdAt}, 1, 10)`, date),
-      ];
-      if (scopedIds && scopedIds.length > 0) conds.push(inArray(iomsReceipts.yardId, scopedIds));
-      if (yardId) conds.push(eq(iomsReceipts.yardId, yardId));
-
-      const rows = await db
-        .select({
-          paymentMode: iomsReceipts.paymentMode,
-          revenueHead: iomsReceipts.revenueHead,
-          total: sql<number>`coalesce(sum(${iomsReceipts.totalAmount}), 0)`,
-          count: sql<number>`count(*)::int`,
-        })
-        .from(iomsReceipts)
-        .where(and(...conds))
-        .groupBy(iomsReceipts.paymentMode, iomsReceipts.revenueHead);
-
-      const byMode: Record<string, { total: number; count: number }> = {};
-      for (const r of rows) {
-        const m = String(r.paymentMode ?? "Unknown");
-        byMode[m] = {
-          total: Math.round(((byMode[m]?.total ?? 0) + (Number(r.total ?? 0) || 0)) * 100) / 100,
-          count: (byMode[m]?.count ?? 0) + (Number(r.count ?? 0) || 0),
-        };
-      }
-
-      res.json({
-        date,
-        yardId: yardId || null,
-        totalsByMode: byMode,
-        rows,
+      const yardIds = yardId ? [yardId] : scopedIds && scopedIds.length > 0 ? scopedIds : [];
+      const { computeCashInHandSummary } = await import("./receipt-deposit-service");
+      const { getMergedSystemConfig, parseSystemConfigNumber } = await import("./system-config");
+      const cfg = await getMergedSystemConfig();
+      const maxDays = parseSystemConfigNumber(cfg, "receipt_deposit_carry_forward_days");
+      const summary = await computeCashInHandSummary({
+        yardIds,
+        maxCarryForwardDays: maxDays > 0 ? maxDays : 2,
       });
+      res.json(summary);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to compute cash-in-hand dashboard");
@@ -589,11 +590,23 @@ export function registerReceiptsIomsRoutes(app: Express) {
             allotmentId: rentInvoices.allotmentId,
             allotmentKind: rentInvoices.allotmentKind,
             assetId: rentInvoices.assetId,
+            rentAmount: rentInvoices.rentAmount,
+            cgst: rentInvoices.cgst,
+            sgst: rentInvoices.sgst,
+            totalAmount: rentInvoices.totalAmount,
           })
           .from(rentInvoices)
           .where(eq(rentInvoices.id, sourceRecordId))
           .limit(1);
         if (inv) {
+          const { invoiceGstSnapshot, withResolvedM03ReceiptGst } = await import("./m03-receipt-gst-display");
+          const resolvedRow = withResolvedM03ReceiptGst(row, invoiceGstSnapshot(inv));
+          payload = {
+            ...payload,
+            amount: resolvedRow.amount,
+            cgst: resolvedRow.cgst,
+            sgst: resolvedRow.sgst,
+          };
           const rh = String(row.revenueHead ?? "").trim();
           const enrich: Record<string, unknown> = {
             sourceInvoiceNo: inv.invoiceNo ?? null,
@@ -739,57 +752,64 @@ export function registerReceiptsIomsRoutes(app: Express) {
           );
         }
       }
+      const { normalizeM03ReceiptGstFields } = await import("./m03-receipt-gst-display");
+      const gstNorm = await normalizeM03ReceiptGstFields(existing);
+      const gstNeedsPersist =
+        Number(existing.cgst ?? 0) < 0.005 &&
+        Number(existing.sgst ?? 0) < 0.005 &&
+        (gstNorm.cgst >= 0.005 || gstNorm.sgst >= 0.005);
+
+      const becomingPaid =
+        (status === "Paid" || status === "Reconciled") &&
+        existing.status !== "Paid" &&
+        existing.status !== "Reconciled";
+      const wasDepositSettled =
+        String(existing.depositStatus ?? "") === "DepositSettled" && Boolean(existing.depositId);
+      const depositStatusPatch =
+        becomingPaid && !existing.depositStatus
+          ? { depositStatus: initialDepositStatusForPaymentMode(existing.paymentMode) }
+          : status === "Reversed" && wasDepositSettled
+            ? { depositStatus: "NotCleared" as const }
+            : {};
+
       await db
         .update(iomsReceipts)
         .set({
           status,
           ...(gatewayRef != null && { gatewayRef }),
+          ...(gstNeedsPersist
+            ? { amount: gstNorm.amount, cgst: gstNorm.cgst, sgst: gstNorm.sgst }
+            : {}),
+          ...depositStatusPatch,
         })
         .where(eq(iomsReceipts.id, id));
       const [row] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, id));
       if (!row) return sendApiError(res, 404, "RECEIPT_NOT_FOUND", "Receipt not found");
 
       let rentDepositLedgerNotice: string | undefined;
-      if (
-        (status === "Paid" || status === "Reconciled") &&
-        existing.status !== "Paid" &&
-        existing.status !== "Reconciled"
-      ) {
-        const coll = await applyM03ReceiptToRentDepositLedger(row);
+      if (becomingPaid) {
+        const coll = await applyM03ReceiptToRentDepositLedgerWhenSettled(row);
         rentDepositLedgerNotice = coll.messages.filter(Boolean).join(" ");
       }
 
-      // If this receipt settles a rent invoice, mark invoice Paid when fully covered (online or counter receipts).
-      if ((status === "Paid" || status === "Reconciled") && row.sourceModule === "M-03" && row.sourceRecordId) {
-        const invoiceId = String(row.sourceRecordId);
-        const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
-        if (inv) {
-          const allRecs = await db
-            .select({
-              totalAmount: iomsReceipts.totalAmount,
-              status: iomsReceipts.status,
-              revenueHead: iomsReceipts.revenueHead,
-              sourceModule: iomsReceipts.sourceModule,
-              sourceRecordId: iomsReceipts.sourceRecordId,
-              m03BreakdownJson: iomsReceipts.m03BreakdownJson,
-            })
-            .from(iomsReceipts)
-            .where(and(eq(iomsReceipts.sourceModule, "M-03"), eq(iomsReceipts.sourceRecordId, invoiceId)));
-          const paidSum = allRecs
-            .filter((r) => String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled")
-            .reduce((s, r) => s + m03ReceiptPrincipalTowardInvoice(r), 0);
-          const total = Number(inv.totalAmount ?? 0);
-          if (paidSum >= total - 0.01 && String(inv.status ?? "") !== "Paid") {
-            await db.update(rentInvoices).set({ status: "Paid" }).where(eq(rentInvoices.id, invoiceId));
-          }
-        }
+      if (becomingPaid && row.sourceModule === "M-03" && row.sourceRecordId) {
+        await maybeMarkM03InvoicePaidFromSettledReceipts(String(row.sourceRecordId));
       }
 
       let rentRecomputationNote: string | undefined;
       if (status === "Reversed") {
-        const ledgerRes = await recordChequeDishonourLedgerForM03Receipt(existing);
-        const hint = await dishonourRecomputationHint(existing);
-        rentRecomputationNote = [hint, ledgerRes.message].filter(Boolean).join(" ");
+        if (wasDepositSettled) {
+          const dishonourRes = await handleDepositedChequeNotCleared(
+            existing,
+            typeof body.dishonourDate === "string" ? body.dishonourDate.slice(0, 10) : undefined,
+          );
+          const hint = await dishonourRecomputationHint(existing);
+          rentRecomputationNote = [hint, dishonourRes.ledgerMessage].filter(Boolean).join(" ");
+        } else {
+          const ledgerRes = await recordChequeDishonourLedgerForM03Receipt(existing);
+          const hint = await dishonourRecomputationHint(existing);
+          rentRecomputationNote = [hint, ledgerRes.message].filter(Boolean).join(" ");
+        }
       }
 
       const afterForAudit =

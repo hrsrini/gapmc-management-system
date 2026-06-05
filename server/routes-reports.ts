@@ -20,6 +20,7 @@ import {
 } from "./report-order";
 import { getMergedSystemConfig } from "./system-config";
 import { buildGapmcTallyInterchangeXmlV1, type TallyExportFlatRow } from "./tally-export-xml";
+import { mapDepositRefByReceiptIds } from "./receipt-deposit-service";
 import {
   rentInvoices,
   paymentVouchers,
@@ -724,6 +725,7 @@ export function registerReportsRoutes(app: Express) {
 
       const receiptBase = db
         .select({
+          receiptId: iomsReceipts.id,
           kind: sql<string>`'receipt'`,
           docNo: iomsReceipts.receiptNo,
           date: iomsReceipts.createdAt,
@@ -748,6 +750,10 @@ export function registerReportsRoutes(app: Express) {
 
       const receiptRows =
         receiptConditions.length > 0 ? await receiptBase.where(and(...receiptConditions)) : await receiptBase;
+
+      const depositRefByReceiptId = await mapDepositRefByReceiptIds(
+        receiptRows.map((r) => r.receiptId).filter(Boolean),
+      );
 
       const voucherConditions = [];
       if (scopedIds && scopedIds.length > 0) voucherConditions.push(inArray(paymentVouchers.yardId, scopedIds));
@@ -781,6 +787,11 @@ export function registerReportsRoutes(app: Express) {
 
       const rows = [...receiptRows, ...voucherRows].sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
+      const receiptDepositRef = (r: { kind: string; receiptId?: string }): string => {
+        if (r.kind !== "receipt" || !r.receiptId) return "";
+        return depositRefByReceiptId.get(r.receiptId) ?? "";
+      };
+
       const columnsParam = String(req.query.columns ?? req.query.tallyColumns ?? "").toLowerCase();
       const useSrsColumns = columnsParam === "srs";
 
@@ -794,24 +805,28 @@ export function registerReportsRoutes(app: Express) {
             "Tally interchange XML is disabled in Admin → Config (tally_xml_export_enabled).",
           );
         }
-        const flat: TallyExportFlatRow[] = rows.map((r) => ({
-          kind: r.kind,
-          docNo: r.docNo,
-          date: r.date,
-          yardId: r.yardId,
-          revenueHead: r.revenueHead,
-          payerName: (r as { payerName?: string | null }).payerName,
-          payeeName: (r as { payeeName?: string | null }).payeeName,
-          voucherType: (r as { voucherType?: string | null }).voucherType,
-          unifiedEntityId: (r as { unifiedEntityId?: string | null }).unifiedEntityId,
-          amount: r.amount,
-          cgst: r.cgst,
-          sgst: r.sgst,
-          totalAmount: r.totalAmount,
-          tallyLedgerName: r.tallyLedgerName,
-          tallyLedgerId: r.tallyLedgerId,
-          tallyGroup: r.tallyGroup,
-        }));
+        const flat: TallyExportFlatRow[] = rows.map((r) => {
+          const depRef = receiptDepositRef(r as { kind: string; receiptId?: string });
+          return {
+            kind: r.kind,
+            docNo: r.docNo,
+            date: r.date,
+            yardId: r.yardId,
+            revenueHead: r.revenueHead,
+            payerName: (r as { payerName?: string | null }).payerName,
+            payeeName: (r as { payeeName?: string | null }).payeeName,
+            voucherType: (r as { voucherType?: string | null }).voucherType,
+            unifiedEntityId: (r as { unifiedEntityId?: string | null }).unifiedEntityId,
+            amount: r.amount,
+            cgst: r.cgst,
+            sgst: r.sgst,
+            totalAmount: r.totalAmount,
+            tallyLedgerName: r.tallyLedgerName,
+            tallyLedgerId: r.tallyLedgerId,
+            tallyGroup: r.tallyGroup,
+            depositRefNo: depRef || undefined,
+          };
+        });
         const xml = buildGapmcTallyInterchangeXmlV1({
           rows: flat,
           from,
@@ -856,7 +871,13 @@ export function registerReportsRoutes(app: Express) {
                 isReceipt
                   ? `IOMS receipt ${r.docNo} ${r.revenueHead ?? ""}`.trim()
                   : `IOMS payment ${r.docNo} ${[r.revenueHead, vt].filter(Boolean).join(" · ")}`.trim()
-              ).concat(uid ? ` · ${uid}` : "");
+              )
+                .concat(uid ? ` · ${uid}` : "")
+                .concat(
+                  isReceipt && receiptDepositRef(r as { kind: string; receiptId?: string })
+                    ? ` · deposit ${receiptDepositRef(r as { kind: string; receiptId?: string })}`
+                    : "",
+                );
               return toCsvRow([dateOnly, voucherType, r.docNo, party, ledger, group, dr, cr, narration]);
             }),
           ].join("\r\n");

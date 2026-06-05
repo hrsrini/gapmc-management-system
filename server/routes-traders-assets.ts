@@ -47,8 +47,9 @@ import { sendApiError } from "./api-errors";
 import { disablePortalAccessForUnifiedEntity } from "./routes-portal";
 import { parseReportPaging, parseReportSort, reportSearchPattern } from "./report-paging";
 import { orderLicenceReport, LICENCE_REPORT_SORT_ALLOW } from "./report-order";
-import { applyM03ReceiptToRentDepositLedger } from "./rent-deposit-ledger-from-receipt";
-import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
+import { applyM03ReceiptToRentDepositLedgerWhenSettled, maybeMarkM03InvoicePaidFromSettledReceipts } from "./receipt-deposit-service";
+import { initialDepositStatusForPaymentMode } from "@shared/receipt-deposit";
+import { m03ReceiptPrincipalTowardInvoice, splitM03RentPaymentGst } from "@shared/m03-receipt-breakdown";
 import {
   HrEmployeeRuleError,
   normalizeMobile10,
@@ -85,8 +86,10 @@ import { buildPreReceiptPdfA4Double } from "./pre-receipt-pdf";
 import {
   billingMonthWithinAllotment,
   findDuplicatePreReceiptForMonth,
+  isFutureBillingMonth,
   resolvePreReceiptIssueContext,
   resolvePreReceiptPrintFields,
+  resolvePreReceiptRentForBillingMonth,
 } from "./pre-receipt-issue";
 import {
   contentTypeForAssetAllotmentAgreement,
@@ -620,47 +623,8 @@ export function registerTradersAssetsRoutes(app: Express) {
         const [lic] = await db.select().from(traderLicences).where(eq(traderLicences.id, tenantLicenceId)).limit(1);
         if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
 
-        const invs = await db
-          .select()
-          .from(rentInvoices)
-          .where(and(eq(rentInvoices.tenantLicenceId, tenantLicenceId), inArray(rentInvoices.status, ["Approved", "Paid"])));
-
-        const invoiceIds = invs.map((i) => i.id);
-        const recs =
-          invoiceIds.length === 0
-            ? []
-            : await db
-                .select()
-                .from(iomsReceipts)
-                .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
-
-        const paidByInvoice: Record<string, number> = {};
-        for (const r of recs) {
-          const invId = String(r.sourceRecordId ?? "");
-          if (!invId) continue;
-          const isPaid = String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled";
-          if (!isPaid) continue;
-          paidByInvoice[invId] = (paidByInvoice[invId] ?? 0) + Number(r.totalAmount ?? 0);
-        }
-
-        for (const i of invs) {
-          const total = Number(i.totalAmount ?? 0);
-          const paid = Number(paidByInvoice[i.id] ?? 0);
-          const outstanding = Math.max(0, total - paid);
-          if (outstanding <= 0) continue;
-          dues.push({
-            kind: "RentInvoice",
-            invoiceId: i.id,
-            invoiceNo: i.invoiceNo,
-            periodMonth: i.periodMonth,
-            assetId: i.assetId,
-            yardId: i.yardId,
-            totalAmount: total,
-            paidAmount: paid,
-            outstandingAmount: outstanding,
-            status: i.status,
-          });
-        }
+        const { listM03RentInvoiceDuesForTraderLicence } = await import("./m03-rent-invoice-dues");
+        dues.push(...(await listM03RentInvoiceDuesForTraderLicence(tenantLicenceId)));
 
         // M-04: approved purchase market fee vs linked IOMS receipt (Pending = still due at counter).
         const purchases = await db
@@ -712,7 +676,12 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (!ent || !yardInScope(req, ent.yardId)) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
         let trackBBillingHint: string | undefined;
         if (!isTrackBGovtSubType(ent.subType)) {
-          trackBBillingHint = TRACKB_NON_GOV_DUES_API_HINT;
+          const { listM03RentInvoiceDuesForTrackBEntity } = await import("./m03-rent-invoice-dues");
+          const rentDues = await listM03RentInvoiceDuesForTrackBEntity(entityId);
+          dues.push(...rentDues);
+          if (rentDues.length === 0) {
+            trackBBillingHint = TRACKB_NON_GOV_DUES_API_HINT;
+          }
         } else {
           const prs = await db.select().from(preReceipts).where(eq(preReceipts.entityId, entityId));
           for (const pr of prs) {
@@ -789,15 +758,22 @@ export function registerTradersAssetsRoutes(app: Express) {
       const createdBy = req.user?.id ?? "system";
       const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
       const payer = await resolveRentInvoiceCounterparty(inv);
+      const gstParts = splitM03RentPaymentGst({
+        rentPay: payAmount,
+        invoiceRentAmount: Number(inv.rentAmount ?? 0),
+        invoiceCgst: Number(inv.cgst ?? 0),
+        invoiceSgst: Number(inv.sgst ?? 0),
+        invoiceTotalAmount: Number(inv.totalAmount ?? 0),
+      });
       const created = await createIomsReceipt({
         yardId: inv.yardId,
         revenueHead,
         payerName: payer.payerName,
         payerType: payer.payerType,
         payerRefId: payer.payerRefId,
-        amount: payAmount,
-        cgst: 0,
-        sgst: 0,
+        amount: gstParts.amount,
+        cgst: gstParts.cgst,
+        sgst: gstParts.sgst,
         tdsAmount: 0,
         sourceModule: "M-03",
         sourceRecordId: inv.id,
@@ -808,12 +784,15 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       await db
         .update(iomsReceipts)
-        .set(counterPaymentPaidUpdate(counterPay))
+        .set({
+          ...counterPaymentPaidUpdate(counterPay),
+          depositStatus: initialDepositStatusForPaymentMode(counterPay.paymentMode),
+        })
         .where(eq(iomsReceipts.id, created.id));
       const [paidRow] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, created.id)).limit(1);
       if (paidRow) {
         try {
-          await applyM03ReceiptToRentDepositLedger(paidRow);
+          await applyM03ReceiptToRentDepositLedgerWhenSettled(paidRow);
         } catch (e) {
           console.error("[dues] rent deposit Collection hook failed:", e);
         }
@@ -821,7 +800,7 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       const newOutstanding = Math.max(0, outstanding - payAmount);
       if (newOutstanding <= 0.0001 && String(inv.status) !== "Paid") {
-        await db.update(rentInvoices).set({ status: "Paid" }).where(eq(rentInvoices.id, invoiceId));
+        await maybeMarkM03InvoicePaidFromSettledReceipts(invoiceId);
       }
 
       res.status(201).json({ receiptId: created.id, receiptNo: created.receiptNo, newOutstanding });
@@ -885,15 +864,22 @@ export function registerTradersAssetsRoutes(app: Express) {
 
         const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
         const payer = await resolveRentInvoiceCounterparty(inv);
+        const gstParts = splitM03RentPaymentGst({
+          rentPay: payAmount,
+          invoiceRentAmount: Number(inv.rentAmount ?? 0),
+          invoiceCgst: Number(inv.cgst ?? 0),
+          invoiceSgst: Number(inv.sgst ?? 0),
+          invoiceTotalAmount: Number(inv.totalAmount ?? 0),
+        });
         const created = await createIomsReceipt({
           yardId: inv.yardId,
           revenueHead,
           payerName: payer.payerName,
           payerType: payer.payerType,
           payerRefId: payer.payerRefId,
-          amount: payAmount,
-          cgst: 0,
-          sgst: 0,
+          amount: gstParts.amount,
+          cgst: gstParts.cgst,
+          sgst: gstParts.sgst,
           tdsAmount: 0,
           paymentMode: "Online",
           sourceModule: "M-03",
@@ -1330,13 +1316,26 @@ export function registerTradersAssetsRoutes(app: Express) {
           "No active approved premises allocation for this entity. Complete premises allocation before issuing a pre-receipt.",
         );
       }
-      const ctx = await resolvePreReceiptIssueContext(entityId);
+      const rentBillingMonthQ = String(req.query.rentBillingMonth ?? "").trim().slice(0, 7);
+      const ctx = await resolvePreReceiptIssueContext(
+        entityId,
+        /^\d{4}-\d{2}$/.test(rentBillingMonthQ) ? rentBillingMonthQ : null,
+      );
       if (!ctx) {
         return sendApiError(
           res,
           400,
           "PRE_RECEIPT_ALLOTMENT_INVALID",
           "Active allocation has no valid monthly rent or premises details.",
+        );
+      }
+      if (/^\d{4}-\d{2}$/.test(rentBillingMonthQ) && isFutureBillingMonth(rentBillingMonthQ)) {
+        return sendApiError(
+          res,
+          400,
+          "PRE_RECEIPT_FUTURE_MONTH",
+          "Pre-receipts cannot be issued for a future billing month.",
+          { rentBillingMonth: rentBillingMonthQ },
         );
       }
       return res.json({ entityId, ...ctx });
@@ -1439,6 +1438,15 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!/^\d{4}-\d{2}$/.test(rentBRaw)) {
         return sendApiError(res, 400, "PRE_RECEIPT_BILLING_MONTH", "rentBillingMonth must be YYYY-MM.");
       }
+      if (isFutureBillingMonth(rentBRaw)) {
+        return sendApiError(
+          res,
+          400,
+          "PRE_RECEIPT_FUTURE_MONTH",
+          "Pre-receipts cannot be issued for a future billing month.",
+          { rentBillingMonth: rentBRaw },
+        );
+      }
       const issueCtx = await resolvePreReceiptIssueContext(entityId);
       if (!issueCtx) {
         return sendApiError(
@@ -1472,6 +1480,16 @@ export function registerTradersAssetsRoutes(app: Express) {
           { existingId: dup.id, existingPreReceiptNo: dup.preReceiptNo },
         );
       }
+      const rentCalc = await resolvePreReceiptRentForBillingMonth(entityId, rentBRaw);
+      if (!rentCalc || !Number.isFinite(rentCalc.amount) || rentCalc.amount <= 0) {
+        return sendApiError(
+          res,
+          400,
+          "PRE_RECEIPT_RENT_CALC",
+          "Could not calculate rent for this billing month and agreement period.",
+          { rentBillingMonth: rentBRaw },
+        );
+      }
       const id = nanoid();
       const preNoRaw = String(body.preReceiptNo ?? "").trim();
       const preNo = preNoRaw ? preNoRaw : await allocateNextPreReceiptNo();
@@ -1484,7 +1502,7 @@ export function registerTradersAssetsRoutes(app: Express) {
         rentPremisesRef: issueCtx.rentPremisesId,
         rentBillingMonth: rentBRaw,
         purpose: null,
-        amount: issueCtx.amount,
+        amount: rentCalc.amount,
         status: "Issued",
         issuedAt: now(),
         dispatchedAt: null,
@@ -1573,6 +1591,15 @@ export function registerTradersAssetsRoutes(app: Express) {
             : String(body.rentBillingMonth).trim().slice(0, 7);
         if (m && !/^\d{4}-\d{2}$/.test(m)) {
           return sendApiError(res, 400, "PRE_RECEIPT_BILLING_MONTH", "rentBillingMonth must be YYYY-MM.");
+        }
+        if (m && isFutureBillingMonth(m)) {
+          return sendApiError(
+            res,
+            400,
+            "PRE_RECEIPT_FUTURE_MONTH",
+            "Pre-receipts cannot be issued for a future billing month.",
+            { rentBillingMonth: m },
+          );
         }
         if (m) {
           const printFields = await resolvePreReceiptPrintFields(existing.entityId);

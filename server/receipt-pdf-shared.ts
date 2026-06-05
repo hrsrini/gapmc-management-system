@@ -35,15 +35,47 @@ export function formatReceiptAmountCell(amountInr: number): string {
 }
 
 export function formatReceiptTotalLine(amountInr: number): string {
-  return formatInrPdf(amountInr);
+  return formatInrPdf(amountInr, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function mapReceiptPaymentModeLabel(mode: string | null | undefined): string {
   const m = String(mode ?? "").trim();
   if (m === "Cash") return "Cash";
   if (m === "Cheque" || m === "DD") return "Cheque/DD";
-  if (m === "Online") return "QR Code / Net Banking";
+  if (m === "Online") return "RTGS/NEFT";
   return m || "—";
+}
+
+type ReceiptPaymentInstrument = {
+  paymentMode: string | null | undefined;
+  chequeNo?: string | null;
+  chequeDate?: string | null;
+  bankName?: string | null;
+  gatewayRef?: string | null;
+  createdAt?: string | null;
+};
+
+/** Statutory payment line on GAPLMB receipt face (Cash / Cheque-DD / RTGS-NEFT). */
+export function formatReceiptPaymentDetailLine(receipt: ReceiptPaymentInstrument): string {
+  const mode = String(receipt.paymentMode ?? "").trim();
+  if (mode === "Cash") return "Cash";
+
+  if (mode === "Cheque" || mode === "DD") {
+    const instrument = mode === "DD" ? "DD" : "Cheque";
+    const no = String(receipt.chequeNo ?? "").trim() || "—";
+    const dt = formatReceiptDateDmYyyy(receipt.chequeDate ?? receipt.createdAt);
+    const bank = String(receipt.bankName ?? "").trim() || "—";
+    return `Cheque/DD Payment made vide ${instrument} No. ${no} dated ${dt} drawn on ${bank}`;
+  }
+
+  if (mode === "Online") {
+    const utr = String(receipt.gatewayRef ?? "").trim() || "—";
+    const dt = formatReceiptDateDmYyyy(receipt.createdAt);
+    const bank = String(receipt.bankName ?? "").trim() || "—";
+    return `Payment received through RTGS/NEFT vide UTR No. ${utr} dated ${dt} from ${bank}`;
+  }
+
+  return mapReceiptPaymentModeLabel(mode);
 }
 
 export type ReceiptPdfBranding = {

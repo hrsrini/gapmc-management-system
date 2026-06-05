@@ -59,13 +59,32 @@ export type M02EntityAlertsPayload = {
   overduePreReceipts?: number;
 };
 
+export type ReceiptDepositEodPayload = {
+  kind: "receipt_deposit_eod";
+  asOfDate: string;
+  totalUndeposited: number;
+  hardCash: number;
+  cheques: number;
+  overdueCount: number;
+  locationLines: string[];
+};
+
+export type ReceiptDepositOverduePayload = {
+  kind: "receipt_deposit_overdue";
+  maxCarryForwardDays: number;
+  overdueReceiptCount: number;
+  sampleReceipts: Array<{ receiptNo: string; yardId: string; daysSinceIssue: number; totalAmount: number }>;
+};
+
 export type NotificationPayload =
   | SlaReminderPayload
   | RetirementReminderPayload
   | OperationalDigestPayload
   | LeaveElCapWarningPayload
   | EmployeeRegistrationPayload
-  | M02EntityAlertsPayload;
+  | M02EntityAlertsPayload
+  | ReceiptDepositEodPayload
+  | ReceiptDepositOverduePayload;
 
 function payloadSummary(payload: NotificationPayload): { subject: string; text: string } {
   if (payload.kind === "sla_reminder") {
@@ -103,6 +122,30 @@ function payloadSummary(payload: NotificationPayload): { subject: string; text: 
         `Expired licences auto-blocked today: ${p.expiredLicencesBlockedToday}\n` +
         `Overdue rent invoices: ${p.overdueRentInvoices ?? "n/a"}\n` +
         `Overdue pre-receipts: ${p.overduePreReceipts ?? "n/a"}`,
+    };
+  }
+  if (payload.kind === "receipt_deposit_eod") {
+    const p = payload;
+    return {
+      subject: `[GAPMC M-05] Cash-in-hand summary (${p.asOfDate})`,
+      text:
+        `Total undeposited: ₹${p.totalUndeposited.toFixed(2)}\n` +
+        `Hard cash: ₹${p.hardCash.toFixed(2)}\n` +
+        `Cheques pending: ₹${p.cheques.toFixed(2)}\n` +
+        `Overdue for deposit: ${p.overdueCount} receipt(s)\n\n` +
+        (p.locationLines.length ? p.locationLines.join("\n") : "No undeposited balances by location."),
+    };
+  }
+  if (payload.kind === "receipt_deposit_overdue") {
+    const p = payload;
+    const sample = p.sampleReceipts
+      .map((r) => `  ${r.receiptNo} (${r.daysSinceIssue}d, ₹${r.totalAmount.toFixed(2)})`)
+      .join("\n");
+    return {
+      subject: `[GAPMC M-05] Deposit overdue alert`,
+      text:
+        `${p.overdueReceiptCount} receipt(s) undeposited beyond ${p.maxCarryForwardDays} working day(s).\n` +
+        (sample ? `\n${sample}` : ""),
     };
   }
   const op = payload;

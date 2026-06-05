@@ -21,9 +21,9 @@ export function isTrackBGovtSubType(subType: string | null | undefined): boolean
   return String(subType ?? "").trim() === "Govt";
 }
 
-/** Same copy as GET /api/ioms/dues Track B branch when sub-type is not Govt (keep in sync). */
+/** Shown on Outstanding dues when a non-Govt Track B entity has no open M-03 invoice balance. */
 export const TRACKB_NON_GOV_DUES_API_HINT =
-  "This Track B entity is not Govt sub-type: pre-receipt dues do not apply. Use M-03 rent / GST tax invoices (and related receipts) for Commercial or Ad-hoc occupant entities.";
+  "Commercial / Ad-hoc Track B: billing is via M-03 rent / GST tax invoices. No approved invoice with an outstanding balance was found for this entity.";
 
 /** Short label for registers / grids (entity list, profile). */
 export function trackBShortBillingLabel(subType: string | null | undefined): string {

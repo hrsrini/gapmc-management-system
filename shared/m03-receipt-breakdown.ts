@@ -37,6 +37,82 @@ export function stringifyM03ReceiptBreakdown(b: M03ReceiptBreakdownV1): string {
   return JSON.stringify(b);
 }
 
+export type M03InvoiceGstSnapshot = {
+  rentAmount: number;
+  cgst: number;
+  sgst: number;
+  totalAmount: number;
+};
+
+type ReceiptGstResolveInput = {
+  amount: number;
+  cgst?: number | null;
+  sgst?: number | null;
+  sourceModule?: string | null;
+  sourceRecordId?: string | null;
+  m03BreakdownJson?: string | null;
+  revenueHead?: string | null;
+};
+
+/**
+ * When M-03 rent receipts store the full payment in `amount` with cgst/sgst = 0,
+ * derive taxable rent + CGST + SGST from the linked invoice (PDF / API display).
+ */
+export function resolveM03ReceiptGstAmounts(
+  receipt: ReceiptGstResolveInput,
+  invoice?: M03InvoiceGstSnapshot | null,
+): { amount: number; cgst: number; sgst: number } {
+  const amount = Number(receipt.amount ?? 0);
+  const cgst = Number(receipt.cgst ?? 0);
+  const sgst = Number(receipt.sgst ?? 0);
+  const rh = String(receipt.revenueHead ?? "").trim();
+  if (rh !== "Rent" && rh !== "GSTInvoice") {
+    return { amount, cgst, sgst };
+  }
+  if (cgst >= 0.005 || sgst >= 0.005) {
+    return { amount, cgst, sgst };
+  }
+  if (String(receipt.sourceModule ?? "") !== "M-03" || !String(receipt.sourceRecordId ?? "").trim() || !invoice) {
+    return { amount, cgst, sgst };
+  }
+  const invCgst = Number(invoice.cgst ?? 0);
+  const invSgst = Number(invoice.sgst ?? 0);
+  if (invCgst + invSgst < 0.005) {
+    return { amount, cgst, sgst };
+  }
+  const m03Br = parseM03ReceiptBreakdown(receipt.m03BreakdownJson);
+  const rentPay =
+    m03Br?.rentAmount != null && Number.isFinite(m03Br.rentAmount)
+      ? Number(m03Br.rentAmount)
+      : Math.round((amount + cgst + sgst) * 100) / 100;
+  return splitM03RentPaymentGst({
+    rentPay,
+    invoiceRentAmount: Number(invoice.rentAmount ?? 0),
+    invoiceCgst: invCgst,
+    invoiceSgst: invSgst,
+    invoiceTotalAmount: Number(invoice.totalAmount ?? 0),
+  });
+}
+
+/** Split a rent payment (invoice outstanding portion) into taxable rent + CGST + SGST per invoice ratios. */
+export function splitM03RentPaymentGst(args: {
+  rentPay: number;
+  invoiceRentAmount: number;
+  invoiceCgst: number;
+  invoiceSgst: number;
+  invoiceTotalAmount: number;
+}): { amount: number; cgst: number; sgst: number } {
+  const rentPay = Math.round(Number(args.rentPay) * 100) / 100;
+  const invTotal = Number(args.invoiceTotalAmount) || 1;
+  const f = rentPay / invTotal;
+  let amount = Math.round(Number(args.invoiceRentAmount) * f * 100) / 100;
+  let cgst = Math.round(Number(args.invoiceCgst) * f * 100) / 100;
+  let sgst = Math.round(Number(args.invoiceSgst) * f * 100) / 100;
+  const drift = Math.round((rentPay - (amount + cgst + sgst)) * 100) / 100;
+  amount = Math.round((amount + drift) * 100) / 100;
+  return { amount, cgst, sgst };
+}
+
 /** Amount from this receipt that reduces rent **invoice** outstanding (not arrears interest). */
 export function m03ReceiptPrincipalTowardInvoice(r: {
   sourceModule: string | null;

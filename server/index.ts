@@ -260,6 +260,20 @@ app.use((req, res, next) => {
     log("Cron M-08 AMC monthly bill generation scheduled (daily 02:20 UTC; Monthly contracts only)");
   }
 
+  if (process.env.CRON_RECEIPT_DEPOSIT_EOD !== "false") {
+    const cron = await import("node-cron");
+    const { runReceiptDepositDailyJobs } = await import("./cron-receipt-deposit");
+    const expr = process.env.RECEIPT_DEPOSIT_EOD_CRON?.trim() || "30 12 * * *";
+    cron.default.schedule(expr, async () => {
+      try {
+        await runReceiptDepositDailyJobs();
+      } catch (e) {
+        console.error("Cron receipt deposit EOD failed:", e);
+      }
+    });
+    log(`Cron M-05 receipt deposit EOD scheduled (${expr})`);
+  }
+
   if (process.env.CRON_DATA_RETENTION_AUDIT === "true") {
     const cron = await import("node-cron");
     const { runDataRetentionAuditJob } = await import("./data-retention-audit");

@@ -17,14 +17,26 @@ const OFFICER_LINE_H = 10;
 const GAP_USERNAME_TO_BOARD = 8;
 /** ~one printed text line on receipt face (8.5–7.5 pt). */
 const TEXT_LINE = 12;
+/** Please note, QR, and Officer Incharge — 3 lines below table total. */
+const FOOTER_NOTE_QR_OFFICER_DROP = TEXT_LINE * 3;
+/** Board signature line — 2 lines below default (username stays fixed). */
+const BOARD_LINE_DROP = TEXT_LINE * 2;
+/** Officer Incharge + board line — nudge up without moving please-note / QR / username. */
+const SIGNATURE_LINES_UP = TEXT_LINE * 2;
 /** Move Officer Incharge + board line up (fit A4). */
 const LIFT_SIGNATURE_BLOCK = TEXT_LINE * 3;
 /** Username sits at slip bottom (no extra lift; board block still lifted). */
 const LIFT_USERNAME = 0;
-const ROW_H = 14;
-const HEADER_H = 16;
-const TOTAL_ROW_H = 18;
+const ROW_H = 12;
+const HEADER_H = 15;
+const TOTAL_ROW_H = 16;
 const TABLE_LINE = 0.5;
+const QR_SIZE = 40;
+
+/** Advance Y after text that may wrap (uses doc.y, not a fixed line height). */
+function flowAfterText(doc: PdfDoc, minY: number, gap = 4): number {
+  return Math.max(doc.y, minY) + gap;
+}
 
 /** Full grid: outer border, column rules, header/body/total separators. */
 function drawParticularsTable(
@@ -85,13 +97,14 @@ function drawParticularsTable(
     rowY += ROW_H;
   }
 
-  // Total row (amount column only; borders span full table width)
+  // Total row: label in particulars column, amount right-aligned
   const totalStr = formatReceiptTotalLine(totalAmount);
   const totalTextY = bodyBottom + (TOTAL_ROW_H - 9) / 2;
-  doc.font("Helvetica-Bold").fontSize(9);
+  doc.font("Helvetica-Bold").fontSize(8);
+  doc.text("Total", partX + 3, totalTextY, { width: partW - 6, align: "left", lineBreak: false });
   doc.text(pdfSafeText(totalStr), amtX, totalTextY, { width: amtW - 3, align: "right", lineBreak: false });
 
-  return tableBottom + 6;
+  return tableBottom + 4;
 }
 
 export type DrawReceiptSlipOptions = {
@@ -140,38 +153,48 @@ export function drawGaplmbReceiptSlip(
   const rightW = innerW * 0.52;
   doc.font("Helvetica").fontSize(8.5);
 
-  doc.text(pdfSafeText(`Receipt No : ${ctx.receiptNo}`), innerX, cy, { width: halfW, align: "left" });
-  doc.text(pdfSafeText(`Date : ${ctx.dateLabel}`), rightX, cy, { width: rightW, align: "right" });
-  cy += 13;
+  doc.text(pdfSafeText(`Receipt No : ${ctx.receiptNo}`), innerX, cy, { width: halfW, align: "left", lineBreak: false });
+  doc.text(pdfSafeText(`Date : ${ctx.dateLabel}`), rightX, cy, { width: rightW, align: "right", lineBreak: false });
+  cy += 11;
 
   doc.text(pdfSafeText(ctx.receivedFromLine), innerX, cy, {
     width: halfW + 20,
     align: "left",
+    lineGap: 0,
   });
   const lic = ctx.licenceNo?.trim() ? ctx.licenceNo.trim() : "—";
-  doc.text(pdfSafeText(`Licence No:${lic}`), rightX, cy, { width: rightW, align: "right" });
-  cy += 13;
+  doc.text(pdfSafeText(`Licence No:${lic}`), rightX, cy, { width: rightW, align: "right", lineBreak: false });
+  cy = flowAfterText(doc, cy, 3);
 
   if (ctx.allotmentReferenceLine?.trim()) {
     doc.text(pdfSafeText(ctx.allotmentReferenceLine.trim()), innerX, cy, {
       width: innerW,
       align: "left",
+      lineGap: 0,
     });
-    cy += 13;
+    cy = flowAfterText(doc, cy, 3);
   }
 
-  doc.text(pdfSafeText(`A Sum Of ( INR ${ctx.amountWords} Only )`), innerX, cy, { width: innerW, align: "left" });
-  cy += 13;
+  doc.fontSize(8);
+  doc.text(pdfSafeText(`A Sum Of ( INR ${ctx.amountWords} Only )`), innerX, cy, {
+    width: innerW,
+    align: "left",
+    lineGap: 0,
+  });
+  cy = flowAfterText(doc, cy, 3);
 
-  doc.text(pdfSafeText(`By : ${ctx.paymentModeLabel}`), innerX, cy, { width: innerW, align: "left" });
-  cy += 12;
+  doc.fontSize(7.5);
+  doc.text(pdfSafeText(`By : ${ctx.paymentDetailLine}`), innerX, cy, { width: innerW, align: "left", lineGap: 0 });
+  cy = flowAfterText(doc, cy, 3);
 
-  doc.text(pdfSafeText("Towards as below :"), innerX, cy, { width: innerW, align: "left" });
-  cy += 11;
+  doc.fontSize(8.5);
+  doc.text(pdfSafeText("Towards as below :"), innerX, cy, { width: innerW, align: "left", lineBreak: false });
+  cy += 10;
 
   const remarks = pdfSafeText(`Remarks : ${ctx.remarks}`);
-  doc.text(remarks, innerX, cy, { width: innerW, align: "left", lineGap: 1 });
-  cy = doc.y + 6;
+  doc.fontSize(8);
+  doc.text(remarks, innerX, cy, { width: innerW, align: "left", lineGap: 0 });
+  cy = flowAfterText(doc, cy, 4);
 
   if (ctx.isGracePeriod) {
     doc.fontSize(7).fillColor("#92400e");
@@ -189,27 +212,51 @@ export function drawGaplmbReceiptSlip(
 
   const slipBottom = y + height - PAD;
   const usernameY = slipBottom - USERNAME_LINE_H - LIFT_USERNAME;
-  const boardLineY = usernameY - GAP_USERNAME_TO_BOARD - BOARD_LINE_H - (LIFT_SIGNATURE_BLOCK - LIFT_USERNAME);
-  const officerLineY = boardLineY - SIGNATURE_STAMP_GAP - OFFICER_LINE_H;
+  const sigBlockHeight =
+    OFFICER_LINE_H + SIGNATURE_STAMP_GAP + BOARD_LINE_H + GAP_USERNAME_TO_BOARD + USERNAME_LINE_H;
 
-  const footerBlockTop = Math.min(cy + 6, officerLineY);
+  // Footer note + QR always below the table (never pulled up into the total row).
+  let footerY = cy + 4 + FOOTER_NOTE_QR_OFFICER_DROP;
   doc.font("Helvetica").fontSize(7);
   const note =
     ctx.revenueHead === "MarketFee"
       ? "Please note: 1. This receipt is proof of Market Fee payment. 2.Cheques subject to realisation."
       : "Please note: 2.Cheques subject to realisation.";
-  doc.text(pdfSafeText(note), innerX, footerBlockTop, { width: innerW * 0.55, align: "left" });
+  doc.text(pdfSafeText(note), innerX, footerY, { width: innerW * 0.58, align: "left", lineGap: 0 });
+  footerY = flowAfterText(doc, footerY, 3);
+
+  if (opts.qrPng && opts.verifyUrl) {
+    try {
+      doc.image(opts.qrPng, innerX, footerY, { width: QR_SIZE, height: QR_SIZE });
+      doc.fontSize(5.5).fillColor("#666");
+      doc.text(pdfSafeText("Verify"), innerX, footerY + QR_SIZE + 2, { width: QR_SIZE, align: "center" });
+      doc.fillColor("#000");
+      footerY += QR_SIZE + 12;
+    } catch {
+      /* skip QR */
+    }
+  }
+
+  const contentEnd = footerY;
+  const maxOfficerY = slipBottom - sigBlockHeight;
+  const defaultOfficerY = slipBottom - sigBlockHeight - LIFT_SIGNATURE_BLOCK;
+  const baseOfficerY = Math.min(maxOfficerY, Math.max(contentEnd + 6, defaultOfficerY));
+  const officerLineY = baseOfficerY + FOOTER_NOTE_QR_OFFICER_DROP - SIGNATURE_LINES_UP;
 
   const sigX = innerX + innerW * 0.42;
   const sigW = innerW * 0.58;
-  doc.text(pdfSafeText("Officer Incharge"), sigX, officerLineY, { width: sigW, align: "right" });
+  const boardLineY =
+    baseOfficerY + OFFICER_LINE_H + SIGNATURE_STAMP_GAP + BOARD_LINE_DROP - SIGNATURE_LINES_UP;
+
+  doc.font("Helvetica").fontSize(7);
+  doc.text(pdfSafeText("Officer Incharge"), sigX, officerLineY, { width: sigW, align: "right", lineBreak: false });
 
   doc.font("Helvetica-Bold").fontSize(7);
   doc.text(
     pdfSafeText("For THE GOA AGRICULTURAL PRODUCE & LIVESTOCK MARKETING BOARD"),
     sigX,
     boardLineY,
-    { width: sigW, align: "right" },
+    { width: sigW, align: "right", lineBreak: false },
   );
 
   doc.font("Helvetica").fontSize(7.5);
@@ -217,25 +264,13 @@ export function drawGaplmbReceiptSlip(
     pdfSafeText(`Username : ${ctx.generatedByUsername}`),
     sigX,
     usernameY,
-    { width: sigW, align: "right" },
+    { width: sigW, align: "right", lineBreak: false },
   );
 
   if (opts.signatoryName?.trim()) {
     doc.fontSize(6.5).fillColor("#444");
-    doc.text(pdfSafeText(opts.signatoryName.trim()), sigX, usernameY - 11, { width: sigW, align: "right" });
+    doc.text(pdfSafeText(opts.signatoryName.trim()), sigX, usernameY - 11, { width: sigW, align: "right", lineBreak: false });
     doc.fillColor("#000");
-  }
-
-  if (opts.qrPng && opts.verifyUrl) {
-    try {
-      const qrSize = 44;
-      doc.image(opts.qrPng, innerX, footerBlockTop + 8, { width: qrSize, height: qrSize });
-      doc.fontSize(5.5).fillColor("#666");
-      doc.text(pdfSafeText("Verify"), innerX, footerBlockTop + qrSize + 10, { width: qrSize, align: "center" });
-      doc.fillColor("#000");
-    } catch {
-      /* skip QR */
-    }
   }
 
   return y + height;

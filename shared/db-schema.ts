@@ -429,8 +429,93 @@ export const iomsReceipts = gapmc.table("ioms_receipts", {
   qrCodeUrl: text("qr_code_url"),
   pdfUrl: text("pdf_url"),
   status: text("status").notNull(), // Pending | Paid | Failed | Reconciled | Reversed (cheque/DD dishonour)
+  /** M-05 §8.4: Undeposited | DepositedPendingVerification | DepositVerified | DepositSettled | AutoSettled | NotCleared */
+  depositStatus: text("deposit_status"),
+  depositId: text("deposit_id"),
+  depositDeferredUntil: text("deposit_deferred_until"),
   createdBy: text("created_by").notNull(),
   createdAt: text("created_at").notNull(),
+});
+
+/** GAPLMB bank accounts for receipt deposits (FR-RCP-010). */
+export const gaplmbBankAccounts = gapmc.table("gaplmb_bank_accounts", {
+  id: text("id").primaryKey(),
+  bankName: text("bank_name").notNull(),
+  accountNumber: text("account_number").notNull(),
+  ifscCode: text("ifsc_code"),
+  branch: text("branch"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const gaplmbBankAccountYards = gapmc.table(
+  "gaplmb_bank_account_yards",
+  {
+    bankAccountId: text("bank_account_id").notNull(),
+    yardId: text("yard_id").notNull(),
+  },
+  (t) => ({ pk: { columns: [t.bankAccountId, t.yardId] } }),
+);
+
+export const gaplmbBankAccountRoles = gapmc.table(
+  "gaplmb_bank_account_roles",
+  {
+    bankAccountId: text("bank_account_id").notNull(),
+    roleTier: text("role_tier").notNull(),
+  },
+  (t) => ({ pk: { columns: [t.bankAccountId, t.roleTier] } }),
+);
+
+export const receiptDepositSequence = gapmc.table(
+  "receipt_deposit_sequence",
+  {
+    yardId: text("yard_id").notNull(),
+    depositDateYmd: text("deposit_date_ymd").notNull(),
+    lastSeq: integer("last_seq").notNull().default(0),
+  },
+  (t) => ({ pk: { columns: [t.yardId, t.depositDateYmd] } }),
+);
+
+export const receiptDeposits = gapmc.table("receipt_deposits", {
+  id: text("id").primaryKey(),
+  depositRefNo: text("deposit_ref_no").notNull().unique(),
+  yardId: text("yard_id").notNull(),
+  bankAccountId: text("bank_account_id").notNull(),
+  depositDate: text("deposit_date").notNull(),
+  totalAmount: doublePrecision("total_amount").notNull().default(0),
+  status: text("status").notNull(),
+  passbookReference: text("passbook_reference"),
+  passbookDate: text("passbook_date"),
+  verifiedBy: text("verified_by"),
+  verifiedAt: text("verified_at"),
+  approvedBy: text("approved_by"),
+  approvedAt: text("approved_at"),
+  rejectionReason: text("rejection_reason"),
+  reversalReason: text("reversal_reason"),
+  reversedBy: text("reversed_by"),
+  reversedAt: text("reversed_at"),
+  hasDishonouredCheque: boolean("has_dishonoured_cheque").default(false).notNull(),
+  dishonourDate: text("dishonour_date"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const receiptDepositLines = gapmc.table("receipt_deposit_lines", {
+  id: text("id").primaryKey(),
+  depositId: text("deposit_id").notNull(),
+  receiptId: text("receipt_id").notNull(),
+  amount: doublePrecision("amount").notNull(),
+});
+
+export const gaplmbBankAccountVersions = gapmc.table("gaplmb_bank_account_versions", {
+  id: text("id").primaryKey(),
+  bankAccountId: text("bank_account_id").notNull(),
+  snapshotJson: text("snapshot_json").notNull(),
+  changedBy: text("changed_by"),
+  changedAt: text("changed_at").notNull(),
 });
 
 /** M-05 manual receipt type master (from Tally / business scenario workbook). */

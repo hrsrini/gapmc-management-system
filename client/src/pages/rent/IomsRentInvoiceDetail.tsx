@@ -336,6 +336,7 @@ export default function IomsRentInvoiceDetail() {
   const verified = invoice.status === "Verified";
   const approved = invoice.status === "Approved";
   const overdue = invoice.status === "Overdue";
+  const cancelled = invoice.status === "Cancelled";
   const canDoVerify = canVerify && draft;
   const canDoApprove = canApprove && verified;
   const canSendBack = canVerify && verified;
@@ -380,45 +381,53 @@ export default function IomsRentInvoiceDetail() {
             {invoice.invoiceNo ?? invoice.id}
           </CardTitle>
           <div className="flex gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={async () => {
-                try {
-                  const res = await fetch(`/api/ioms/rent/invoices/${encodeURIComponent(id!)}/pdf`, {
-                    credentials: "include",
-                  });
-                  if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    throw new Error((err as { error?: string }).error ?? res.statusText);
+            {!cancelled ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    const res = await fetch(`/api/ioms/rent/invoices/${encodeURIComponent(id!)}/pdf`, {
+                      credentials: "include",
+                    });
+                    if (!res.ok) {
+                      const err = await res.json().catch(() => ({}));
+                      throw new Error((err as { error?: string }).error ?? res.statusText);
+                    }
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `rent-invoice-${(invoice.invoiceNo ?? id).replace(/[^\w.-]+/g, "_")}.pdf`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast({ title: "Download started" });
+                  } catch (e) {
+                    toast({
+                      title: "PDF failed",
+                      description: e instanceof Error ? e.message : "Could not download PDF.",
+                      variant: "destructive",
+                    });
                   }
-                  const blob = await res.blob();
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `rent-invoice-${(invoice.invoiceNo ?? id).replace(/[^\w.-]+/g, "_")}.pdf`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                  toast({ title: "Download started" });
-                } catch (e) {
-                  toast({
-                    title: "PDF failed",
-                    description: e instanceof Error ? e.message : "Could not download PDF.",
-                    variant: "destructive",
-                  });
-                }
-              }}
-            >
-              <Download className="h-4 w-4 mr-1" />
-              PDF
-            </Button>
+                }}
+              >
+                <Download className="h-4 w-4 mr-1" />
+                PDF
+              </Button>
+            ) : null}
             <Button variant="ghost" size="sm" onClick={() => setLocation("/rent/ioms")}>
               <ArrowLeft className="h-4 w-4 mr-1" /> Back
             </Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {cancelled ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              This invoice is <strong>Cancelled</strong>. PDF download and printing are disabled. A new invoice may be
+              generated for the same billing month; it will receive a new invoice number.
+            </div>
+          ) : null}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[invoice.yardId] ?? invoice.yardId}</div>
             <div><span className="text-muted-foreground">Period</span><br />{formatYearMonthToDisplay(invoice.periodMonth)}</div>
@@ -436,7 +445,7 @@ export default function IomsRentInvoiceDetail() {
             <div>
               <span className="text-muted-foreground">Status</span>
               <br />
-              <Badge variant={overdue ? "destructive" : "secondary"}>{invoice.status}</Badge>
+              <Badge variant={cancelled || overdue ? "destructive" : "secondary"}>{invoice.status}</Badge>
             </div>
             <div>
               <span className="text-muted-foreground">Billing type</span>

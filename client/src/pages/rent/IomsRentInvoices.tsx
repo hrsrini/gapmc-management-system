@@ -211,25 +211,29 @@ export default function IomsRentInvoices() {
       _rent: formatInr(r.rentAmount),
       _total: formatInr(r.totalAmount),
       status: r.status,
-      _status: <Badge variant="secondary">{r.status}</Badge>,
+      _status: (
+        <Badge variant={r.status === "Cancelled" ? "destructive" : "secondary"}>{r.status}</Badge>
+      ),
       _actions: (
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => void downloadInvoicePdf(r)}
-            disabled={pdfLoadingId === r.id}
-            title="Download PDF"
-            aria-label="Download invoice PDF"
-          >
-            {pdfLoadingId === r.id ? (
-              <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-            ) : (
-              <Download className="h-3.5 w-3.5 mr-1" />
-            )}
-            PDF
-          </Button>
+          {r.status !== "Cancelled" ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void downloadInvoicePdf(r)}
+              disabled={pdfLoadingId === r.id}
+              title="Download PDF"
+              aria-label="Download invoice PDF"
+            >
+              {pdfLoadingId === r.id ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5 mr-1" />
+              )}
+              PDF
+            </Button>
+          ) : null}
           {canVerify && r.status === "Draft" && (
             <Button
               size="sm"

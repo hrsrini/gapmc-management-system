@@ -47,7 +47,8 @@ import {
   type ParsedCounterDuesPayment,
 } from "./dues-counter-payment";
 import { assertTraderLicenceAccessibleInUserScope } from "./trader-licence-market-scope";
-import { applyM03ReceiptToRentDepositLedger } from "./rent-deposit-ledger-from-receipt";
+import { applyM03ReceiptToRentDepositLedgerWhenSettled, maybeMarkM03InvoicePaidFromSettledReceipts } from "./receipt-deposit-service";
+import { initialDepositStatusForPaymentMode } from "@shared/receipt-deposit";
 import { listRentDepositLedgerEnriched } from "./rent-deposit-ledger-display";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB, unifiedEntityIdFromAdHoc } from "@shared/unified-entity-id";
 import { ledgerRowMatchesUnifiedEntityFilter } from "./rent-ledger-scope";
@@ -57,7 +58,11 @@ import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolv
 import { rentPeriodMonthEndIso } from "./rent-interest";
 import { allocateRentInvoiceNo, allocateRentInvoiceNoInTx } from "./rent-invoice-number";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
-import { m03ReceiptPrincipalTowardInvoice, stringifyM03ReceiptBreakdown } from "@shared/m03-receipt-breakdown";
+import {
+  m03ReceiptPrincipalTowardInvoice,
+  splitM03RentPaymentGst,
+  stringifyM03ReceiptBreakdown,
+} from "@shared/m03-receipt-breakdown";
 import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
 import {
   MIN_RENT_INVOICE_AMOUNT_INR,
@@ -66,6 +71,7 @@ import {
 import {
   findBlockingRentInvoiceForPremisesMonth,
   normalizeRentInvoiceAssetId,
+  RENT_INVOICE_CANCELLED_NO_PDF_MESSAGE,
   RENT_INVOICE_PREMISES_MONTH_DUPLICATE_MESSAGE,
 } from "./rent-invoice-premises-month-uniqueness";
 import {
@@ -205,7 +211,11 @@ export function registerRentIomsRoutes(app: Express) {
       }
       const base = db.select().from(rentInvoices).orderBy(desc(rentInvoices.periodMonth));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
-      res.json(list);
+      const mergedCfg = await getMergedSystemConfig();
+      const cgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_cgst_percent");
+      const sgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_sgst_percent");
+      const { withResolvedRentInvoiceGst } = await import("./rent-invoice-gst-display");
+      res.json(list.map((row) => withResolvedRentInvoiceGst(row, cgstPct, sgstPct)));
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch rent invoices");
@@ -275,7 +285,11 @@ export function registerRentIomsRoutes(app: Express) {
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(row.yardId)) {
         return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       }
-      res.json(row);
+      const mergedCfg = await getMergedSystemConfig();
+      const cgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_cgst_percent");
+      const sgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_sgst_percent");
+      const { withResolvedRentInvoiceGst } = await import("./rent-invoice-gst-display");
+      res.json(withResolvedRentInvoiceGst(row, cgstPct, sgstPct));
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch rent invoice");
@@ -290,6 +304,9 @@ export function registerRentIomsRoutes(app: Express) {
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
         return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
+      }
+      if (String(inv.status ?? "") === "Cancelled") {
+        return sendApiError(res, 403, "RENT_INVOICE_CANCELLED_NO_PDF", RENT_INVOICE_CANCELLED_NO_PDF_MESSAGE);
       }
       const [yard] = await db
         .select({ name: yards.name, code: yards.code, address: yards.address })
@@ -1323,9 +1340,22 @@ export function registerRentIomsRoutes(app: Express) {
 
         if (newStatus === "Paid" && receiptRow && receiptRow.status !== "Paid") {
           const beforeReceipt = receiptRow;
+          const { normalizeM03ReceiptGstFields } = await import("./m03-receipt-gst-display");
+          const gstNorm = await normalizeM03ReceiptGstFields(receiptRow);
+          const gstNeedsPersist =
+            Number(receiptRow.cgst ?? 0) < 0.005 &&
+            Number(receiptRow.sgst ?? 0) < 0.005 &&
+            (gstNorm.cgst >= 0.005 || gstNorm.sgst >= 0.005);
           await db
             .update(iomsReceipts)
-            .set({ status: "Paid", gatewayRef: "Manual" })
+            .set({
+              status: "Paid",
+              gatewayRef: "Manual",
+              depositStatus: initialDepositStatusForPaymentMode(receiptRow.paymentMode),
+              ...(gstNeedsPersist
+                ? { amount: gstNorm.amount, cgst: gstNorm.cgst, sgst: gstNorm.sgst }
+                : {}),
+            })
             .where(eq(iomsReceipts.id, receiptRow.id));
 
           const [paidRow] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, receiptRow.id)).limit(1);
@@ -1338,7 +1368,7 @@ export function registerRentIomsRoutes(app: Express) {
               afterValue: paidRow,
             }).catch((e) => console.error("Audit log failed:", e));
             try {
-              await applyM03ReceiptToRentDepositLedger(paidRow);
+              await applyM03ReceiptToRentDepositLedgerWhenSettled(paidRow);
             } catch (e) {
               console.error("[rent-invoice] rent deposit Collection hook failed:", e);
             }
@@ -1566,19 +1596,14 @@ export function registerRentIomsRoutes(app: Express) {
       const payer = await resolveRentInvoiceCounterparty(inv);
       const createdBy = req.user?.id ?? "system";
 
-      const splitGstForRentPay = (rentPay: number): { amount: number; cgst: number; sgst: number } => {
-        const t = Number(inv.totalAmount ?? 0) || 1;
-        const ra = Number(inv.rentAmount ?? 0);
-        const c = Number(inv.cgst ?? 0);
-        const s = Number(inv.sgst ?? 0);
-        const f = rentPay / t;
-        let amount = Math.round(ra * f * 100) / 100;
-        let cgst = Math.round(c * f * 100) / 100;
-        let sgst = Math.round(s * f * 100) / 100;
-        const drift = Math.round((rentPay - (amount + cgst + sgst)) * 100) / 100;
-        amount = Math.round((amount + drift) * 100) / 100;
-        return { amount, cgst, sgst };
-      };
+      const splitGstForRentPay = (rentPay: number) =>
+        splitM03RentPaymentGst({
+          rentPay,
+          invoiceRentAmount: Number(inv.rentAmount ?? 0),
+          invoiceCgst: Number(inv.cgst ?? 0),
+          invoiceSgst: Number(inv.sgst ?? 0),
+          invoiceTotalAmount: Number(inv.totalAmount ?? 0),
+        });
 
       let created: { id: string; receiptNo: string };
       if (mode === "interest_only") {
@@ -1605,7 +1630,7 @@ export function registerRentIomsRoutes(app: Express) {
         });
       } else if (mode === "rent_only") {
         const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
-        const parts = inv.isGovtEntity ? splitGstForRentPay(rentAmt) : { amount: rentAmt, cgst: 0, sgst: 0 };
+        const parts = splitGstForRentPay(rentAmt);
         created = await createIomsReceipt({
           yardId: inv.yardId,
           revenueHead,
@@ -1624,7 +1649,7 @@ export function registerRentIomsRoutes(app: Express) {
         });
       } else {
         const revenueHead = inv.isGovtEntity ? "GSTInvoice" : "Rent";
-        const parts = inv.isGovtEntity ? splitGstForRentPay(rentAmt) : { amount: rentAmt, cgst: 0, sgst: 0 };
+        const parts = splitGstForRentPay(rentAmt);
         const totalIn = Math.round((rentAmt + interestAmt) * 100) / 100;
         const baseParts = Math.round((parts.amount + parts.cgst + parts.sgst) * 100) / 100;
         if (Math.abs(baseParts - rentAmt) > 0.05) {
@@ -1657,19 +1682,18 @@ export function registerRentIomsRoutes(app: Express) {
 
       await db
         .update(iomsReceipts)
-        .set(counterPaymentPaidUpdate(counterPay))
+        .set({
+          ...counterPaymentPaidUpdate(counterPay),
+          depositStatus: initialDepositStatusForPaymentMode(counterPay.paymentMode),
+        })
         .where(eq(iomsReceipts.id, created.id));
       const [paidRow] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, created.id)).limit(1);
       let ledgerMessages: string[] = [];
       if (paidRow) {
-        ledgerMessages = (await applyM03ReceiptToRentDepositLedger(paidRow)).messages.filter(Boolean);
+        ledgerMessages = (await applyM03ReceiptToRentDepositLedgerWhenSettled(paidRow)).messages.filter(Boolean);
       }
 
-      const paidMap2 = await sumPaidM03ByInvoiceIds([inv.id]);
-      const paidSum2 = paidMap2.get(inv.id) ?? 0;
-      if (paidSum2 >= invoiceTotal - 0.01 && String(inv.status ?? "") !== "Paid") {
-        await db.update(rentInvoices).set({ status: "Paid" }).where(eq(rentInvoices.id, invoiceId));
-      }
+      await maybeMarkM03InvoicePaidFromSettledReceipts(invoiceId);
 
       writeAuditLog(req, {
         module: "Rent/Tax",

@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { iomsReceipts, rentInvoices, traderLicences, users, yards } from "@shared/db-schema";
-import { parseM03ReceiptBreakdown } from "@shared/m03-receipt-breakdown";
+import { parseM03ReceiptBreakdown, resolveM03ReceiptGstAmounts } from "@shared/m03-receipt-breakdown";
+import { invoiceGstSnapshot } from "./m03-receipt-gst-display";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 import { db } from "./db";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
@@ -10,8 +11,8 @@ import { formatBillingMonthLabel } from "./pre-receipt-pdf";
 import {
   formatInrAmountWordsReceiptFace,
   formatReceiptDateDmYyyy,
+  formatReceiptPaymentDetailLine,
   getReceiptPdfBranding,
-  mapReceiptPaymentModeLabel,
   marketFeeReceiptTitleForYard,
   rentReceiptTitleForYard,
 } from "./receipt-pdf-shared";
@@ -33,7 +34,7 @@ export type ReceiptPdfLayoutContext = {
   receiptTitle: string;
   receiptNo: string;
   dateLabel: string;
-  paymentModeLabel: string;
+  paymentDetailLine: string;
   remarks: string;
   amountWords: string;
   rows: ReceiptPdfParticularRow[];
@@ -92,7 +93,7 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
   return `Being amount received towards ${rh || "payment"}.`;
 }
 
-function buildParticularRows(receipt: ReceiptRow): ReceiptPdfParticularRow[] {
+async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParticularRow[]> {
   const rh = String(receipt.revenueHead ?? "").trim();
   const m03Br = parseM03ReceiptBreakdown((receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson);
   const rows: Omit<ReceiptPdfParticularRow, "sn">[] = [];
@@ -103,13 +104,33 @@ function buildParticularRows(receipt: ReceiptRow): ReceiptPdfParticularRow[] {
     const interest = Number(receipt.amount ?? 0);
     if (interest > 0.005) rows.push({ label: "Interest on Rent", amount: interest });
   } else {
-    const rentBase =
-      m03Br?.rentAmount != null && Number.isFinite(m03Br.rentAmount)
-        ? Number(m03Br.rentAmount)
-        : Number(receipt.amount ?? 0);
+    let rentBase = Number(receipt.amount ?? 0);
+    let cgst = Number(receipt.cgst ?? 0);
+    let sgst = Number(receipt.sgst ?? 0);
+
+    if (
+      cgst < 0.005 &&
+      sgst < 0.005 &&
+      String(receipt.sourceModule ?? "") === "M-03" &&
+      receipt.sourceRecordId
+    ) {
+      const [inv] = await db
+        .select({
+          rentAmount: rentInvoices.rentAmount,
+          cgst: rentInvoices.cgst,
+          sgst: rentInvoices.sgst,
+          totalAmount: rentInvoices.totalAmount,
+        })
+        .from(rentInvoices)
+        .where(eq(rentInvoices.id, receipt.sourceRecordId))
+        .limit(1);
+      const parts = resolveM03ReceiptGstAmounts(receipt, inv ? invoiceGstSnapshot(inv) : null);
+      rentBase = parts.amount;
+      cgst = parts.cgst;
+      sgst = parts.sgst;
+    }
+
     if (rentBase > 0.005) rows.push({ label: "Rent", amount: rentBase });
-    const cgst = Number(receipt.cgst ?? 0);
-    const sgst = Number(receipt.sgst ?? 0);
     if (cgst > 0.005) rows.push({ label: "CGST", amount: cgst });
     if (sgst > 0.005) rows.push({ label: "SGST", amount: sgst });
     const tds = Number(receipt.tdsAmount ?? 0);
@@ -200,10 +221,10 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     receiptTitle: receiptTitle(receipt, yard?.code ?? null, yard?.name ?? null),
     receiptNo: receipt.receiptNo,
     dateLabel: formatReceiptDateDmYyyy(receipt.createdAt),
-    paymentModeLabel: mapReceiptPaymentModeLabel(receipt.paymentMode),
+    paymentDetailLine: formatReceiptPaymentDetailLine(receipt),
     remarks,
     amountWords: formatInrAmountWordsReceiptFace(totalAmount),
-    rows: buildParticularRows(receipt),
+    rows: await buildParticularRows(receipt),
     totalAmount,
     isGracePeriod: Boolean((receipt as { isGracePeriod?: boolean | null }).isGracePeriod),
     revenueHead: String(receipt.revenueHead ?? ""),

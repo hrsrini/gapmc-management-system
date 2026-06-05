@@ -385,8 +385,8 @@ export default function OutstandingDues() {
             Outstanding dues (unified entity)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Select a unified entity ID (<span className="font-mono">TA:</span>/<span className="font-mono">TB:</span>/<span className="font-mono">AH:</span>). Track A shows rent invoice dues (counter pay) plus M-04 market fee outstanding (counter pay records M-05 receipts; partial payments supported). Track B shows pre-receipt dues only for{" "}
-            <span className="font-medium text-foreground">Govt</span> sub-type entities; other Track B sub-types use M-03 tax invoices.
+            Select a unified entity ID (<span className="font-mono">TA:</span>/<span className="font-mono">TB:</span>/<span className="font-mono">AH:</span>). Track A shows M-03 rent invoice dues plus M-04 market fee outstanding. Track B{" "}
+            <span className="font-medium text-foreground">Govt</span> sub-type shows pre-receipt dues; Commercial and Ad-hoc Track B show outstanding M-03 rent / GST tax invoices.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">

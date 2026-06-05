@@ -21,6 +21,8 @@ export type TallyExportFlatRow = {
   tallyLedgerName: string | null;
   tallyLedgerId: string | null;
   tallyGroup: string | null;
+  /** M-05 §8.4: bank deposit batch ref when receipt is deposit-settled. */
+  depositRefNo?: string | null;
 };
 
 function esc(s: string): string {
@@ -58,6 +60,7 @@ export function buildGapmcTallyInterchangeXmlV1(params: {
         `tallyLedgerId="${esc(String(r.tallyLedgerId ?? ""))}"`,
         `tallyLedgerName="${esc(String(r.tallyLedgerName ?? ""))}"`,
         `tallyGroup="${esc(String(r.tallyGroup ?? ""))}"`,
+        `depositRefNo="${esc(String(r.depositRefNo ?? ""))}"`,
       ].join(" ");
       return `    <row ${attrs}/>`;
     })
