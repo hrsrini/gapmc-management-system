@@ -1,11 +1,12 @@
 /**
- * Seed bank account + undeposited cash/cheque receipts for M-05 §8.4 deposit UAT.
- * Idempotent — safe to re-run.
+ * Seed bank account + undeposited receipts for M-05 §8.4 deposit UAT (Step 6).
+ * Idempotent — safe to re-run. Use --reset to force all seed receipts back to Undeposited.
  *
  * Usage: npm run db:seed-receipt-deposit-uat
+ *        npm run db:seed-receipt-deposit-uat -- --reset
  */
 import "dotenv/config";
-import { and, eq } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import { db, pool } from "../server/db";
 import { createIomsReceipt } from "../server/routes-receipts-ioms";
 import {
@@ -19,10 +20,65 @@ import { initialDepositStatusForPaymentMode } from "../shared/receipt-deposit";
 
 const BANK_ID = "uat-bank-deposit-001";
 const BANK_ACCOUNT_NO = "UAT-DEPOSIT-001";
-const SEED_NARRATION = "UAT deposit workflow seed (safe to delete)";
+const SEED_PREFIX = "UAT deposit seed |";
+
+type SeedReceipt = {
+  tag: string;
+  paymentMode: "Cash" | "Cheque" | "DD";
+  amount: number;
+  payerName: string;
+  chequeNo?: string;
+  /** YYYY-MM-DD — backdate for overdue testing */
+  paymentDateYmd?: string;
+  /** YYYY-MM-DD — defer from cash-in-hand until this date */
+  deferUntilYmd?: string;
+};
+
+const SEED_RECEIPTS: SeedReceipt[] = [
+  { tag: "cash-standard", paymentMode: "Cash", amount: 2500, payerName: "UAT Cash Payer" },
+  {
+    tag: "cheque-standard",
+    paymentMode: "Cheque",
+    amount: 7500,
+    payerName: "UAT Cheque Payer",
+    chequeNo: "UAT-CHQ-0001",
+  },
+  { tag: "dd-standard", paymentMode: "DD", amount: 3000, payerName: "UAT DD Payer", chequeNo: "UAT-DD-0001" },
+  {
+    tag: "cash-overdue",
+    paymentMode: "Cash",
+    amount: 1200,
+    payerName: "UAT Overdue Cash",
+    paymentDateYmd: daysAgoYmd(5),
+  },
+  {
+    tag: "cheque-deferred",
+    paymentMode: "Cheque",
+    amount: 4000,
+    payerName: "UAT Deferred Cheque",
+    chequeNo: "UAT-CHQ-DEFER",
+    deferUntilYmd: daysAheadYmd(1),
+  },
+];
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function daysAgoYmd(n: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+function daysAheadYmd(n: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function narrationFor(tag: string): string {
+  return `${SEED_PREFIX}${tag}`;
 }
 
 async function ensureBankAccount(yardId: string, yardCode: string): Promise<void> {
@@ -32,7 +88,7 @@ async function ensureBankAccount(yardId: string, yardCode: string): Promise<void
     .where(eq(gaplmbBankAccounts.id, BANK_ID))
     .limit(1);
   if (existing) {
-    console.log(`Bank account already exists: ${existing.bankName} (${existing.accountNumber})`);
+    console.log(`Bank account: ${existing.bankName} (${existing.accountNumber})`);
     return;
   }
 
@@ -55,73 +111,84 @@ async function ensureBankAccount(yardId: string, yardCode: string): Promise<void
   console.log(`Created bank account ${BANK_ACCOUNT_NO} for yard ${yardCode}`);
 }
 
-async function ensureUndepositedReceipt(args: {
-  yardId: string;
-  paymentMode: "Cash" | "Cheque";
-  amount: number;
-  payerName: string;
-  chequeNo?: string;
-}): Promise<{ id: string; receiptNo: string }> {
+async function ensureSeedReceipt(
+  yardId: string,
+  spec: SeedReceipt,
+  forceReset: boolean,
+): Promise<{ id: string; receiptNo: string; note: string }> {
+  const narration = narrationFor(spec.tag);
   const [existing] = await db
     .select()
     .from(iomsReceipts)
-    .where(
-      and(
-        eq(iomsReceipts.narration, SEED_NARRATION),
-        eq(iomsReceipts.paymentMode, args.paymentMode),
-        eq(iomsReceipts.yardId, args.yardId),
-      ),
-    )
+    .where(and(eq(iomsReceipts.narration, narration), eq(iomsReceipts.yardId, yardId)))
     .limit(1);
 
+  const paidAt =
+    spec.paymentDateYmd && /^\d{4}-\d{2}-\d{2}$/.test(spec.paymentDateYmd)
+      ? `${spec.paymentDateYmd}T10:00:00.000Z`
+      : new Date().toISOString();
+
   if (existing) {
-    if (existing.depositStatus !== "Undeposited" || existing.status !== "Paid") {
+    const needsReset =
+      forceReset ||
+      existing.depositStatus !== "Undeposited" ||
+      existing.status !== "Paid" ||
+      (spec.deferUntilYmd && existing.depositDeferredUntil !== spec.deferUntilYmd) ||
+      (!spec.deferUntilYmd && existing.depositDeferredUntil);
+    if (needsReset) {
       await db
         .update(iomsReceipts)
         .set({
           status: "Paid",
           depositStatus: "Undeposited",
           depositId: null,
-          depositDeferredUntil: null,
+          depositDeferredUntil: spec.deferUntilYmd ?? null,
+          createdAt: paidAt,
         })
         .where(eq(iomsReceipts.id, existing.id));
-      console.log(`Reset ${existing.receiptNo} to Paid / Undeposited`);
-    } else {
-      console.log(`Receipt already undeposited: ${existing.receiptNo} (${args.paymentMode})`);
+      console.log(`Reset ${existing.receiptNo} (${spec.tag})`);
+      return { id: existing.id, receiptNo: existing.receiptNo, note: "reset" };
     }
-    return { id: existing.id, receiptNo: existing.receiptNo };
+    console.log(`OK ${existing.receiptNo} (${spec.tag})`);
+    return { id: existing.id, receiptNo: existing.receiptNo, note: "exists" };
   }
 
   const { id, receiptNo } = await createIomsReceipt({
-    yardId: args.yardId,
+    yardId,
     revenueHead: "Rent",
-    payerName: args.payerName,
-    amount: args.amount,
+    payerName: spec.payerName,
+    amount: spec.amount,
     cgst: 0,
     sgst: 0,
-    paymentMode: args.paymentMode,
+    paymentMode: spec.paymentMode,
     sourceModule: "M-05-UAT",
-    narration: SEED_NARRATION,
+    narration,
     createdBy: "system",
-    paymentDateYmd: new Date().toISOString().slice(0, 10),
-    chequeNo: args.chequeNo ?? null,
-    bankName: args.paymentMode === "Cheque" ? "UAT Test Bank" : null,
-    chequeDate: args.paymentMode === "Cheque" ? new Date().toISOString().slice(0, 10) : null,
+    paymentDateYmd: spec.paymentDateYmd ?? new Date().toISOString().slice(0, 10),
+    chequeNo: spec.chequeNo ?? null,
+    bankName: spec.paymentMode !== "Cash" ? "UAT Test Bank" : null,
+    chequeDate:
+      spec.paymentMode !== "Cash"
+        ? (spec.paymentDateYmd ?? new Date().toISOString().slice(0, 10))
+        : null,
   });
 
   await db
     .update(iomsReceipts)
     .set({
       status: "Paid",
-      depositStatus: initialDepositStatusForPaymentMode(args.paymentMode),
+      depositStatus: initialDepositStatusForPaymentMode(spec.paymentMode),
+      depositDeferredUntil: spec.deferUntilYmd ?? null,
+      createdAt: paidAt,
     })
     .where(eq(iomsReceipts.id, id));
 
-  console.log(`Created undeposited ${args.paymentMode} receipt: ${receiptNo} (₹${args.amount})`);
-  return { id, receiptNo };
+  console.log(`Created ${receiptNo} (${spec.tag}) ₹${spec.amount}`);
+  return { id, receiptNo, note: "created" };
 }
 
 async function main(): Promise<void> {
+  const forceReset = process.argv.includes("--reset");
   const yardRows = await db.select().from(yards);
   const yard =
     yardRows.find((y) => String(y.code ?? "").toUpperCase() === "VAL") ??
@@ -132,30 +199,53 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`Using yard: ${yard.name} (${yard.code})`);
+  console.log(`Yard: ${yard.name} (${yard.code})${forceReset ? " [--reset]" : ""}\n`);
   await ensureBankAccount(yard.id, String(yard.code ?? yard.id));
 
-  const cash = await ensureUndepositedReceipt({
-    yardId: yard.id,
-    paymentMode: "Cash",
-    amount: 2500,
-    payerName: "UAT Cash Payer",
-  });
-  const cheque = await ensureUndepositedReceipt({
-    yardId: yard.id,
-    paymentMode: "Cheque",
-    amount: 7500,
-    payerName: "UAT Cheque Payer",
-    chequeNo: "UAT-CHQ-0001",
-  });
+  const created: Array<{ id: string; receiptNo: string; tag: string }> = [];
+  for (const spec of SEED_RECEIPTS) {
+    const r = await ensureSeedReceipt(yard.id, spec, forceReset);
+    created.push({ id: r.id, receiptNo: r.receiptNo, tag: spec.tag });
+  }
 
-  console.log("\n--- UAT walkthrough (TP-M05-007–011) ---");
-  console.log("1. /admin/bank-accounts — confirm UAT GAPLMB Collection Account");
-  console.log("2. /receipts/ioms/cash-in-hand — see ₹10,000 undeposited");
-  console.log(`3. /receipts/ioms/deposit-entry — select yard ${yard.code}, batch both receipts`);
+  const seedRows = await db
+    .select({
+      receiptNo: iomsReceipts.receiptNo,
+      paymentMode: iomsReceipts.paymentMode,
+      totalAmount: iomsReceipts.totalAmount,
+      depositStatus: iomsReceipts.depositStatus,
+      depositDeferredUntil: iomsReceipts.depositDeferredUntil,
+      createdAt: iomsReceipts.createdAt,
+    })
+    .from(iomsReceipts)
+    .where(like(iomsReceipts.narration, `${SEED_PREFIX}%`));
+
+  const due = seedRows.filter(
+    (r) =>
+      r.depositStatus === "Undeposited" &&
+      (!r.depositDeferredUntil || r.depositDeferredUntil <= new Date().toISOString().slice(0, 10)),
+  );
+  const deferred = seedRows.filter(
+    (r) => r.depositDeferredUntil && r.depositDeferredUntil > new Date().toISOString().slice(0, 10),
+  );
+  const dueTotal = due.reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+
+  console.log("\n--- Seed summary ---");
+  console.log(`  Seed receipts: ${seedRows.length}`);
+  console.log(`  Due for deposit: ${due.length} (₹${dueTotal.toFixed(2)})`);
+  console.log(`  Deferred: ${deferred.length}`);
+
+  console.log("\n--- Step 6 UAT (TP-M05-007–011) ---");
+  console.log("1. /admin/bank-accounts — UAT GAPLMB Collection Account (UAT-DEPOSIT-001)");
+  console.log(`2. /receipts/ioms/cash-in-hand?yardId=${yard.id} — overdue + defer sections`);
+  console.log(`3. /receipts/ioms/deposit-entry — yard ${yard.code}: batch cash + cheque + DD (not deferred)`);
   console.log("4. /receipts/ioms/deposits — DV verify → DA approve");
-  console.log(`5. Receipt detail: /receipts/ioms/${cash.id} and /receipts/ioms/${cheque.id}`);
-  console.log("\nRe-run: npm run sit:receipt-deposit-workflow");
+  console.log("5. After approve: mark cheque Reversed on receipt detail (dishonour-after-deposit)");
+  console.log("\nReceipt links:");
+  for (const r of created) {
+    console.log(`  ${r.tag}: /receipts/ioms/${r.id} (${r.receiptNo})`);
+  }
+  console.log("\nnpm run sit:receipt-deposit-workflow");
 }
 
 main()
