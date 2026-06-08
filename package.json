@@ -70,6 +70,8 @@
     "go-live:data-backfill-dry-run": "dotenv -e .env -- tsx scripts/go-live-data-backfill-dry-run.ts",
     "db:seed-receipt-deposit-uat": "dotenv -e .env -- tsx scripts/seed-receipt-deposit-uat.ts",
     "db:seed-receipt-deposit-uat-reset": "dotenv -e .env -- tsx scripts/seed-receipt-deposit-uat.ts -- --reset",
+    "db:backfill-manual-receipt-revenue-head-dry": "dotenv -e .env -- tsx scripts/backfill-manual-receipt-revenue-head.ts -- --dry-run",
+    "db:backfill-manual-receipt-revenue-head": "dotenv -e .env -- tsx scripts/backfill-manual-receipt-revenue-head.ts",
     "db:backfill-pre-receipt-settlement-revenue-head": "dotenv -e .env -- tsx scripts/backfill-pre-receipt-settlement-revenue-head.ts",
     "db:backfill-pre-receipt-receipt-no-rent": "dotenv -e .env -- tsx scripts/backfill-pre-receipt-receipt-no-rent.ts",
     "db:check-pre-receipt-receipt-state": "dotenv -e .env -- tsx scripts/check-pre-receipt-receipt-state.ts",

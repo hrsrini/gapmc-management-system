@@ -19,6 +19,8 @@ const GAP_USERNAME_TO_BOARD = 8;
 const TEXT_LINE = 12;
 /** Please note, QR, and Officer Incharge — 3 lines below table total. */
 const FOOTER_NOTE_QR_OFFICER_DROP = TEXT_LINE * 3;
+/** Extra drop for please-note / QR / Verify only (signatures stay fixed). */
+const FOOTER_NOTE_QR_EXTRA_DROP = TEXT_LINE * 2;
 /** Board signature line — 2 lines below default (username stays fixed). */
 const BOARD_LINE_DROP = TEXT_LINE * 2;
 /** Officer Incharge + board line — nudge up without moving please-note / QR / username. */
@@ -33,9 +35,22 @@ const TOTAL_ROW_H = 16;
 const TABLE_LINE = 0.5;
 const QR_SIZE = 40;
 
-/** Advance Y after text that may wrap (uses doc.y, not a fixed line height). */
-function flowAfterText(doc: PdfDoc, minY: number, gap = 4): number {
-  return Math.max(doc.y, minY) + gap;
+/**
+ * Draw wrapped text and advance Y by measured height.
+ * PDFKit resets doc.y when a second text() is drawn on the same row — do not rely on doc.y alone.
+ */
+function advanceAfterWrappedText(
+  doc: PdfDoc,
+  text: string,
+  x: number,
+  y: number,
+  width: number,
+  gap = 4,
+): number {
+  const safe = pdfSafeText(text);
+  const h = doc.heightOfString(safe, { width, lineGap: 0 });
+  doc.text(safe, x, y, { width, align: "left", lineGap: 0 });
+  return y + h + gap;
 }
 
 /** Full grid: outer border, column rules, header/body/total separators. */
@@ -157,55 +172,39 @@ export function drawGaplmbReceiptSlip(
   doc.text(pdfSafeText(`Date : ${ctx.dateLabel}`), rightX, cy, { width: rightW, align: "right", lineBreak: false });
   cy += 11;
 
-  doc.text(pdfSafeText(ctx.receivedFromLine), innerX, cy, {
-    width: halfW + 20,
-    align: "left",
-    lineGap: 0,
-  });
+  cy = advanceAfterWrappedText(doc, ctx.receivedFromLine, innerX, cy, innerW, 3);
   const lic = ctx.licenceNo?.trim() ? ctx.licenceNo.trim() : "—";
   doc.text(pdfSafeText(`Licence No:${lic}`), rightX, cy, { width: rightW, align: "right", lineBreak: false });
-  cy = flowAfterText(doc, cy, 3);
+  cy += 11;
 
   if (ctx.allotmentReferenceLine?.trim()) {
-    doc.text(pdfSafeText(ctx.allotmentReferenceLine.trim()), innerX, cy, {
-      width: innerW,
-      align: "left",
-      lineGap: 0,
-    });
-    cy = flowAfterText(doc, cy, 3);
+    cy = advanceAfterWrappedText(doc, ctx.allotmentReferenceLine.trim(), innerX, cy, innerW, 3);
   }
 
   doc.fontSize(8);
-  doc.text(pdfSafeText(`A Sum Of ( INR ${ctx.amountWords} Only )`), innerX, cy, {
-    width: innerW,
-    align: "left",
-    lineGap: 0,
-  });
-  cy = flowAfterText(doc, cy, 3);
+  cy = advanceAfterWrappedText(doc, `A Sum Of ( INR ${ctx.amountWords} Only )`, innerX, cy, innerW, 3);
 
   doc.fontSize(7.5);
-  doc.text(pdfSafeText(`By : ${ctx.paymentDetailLine}`), innerX, cy, { width: innerW, align: "left", lineGap: 0 });
-  cy = flowAfterText(doc, cy, 3);
+  cy = advanceAfterWrappedText(doc, `By : ${ctx.paymentDetailLine}`, innerX, cy, innerW, 3);
 
   doc.fontSize(8.5);
   doc.text(pdfSafeText("Towards as below :"), innerX, cy, { width: innerW, align: "left", lineBreak: false });
   cy += 10;
 
-  const remarks = pdfSafeText(`Remarks : ${ctx.remarks}`);
   doc.fontSize(8);
-  doc.text(remarks, innerX, cy, { width: innerW, align: "left", lineGap: 0 });
-  cy = flowAfterText(doc, cy, 4);
+  cy = advanceAfterWrappedText(doc, `Remarks : ${ctx.remarks}`, innerX, cy, innerW, 4);
 
   if (ctx.isGracePeriod) {
     doc.fontSize(7).fillColor("#92400e");
-    doc.text(
-      pdfSafeText("Grace period transaction — licence renewal required per policy."),
+    cy = advanceAfterWrappedText(
+      doc,
+      "Grace period transaction — licence renewal required per policy.",
       innerX,
       cy,
-      { width: innerW },
+      innerW,
+      4,
     );
     doc.fillColor("#000");
-    cy = doc.y + 4;
   }
 
   cy = drawParticularsTable(doc, ctx.rows, ctx.totalAmount, innerX, cy, innerW);
@@ -215,15 +214,24 @@ export function drawGaplmbReceiptSlip(
   const sigBlockHeight =
     OFFICER_LINE_H + SIGNATURE_STAMP_GAP + BOARD_LINE_H + GAP_USERNAME_TO_BOARD + USERNAME_LINE_H;
 
-  // Footer note + QR always below the table (never pulled up into the total row).
-  let footerY = cy + 4 + FOOTER_NOTE_QR_OFFICER_DROP;
+  const maxOfficerY = slipBottom - sigBlockHeight;
+  const defaultOfficerY = slipBottom - sigBlockHeight - LIFT_SIGNATURE_BLOCK;
+  const baseOfficerY = Math.min(maxOfficerY, Math.max(cy + 6, defaultOfficerY));
+  const officerLineY = baseOfficerY + FOOTER_NOTE_QR_OFFICER_DROP - SIGNATURE_LINES_UP;
+
+  // Please note + QR + Verify — nudged down; signature block position unchanged.
+  const noteQrBlockH = QR_SIZE + 52;
+  const maxFooterY = officerLineY - noteQrBlockH - 2;
+  let footerY = cy + 4 + FOOTER_NOTE_QR_OFFICER_DROP + FOOTER_NOTE_QR_EXTRA_DROP;
+  footerY = Math.min(footerY, maxFooterY);
+  footerY = Math.max(footerY, cy + 6);
+
   doc.font("Helvetica").fontSize(7);
   const note =
     ctx.revenueHead === "MarketFee"
       ? "Please note: 1. This receipt is proof of Market Fee payment. 2.Cheques subject to realisation."
       : "Please note: 2.Cheques subject to realisation.";
-  doc.text(pdfSafeText(note), innerX, footerY, { width: innerW * 0.58, align: "left", lineGap: 0 });
-  footerY = flowAfterText(doc, footerY, 3);
+  footerY = advanceAfterWrappedText(doc, note, innerX, footerY, innerW * 0.58, 3);
 
   if (opts.qrPng && opts.verifyUrl) {
     try {
@@ -231,17 +239,10 @@ export function drawGaplmbReceiptSlip(
       doc.fontSize(5.5).fillColor("#666");
       doc.text(pdfSafeText("Verify"), innerX, footerY + QR_SIZE + 2, { width: QR_SIZE, align: "center" });
       doc.fillColor("#000");
-      footerY += QR_SIZE + 12;
     } catch {
       /* skip QR */
     }
   }
-
-  const contentEnd = footerY;
-  const maxOfficerY = slipBottom - sigBlockHeight;
-  const defaultOfficerY = slipBottom - sigBlockHeight - LIFT_SIGNATURE_BLOCK;
-  const baseOfficerY = Math.min(maxOfficerY, Math.max(contentEnd + 6, defaultOfficerY));
-  const officerLineY = baseOfficerY + FOOTER_NOTE_QR_OFFICER_DROP - SIGNATURE_LINES_UP;
 
   const sigX = innerX + innerW * 0.42;
   const sigW = innerW * 0.58;

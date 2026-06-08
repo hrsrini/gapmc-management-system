@@ -83,6 +83,7 @@ interface IomsReceipt {
   allotmentReferenceNo?: string | null;
   unifiedEntityId?: string | null;
   unifiedEntityDisplayName?: string | null;
+  licenceNo?: string | null;
   qrCodeUrl?: string | null;
   pdfUrl?: string | null;
   status: string;
@@ -498,17 +499,15 @@ export default function IomsReceiptDetail() {
           ) : null}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Yard</span><br />{yardById[receipt.yardId] ?? receipt.yardId}</div>
-            <div><span className="text-muted-foreground">Revenue head</span><br />{receipt.revenueHead}</div>
-            {receipt.manualReceiptTypeLedgerName ? (
-              <div>
-                <span className="text-muted-foreground">Manual receipt type</span>
-                <br />
-                {receipt.manualReceiptTypeLedgerName}
-                {receipt.manualTallyLedgerName ? (
-                  <span className="text-muted-foreground text-xs block">Tally: {receipt.manualTallyLedgerName}</span>
-                ) : null}
-              </div>
-            ) : null}
+            <div>
+              <span className="text-muted-foreground">Revenue head (Tally)</span>
+              <br />
+              {receipt.manualReceiptTypeLedgerName?.trim() || receipt.revenueHead}
+              {receipt.manualTallyLedgerName &&
+              receipt.manualTallyLedgerName !== receipt.manualReceiptTypeLedgerName ? (
+                <span className="text-muted-foreground text-xs block">Tally ledger: {receipt.manualTallyLedgerName}</span>
+              ) : null}
+            </div>
             {m03RentReceipt ? (
               <>
                 <div>
@@ -517,17 +516,29 @@ export default function IomsReceiptDetail() {
                   {payerResolvedLabel}
                 </div>
                 <div>
+                  <span className="text-muted-foreground">Licence No.</span>
+                  <br />
+                  {receipt.licenceNo?.trim() || "—"}
+                </div>
+                <div>
                   <span className="text-muted-foreground">Allotment Reference No.</span>
                   <br />
                   {allotmentReferenceDisplay || "—"}
                 </div>
               </>
             ) : (
-              <div>
-                <span className="text-muted-foreground">Payer</span>
-                <br />
-                {payerResolvedLabel}
-              </div>
+              <>
+                <div>
+                  <span className="text-muted-foreground">Payer</span>
+                  <br />
+                  {payerResolvedLabel}
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Licence No.</span>
+                  <br />
+                  {receipt.licenceNo?.trim() || "—"}
+                </div>
+              </>
             )}
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant={receipt.status === "Paid" ? "default" : "secondary"}>{receipt.status}</Badge></div>
             {(receipt.depositStatus || receipt.paymentMode === "Cash" || receipt.paymentMode === "Cheque" || receipt.paymentMode === "DD") && (

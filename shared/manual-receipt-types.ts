@@ -67,3 +67,50 @@ export function normalizeLedgerName(name: string): string {
     .replace(/\s+/g, " ")
     .replace(/miscallaneous income/i, "Miscallaneous Income");
 }
+
+/** Standard IOMS revenue-head buckets (not Tally ledger names). */
+export const STANDARD_REVENUE_HEADS = [
+  "Rent",
+  "GSTInvoice",
+  "RentArrearsInterest",
+  "MarketFee",
+  "LicenceFee",
+  "SecurityDeposit",
+  "Miscellaneous",
+] as const;
+
+export function isStandardRevenueHead(head: string): boolean {
+  return (STANDARD_REVENUE_HEADS as readonly string[]).includes(String(head ?? "").trim());
+}
+
+/** Posting / display head for manual receipts — always the Tally ledger name. */
+export function manualReceiptPostingHead(ledgerName: string): string {
+  return normalizeLedgerName(ledgerName);
+}
+
+/** Receipt number segment for non-standard (Tally) heads, e.g. Supply of Stationery → SOS. */
+export function abbreviateReceiptHeadCode(ledgerOrHead: string): string {
+  const name = normalizeLedgerName(ledgerOrHead);
+  if (!name) return "MISC";
+  if (isStandardRevenueHead(name)) {
+    const codes: Record<string, string> = {
+      Rent: "RENT",
+      GSTInvoice: "GST",
+      RentArrearsInterest: "RINT",
+      MarketFee: "MFEE",
+      LicenceFee: "LCFEE",
+      SecurityDeposit: "SECDEP",
+      Miscellaneous: "MISC",
+    };
+    return codes[name] ?? "MISC";
+  }
+  const words = name.replace(/[^a-zA-Z0-9\s]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "MISC";
+  if (words.length === 1) {
+    const w = words[0]!;
+    return w.length <= 8 ? w.toUpperCase() : w.slice(0, 8).toUpperCase();
+  }
+  const acronym = words.map((w) => w[0]).join("").toUpperCase();
+  if (acronym.length >= 2 && acronym.length <= 8) return acronym;
+  return name.replace(/[^a-zA-Z0-9]+/g, "").slice(0, 8).toUpperCase() || "MISC";
+}

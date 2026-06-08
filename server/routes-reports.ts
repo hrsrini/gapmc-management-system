@@ -37,6 +37,7 @@ import {
 } from "@shared/db-schema";
 import { maskPanForExport } from "@shared/india-validation";
 import { attachPayerDisplayNames, finalizeEntityDisplayName } from "./ioms-receipt-payer-display";
+import { attachReceiptLicenceNos } from "./ioms-receipt-licence-display";
 import { enrichRentSummaryRows } from "./rent-summary-report-enrich";
 import { enrichReceiptRegisterRows, formatCreatedAtCsv } from "./report-csv-format";
 
@@ -496,7 +497,8 @@ export function registerReportsRoutes(app: Express) {
       const base = db.select().from(iomsReceipts).orderBy(desc(iomsReceipts.createdAt));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
       const listWithPayer = await attachPayerDisplayNames(list);
-      const listEnriched = await enrichReceiptRegisterRows(listWithPayer);
+      const listWithLicence = await attachReceiptLicenceNos(listWithPayer);
+      const listEnriched = await enrichReceiptRegisterRows(listWithLicence);
 
       if (format === "csv") {
         const headers = [
@@ -504,6 +506,7 @@ export function registerReportsRoutes(app: Express) {
           "yardName",
           "revenueHead",
           "traderOrEntityName",
+          "licenceNo",
           "totalAmount",
           "paymentMode",
           "status",
@@ -518,6 +521,7 @@ export function registerReportsRoutes(app: Express) {
             r.unifiedEntityDisplayName,
             r.payerDisplayName,
           ]),
+          (r as { licenceNo?: string | null }).licenceNo ?? "",
           r.totalAmount,
           r.paymentMode,
           r.status,
@@ -560,7 +564,8 @@ export function registerReportsRoutes(app: Express) {
             ? await dataQ
             : await dataQ.limit(pageSize).offset((page - 1) * pageSize);
         const rowsWithPayer = await attachPayerDisplayNames(rows);
-        const rowsEnriched = await enrichReceiptRegisterRows(rowsWithPayer);
+        const rowsWithLicence = await attachReceiptLicenceNos(rowsWithPayer);
+        const rowsEnriched = await enrichReceiptRegisterRows(rowsWithLicence);
         return res.json({ total, page, pageSize, rows: rowsEnriched });
       }
 

@@ -16,6 +16,7 @@ import {
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
 import {
+  manualReceiptPostingHead,
   partyTypesForPayeeRule,
   type ManualReceiptPartyType,
   type ManualReceiptPayeeRule,
@@ -279,9 +280,11 @@ export function registerManualReceiptRoutes(app: Express) {
       }
 
       const createdBy = req.user?.id ?? "system";
+      const postingHead = manualReceiptPostingHead(mrt.ledgerName);
+
       const created = await createIomsReceipt({
         yardId,
-        revenueHead: mrt.revenueHead,
+        revenueHead: postingHead,
         payerName: payer.payerName,
         payerType: payer.payerType,
         payerRefId: payer.payerRefId ?? undefined,

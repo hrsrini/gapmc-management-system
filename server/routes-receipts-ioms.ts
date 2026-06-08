@@ -10,6 +10,7 @@ import { yards, receiptSequence, iomsReceipts, paymentGatewayLog, rentInvoices, 
 import { buildIomsReceiptPdf } from "./receipt-pdf";
 import { attachCreatedByDisplayNames } from "./ioms-receipt-created-by-display";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
+import { attachReceiptLicenceNos } from "./ioms-receipt-licence-display";
 import {
   recordChequeDishonourLedgerForM03Receipt,
   applyM03ReceiptToRentDepositLedger,
@@ -33,6 +34,36 @@ import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-
 import { getM03RentReceiptArrearsDisclosure, type RentReceiptArrearsDisclosure } from "./rent-receipt-arrears";
 import { resolveRentFormalAllotmentRefNo } from "./rent-allotment-reference";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
+import {
+  abbreviateReceiptHeadCode,
+  isStandardRevenueHead,
+  manualReceiptPostingHead,
+} from "@shared/manual-receipt-types";
+
+async function applyManualReceiptPostingHeads<T extends {
+  sourceModule?: string | null;
+  manualReceiptTypeId?: string | null;
+  revenueHead?: string | null;
+}>(rows: T[]): Promise<T[]> {
+  const typeIds = Array.from(
+    new Set(
+      rows
+        .filter((r) => String(r.sourceModule ?? "").trim() === "M-05-MANUAL" && r.manualReceiptTypeId)
+        .map((r) => String(r.manualReceiptTypeId)),
+    ),
+  );
+  if (typeIds.length === 0) return rows;
+  const types = await db
+    .select({ id: manualReceiptTypes.id, ledgerName: manualReceiptTypes.ledgerName })
+    .from(manualReceiptTypes)
+    .where(inArray(manualReceiptTypes.id, typeIds));
+  const headById = new Map(types.map((t) => [t.id, manualReceiptPostingHead(t.ledgerName)]));
+  return rows.map((r) => {
+    if (String(r.sourceModule ?? "").trim() !== "M-05-MANUAL" || !r.manualReceiptTypeId) return r;
+    const head = headById.get(String(r.manualReceiptTypeId));
+    return head ? { ...r, revenueHead: head } : r;
+  });
+}
 
 async function dishonourRecomputationHint(
   existing: typeof iomsReceipts.$inferSelect,
@@ -153,7 +184,9 @@ export async function generateNextReceiptNo(
   yardId: string,
   revenueHead: string
 ): Promise<string> {
-  const headCode = REVENUE_HEAD_CODES[revenueHead] ?? "MISC";
+  const headCode = isStandardRevenueHead(revenueHead)
+    ? (REVENUE_HEAD_CODES[revenueHead] ?? "MISC")
+    : abbreviateReceiptHeadCode(revenueHead);
   const fy = getFinancialYear();
 
   const [yard] = await db.select({ code: yards.code }).from(yards).where(eq(yards.id, yardId));
@@ -349,7 +382,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
         .limit(Math.min(Number(limit) || 100, 500));
       const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
       const withPayer = await attachPayerDisplayNames(list);
-      const enriched = await attachCreatedByDisplayNames(withPayer);
+      const enriched = await applyManualReceiptPostingHeads(await attachCreatedByDisplayNames(withPayer));
       const m03InvoiceIds = Array.from(
         new Set(
           enriched
@@ -358,12 +391,13 @@ export function registerReceiptsIomsRoutes(app: Express) {
         ),
       );
       if (m03InvoiceIds.length === 0) {
-        res.json(
+        const withLicence = await attachReceiptLicenceNos(
           enriched.map((r) => ({
             ...r,
             createdByName: r.createdByDisplayName,
           })),
         );
+        res.json(withLicence);
         return;
       }
       const invRows = await db
@@ -381,21 +415,20 @@ export function registerReceiptsIomsRoutes(app: Express) {
       const invById = new Map(invRows.map((x) => [x.id, x]));
       const { buildInvoiceGstMap, withResolvedM03ReceiptGst } = await import("./m03-receipt-gst-display");
       const gstById = buildInvoiceGstMap(invRows);
-      res.json(
-        enriched.map((r) => {
-          let base = { ...r, createdByName: r.createdByDisplayName };
-          if ((r.sourceModule ?? "").trim() !== "M-03" || !(r.sourceRecordId ?? "").trim()) return base;
-          const invId = String(r.sourceRecordId).trim();
-          const inv = invById.get(invId);
-          if (!inv) return base;
-          base = withResolvedM03ReceiptGst(base, gstById.get(invId) ?? null);
-          return {
-            ...base,
-            sourceInvoiceNo: inv.invoiceNo ?? null,
-            sourceInvoicePeriodMonth: inv.periodMonth ?? null,
-          };
-        }),
-      );
+      const withM03 = enriched.map((r) => {
+        let base = { ...r, createdByName: r.createdByDisplayName };
+        if ((r.sourceModule ?? "").trim() !== "M-03" || !(r.sourceRecordId ?? "").trim()) return base;
+        const invId = String(r.sourceRecordId).trim();
+        const inv = invById.get(invId);
+        if (!inv) return base;
+        base = withResolvedM03ReceiptGst(base, gstById.get(invId) ?? null);
+        return {
+          ...base,
+          sourceInvoiceNo: inv.invoiceNo ?? null,
+          sourceInvoicePeriodMonth: inv.periodMonth ?? null,
+        };
+      });
+      res.json(await attachReceiptLicenceNos(withM03));
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipts");
@@ -471,11 +504,20 @@ export function registerReceiptsIomsRoutes(app: Express) {
         .from(iomsReceipts)
         .where(eq(iomsReceipts.receiptNo, receiptNo));
       if (!row) return sendApiError(res, 404, "RECEIPT_VERIFY_NOT_FOUND", "Receipt not found", { receiptNo });
+      let revenueHead = row.revenueHead;
+      if (String(row.sourceModule ?? "").trim() === "M-05-MANUAL" && row.manualReceiptTypeId) {
+        const [mrt] = await db
+          .select({ ledgerName: manualReceiptTypes.ledgerName })
+          .from(manualReceiptTypes)
+          .where(eq(manualReceiptTypes.id, row.manualReceiptTypeId))
+          .limit(1);
+        if (mrt?.ledgerName?.trim()) revenueHead = mrt.ledgerName.trim();
+      }
       res.json({
         receiptNo: row.receiptNo,
         amount: row.amount,
         totalAmount: row.totalAmount,
-        revenueHead: row.revenueHead,
+        revenueHead,
         paymentMode: row.paymentMode,
         status: row.status,
         createdAt: row.createdAt,
@@ -632,11 +674,15 @@ export function registerReceiptsIomsRoutes(app: Express) {
           .where(eq(manualReceiptTypes.id, manualTypeId))
           .limit(1);
         if (mrt) {
+          const postingHead = mrt.ledgerName.trim();
           payload = {
             ...payload,
             manualReceiptTypeLedgerName: mrt.ledgerName,
             manualReceiptPayeeRule: mrt.payeeRule,
             manualTallyLedgerName: mrt.tallyLedgerName ?? null,
+            ...(String(row.sourceModule ?? "").trim() === "M-05-MANUAL" && postingHead
+              ? { revenueHead: postingHead }
+              : {}),
           };
         }
       }
@@ -647,7 +693,8 @@ export function registerReceiptsIomsRoutes(app: Express) {
         depositDeferredUntil: row.depositDeferredUntil ?? null,
         ...depositCtx,
       };
-      res.json(payload);
+      const [withLicence] = await attachReceiptLicenceNos([row]);
+      res.json({ ...payload, licenceNo: withLicence.licenceNo });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipt");

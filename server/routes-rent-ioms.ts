@@ -1403,7 +1403,8 @@ export function registerRentIomsRoutes(app: Express) {
             .where(eq(iomsReceipts.unifiedEntityId, unifiedRaw))
             .orderBy(desc(iomsReceipts.createdAt))
             .limit(200);
-          return res.json(rows);
+          const { attachReceiptLicenceNos } = await import("./ioms-receipt-licence-display");
+          return res.json(await attachReceiptLicenceNos(rows));
         }
         tid = parsed.refId;
       }
@@ -1417,10 +1418,16 @@ export function registerRentIomsRoutes(app: Express) {
       const rows = await db
         .select()
         .from(iomsReceipts)
-        .where(and(eq(iomsReceipts.payerType, "TraderLicence"), eq(iomsReceipts.payerRefId, tid)))
+        .where(
+          and(
+            or(eq(iomsReceipts.payerType, "TraderLicence"), eq(iomsReceipts.payerType, "TenantLicence")),
+            or(eq(iomsReceipts.payerRefId, tid), eq(iomsReceipts.unifiedEntityId, unifiedEntityIdFromTrackA(tid))),
+          ),
+        )
         .orderBy(desc(iomsReceipts.createdAt))
         .limit(200);
-      res.json(rows);
+      const { attachReceiptLicenceNos } = await import("./ioms-receipt-licence-display");
+      res.json(await attachReceiptLicenceNos(rows));
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch trader-linked receipts");

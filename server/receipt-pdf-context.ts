@@ -1,11 +1,12 @@
 import { eq } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
-import { iomsReceipts, rentInvoices, traderLicences, users, yards } from "@shared/db-schema";
+import { iomsReceipts, manualReceiptTypes, rentInvoices, users, yards } from "@shared/db-schema";
+import { isStandardRevenueHead, manualReceiptPostingHead } from "@shared/manual-receipt-types";
 import { parseM03ReceiptBreakdown, resolveM03ReceiptGstAmounts } from "@shared/m03-receipt-breakdown";
 import { invoiceGstSnapshot } from "./m03-receipt-gst-display";
-import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 import { db } from "./db";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
+import { resolveReceiptLicenceNo } from "./ioms-receipt-licence-display";
 import { resolveRentReceiptPremisesPrint } from "./rent-allotment-reference";
 import { formatBillingMonthLabel } from "./pre-receipt-pdf";
 import {
@@ -46,29 +47,28 @@ export type ReceiptPdfLayoutContext = {
   generatedByUsername: string;
 };
 
-async function resolveLicenceNo(receipt: ReceiptRow): Promise<string | null> {
-  const ids = new Set<string>();
-  const ref = (receipt.payerRefId ?? "").trim();
-  const typ = String(receipt.payerType ?? "").trim().toLowerCase();
-  if (ref && (typ === "traderlicence" || typ === "tenantlicence" || !typ)) ids.add(ref);
-  const ue = parseUnifiedEntityId(String(receipt.unifiedEntityId ?? "").trim());
-  if (ue?.kind === "TA") ids.add(ue.refId);
-  if (ids.size === 0) return null;
-  const idList = Array.from(ids);
-  for (const id of idList) {
-    const [row] = await db
-      .select({ licenceNo: traderLicences.licenceNo })
-      .from(traderLicences)
-      .where(eq(traderLicences.id, id))
-      .limit(1);
-    if (row?.licenceNo?.trim()) return row.licenceNo.trim();
-  }
-  return null;
+async function resolveManualLedgerLabel(receipt: ReceiptRow): Promise<string | null> {
+  const typeId = String(receipt.manualReceiptTypeId ?? "").trim();
+  if (!typeId) return null;
+  const [mrt] = await db
+    .select({ ledgerName: manualReceiptTypes.ledgerName })
+    .from(manualReceiptTypes)
+    .where(eq(manualReceiptTypes.id, typeId))
+    .limit(1);
+  return mrt?.ledgerName ? manualReceiptPostingHead(mrt.ledgerName) : null;
+}
+
+function isManualReceipt(receipt: ReceiptRow): boolean {
+  return String(receipt.sourceModule ?? "").trim() === "M-05-MANUAL";
 }
 
 async function buildRemarks(receipt: ReceiptRow): Promise<string> {
   const mode = String(receipt.paymentMode ?? "").trim();
   const payWord = mode === "Cash" ? "Cash" : mode === "Cheque" || mode === "DD" ? "Cheque" : mode || "payment";
+  if (isManualReceipt(receipt)) {
+    const ledger = await resolveManualLedgerLabel(receipt);
+    if (ledger) return `Being amount received towards ${ledger}.`;
+  }
   if (String(receipt.sourceModule ?? "") === "M-03" && receipt.sourceRecordId) {
     const [inv] = await db
       .select({
@@ -97,6 +97,17 @@ async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParti
   const rh = String(receipt.revenueHead ?? "").trim();
   const m03Br = parseM03ReceiptBreakdown((receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson);
   const rows: Omit<ReceiptPdfParticularRow, "sn">[] = [];
+
+  if (isManualReceipt(receipt)) {
+    const ledger =
+      (await resolveManualLedgerLabel(receipt)) ||
+      (isStandardRevenueHead(rh) ? null : rh) ||
+      rh ||
+      "Amount";
+    const amount = Number(receipt.totalAmount ?? receipt.amount ?? 0);
+    rows.push({ label: ledger, amount });
+    return rows.map((r, i) => ({ sn: i + 1, ...r }));
+  }
 
   if (rh === "MarketFee") {
     rows.push({ label: "Market Fee", amount: Number(receipt.amount ?? 0) });
@@ -175,7 +186,7 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     /* use fallback */
   }
 
-  const licenceNo = await resolveLicenceNo(receipt);
+  const licenceNo = await resolveReceiptLicenceNo(receipt);
   const remarks = await buildRemarks(receipt);
   const totalAmount = Number(receipt.totalAmount ?? 0);
   const branding = getReceiptPdfBranding(yard?.address ?? null, yard?.name ?? null);
@@ -227,7 +238,9 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     rows: await buildParticularRows(receipt),
     totalAmount,
     isGracePeriod: Boolean((receipt as { isGracePeriod?: boolean | null }).isGracePeriod),
-    revenueHead: String(receipt.revenueHead ?? ""),
+    revenueHead: isManualReceipt(receipt)
+      ? (await resolveManualLedgerLabel(receipt)) ?? String(receipt.revenueHead ?? "")
+      : String(receipt.revenueHead ?? ""),
     generatedByUsername,
   };
 }

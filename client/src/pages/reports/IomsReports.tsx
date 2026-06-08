@@ -118,6 +118,7 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
         { key: "yardName", header: "Yard", sortField: "yardId" },
         { key: "revenueHead", header: "Revenue Head" },
         { key: "entityDisplayName", header: "Trader Name/Entity Name" },
+        { key: "licenceNo", header: "Licence no." },
         { key: "_total", header: "Total (₹)", sortField: "totalAmount" },
         { key: "paymentMode", header: "Mode" },
         { key: "status", header: "Status" },

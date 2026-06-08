@@ -13,6 +13,14 @@ import {
 import type { InferSelectModel } from "drizzle-orm";
 import { ledgerRowEffectiveUnifiedEntityId } from "./rent-ledger-scope";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
+import {
+  addInvoiceTenantLicenceRefs,
+  collectReceiptLicenceLookupRefs,
+  loadLicenceDisplayMaps,
+  mergeReceiptLicenceLookupRefs,
+  resolveLicenceDisplayFromRefs,
+  type ReceiptLicenceLookupRefs,
+} from "./ioms-receipt-licence-display";
 
 export type RentDepositLedgerRow = InferSelectModel<typeof rentDepositLedger>;
 
@@ -145,18 +153,35 @@ export async function enrichRentDepositLedgerPartyNames<
     ),
   );
   const firmByLicenceId = new Map<string, string>();
-  const licenceNoById = new Map<string, string | null>();
   if (tenantIds.length > 0) {
     const licRows = await db
-      .select({ id: traderLicences.id, firmName: traderLicences.firmName, licenceNo: traderLicences.licenceNo })
+      .select({ id: traderLicences.id, firmName: traderLicences.firmName })
       .from(traderLicences)
       .where(inArray(traderLicences.id, tenantIds));
     for (const l of licRows) {
       firmByLicenceId.set(l.id, String(l.firmName ?? "").trim() || l.id);
-      const no = l.licenceNo != null ? String(l.licenceNo).trim() : "";
-      licenceNoById.set(l.id, no || null);
     }
   }
+
+  const licenceRefsByRow: ReceiptLicenceLookupRefs[] = [];
+  const mergedLicenceRefs: ReceiptLicenceLookupRefs = {
+    traderIds: new Set(),
+    entityIds: new Set(),
+    adHocIds: new Set(),
+  };
+  for (const row of list) {
+    const refs = collectReceiptLicenceLookupRefs({
+      unifiedEntityId: ledgerRowEffectiveUnifiedEntityId(row),
+      sourceModule: String(row.invoiceId ?? "").trim() ? "M-03" : null,
+      sourceRecordId: row.invoiceId,
+    });
+    addInvoiceTenantLicenceRefs(row.invoiceTenantLicenceId, row.invoiceEntityId, refs);
+    const ledgerTid = String(row.tenantLicenceId ?? "").trim();
+    if (ledgerTid && !/^(TA|TB|AH):/i.test(ledgerTid)) refs.traderIds.add(ledgerTid);
+    licenceRefsByRow.push(refs);
+    mergeReceiptLicenceLookupRefs(mergedLicenceRefs, refs);
+  }
+  const licenceMaps = await loadLicenceDisplayMaps(mergedLicenceRefs);
 
   const tbRefFromInvoice = (row: T): string | null => {
     const eid = String(row.invoiceEntityId ?? "").trim();
@@ -193,7 +218,6 @@ export async function enrichRentDepositLedgerPartyNames<
 
   const entityNameById = new Map<string, string>();
   const entityNameByEntityCode = new Map<string, string>();
-  const entityCodeById = new Map<string, string>();
   if (tbIds.length > 0) {
     const entRows = await db
       .select({ id: entities.id, entityCode: entities.entityCode, name: entities.name })
@@ -203,10 +227,7 @@ export async function enrichRentDepositLedgerPartyNames<
       const label = String(er.name ?? "").trim() || er.id;
       entityNameById.set(er.id, label);
       const code = er.entityCode != null ? String(er.entityCode).trim() : "";
-      if (code) {
-        entityNameByEntityCode.set(code, label);
-        entityCodeById.set(er.id, code);
-      }
+      if (code) entityNameByEntityCode.set(code, label);
     }
   }
   const adhocNameById = new Map<string, string>();
@@ -220,11 +241,11 @@ export async function enrichRentDepositLedgerPartyNames<
     }
   }
 
-  return list.map((row) => {
+  return list.map((row, index) => {
     const tidRaw = String(row.tenantLicenceId ?? "").trim();
     const tidBare = /^(TA|TB|AH):/i.test(tidRaw) ? "" : tidRaw;
     const firm = tidBare ? (firmByLicenceId.get(tidBare) ?? null) : null;
-    const licNo = tidBare ? (licenceNoById.get(tidBare) ?? null) : null;
+    const licNo = resolveLicenceDisplayFromRefs(licenceRefsByRow[index], licenceMaps);
     const effUe = ledgerRowEffectiveUnifiedEntityId(row);
     const parsed = effUe ? parseUnifiedEntityId(effUe) : null;
     const resolveTb = (ref: string) => entityNameById.get(ref) ?? entityNameByEntityCode.get(ref);
@@ -251,30 +272,7 @@ export async function enrichRentDepositLedgerPartyNames<
     })();
 
     const tenantLicenceDisplayName = (licNo ?? tidBare) || "—";
-
-    const licenceOrEntityIdDisplay = (() => {
-      if (parsed?.kind === "TB") {
-        return entityCodeById.get(parsed.refId) ?? parsed.refId;
-      }
-      if (parsed?.kind === "TA") {
-        return licenceNoById.get(parsed.refId) ?? parsed.refId;
-      }
-      if (parsed?.kind === "AH") {
-        return parsed.refId;
-      }
-      if (invTbRef) {
-        const code = entityCodeById.get(invTbRef);
-        if (code) return code;
-      }
-      const tidParsed = /^(TA|TB|AH):/i.test(tidRaw) ? parseUnifiedEntityId(tidRaw) : null;
-      if (tidParsed?.kind === "TB") {
-        return entityCodeById.get(tidParsed.refId) ?? tidParsed.refId;
-      }
-      if (tidParsed?.kind === "TA") {
-        return licenceNoById.get(tidParsed.refId) ?? tidParsed.refId;
-      }
-      return tenantLicenceDisplayName;
-    })();
+    const licenceOrEntityIdDisplay = licNo ?? tenantLicenceDisplayName;
 
     return { ...row, unifiedEntityDisplayName, tenantLicenceDisplayName, licenceOrEntityIdDisplay };
   });
