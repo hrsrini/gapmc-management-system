@@ -6,7 +6,7 @@ import { parseM03ReceiptBreakdown, resolveM03ReceiptGstAmounts } from "@shared/m
 import { invoiceGstSnapshot } from "./m03-receipt-gst-display";
 import { db } from "./db";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
-import { resolveReceiptLicenceNo } from "./ioms-receipt-licence-display";
+import { isReceiptTrackAForPdf, resolveReceiptLicenceNo } from "./ioms-receipt-licence-display";
 import { resolveRentReceiptPremisesPrint } from "./rent-allotment-reference";
 import { formatBillingMonthLabel } from "./pre-receipt-pdf";
 import {
@@ -15,6 +15,7 @@ import {
   formatReceiptPaymentDetailLine,
   getReceiptPdfBranding,
   marketFeeReceiptTitleForYard,
+  otherReceiptTitleForYard,
   rentReceiptTitleForYard,
 } from "./receipt-pdf-shared";
 
@@ -31,6 +32,11 @@ export type ReceiptPdfLayoutContext = {
   /** Payer / lessee name on receipt face. */
   receivedFromLine: string;
   licenceNo: string | null;
+  /** Track A only — hide licence label/value for Track B, New Party, and unlinked manual payers. */
+  showLicenceNo: boolean;
+  /** New Party only; omitted when blank. */
+  newPartyAddressLine: string | null;
+  newPartyContactLine: string | null;
   branding: ReturnType<typeof getReceiptPdfBranding>;
   receiptTitle: string;
   receiptNo: string;
@@ -163,7 +169,7 @@ function receiptTitle(receipt: ReceiptRow, yardCode: string | null, yardName: st
   if (rh === "Rent" || rh === "GSTInvoice" || rh === "RentArrearsInterest") {
     return rentReceiptTitleForYard(yardCode, yardName);
   }
-  return process.env.RECEIPT_PDF_GENERIC_TITLE?.trim() || "Official Receipt";
+  return otherReceiptTitleForYard(yardName, yardCode);
 }
 
 export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<ReceiptPdfLayoutContext> {
@@ -186,7 +192,18 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     /* use fallback */
   }
 
-  const licenceNo = await resolveReceiptLicenceNo(receipt);
+  const showLicenceNo = isReceiptTrackAForPdf(receipt);
+  const licenceNo = showLicenceNo ? await resolveReceiptLicenceNo(receipt) : null;
+
+  let newPartyAddressLine: string | null = null;
+  let newPartyContactLine: string | null = null;
+  if (String(receipt.payerPartyType ?? "").trim() === "NewParty") {
+    const addr = String(receipt.payerAddress ?? "").trim();
+    const contact = String(receipt.payerContact ?? "").trim();
+    if (addr) newPartyAddressLine = `Address : ${addr}`;
+    if (contact) newPartyContactLine = `Contact No. : ${contact}`;
+  }
+
   const remarks = await buildRemarks(receipt);
   const totalAmount = Number(receipt.totalAmount ?? 0);
   const branding = getReceiptPdfBranding(yard?.address ?? null, yard?.name ?? null);
@@ -228,6 +245,9 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     receivedFromLine,
     allotmentReferenceLine,
     licenceNo,
+    showLicenceNo: showLicenceNo && Boolean(licenceNo?.trim()),
+    newPartyAddressLine,
+    newPartyContactLine,
     branding,
     receiptTitle: receiptTitle(receipt, yard?.code ?? null, yard?.name ?? null),
     receiptNo: receipt.receiptNo,

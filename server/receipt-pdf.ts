@@ -9,6 +9,7 @@ import { loadPdfDocumentConstructor } from "./pdfkit-loader";
 import { pdfSafeText } from "./pdf-safe-text";
 import { loadReceiptPdfLayoutContext } from "./receipt-pdf-context";
 import { drawGaplmbReceiptSlip } from "./receipt-pdf-layout";
+import { readUploadedReceiptLogoBuffer } from "./receipt-logo-storage";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
 
@@ -62,6 +63,8 @@ export async function buildIomsReceiptPdf(params: {
     console.warn("[receipt-pdf] QR generation failed", e);
   }
 
+  const logoPng = bodyOnly ? null : await readUploadedReceiptLogoBuffer();
+
   const doc = new PDFDocument({ size: "A4", margin: A4_MARGIN });
   const chunks: Buffer[] = [];
   doc.on("data", (c: Buffer) => chunks.push(c));
@@ -88,6 +91,7 @@ export async function buildIomsReceiptPdf(params: {
     const slipOpts = {
       bodyOnly,
       signatoryName: signatoryName || null,
+      logoPng,
       qrPng: bodyOnly ? null : qrPng,
       verifyUrl: bodyOnly ? null : verifyUrl,
     };

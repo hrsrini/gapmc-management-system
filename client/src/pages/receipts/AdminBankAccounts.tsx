@@ -5,24 +5,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Landmark, Loader2, Plus, History } from "lucide-react";
+import { Landmark, Loader2, Plus, History, MapPin } from "lucide-react";
 import { formatApiDateOrDateTime } from "@/lib/dateFormat";
 
 interface BankAccountRow {
@@ -42,7 +37,16 @@ interface YardRef {
   code: string;
 }
 
-const ROLE_OPTIONS = ["DO", "DV", "DA", "ADMIN", "READ_ONLY"];
+interface MappingHistoryRow {
+  id: string;
+  actionType: string;
+  yardId: string | null;
+  previousMapping: string[];
+  newMapping: string[];
+  remarks: string | null;
+  changedByName: string | null;
+  changedAt: string;
+}
 
 export default function AdminBankAccounts() {
   const { toast } = useToast();
@@ -52,13 +56,21 @@ export default function AdminBankAccounts() {
   const [ifscCode, setIfscCode] = useState("");
   const [branch, setBranch] = useState("");
   const [yardIds, setYardIds] = useState<string[]>([]);
-  const [roleTiers, setRoleTiers] = useState<string[]>([]);
+  const [createRemarks, setCreateRemarks] = useState("");
   const [historyId, setHistoryId] = useState<string | null>(null);
+  const [manageAccount, setManageAccount] = useState<BankAccountRow | null>(null);
+  const [manageYardIds, setManageYardIds] = useState<string[]>([]);
+  const [manageRemarks, setManageRemarks] = useState("");
 
   const { data: list = [], isLoading } = useQuery<BankAccountRow[]>({
     queryKey: ["/api/ioms/receipt-deposits/bank-accounts/all"],
   });
   const { data: yards = [] } = useQuery<YardRef[]>({ queryKey: ["/api/yards"] });
+
+  const { data: mappingHistory = [], isLoading: mappingLoading } = useQuery<MappingHistoryRow[]>({
+    queryKey: [`/api/ioms/receipt-deposits/bank-accounts/${historyId}/mapping-history`],
+    enabled: Boolean(historyId),
+  });
 
   const { data: versionHistory = [], isLoading: versionsLoading } = useQuery<
     Array<{ id: string; changedAt: string; changedBy: string | null; snapshot: Record<string, unknown> }>
@@ -73,7 +85,16 @@ export default function AdminBankAccounts() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ bankName, accountNumber, ifscCode, branch, yardIds, roleTiers, isActive: true }),
+        body: JSON.stringify({
+          bankName,
+          accountNumber,
+          ifscCode,
+          branch,
+          yardIds,
+          roleTiers: [],
+          isActive: true,
+          remarks: createRemarks.trim() || undefined,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data as { message?: string }).message ?? res.statusText);
@@ -87,7 +108,7 @@ export default function AdminBankAccounts() {
       setIfscCode("");
       setBranch("");
       setYardIds([]);
-      setRoleTiers([]);
+      setCreateRemarks("");
     },
     onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
   });
@@ -108,7 +129,43 @@ export default function AdminBankAccounts() {
     },
   });
 
+  const saveYardMappings = useMutation({
+    mutationFn: async () => {
+      if (!manageAccount) throw new Error("No account selected");
+      const res = await fetch(`/api/ioms/receipt-deposits/bank-accounts/${manageAccount.id}/yards`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          yardIds: manageYardIds,
+          remarks: manageRemarks.trim() || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { message?: string }).message ?? res.statusText);
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/receipt-deposits/bank-accounts/all"] });
+      if (manageAccount) {
+        queryClient.invalidateQueries({
+          queryKey: [`/api/ioms/receipt-deposits/bank-accounts/${manageAccount.id}/mapping-history`],
+        });
+      }
+      toast({ title: "Yard mappings updated" });
+      setManageAccount(null);
+      setManageRemarks("");
+    },
+    onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
+  });
+
   const yardLabel = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, `${y.name} (${y.code})`])), [yards]);
+  const yardCode = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, y.code])), [yards]);
+
+  const formatMappingList = (ids: string[]) => {
+    if (ids.length === 0) return "All yards";
+    return ids.map((id) => yardLabel[id] ?? yardCode[id] ?? id).join(", ");
+  };
 
   const columns: ReportTableColumn[] = [
     { key: "bankName", header: "Bank" },
@@ -133,6 +190,18 @@ export default function AdminBankAccounts() {
             <Button
               size="sm"
               variant="outline"
+              onClick={() => {
+                setManageAccount(a);
+                setManageYardIds([...a.yardIds]);
+                setManageRemarks("");
+              }}
+            >
+              <MapPin className="h-3.5 w-3.5 mr-1" />
+              Manage yards
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
               onClick={() => toggleActive.mutate({ id: a.id, isActive: !a.isActive })}
             >
               {a.isActive ? "Deactivate" : "Activate"}
@@ -147,8 +216,15 @@ export default function AdminBankAccounts() {
     [list, yardLabel, toggleActive],
   );
 
+  const historyAccount = list.find((a) => a.id === historyId);
+
   return (
-    <AppShell breadcrumbs={[{ label: "Admin", href: "/admin/config" }, { label: "Bank accounts (M-05)" }]}>
+    <AppShell
+      breadcrumbs={[
+        { label: "Admin", href: "/admin/config" },
+        { label: "Bank Account – Yard Mapping" },
+      ]}
+    >
       <Card className="mb-4">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -189,6 +265,15 @@ export default function AdminBankAccounts() {
               ))}
             </div>
           </div>
+          <div className="space-y-1 md:col-span-2">
+            <Label>Remarks (optional)</Label>
+            <Textarea
+              value={createRemarks}
+              onChange={(e) => setCreateRemarks(e.target.value)}
+              rows={2}
+              placeholder="Reason for initial yard mapping"
+            />
+          </div>
           <div className="md:col-span-2 flex justify-end">
             <Button
               disabled={createMutation.isPending || !bankName.trim() || !accountNumber.trim()}
@@ -204,39 +289,139 @@ export default function AdminBankAccounts() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Landmark className="h-5 w-5" />
-            GAPLMB bank accounts
+            Bank Account – Yard Mapping Management
           </CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
             <Loader2 className="h-6 w-6 animate-spin" />
           ) : (
-            <ClientDataGrid columns={columns} sourceRows={sourceRows} defaultSortKey="bankName" defaultSortDir="asc" emptyMessage="No bank accounts." />
+            <ClientDataGrid
+              columns={columns}
+              sourceRows={sourceRows}
+              defaultSortKey="bankName"
+              defaultSortDir="asc"
+              emptyMessage="No bank accounts."
+            />
           )}
         </CardContent>
       </Card>
 
-      <Dialog open={Boolean(historyId)} onOpenChange={(o) => !o && setHistoryId(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+      <Dialog open={Boolean(manageAccount)} onOpenChange={(o) => !o && setManageAccount(null)}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Bank account version history</DialogTitle>
+            <DialogTitle>Manage yard mappings</DialogTitle>
           </DialogHeader>
-          {versionsLoading ? (
+          {manageAccount ? (
+            <div className="space-y-4 text-sm">
+              <p className="text-muted-foreground">
+                {manageAccount.bankName} — {manageAccount.accountNumber}
+              </p>
+              <div className="space-y-2">
+                <Label>Linked yards (empty = all yards)</Label>
+                <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto border rounded-md p-2">
+                  {yards.map((y) => (
+                    <label key={y.id} className="flex items-center gap-1">
+                      <Checkbox
+                        checked={manageYardIds.includes(y.id)}
+                        onCheckedChange={(c) =>
+                          setManageYardIds((prev) =>
+                            c ? [...prev, y.id] : prev.filter((id) => id !== y.id),
+                          )
+                        }
+                      />
+                      {y.code}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label>Remarks (optional)</Label>
+                <Textarea
+                  value={manageRemarks}
+                  onChange={(e) => setManageRemarks(e.target.value)}
+                  rows={2}
+                  placeholder="Reason for link / de-link / add / remove"
+                />
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setManageAccount(null)}>
+              Cancel
+            </Button>
+            <Button disabled={saveYardMappings.isPending} onClick={() => saveYardMappings.mutate()}>
+              {saveYardMappings.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save mappings"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(historyId)} onOpenChange={(o) => !o && setHistoryId(null)}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Mapping history</DialogTitle>
+          </DialogHeader>
+          {historyAccount ? (
+            <p className="text-sm text-muted-foreground mb-2">
+              {historyAccount.bankName} — {historyAccount.accountNumber}
+            </p>
+          ) : null}
+          {mappingLoading ? (
             <Loader2 className="h-6 w-6 animate-spin" />
-          ) : versionHistory.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No saved versions yet (created on each update).</p>
+          ) : mappingHistory.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No mapping changes recorded yet.</p>
           ) : (
-            <ul className="space-y-3 text-sm">
-              {versionHistory.map((v) => (
-                <li key={v.id} className="rounded-md border p-3">
-                  <div className="font-medium">{formatApiDateOrDateTime(v.changedAt)}</div>
-                  <pre className="mt-2 overflow-x-auto text-xs bg-muted p-2 rounded">
-                    {JSON.stringify(v.snapshot, null, 2)}
-                  </pre>
-                </li>
-              ))}
-            </ul>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b text-left">
+                    <th className="py-2 pr-2">Date / time</th>
+                    <th className="py-2 pr-2">User</th>
+                    <th className="py-2 pr-2">Action</th>
+                    <th className="py-2 pr-2">Previous</th>
+                    <th className="py-2 pr-2">New</th>
+                    <th className="py-2">Remarks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mappingHistory.map((h) => (
+                    <tr key={h.id} className="border-b align-top">
+                      <td className="py-2 pr-2 whitespace-nowrap">{formatApiDateOrDateTime(h.changedAt)}</td>
+                      <td className="py-2 pr-2">{h.changedByName ?? "—"}</td>
+                      <td className="py-2 pr-2 font-medium">
+                        {h.actionType}
+                        {h.yardId ? ` (${yardCode[h.yardId] ?? h.yardId})` : ""}
+                      </td>
+                      <td className="py-2 pr-2 text-muted-foreground">{formatMappingList(h.previousMapping)}</td>
+                      <td className="py-2 pr-2">{formatMappingList(h.newMapping)}</td>
+                      <td className="py-2 text-muted-foreground">{h.remarks ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
+
+          <details className="mt-4 text-sm">
+            <summary className="cursor-pointer text-muted-foreground">Full account snapshots</summary>
+            {versionsLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin mt-2" />
+            ) : versionHistory.length === 0 ? (
+              <p className="text-muted-foreground mt-2">No snapshots.</p>
+            ) : (
+              <ul className="space-y-2 mt-2">
+                {versionHistory.map((v) => (
+                  <li key={v.id} className="rounded-md border p-2">
+                    <div className="font-medium">{formatApiDateOrDateTime(v.changedAt)}</div>
+                    <pre className="mt-1 overflow-x-auto text-xs bg-muted p-2 rounded">
+                      {JSON.stringify(v.snapshot, null, 2)}
+                    </pre>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </details>
         </DialogContent>
       </Dialog>
     </AppShell>

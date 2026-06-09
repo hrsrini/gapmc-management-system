@@ -11,7 +11,11 @@ const { Client } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.join(__dirname, "migrations");
 
-const FILES = ["051-receipt-deposit-workflow.sql", "052-receipt-deposit-extras.sql"] as const;
+const FILES = [
+  "051-receipt-deposit-workflow.sql",
+  "052-receipt-deposit-extras.sql",
+  "053-bank-account-yard-mapping-log.sql",
+] as const;
 
 async function main() {
   const url = process.env.DATABASE_URL?.trim();

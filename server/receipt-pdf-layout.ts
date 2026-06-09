@@ -34,6 +34,8 @@ const HEADER_H = 15;
 const TOTAL_ROW_H = 16;
 const TABLE_LINE = 0.5;
 const QR_SIZE = 40;
+/** GAPLMB logo from Admin → Receipt PDF logo (top-left of slip). */
+const LOGO_SIZE = 44;
 
 /**
  * Draw wrapped text and advance Y by measured height.
@@ -125,6 +127,7 @@ function drawParticularsTable(
 export type DrawReceiptSlipOptions = {
   bodyOnly: boolean;
   signatoryName?: string | null;
+  logoPng?: Buffer | null;
   qrPng?: Buffer | null;
   verifyUrl?: string | null;
 };
@@ -142,6 +145,14 @@ export function drawGaplmbReceiptSlip(
   const innerX = x + PAD;
   const innerW = width - PAD * 2;
   let cy = y + PAD;
+
+  if (opts.logoPng) {
+    try {
+      doc.image(opts.logoPng, innerX, cy, { width: LOGO_SIZE, height: LOGO_SIZE, fit: [LOGO_SIZE, LOGO_SIZE] });
+    } catch {
+      /* skip logo */
+    }
+  }
 
   if (!opts.bodyOnly) {
     doc.font("Helvetica-Bold").fontSize(10);
@@ -173,9 +184,22 @@ export function drawGaplmbReceiptSlip(
   cy += 11;
 
   cy = advanceAfterWrappedText(doc, ctx.receivedFromLine, innerX, cy, innerW, 3);
-  const lic = ctx.licenceNo?.trim() ? ctx.licenceNo.trim() : "—";
-  doc.text(pdfSafeText(`Licence No:${lic}`), rightX, cy, { width: rightW, align: "right", lineBreak: false });
-  cy += 11;
+
+  if (ctx.showLicenceNo && ctx.licenceNo?.trim()) {
+    doc.text(pdfSafeText(`Licence No:${ctx.licenceNo.trim()}`), rightX, cy, {
+      width: rightW,
+      align: "right",
+      lineBreak: false,
+    });
+    cy += 11;
+  }
+
+  if (ctx.newPartyAddressLine?.trim()) {
+    cy = advanceAfterWrappedText(doc, ctx.newPartyAddressLine.trim(), innerX, cy, innerW, 2);
+  }
+  if (ctx.newPartyContactLine?.trim()) {
+    cy = advanceAfterWrappedText(doc, ctx.newPartyContactLine.trim(), innerX, cy, innerW, 2);
+  }
 
   if (ctx.allotmentReferenceLine?.trim()) {
     cy = advanceAfterWrappedText(doc, ctx.allotmentReferenceLine.trim(), innerX, cy, innerW, 3);

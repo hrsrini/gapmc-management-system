@@ -11,6 +11,7 @@ const REQUIRED_TABLES = [
   "gaplmb_bank_account_yards",
   "gaplmb_bank_account_roles",
   "gaplmb_bank_account_versions",
+  "gaplmb_bank_account_yard_mapping_log",
   "receipt_deposit_sequence",
   "receipt_deposits",
   "receipt_deposit_lines",

@@ -115,3 +115,17 @@ export function marketFeeReceiptTitleForYard(yardCode: string | null | undefined
   const code = String(yardCode ?? "").trim();
   return code ? `${code.toUpperCase()} - Market Fee Receipt` : "Market Fee Receipt";
 }
+
+/** Manual / miscellaneous IOMS receipts (non-rent, non-market-fee). */
+export function otherReceiptTitleForYard(
+  yardName: string | null | undefined,
+  yardCode: string | null | undefined,
+): string {
+  const override = process.env.RECEIPT_PDF_OTHER_TITLE?.trim();
+  if (override) return override;
+  const name = String(yardName ?? "").trim();
+  if (name) return `${name} - Other Receipts`;
+  const code = String(yardCode ?? "").trim();
+  if (code) return `${code.toUpperCase()} - Other Receipts`;
+  return "Other Receipts";
+}

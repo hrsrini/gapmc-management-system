@@ -518,6 +518,19 @@ export const gaplmbBankAccountVersions = gapmc.table("gaplmb_bank_account_versio
   changedAt: text("changed_at").notNull(),
 });
 
+/** FR-RCP-010: append-only yard ↔ bank account mapping audit (Link / DeLink / AddYard / RemoveYard / Modify). */
+export const gaplmbBankAccountYardMappingLog = gapmc.table("gaplmb_bank_account_yard_mapping_log", {
+  id: text("id").primaryKey(),
+  bankAccountId: text("bank_account_id").notNull(),
+  actionType: text("action_type").notNull(),
+  yardId: text("yard_id"),
+  previousMappingJson: text("previous_mapping_json").notNull().default("[]"),
+  newMappingJson: text("new_mapping_json").notNull().default("[]"),
+  remarks: text("remarks"),
+  changedBy: text("changed_by"),
+  changedAt: text("changed_at").notNull(),
+});
+
 /** M-05 manual receipt type master (from Tally / business scenario workbook). */
 export const manualReceiptTypes = gapmc.table("manual_receipt_types", {
   id: text("id").primaryKey(),

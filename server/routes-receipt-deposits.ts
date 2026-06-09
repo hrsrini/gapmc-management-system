@@ -15,6 +15,10 @@ import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import {
+  listYardMappingHistory,
+  syncBankAccountYardMappings,
+} from "./bank-account-yard-mapping";
+import {
   approveReceiptDeposit,
   computeCashInHandSummary,
   createReceiptDepositBatch,
@@ -122,9 +126,13 @@ export function registerReceiptDepositRoutes(app: Express) {
       });
       const yardIds = Array.isArray(body.yardIds) ? body.yardIds.map(String) : [];
       const roleTiers = Array.isArray(body.roleTiers) ? body.roleTiers.map(String) : [];
-      for (const y of yardIds) {
-        await db.insert(gaplmbBankAccountYards).values({ bankAccountId: id, yardId: y });
-      }
+      const remarks = body.remarks ? String(body.remarks).trim() : null;
+      await syncBankAccountYardMappings({
+        bankAccountId: id,
+        newYardIds: yardIds,
+        changedBy: req.user?.id ?? null,
+        remarks: remarks || "Initial bank account setup",
+      });
       for (const r of roleTiers) {
         await db.insert(gaplmbBankAccountRoles).values({ bankAccountId: id, roleTier: r });
       }
@@ -162,11 +170,20 @@ export function registerReceiptDepositRoutes(app: Express) {
       if (body.isActive !== undefined) updates.isActive = Boolean(body.isActive);
       await db.update(gaplmbBankAccounts).set(updates as Record<string, string | boolean>).where(eq(gaplmbBankAccounts.id, id));
 
+      let yardIdsAfter = await db
+        .select({ yardId: gaplmbBankAccountYards.yardId })
+        .from(gaplmbBankAccountYards)
+        .where(eq(gaplmbBankAccountYards.bankAccountId, id))
+        .then((rows) => rows.map((r) => r.yardId));
       if (Array.isArray(body.yardIds)) {
-        await db.delete(gaplmbBankAccountYards).where(eq(gaplmbBankAccountYards.bankAccountId, id));
-        for (const y of body.yardIds.map(String)) {
-          await db.insert(gaplmbBankAccountYards).values({ bankAccountId: id, yardId: y });
-        }
+        const remarks = body.remarks ? String(body.remarks).trim() : null;
+        const synced = await syncBankAccountYardMappings({
+          bankAccountId: id,
+          newYardIds: body.yardIds.map(String),
+          changedBy: req.user?.id ?? null,
+          remarks,
+        });
+        yardIdsAfter = synced.newYardIds;
       }
       if (Array.isArray(body.roleTiers)) {
         await db.delete(gaplmbBankAccountRoles).where(eq(gaplmbBankAccountRoles.bankAccountId, id));
@@ -176,10 +193,6 @@ export function registerReceiptDepositRoutes(app: Express) {
       }
       const [row] = await db.select().from(gaplmbBankAccounts).where(eq(gaplmbBankAccounts.id, id)).limit(1);
       if (row) {
-        const yardLinks = await db
-          .select()
-          .from(gaplmbBankAccountYards)
-          .where(eq(gaplmbBankAccountYards.bankAccountId, id));
         const roleLinks = await db
           .select()
           .from(gaplmbBankAccountRoles)
@@ -189,16 +202,76 @@ export function registerReceiptDepositRoutes(app: Express) {
           changedBy: req.user?.id ?? null,
           snapshot: {
             ...row,
-            yardIds: yardLinks.map((y) => y.yardId),
+            yardIds: yardIdsAfter,
             roleTiers: roleLinks.map((r) => r.roleTier),
           },
         });
       }
       writeAuditLog(req, { module: "Receipts", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch(() => {});
-      res.json(row);
+      res.json({ ...row, yardIds: yardIdsAfter });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update bank account");
+    }
+  });
+
+  /** FR-RCP-010: link / de-link / add / remove yard mappings with audit remarks. */
+  app.patch("/api/ioms/receipt-deposits/bank-accounts/:id/yards", async (req, res) => {
+    try {
+      const tiers = userRoleTiers(req.user);
+      if (!tiers.includes("ADMIN") && !tiers.includes("DA")) {
+        return sendApiError(res, 403, "FORBIDDEN", "Admin or DA required");
+      }
+      const id = String(req.params.id);
+      const [existing] = await db.select().from(gaplmbBankAccounts).where(eq(gaplmbBankAccounts.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "NOT_FOUND", "Bank account not found");
+      const body = req.body as Record<string, unknown>;
+      if (!Array.isArray(body.yardIds)) {
+        return sendApiError(res, 400, "YARD_IDS_REQUIRED", "yardIds array is required");
+      }
+      const synced = await syncBankAccountYardMappings({
+        bankAccountId: id,
+        newYardIds: body.yardIds.map(String),
+        changedBy: req.user?.id ?? null,
+        remarks: body.remarks ? String(body.remarks).trim() : null,
+      });
+      await db
+        .update(gaplmbBankAccounts)
+        .set({ updatedAt: nowIso() })
+        .where(eq(gaplmbBankAccounts.id, id));
+      const [row] = await db.select().from(gaplmbBankAccounts).where(eq(gaplmbBankAccounts.id, id)).limit(1);
+      if (row) {
+        await saveBankAccountVersionSnapshot({
+          bankAccountId: id,
+          changedBy: req.user?.id ?? null,
+          snapshot: { ...row, yardIds: synced.newYardIds },
+        });
+      }
+      writeAuditLog(req, {
+        module: "Receipts",
+        action: "Update",
+        recordId: id,
+        afterValue: { yardIds: synced.newYardIds, remarks: body.remarks ?? null },
+      }).catch(() => {});
+      res.json({ ...row, yardIds: synced.newYardIds });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update yard mappings");
+    }
+  });
+
+  app.get("/api/ioms/receipt-deposits/bank-accounts/:id/mapping-history", async (req, res) => {
+    try {
+      const tiers = userRoleTiers(req.user);
+      if (!tiers.includes("ADMIN") && !tiers.includes("DA") && !tiers.includes("DV") && !tiers.includes("DO")) {
+        return sendApiError(res, 403, "FORBIDDEN", "Accounts access required");
+      }
+      const id = String(req.params.id);
+      const history = await listYardMappingHistory(id);
+      res.json(history);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to list mapping history");
     }
   });
 

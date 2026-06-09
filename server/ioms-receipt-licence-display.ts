@@ -13,9 +13,29 @@ export type ReceiptLicenceFields = {
   payerRefId?: string | null;
   payerType?: string | null;
   unifiedEntityId?: string | null;
+  payerPartyType?: string | null;
   sourceModule?: string | null;
   sourceRecordId?: string | null;
 };
+
+/** Statutory PDF: licence line only for Track A (linked trader licence). */
+export function isReceiptTrackAForPdf(receipt: ReceiptLicenceFields): boolean {
+  const partyTyp = String(receipt.payerPartyType ?? "").trim();
+  if (partyTyp === "NewParty") return false;
+
+  const ue = parseUnifiedEntityId(String(receipt.unifiedEntityId ?? "").trim());
+  if (ue?.kind === "TB" || ue?.kind === "AH") return false;
+  if (ue?.kind === "TA") return true;
+
+  const typ = String(receipt.payerType ?? "").trim().toLowerCase();
+  if (typ === "trackbentity" || typ === "entity") return false;
+  if (typ === "manualparty") return false;
+  if (typ === "traderlicence" || typ === "tenantlicence") {
+    return Boolean((receipt.payerRefId ?? "").trim());
+  }
+
+  return false;
+}
 
 export type ReceiptLicenceLookupRefs = {
   traderIds: Set<string>;
