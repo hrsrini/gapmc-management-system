@@ -49,6 +49,18 @@ import {
   allocationTenancyBadge,
   formatAllocationMoney,
 } from "@/lib/premises-allocation-table";
+import {
+  TenancyVacateConfirmDialog,
+  tenancyStatusChangeNeedsConfirm,
+} from "@/components/premises/TenancyVacateConfirmDialog";
+import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
+import {
+  buildCounterDuesPaymentApiBody,
+  defaultPaymentPreferenceValue,
+  validatePaymentPreference,
+  type PaymentPreferenceValue,
+} from "@/lib/duesCounterPayment";
+import { downloadIomsReceiptPdf } from "@/lib/downloadIomsReceiptPdf";
 
 interface Entity {
   id: string;
@@ -93,6 +105,7 @@ interface Allotment {
   approvalStatus?: string | null;
   monthlyRent?: number | null;
   premisesRefNo?: string | null;
+  allotmentDate?: string | null;
   agreementDocFile?: string | null;
   rentRevisionMode?: string | null;
   agreementType?: string | null;
@@ -167,6 +180,8 @@ export default function EntityDetail() {
 
   const [open, setOpen] = useState(false);
   const [assetId, setAssetId] = useState("");
+  const [allotmentDate, setAllotmentDate] = useState("");
+  const [allotmentRefNo, setAllotmentRefNo] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [monthlyRent, setMonthlyRent] = useState("");
@@ -175,8 +190,13 @@ export default function EntityDetail() {
   const [consecutiveRenewalCount, setConsecutiveRenewalCount] = useState("0");
   const [gstApplicableDraft, setGstApplicableDraft] = useState(true);
   const [securityDeposit, setSecurityDeposit] = useState("");
+  const [securityDepositPayment, setSecurityDepositPayment] = useState<PaymentPreferenceValue>(() =>
+    defaultPaymentPreferenceValue(),
+  );
 
   const [manageRow, setManageRow] = useState<Allotment | null>(null);
+  const [mAllotmentDate, setMAllotmentDate] = useState("");
+  const [mAllotmentRefNo, setMAllotmentRefNo] = useState("");
   const [mFrom, setMFrom] = useState("");
   const [mTo, setMTo] = useState("");
   const [mRent, setMRent] = useState("");
@@ -188,6 +208,8 @@ export default function EntityDetail() {
   const [mGstDaOv, setMGstDaOv] = useState(false);
   const [tenancyVacateOn, setTenancyVacateOn] = useState("");
   const [agreementFile, setAgreementFile] = useState<File | null>(null);
+  const [pendingTenancyStatus, setPendingTenancyStatus] = useState<string | null>(null);
+  const [tenancyConfirmOpen, setTenancyConfirmOpen] = useState(false);
   const [editName, setEditName] = useState("");
   const [editSubType, setEditSubType] = useState("");
   const [editMobile, setEditMobile] = useState("");
@@ -212,6 +234,8 @@ export default function EntityDetail() {
   useEffect(() => {
     const r = manageRow;
     if (!r) return;
+    setMAllotmentDate(r.allotmentDate?.slice(0, 10) ?? localCalendarYmd());
+    setMAllotmentRefNo(r.premisesRefNo ?? "");
     setMFrom(r.fromDate ?? "");
     setMTo(r.toDate ?? "");
     setMRent(r.monthlyRent != null ? String(r.monthlyRent) : "");
@@ -229,6 +253,27 @@ export default function EntityDetail() {
     if (!entity?.subType) return;
     setGstApplicableDraft(defaultGstApplicableTrackBEntity(entity.subType));
   }, [entity?.subType, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setAllotmentDate((prev) => prev || localCalendarYmd());
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setSecurityDepositPayment(defaultPaymentPreferenceValue());
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const n = Number(securityDeposit);
+    if (!Number.isFinite(n) || n <= 0) return;
+    setSecurityDepositPayment((p) => ({ ...p, paidAmount: String(Math.round(n * 100) / 100) }));
+  }, [securityDeposit, open]);
+
+  const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
+  const secDepAmount = securityDeposit.trim() ? Number(securityDeposit) : 0;
+  const showSecDepPayment = Number.isFinite(secDepAmount) && secDepAmount > 0;
 
   const updateEntityMutation = useMutation({
     mutationFn: async () => {
@@ -280,17 +325,33 @@ export default function EntityDetail() {
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: async (data) => {
       queryClient.invalidateQueries({ queryKey: [`/api/ioms/entity-allotments?entityId=${encodeURIComponent(id!)}`] });
       queryClient.invalidateQueries({ queryKey: [vacantUrl] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/receipts"] });
+
+      const receipt = data?.securityDepositReceipt as { receiptId?: string; receiptNo?: string } | null | undefined;
+      let description = "Upload the agreement copy (PDF), then DV verifies and DA approves.";
+      if (receipt?.receiptId && receipt?.receiptNo) {
+        try {
+          await downloadIomsReceiptPdf(receipt.receiptId, receipt.receiptNo);
+          description = `Security deposit receipt ${receipt.receiptNo} issued and downloaded. ${description}`;
+        } catch {
+          description = `Security deposit receipt ${receipt.receiptNo} issued. Open Receipts to download the PDF if needed. ${description}`;
+        }
+      }
+
       toast({
         title: "Draft allocation created",
-        description: "Upload the notarised agreement PDF, then DV verifies and DA approves.",
+        description,
       });
       setOpen(false);
       setSecurityDeposit("");
+      setSecurityDepositPayment(defaultPaymentPreferenceValue());
       setMonthlyRent("");
       setAssetId("");
+      setAllotmentDate("");
+      setAllotmentRefNo("");
       setAgreementTypeOverride("__auto__");
       setConsecutiveRenewalCount("0");
     },
@@ -584,7 +645,7 @@ export default function EntityDetail() {
               <div>
                 <CardTitle>Premises allocations ({allotments.length})</CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  DO drafts an allocation with rent and dates; DV verifies once the notarised PDF is uploaded; DA approves and assigns the premises reference.
+                  DO drafts an allocation with rent and dates; DV verifies once the agreement copy (PDF) is uploaded; DA approves and assigns the premises reference.
                 </p>
               </div>
               {canCreate && (
@@ -652,6 +713,18 @@ export default function EntityDetail() {
               <p className="text-xs text-muted-foreground">Taken from the entity record.</p>
             </div>
             <div className="space-y-1">
+              <Label>Allotment date *</Label>
+              <Input type="date" value={allotmentDate} onChange={(e) => setAllotmentDate(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label>Allotment reference no.</Label>
+              <Input
+                value={allotmentRefNo}
+                onChange={(e) => setAllotmentRefNo(e.target.value)}
+                placeholder="Optional"
+              />
+            </div>
+            <div className="space-y-1">
               <Label>Agreement from *</Label>
               <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
             </div>
@@ -680,7 +753,7 @@ export default function EntityDetail() {
               </Select>
             </div>
             <div className="space-y-1">
-              <Label>Monthly rent *</Label>
+              <Label>Monthly Rent (Rs.) *</Label>
               <Input value={monthlyRent} onChange={(e) => setMonthlyRent(e.target.value)} inputMode="decimal" placeholder="> 0" />
             </div>
             <div className="space-y-1 md:col-span-2">
@@ -706,6 +779,21 @@ export default function EntityDetail() {
               <Label>Security deposit (₹)</Label>
               <Input value={securityDeposit} onChange={(e) => setSecurityDeposit(e.target.value)} inputMode="decimal" />
             </div>
+            {showSecDepPayment ? (
+              <div className="md:col-span-2 rounded-md border p-3 bg-muted/20">
+                <p className="text-sm font-medium mb-2">Security deposit payment</p>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Record how the deposit was received. A paid receipt is issued immediately when you create the draft.
+                </p>
+                <PaymentPreferenceForm
+                  value={securityDepositPayment}
+                  onChange={setSecurityDepositPayment}
+                  receivedByLabel={receivedByLabel}
+                  receivedAtLabel={yardDisplayName}
+                  summaryAmount={String(secDepAmount)}
+                />
+              </div>
+            ) : null}
             {entity?.subType === "AdHocOccupant" ? (
               <div className="md:col-span-2 flex items-start gap-3 rounded-md border p-3">
                 <Checkbox
@@ -732,6 +820,7 @@ export default function EntityDetail() {
                 createMutation.isPending ||
                 !assetId ||
                 !entity?.name?.trim() ||
+                !allotmentDate ||
                 !fromDate ||
                 !toDate ||
                 !Number.isFinite(Number(monthlyRent)) ||
@@ -742,6 +831,7 @@ export default function EntityDetail() {
                 const body: Record<string, unknown> = {
                   assetId,
                   entityId: id,
+                  allotmentDate,
                   fromDate,
                   toDate,
                   monthlyRent: mr,
@@ -750,7 +840,18 @@ export default function EntityDetail() {
                   securityDeposit: securityDeposit.trim() ? Number(securityDeposit) : null,
                 };
                 if (agreementTypeOverride !== "__auto__") body.agreementType = agreementTypeOverride;
+                if (allotmentRefNo.trim()) body.premisesRefNo = allotmentRefNo.trim();
                 if (entity?.subType === "AdHocOccupant") body.gstApplicable = gstApplicableDraft;
+                const secAmt = securityDeposit.trim() ? Number(securityDeposit) : 0;
+                if (Number.isFinite(secAmt) && secAmt > 0) {
+                  const pref = { ...securityDepositPayment, paidAmount: securityDeposit };
+                  const prefErr = validatePaymentPreference(pref);
+                  if (prefErr) {
+                    toast({ title: "Security deposit payment", description: prefErr, variant: "destructive" });
+                    return;
+                  }
+                  Object.assign(body, buildCounterDuesPaymentApiBody(pref, secAmt));
+                }
                 createMutation.mutate(body);
               }}
             >
@@ -807,6 +908,14 @@ export default function EntityDetail() {
                       <Input value={entity?.name ?? manageRow.allotteeName ?? ""} readOnly className="bg-muted/50" />
                     </div>
                     <div className="space-y-1">
+                      <Label>Allotment date</Label>
+                      <Input type="date" value={mAllotmentDate} onChange={(e) => setMAllotmentDate(e.target.value)} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Allotment reference no.</Label>
+                      <Input value={mAllotmentRefNo} onChange={(e) => setMAllotmentRefNo(e.target.value)} />
+                    </div>
+                    <div className="space-y-1">
                       <Label>Agreement from</Label>
                       <Input type="date" value={mFrom} onChange={(e) => setMFrom(e.target.value)} />
                     </div>
@@ -815,7 +924,7 @@ export default function EntityDetail() {
                       <Input type="date" value={mTo} onChange={(e) => setMTo(e.target.value)} />
                     </div>
                     <div className="space-y-1 md:col-span-2">
-                      <Label>Monthly rent</Label>
+                      <Label>Monthly Rent (Rs.)</Label>
                       <Input value={mRent} onChange={(e) => setMRent(e.target.value)} inputMode="decimal" />
                     </div>
                     <div className="space-y-1 md:col-span-2">
@@ -854,6 +963,8 @@ export default function EntityDetail() {
                           patchAllotMutation.mutate({
                             allocId: manageRow.id,
                             body: {
+                              allotmentDate: mAllotmentDate,
+                              premisesRefNo: mAllotmentRefNo.trim() || null,
                               fromDate: mFrom,
                               toDate: mTo,
                               monthlyRent: Number(mRent),
@@ -872,7 +983,7 @@ export default function EntityDetail() {
                 {["Draft", "Rejected"].includes(String(manageRow.approvalStatus ?? "")) &&
                 (tiers.has("DO") || tiers.has("ADMIN")) ? (
                   <div className="border-t pt-3 space-y-2">
-                    <Label>Upload notarised agreement (PDF)</Label>
+                    <Label>Upload Agreement Copy (PDF)</Label>
                     <Input
                       type="file"
                       accept="application/pdf"
@@ -1047,6 +1158,13 @@ export default function EntityDetail() {
                             });
                             return;
                           }
+                        }
+                        if (tenancyStatusChangeNeedsConfirm(cur, v)) {
+                          setPendingTenancyStatus(v);
+                          setTenancyConfirmOpen(true);
+                          return;
+                        }
+                        if (v === "Vacated") {
                           patchAllotMutation.mutate({
                             allocId: manageRow.id,
                             body: { status: v, toDate: tenancyVacateOn },
@@ -1087,6 +1205,42 @@ export default function EntityDetail() {
                   Close
                 </Button>
               </DialogFooter>
+
+              <TenancyVacateConfirmDialog
+                open={tenancyConfirmOpen}
+                onOpenChange={(o) => {
+                  setTenancyConfirmOpen(o);
+                  if (!o) setPendingTenancyStatus(null);
+                }}
+                allotteeName={entity?.name ?? manageRow.allotteeName ?? ""}
+                premisesName={formatPremisesAssetLabel(manageRow.assetId, assetDisplayById, manageRow.premisesRefNo)}
+                loading={patchAllotMutation.isPending}
+                onConfirm={() => {
+                  const v = pendingTenancyStatus;
+                  if (!v || !manageRow) return;
+                  if (v === "Vacated") {
+                    patchAllotMutation.mutate(
+                      { allocId: manageRow.id, body: { status: v, toDate: tenancyVacateOn } },
+                      {
+                        onSettled: () => {
+                          setTenancyConfirmOpen(false);
+                          setPendingTenancyStatus(null);
+                        },
+                      },
+                    );
+                  } else {
+                    patchAllotMutation.mutate(
+                      { allocId: manageRow.id, body: { status: v } },
+                      {
+                        onSettled: () => {
+                          setTenancyConfirmOpen(false);
+                          setPendingTenancyStatus(null);
+                        },
+                      },
+                    );
+                  }
+                }}
+              />
             </>
           )}
         </DialogContent>

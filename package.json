@@ -79,6 +79,8 @@
     "db:backfill-pre-receipt-billing": "dotenv -e .env -- tsx scripts/backfill-pre-receipt-billing.ts",
     "db:apply-m02-unified-entities-rent-revisions": "dotenv -e .env -- tsx scripts/apply-m02-unified-entities-rent-revisions.ts",
     "db:apply-m02-premises-allocation-us-m02-003": "dotenv -e .env -- tsx scripts/apply-m02-premises-allocation-us-m02-003.ts",
+    "db:apply-m02-premises-master-fields": "dotenv -e .env -- tsx scripts/apply-m02-premises-master-fields.ts",
+    "db:apply-m02-allotment-date": "dotenv -e .env -- tsx scripts/apply-m02-allotment-date.ts",
     "db:apply-m02-licence-renewal-parent": "dotenv -e .env -- tsx scripts/apply-m02-licence-renewal-parent.ts",
     "db:apply-m03-rent-revision-workflow": "dotenv -e .env -- tsx scripts/apply-m03-rent-revision-workflow.ts",
     "db:backfill-rent-invoice-numbers": "dotenv -e .env -- tsx scripts/backfill-rent-invoice-numbers.ts",

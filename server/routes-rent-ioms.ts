@@ -21,6 +21,7 @@ import {
   yards,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
+import { hasPermission } from "./auth";
 import {
   canCreateRentInvoice,
   canRunM03RentArrearsInterest,
@@ -365,11 +366,27 @@ export function registerRentIomsRoutes(app: Express) {
       const paid = paidMap.get(id) ?? 0;
       const total = Number(inv.totalAmount ?? 0);
       const outstandingRent = Math.max(0, Math.round((total - paid) * 100) / 100);
+      const interestRows = await db
+        .select()
+        .from(rentDepositLedger)
+        .where(and(eq(rentDepositLedger.invoiceId, id), eq(rentDepositLedger.entryType, "Interest")));
+      const unpaidInterestLedgerEntryIds: string[] = [];
+      let outstandingInterest = 0;
+      for (const row of interestRows) {
+        if (String(row.interestPaymentStatus ?? "").trim() === "Paid") continue;
+        const debit = Number(row.debit ?? 0);
+        if (debit <= 0.005) continue;
+        outstandingInterest += debit;
+        unpaidInterestLedgerEntryIds.push(row.id);
+      }
+      outstandingInterest = Math.round(outstandingInterest * 100) / 100;
       res.json({
         invoiceId: id,
         invoiceNo: inv.invoiceNo ?? null,
         yardId: inv.yardId,
         outstandingRent,
+        outstandingInterest,
+        unpaidInterestLedgerEntryIds,
         isGovtEntity: Boolean(inv.isGovtEntity),
         status: inv.status,
       });
@@ -1492,12 +1509,16 @@ export function registerRentIomsRoutes(app: Express) {
    */
   app.post("/api/ioms/rent/ledger/record-payment", async (req, res) => {
     try {
-      if (!canRunM03RentArrearsInterest(req.user) && !canCreateRentInvoice(req.user)) {
+      const canPay =
+        canRunM03RentArrearsInterest(req.user) ||
+        canCreateRentInvoice(req.user) ||
+        hasPermission(req.user, "M-03", "Update");
+      if (!canPay) {
         return sendApiError(
           res,
           403,
           "LEDGER_PAYMENT_DENIED",
-          "Only Data Originator, Data Approver, or Admin can record rent deposit ledger payments",
+          "Insufficient permission to record rent / interest counter payments (M-03 Update or rent desk role required)",
         );
       }
       const body = req.body as Record<string, unknown>;

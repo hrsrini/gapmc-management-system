@@ -34,13 +34,53 @@ import {
   RefreshCcw,
   Loader2,
 } from 'lucide-react';
-import { legacyRowMatchesSelectedApiYard } from '@/lib/legacyYardMatch';
+import { legacyRowMatchesSelectedApiYard, type ApiYardRef } from '@/lib/legacyYardMatch';
 import { useScopedActiveYards } from '@/hooks/useScopedActiveYards';
 import { apiRequest, queryClient } from '@/lib/queryClient';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/context/AuthContext';
 import { formatInr } from "@/lib/formatInr";
 import type { Receipt } from '@shared/schema';
+import { normalizeLedgerName, revenueHeadForLedgerName } from '@shared/manual-receipt-types';
+import type { ReceiptRevenueHeadOption } from '@shared/receipt-revenue-head-options';
+
+type ReceiptRow = Receipt & { iomsYardId?: string };
+
+function normLocationName(n: string): string {
+  return String(n).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function locationTypeSuffix(type: string | null | undefined): string {
+  const t = String(type ?? '').trim();
+  if (t === 'HO') return 'HO';
+  if (t === 'CheckPost') return 'Check-post';
+  if (t === 'Yard') return 'Yard';
+  return t;
+}
+
+function receiptMatchesLocation(receipt: ReceiptRow, selectedLocationId: string, yards: ApiYardRef[]): boolean {
+  if (selectedLocationId === 'all') return true;
+  if (receipt.iomsYardId && receipt.iomsYardId === selectedLocationId) return true;
+  if (legacyRowMatchesSelectedApiYard(receipt.yardId, receipt.yardName, selectedLocationId, yards)) {
+    return true;
+  }
+  const loc = yards.find((y) => y.id === selectedLocationId);
+  if (loc?.name && receipt.yardName) {
+    return normLocationName(receipt.yardName) === normLocationName(loc.name);
+  }
+  return false;
+}
+
+function receiptMatchesRevenueHead(receipt: ReceiptRow, selectedHead: string): boolean {
+  if (selectedHead === 'all') return true;
+  const head = normalizeLedgerName(receipt.head);
+  const sel = normalizeLedgerName(selectedHead);
+  if (!head || !sel) return false;
+  if (head.toLowerCase() === sel.toLowerCase()) return true;
+  if (head === revenueHeadForLedgerName(selectedHead)) return true;
+  if (revenueHeadForLedgerName(head) === sel) return true;
+  return false;
+}
 
 const typeColors: Record<string, string> = {
   Rent: 'bg-primary/10 text-primary border-primary/20',
@@ -58,7 +98,7 @@ const receiptColumns: ReportTableColumn[] = [
   { key: 'receiptDate', header: 'Date' },
   { key: '_type', header: 'Type', sortField: 'type' },
   { key: 'traderName', header: 'Trader' },
-  { key: 'head', header: 'Head' },
+  { key: 'head', header: 'Revenue head (Tally)' },
   { key: '_total', header: 'Amount', sortField: 'total' },
   { key: 'paymentMode', header: 'Mode' },
   { key: 'issuedBy', header: 'Issued By' },
@@ -69,8 +109,8 @@ export default function ReceiptList() {
   const { toast } = useToast();
   const { can } = useAuth();
   const canDelete = can('M-05', 'Delete');
-  const [selectedYard, setSelectedYard] = useState<string>('all');
-  const [selectedType, setSelectedType] = useState<string>('all');
+  const [selectedLocation, setSelectedLocation] = useState<string>('all');
+  const [selectedRevenueHead, setSelectedRevenueHead] = useState<string>('all');
   const [deleteTarget, setDeleteTarget] = useState<Receipt | null>(null);
   const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
 
@@ -113,6 +153,24 @@ export default function ReceiptList() {
 
   const { data: yards = [] } = useScopedActiveYards();
 
+  const { data: revenueHeadCatalog = [] } = useQuery<ReceiptRevenueHeadOption[]>({
+    queryKey: ['/api/ioms/reference/receipt-revenue-heads'],
+  });
+
+  const revenueHeadOptions = useMemo(() => {
+    const seen = new Set(revenueHeadCatalog.map((o) => o.value.toLowerCase()));
+    const extras: ReceiptRevenueHeadOption[] = [];
+    for (const receipt of receipts ?? []) {
+      const value = normalizeLedgerName(receipt.head);
+      if (!value) continue;
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      extras.push({ value, label: value });
+    }
+    return [...revenueHeadCatalog, ...extras].sort((a, b) => a.label.localeCompare(b.label));
+  }, [revenueHeadCatalog, receipts]);
+
   const voidMutation = useMutation({
     mutationFn: (id: string) => apiRequest('PUT', `/api/receipts/${id}`, { status: 'Voided' }),
     onSuccess: () => {
@@ -138,16 +196,12 @@ export default function ReceiptList() {
 
   const filteredReceipts = useMemo(() => {
     return (receipts ?? []).filter((receipt) => {
-      const matchesYard = legacyRowMatchesSelectedApiYard(
-        receipt.yardId,
-        receipt.yardName,
-        selectedYard,
-        yards,
-      );
-      const matchesType = selectedType === 'all' || receipt.type === selectedType;
-      return matchesYard && matchesType;
+      const row = receipt as ReceiptRow;
+      const matchesLocation = receiptMatchesLocation(row, selectedLocation, yards);
+      const matchesRevenueHead = receiptMatchesRevenueHead(row, selectedRevenueHead);
+      return matchesLocation && matchesRevenueHead;
     });
-  }, [receipts, selectedYard, selectedType, yards]);
+  }, [receipts, selectedLocation, selectedRevenueHead, yards]);
 
   const sourceRows = useMemo((): Record<string, unknown>[] => {
     return filteredReceipts.map((receipt) => ({
@@ -226,7 +280,7 @@ export default function ReceiptList() {
     }));
   }, [filteredReceipts, voidMutation, canDelete, deleteMutation.isPending, downloadReceiptPdf, pdfLoadingId]);
 
-  const filterKey = `${selectedYard}|${selectedType}`;
+  const filterKey = `${selectedLocation}|${selectedRevenueHead}`;
 
   if (isError) {
     return (
@@ -261,35 +315,39 @@ export default function ReceiptList() {
         <Card>
           <CardHeader className="pb-4">
             <CardTitle className="text-base font-medium">Filters</CardTitle>
-            <p className="text-sm text-muted-foreground">Use the grid search for receipt number, trader, head, etc.</p>
+            <p className="text-sm text-muted-foreground">
+              Use the grid search for receipt number, trader, revenue head, etc.
+            </p>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Select value={selectedType} onValueChange={setSelectedType}>
+              <Select value={selectedRevenueHead} onValueChange={setSelectedRevenueHead}>
                 <SelectTrigger data-testid="select-type">
-                  <SelectValue placeholder="Receipt Type" />
+                  <SelectValue placeholder="All Types" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="max-h-72">
                   <SelectItem value="all">All Types</SelectItem>
-                  <SelectItem value="Rent">Rent</SelectItem>
-                  <SelectItem value="Market Fee">Market Fee</SelectItem>
-                  <SelectItem value="License Fee">License Fee</SelectItem>
-                  <SelectItem value="Other">Other</SelectItem>
+                  {revenueHeadOptions.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
-              <Select value={selectedYard} onValueChange={setSelectedYard}>
-                <SelectTrigger data-testid="select-yard">
-                  <SelectValue placeholder="Select Yard" />
+              <Select value={selectedLocation} onValueChange={setSelectedLocation}>
+                <SelectTrigger data-testid="select-location">
+                  <SelectValue placeholder="Select location" />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Yards</SelectItem>
-                  {yards
-                    .filter((y) => String(y.type ?? '').toLowerCase() === 'yard')
-                    .map((yard) => (
+                <SelectContent className="max-h-72">
+                  <SelectItem value="all">All locations</SelectItem>
+                  {yards.map((yard) => {
+                    const suffix = locationTypeSuffix(yard.type);
+                    return (
                       <SelectItem key={yard.id} value={yard.id}>
-                        {yard.name}
+                        {suffix ? `${yard.name} (${suffix})` : yard.name}
                       </SelectItem>
-                    ))}
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>

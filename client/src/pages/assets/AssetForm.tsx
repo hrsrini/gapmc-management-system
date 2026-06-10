@@ -13,16 +13,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { invalidatePremisesRegisterQueries } from "@/lib/premisesRegisterCache";
 import { Building2, Loader2, AlertCircle } from "lucide-react";
-import { PREMISES_STATUS_VALUES } from "@shared/premises-allocation";
+import { PREMISES_STATUS_VALUES, premisesStatusLabel } from "@shared/premises-allocation";
+import {
+  PREMISES_LOCATION_VALUES,
+  PREMISES_TYPE_VALUES,
+  PROPERTY_TAX_AUTHORITY_VALUES,
+  UTILITY_CONNECTION_VALUES,
+  migrateLegacyPremisesType,
+} from "@shared/premises-master";
 
 interface Yard {
   id: string;
   code?: string | null;
   name?: string | null;
-  /** Yard | CheckPost | HO — premises master uses Yard rows only. */
   type?: string | null;
 }
 
@@ -31,16 +37,19 @@ interface Asset {
   assetId: string;
   yardId: string;
   assetType: string;
-  complexName?: string | null;
+  premisesLocation?: string | null;
+  propertyTaxAuthority?: string | null;
+  houseNo?: string | null;
+  electricityConnectionType?: string | null;
+  contractAccountNo?: string | null;
+  waterConnectionType?: string | null;
+  consumerId?: string | null;
   area?: string | null;
   value?: number | null;
   fileNumber?: string | null;
   orderNumber?: string | null;
-  isActive?: boolean | null;
   premisesStatus?: string | null;
 }
-
-const ASSET_TYPES = ["Shop", "Stall", "Godown", "Office", "Building"];
 
 export default function AssetForm() {
   const { id } = useParams<{ id: string }>();
@@ -51,14 +60,19 @@ export default function AssetForm() {
 
   const [assetId, setAssetId] = useState("");
   const [yardId, setYardId] = useState("");
-  const [assetType, setAssetType] = useState("Shop");
-  const [complexName, setComplexName] = useState("");
+  const [assetType, setAssetType] = useState<string>("Shop");
+  const [premisesLocation, setPremisesLocation] = useState("");
+  const [propertyTaxAuthority, setPropertyTaxAuthority] = useState("");
+  const [houseNo, setHouseNo] = useState("");
   const [area, setArea] = useState("");
   const [value, setValue] = useState("");
+  const [electricityConnectionType, setElectricityConnectionType] = useState("");
+  const [contractAccountNo, setContractAccountNo] = useState("");
+  const [waterConnectionType, setWaterConnectionType] = useState("");
+  const [consumerId, setConsumerId] = useState("");
   const [fileNumber, setFileNumber] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
-  const [isActive, setIsActive] = useState(true);
-  const [premisesStatus, setPremisesStatus] = useState<string>("Active");
+  const [premisesStatus, setPremisesStatus] = useState<string>("Vacant");
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
   const premiseYardOptions = useMemo(() => {
@@ -83,15 +97,22 @@ export default function AssetForm() {
     if (!existing) return;
     setAssetId(existing.assetId ?? "");
     setYardId(existing.yardId ?? "");
-    setAssetType(existing.assetType ?? "Shop");
-    setComplexName(existing.complexName ?? "");
+    setAssetType(migrateLegacyPremisesType(existing.assetType));
+    setPremisesLocation(existing.premisesLocation ?? "");
+    setPropertyTaxAuthority(existing.propertyTaxAuthority ?? "");
+    setHouseNo(existing.houseNo ?? "");
     setArea(existing.area ?? "");
     setValue(existing.value != null ? String(existing.value) : "");
+    setElectricityConnectionType(existing.electricityConnectionType ?? "");
+    setContractAccountNo(existing.contractAccountNo ?? "");
+    setWaterConnectionType(existing.waterConnectionType ?? "");
+    setConsumerId(existing.consumerId ?? "");
     setFileNumber(existing.fileNumber ?? "");
     setOrderNumber(existing.orderNumber ?? "");
-    setIsActive(existing.isActive !== false);
     const ps = String(existing.premisesStatus ?? "").trim();
-    setPremisesStatus(PREMISES_STATUS_VALUES.includes(ps as (typeof PREMISES_STATUS_VALUES)[number]) ? ps : "Active");
+    if (ps === "Active") setPremisesStatus("Vacant");
+    else if (PREMISES_STATUS_VALUES.includes(ps as (typeof PREMISES_STATUS_VALUES)[number])) setPremisesStatus(ps);
+    else setPremisesStatus("Vacant");
   }, [existing]);
 
   const createMutation = useMutation({
@@ -109,8 +130,7 @@ export default function AssetForm() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets/vacant"] });
+      invalidatePremisesRegisterQueries(queryClient);
       toast({ title: "Premises registered" });
       setLocation("/assets");
     },
@@ -132,7 +152,7 @@ export default function AssetForm() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets"] });
+      invalidatePremisesRegisterQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets", id] });
       toast({ title: "Premises updated" });
       setLocation("/assets");
@@ -140,24 +160,34 @@ export default function AssetForm() {
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!assetId.trim() || !yardId) {
-      toast({ title: "Validation", description: "Asset ID and Yard are required.", variant: "destructive" });
-      return;
-    }
+  const buildPayload = (): Record<string, unknown> => {
     const payload: Record<string, unknown> = {
       assetId: assetId.trim(),
       yardId,
       assetType,
-      complexName: complexName.trim() || null,
+      premisesLocation: premisesLocation || null,
+      propertyTaxAuthority: propertyTaxAuthority || null,
+      houseNo: houseNo.trim() || null,
       area: area.trim() || null,
       value: value ? Number(value) : null,
+      electricityConnectionType: electricityConnectionType || null,
+      contractAccountNo: contractAccountNo.trim() || null,
+      waterConnectionType: waterConnectionType || null,
+      consumerId: consumerId.trim() || null,
       fileNumber: fileNumber.trim() || null,
       orderNumber: orderNumber.trim() || null,
-      isActive,
-      premisesStatus,
     };
+    if (isEdit) payload.premisesStatus = premisesStatus;
+    return payload;
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!assetId.trim() || !yardId) {
+      toast({ title: "Validation", description: "Premises ID and Yard are required.", variant: "destructive" });
+      return;
+    }
+    const payload = buildPayload();
     if (isEdit) updateMutation.mutate(payload);
     else createMutation.mutate(payload);
   };
@@ -201,21 +231,21 @@ export default function AssetForm() {
         { label: isEdit ? "Edit premises" : "Premises master registration" },
       ]}
     >
-      <Card className="max-w-3xl">
+      <Card className="max-w-4xl">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Building2 className="h-5 w-5" />
             {isEdit ? "Edit Premises (M-02)" : "Premises Master Registration (M-02)"}
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Register a physical unit (shop/stall/godown/office). Asset ID format: [LOC]/[TYPE]-[NNN].
+            Register a physical unit (shop, stall, godown, office, shed, etc.). Premises ID format: [LOC]/[TYPE]-[NNN].
           </p>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Asset ID *</Label>
+                <Label>Premises ID *</Label>
                 <Input
                   value={assetId}
                   onChange={(e) => setAssetId(e.target.value)}
@@ -248,8 +278,8 @@ export default function AssetForm() {
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    {ASSET_TYPES.map((t) => (
+                  <SelectContent className="max-h-72">
+                    {PREMISES_TYPE_VALUES.map((t) => (
                       <SelectItem key={t} value={t}>
                         {t}
                       </SelectItem>
@@ -258,33 +288,73 @@ export default function AssetForm() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Premises status</Label>
-                <Select value={premisesStatus} onValueChange={setPremisesStatus}>
+                <Label>Premises location</Label>
+                <Select value={premisesLocation || "__none__"} onValueChange={(v) => setPremisesLocation(v === "__none__" ? "" : v)}>
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder="Select location" />
                   </SelectTrigger>
                   <SelectContent>
-                    {PREMISES_STATUS_VALUES.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {s === "UnsafeForOccupation" ? "Unsafe for occupation" : s}
+                    <SelectItem value="__none__">—</SelectItem>
+                    {PREMISES_LOCATION_VALUES.map((loc) => (
+                      <SelectItem key={loc} value={loc}>
+                        {loc}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Premises status</Label>
+                {isEdit ? (
+                  <Select value={premisesStatus} onValueChange={setPremisesStatus}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PREMISES_STATUS_VALUES.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          {premisesStatusLabel(s)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input value="Vacant" readOnly disabled className="bg-muted" />
+                )}
                 <p className="text-xs text-muted-foreground">
-                  Only <span className="font-medium text-foreground">Active</span> premises can receive a new allocation.
+                  Only <span className="font-medium text-foreground">Vacant</span> premises are available for new allotment.
+                  New entries default to Vacant.
                 </p>
               </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2 md:col-span-2">
-                <Label>Complex name</Label>
-                <Input value={complexName} onChange={(e) => setComplexName(e.target.value)} placeholder="Optional" />
+              <div className="space-y-2">
+                <Label>Property Tax Authority</Label>
+                <Select
+                  value={propertyTaxAuthority || "__none__"}
+                  onValueChange={(v) => setPropertyTaxAuthority(v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select authority" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">—</SelectItem>
+                    {PROPERTY_TAX_AUTHORITY_VALUES.map((a) => (
+                      <SelectItem key={a} value={a}>
+                        {a}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>House No.</Label>
+                <Input value={houseNo} onChange={(e) => setHouseNo(e.target.value)} placeholder="Optional" />
+              </div>
               <div className="space-y-2">
                 <Label>Area (sq. meters)</Label>
                 <Input value={area} onChange={(e) => setArea(e.target.value)} placeholder="Optional" />
@@ -293,21 +363,66 @@ export default function AssetForm() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Valuation</Label>
+                <Label>Rent as Per Valuation Report (Rs.)</Label>
                 <Input type="number" min="0" step="0.01" value={value} onChange={(e) => setValue(e.target.value)} placeholder="Optional" />
-              </div>
-              <div className="space-y-2 flex items-end justify-between gap-3 rounded-md border p-3">
-                <div>
-                  <Label>Status</Label>
-                  <div className="text-sm text-muted-foreground">{isActive ? "Active" : "Inactive"}</div>
-                </div>
-                <Switch checked={isActive} onCheckedChange={setIsActive} />
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>File number</Label>
+                <Label>Electricity Connection Type</Label>
+                <Select
+                  value={electricityConnectionType || "__none__"}
+                  onValueChange={(v) => setElectricityConnectionType(v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">—</SelectItem>
+                    {UTILITY_CONNECTION_VALUES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Contract Account No.</Label>
+                <Input value={contractAccountNo} onChange={(e) => setContractAccountNo(e.target.value)} placeholder="Optional" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Water Connection Type</Label>
+                <Select
+                  value={waterConnectionType || "__none__"}
+                  onValueChange={(v) => setWaterConnectionType(v === "__none__" ? "" : v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">—</SelectItem>
+                    {UTILITY_CONNECTION_VALUES.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {c}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Consumer ID</Label>
+                <Input value={consumerId} onChange={(e) => setConsumerId(e.target.value)} placeholder="Optional" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Admin. File Number</Label>
                 <Input value={fileNumber} onChange={(e) => setFileNumber(e.target.value)} placeholder="Optional" />
               </div>
               <div className="space-y-2">
@@ -331,4 +446,3 @@ export default function AssetForm() {
     </AppShell>
   );
 }
-

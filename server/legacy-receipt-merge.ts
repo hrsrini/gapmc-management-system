@@ -86,6 +86,8 @@ function mapEnrichedIomsRow(
     traderId: String(r.payerRefId ?? r.unifiedEntityId ?? r.createdBy ?? ""),
     traderName: payerLabel,
     head: normalizeLegacyRevenueHead(r.revenueHead),
+    /** IOMS yard UUID — used by All Receipts location filter (Yard / HO / Check-post). */
+    iomsYardId: r.yardId,
     amount: Number(r.amount ?? 0),
     ...(cgst > 0 ? { cgst } : {}),
     ...(sgst > 0 ? { sgst } : {}),

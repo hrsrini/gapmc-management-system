@@ -34,19 +34,16 @@ import {
   userRoleTiers,
   verifyReceiptDeposit,
 } from "./receipt-deposit-service";
+import {
+  buildCashInHandLocationContext,
+  CashInHandYardAccessError,
+  isHeadOfficeScopedRequest,
+  resolveCashInHandYardIds,
+  yardAllowedForCashInHand,
+} from "./receipt-deposit-location-scope";
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function scopedYardIds(req: Request): string[] {
-  const scoped = req.scopedLocationIds;
-  return scoped && scoped.length > 0 ? scoped : [];
-}
-
-function yardInScope(req: Request, yardId: string): boolean {
-  const scoped = scopedYardIds(req);
-  return scoped.length === 0 || scoped.includes(yardId);
 }
 
 export function registerReceiptDepositRoutes(app: Express) {
@@ -55,15 +52,14 @@ export function registerReceiptDepositRoutes(app: Express) {
     try {
       const yardId = String(req.query.yardId ?? "").trim();
       const tiers = userRoleTiers(req.user);
-      let yardIds = scopedYardIds(req);
-      if (yardId) {
-        if (!yardInScope(req, yardId)) {
+      let yardIds: string[];
+      try {
+        yardIds = await resolveCashInHandYardIds(req, yardId || undefined);
+      } catch (e) {
+        if (e instanceof CashInHandYardAccessError) {
           return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "Yard access denied");
         }
-        yardIds = [yardId];
-      }
-      if (yardIds.length === 0 && tiers.includes("ADMIN")) {
-        yardIds = []; // admin sees all when no scope
+        throw e;
       }
       const list = await listBankAccountsForUser({
         yardIds,
@@ -311,15 +307,27 @@ export function registerReceiptDepositRoutes(app: Express) {
   });
 
   // ----- Undeposited receipts & cash-in-hand (SCR-RCP-05 / SCR-RCP-06) -----
+  app.get("/api/ioms/receipt-deposits/cash-in-hand/locations", async (req, res) => {
+    try {
+      const ctx = await buildCashInHandLocationContext(req);
+      res.json(ctx);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load cash-in-hand locations");
+    }
+  });
+
   app.get("/api/ioms/receipt-deposits/undeposited", async (req, res) => {
     try {
       const yardId = String(req.query.yardId ?? "").trim();
-      let yardIds = scopedYardIds(req);
-      if (yardId) {
-        if (!yardInScope(req, yardId)) {
+      let yardIds: string[];
+      try {
+        yardIds = await resolveCashInHandYardIds(req, yardId || undefined);
+      } catch (e) {
+        if (e instanceof CashInHandYardAccessError) {
           return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "Yard access denied");
         }
-        yardIds = [yardId];
+        throw e;
       }
       const from = String(req.query.from ?? "").trim().slice(0, 10);
       const to = String(req.query.to ?? "").trim().slice(0, 10);
@@ -338,16 +346,14 @@ export function registerReceiptDepositRoutes(app: Express) {
   app.get("/api/ioms/receipt-deposits/cash-in-hand", async (req, res) => {
     try {
       const yardId = String(req.query.yardId ?? "").trim();
-      const tiers = userRoleTiers(req.user);
-      let yardIds = scopedYardIds(req);
-      if (yardId) {
-        if (!yardInScope(req, yardId)) {
+      let yardIds: string[];
+      try {
+        yardIds = await resolveCashInHandYardIds(req, yardId || undefined);
+      } catch (e) {
+        if (e instanceof CashInHandYardAccessError) {
           return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "Yard access denied");
         }
-        yardIds = [yardId];
-      }
-      if (isDvOrDa(tiers) && !yardId && yardIds.length === 0) {
-        // DV/DA consolidated: all yards (no scope filter)
+        throw e;
       }
       const cfg = await getMergedSystemConfig();
       const maxDays = parseSystemConfigNumber(cfg, "receipt_deposit_carry_forward_days");
@@ -384,12 +390,18 @@ export function registerReceiptDepositRoutes(app: Express) {
     try {
       const yardId = String(req.query.yardId ?? "").trim();
       const status = String(req.query.status ?? "").trim();
-      let yardIds = scopedYardIds(req);
-      if (yardId) {
-        if (!yardInScope(req, yardId)) {
+      let yardIds: string[];
+      try {
+        yardIds = await resolveCashInHandYardIds(req, yardId || undefined);
+      } catch (e) {
+        if (e instanceof CashInHandYardAccessError) {
           return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "Yard access denied");
         }
-        yardIds = [yardId];
+        throw e;
+      }
+      const ho = await isHeadOfficeScopedRequest(req);
+      if (!yardId && ho) {
+        yardIds = [];
       }
       const conds = [];
       if (yardIds.length > 0) conds.push(inArray(receiptDeposits.yardId, yardIds));
@@ -415,7 +427,7 @@ export function registerReceiptDepositRoutes(app: Express) {
       const id = String(req.params.id);
       const [dep] = await db.select().from(receiptDeposits).where(eq(receiptDeposits.id, id)).limit(1);
       if (!dep) return sendApiError(res, 404, "NOT_FOUND", "Deposit not found");
-      if (!yardInScope(req, dep.yardId)) {
+      if (!(await yardAllowedForCashInHand(req, dep.yardId))) {
         return sendApiError(res, 404, "NOT_FOUND", "Deposit not found");
       }
       res.json(await enrichDepositRecord(dep));
@@ -435,7 +447,7 @@ export function registerReceiptDepositRoutes(app: Express) {
       if (!yardId || !bankAccountId) {
         return sendApiError(res, 400, "DEPOSIT_FIELDS", "yardId and bankAccountId are required");
       }
-      if (!yardInScope(req, yardId)) {
+      if (!(await yardAllowedForCashInHand(req, yardId))) {
         return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "Yard access denied");
       }
       const createdBy = req.user?.id ?? "system";
@@ -466,7 +478,7 @@ export function registerReceiptDepositRoutes(app: Express) {
       const id = String(req.params.id);
       const body = req.body as Record<string, unknown>;
       const [dep] = await db.select().from(receiptDeposits).where(eq(receiptDeposits.id, id)).limit(1);
-      if (!dep || !yardInScope(req, dep.yardId)) {
+      if (!dep || !(await yardAllowedForCashInHand(req, dep.yardId))) {
         return sendApiError(res, 404, "NOT_FOUND", "Deposit not found");
       }
       await verifyReceiptDeposit({
@@ -492,7 +504,7 @@ export function registerReceiptDepositRoutes(app: Express) {
       }
       const id = String(req.params.id);
       const [dep] = await db.select().from(receiptDeposits).where(eq(receiptDeposits.id, id)).limit(1);
-      if (!dep || !yardInScope(req, dep.yardId)) {
+      if (!dep || !(await yardAllowedForCashInHand(req, dep.yardId))) {
         return sendApiError(res, 404, "NOT_FOUND", "Deposit not found");
       }
       const { ledgerMessages } = await approveReceiptDeposit({
@@ -517,7 +529,7 @@ export function registerReceiptDepositRoutes(app: Express) {
       const id = String(req.params.id);
       const body = req.body as Record<string, unknown>;
       const [dep] = await db.select().from(receiptDeposits).where(eq(receiptDeposits.id, id)).limit(1);
-      if (!dep || !yardInScope(req, dep.yardId)) {
+      if (!dep || !(await yardAllowedForCashInHand(req, dep.yardId))) {
         return sendApiError(res, 404, "NOT_FOUND", "Deposit not found");
       }
       await rejectReceiptDeposit({
@@ -542,7 +554,7 @@ export function registerReceiptDepositRoutes(app: Express) {
       const id = String(req.params.id);
       const body = req.body as Record<string, unknown>;
       const [dep] = await db.select().from(receiptDeposits).where(eq(receiptDeposits.id, id)).limit(1);
-      if (!dep || !yardInScope(req, dep.yardId)) {
+      if (!dep || !(await yardAllowedForCashInHand(req, dep.yardId))) {
         return sendApiError(res, 404, "NOT_FOUND", "Deposit not found");
       }
       const { ledgerMessages } = await reverseApprovedReceiptDeposit({

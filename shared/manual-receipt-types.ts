@@ -79,6 +79,8 @@ export const STANDARD_REVENUE_HEADS = [
   "Miscellaneous",
 ] as const;
 
+export type StandardRevenueHead = (typeof STANDARD_REVENUE_HEADS)[number];
+
 export function isStandardRevenueHead(head: string): boolean {
   return (STANDARD_REVENUE_HEADS as readonly string[]).includes(String(head ?? "").trim());
 }

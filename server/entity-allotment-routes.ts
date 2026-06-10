@@ -3,16 +3,17 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import multer from "multer";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { assets, entities, entityAllotments, iomsReceipts, yards } from "@shared/db-schema";
+import { assetAllotments, assets, entities, entityAllotments, iomsReceipts, yards } from "@shared/db-schema";
 import { unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { db, pool } from "./db";
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { routeParamString } from "./route-params";
+import { syncPremisesStatusFromTenancy } from "./premises-status-sync";
 import {
   assertPremisesNotAlreadyAllocatedActive,
   fetchAssetForAllocationGuard,
@@ -35,6 +36,10 @@ import {
   roundedMoney2,
   todayYmdUtc,
 } from "@shared/premises-allocation";
+import {
+  issueSecurityDepositReceiptOnAllotmentDraft,
+  SecurityDepositReceiptError,
+} from "./allotment-security-deposit-receipt";
 import {
   contentTypeForEntityAllotmentAgreement,
   extFromEntityAllotmentAgreementMime,
@@ -79,6 +84,21 @@ async function allocatePremisesRefNo(assetPremisesId: string, yardCode: string):
   const premisesKey = `${assetPremisesId}|${yardCode}`;
   const nn = await nextPremisesRefCounter(premisesKey);
   return `${assetPremisesId}-${yardCode}-${String(nn).padStart(2, "0")}`;
+}
+
+export async function premisesRefNoTaken(refNo: string, excludeEntityAllotId?: string, excludeAssetAllotId?: string): Promise<boolean> {
+  const ref = String(refNo ?? "").trim();
+  if (!ref) return false;
+  const entityCond = excludeEntityAllotId
+    ? and(eq(entityAllotments.premisesRefNo, ref), ne(entityAllotments.id, excludeEntityAllotId))
+    : eq(entityAllotments.premisesRefNo, ref);
+  const [entityHit] = await db.select({ id: entityAllotments.id }).from(entityAllotments).where(entityCond).limit(1);
+  if (entityHit) return true;
+  const traderCond = excludeAssetAllotId
+    ? and(eq(assetAllotments.premisesRefNo, ref), ne(assetAllotments.id, excludeAssetAllotId))
+    : eq(assetAllotments.premisesRefNo, ref);
+  const [traderHit] = await db.select({ id: assetAllotments.id }).from(assetAllotments).where(traderCond).limit(1);
+  return Boolean(traderHit);
 }
 
 async function tenantChainGapViolates(existing: EntityAllotmentRow): Promise<boolean> {
@@ -162,7 +182,7 @@ export function registerEntityAllotmentRoutes(app: Express) {
 
       const allocPrem = isPremisesAllocatable({
         isActive: assetRow.isActive,
-        premisesStatus: (assetRow as { premisesStatus?: string | null }).premisesStatus ?? "Active",
+        premisesStatus: (assetRow as { premisesStatus?: string | null }).premisesStatus ?? "Vacant",
       });
       if (!allocPrem.ok) return sendApiError(res, 400, allocPrem.code, allocPrem.message);
 
@@ -173,6 +193,15 @@ export function registerEntityAllotmentRoutes(app: Express) {
           entityAllotments: dup.entityConflicts,
           traderAllotments: dup.traderConflicts,
         });
+      }
+
+      const allotmentDate = String(body.allotmentDate ?? "").trim();
+      const adErr = ymdFieldError("Allotment date", allotmentDate, true);
+      if (adErr) return sendApiError(res, 400, "ALLOTMENT_DATE", adErr);
+
+      const premisesRefNo = body.premisesRefNo != null ? String(body.premisesRefNo).trim() : "";
+      if (premisesRefNo && (await premisesRefNoTaken(premisesRefNo))) {
+        return sendApiError(res, 400, "PREMISES_REF_DUPLICATE", "Allotment reference number is already in use.");
       }
 
       const fromDate = String(body.fromDate ?? "").trim();
@@ -235,7 +264,8 @@ export function registerEntityAllotmentRoutes(app: Express) {
         dvUser: null,
         daUser: null,
         approvalStatus: "Draft",
-        premisesRefNo: null,
+        allotmentDate,
+        premisesRefNo: premisesRefNo || null,
         monthlyRent: roundedMoney2(monthlyRent),
         gstApplicable,
         gstLocked: false,
@@ -255,7 +285,31 @@ export function registerEntityAllotmentRoutes(app: Express) {
       const [row] = await db.select().from(entityAllotments).where(eq(entityAllotments.id, id));
       if (row)
         writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error(e));
-      res.status(201).json(row);
+
+      let securityDepositReceipt: { receiptId: string; receiptNo: string } | null = null;
+      if (sec != null && Number.isFinite(sec) && sec > 0) {
+        try {
+          securityDepositReceipt = await issueSecurityDepositReceiptOnAllotmentDraft({
+            req,
+            allotmentId: id,
+            yardId: assetRow.yardId,
+            securityDepositAmount: sec,
+            payerName: allotteeName,
+            payerType: "Entity",
+            payerRefId: entityId,
+            unifiedEntityId: unifiedEntityIdFromTrackB(entityId),
+            premisesAssetId: assetRow.assetId,
+            paymentBody: body,
+          });
+        } catch (err) {
+          if (err instanceof SecurityDepositReceiptError) {
+            return sendApiError(res, 400, err.code, err.message);
+          }
+          throw err;
+        }
+      }
+
+      res.status(201).json({ ...row, securityDepositReceipt });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create entity allotment");
@@ -373,7 +427,7 @@ export function registerEntityAllotmentRoutes(app: Express) {
 
         if (currentApproval === "Draft" && newApproval === "Verified") {
           if (!existing.agreementDocFile)
-            return sendApiError(res, 400, "E-AST-011", "Notarised agreement PDF must be uploaded before DV verification.");
+            return sendApiError(res, 400, "E-AST-011", "Agreement copy (PDF) must be uploaded before DV verification.");
         }
 
         if (currentApproval === "Verified" && newApproval === "Draft") {
@@ -385,7 +439,7 @@ export function registerEntityAllotmentRoutes(app: Express) {
 
         if (newApproval === "Approved") {
           if (!existing.agreementDocFile)
-            return sendApiError(res, 400, "E-AST-011", "Notarised agreement PDF is mandatory before DA approval.");
+            return sendApiError(res, 400, "E-AST-011", "Agreement copy (PDF) is mandatory before DA approval.");
 
           const gapOv = Boolean(body.agreementGapDaOverride ?? false);
           const violates = await tenantChainGapViolates(existing);
@@ -467,6 +521,7 @@ export function registerEntityAllotmentRoutes(app: Express) {
             }
           }
 
+          await syncPremisesStatusFromTenancy(existing.assetId);
           const [after] = await db.select().from(entityAllotments).where(eq(entityAllotments.id, id));
           writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existing, afterValue: after }).catch((e) =>
             console.error(e),
@@ -552,6 +607,7 @@ export function registerEntityAllotmentRoutes(app: Express) {
           } else {
             await db.update(entityAllotments).set({ status: tenancy }).where(eq(entityAllotments.id, id));
           }
+          await syncPremisesStatusFromTenancy(existing.assetId);
           const [row] = await db.select().from(entityAllotments).where(eq(entityAllotments.id, id));
           writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) =>
             console.error(e),
@@ -572,6 +628,19 @@ export function registerEntityAllotmentRoutes(app: Express) {
         if (syncedAllottee) updates.allotteeName = syncedAllottee;
       } else if (body.allotteeName !== undefined) {
         updates.allotteeName = String(body.allotteeName ?? "").trim();
+      }
+      if (financeEditable && body.allotmentDate !== undefined) {
+        const ad = String(body.allotmentDate ?? "").trim();
+        const adErr = ymdFieldError("Allotment date", ad, true);
+        if (adErr) return sendApiError(res, 400, "ALLOTMENT_DATE", adErr);
+        updates.allotmentDate = ad;
+      }
+      if (financeEditable && body.premisesRefNo !== undefined) {
+        const ref = String(body.premisesRefNo ?? "").trim();
+        if (ref && (await premisesRefNoTaken(ref, id))) {
+          return sendApiError(res, 400, "PREMISES_REF_DUPLICATE", "Allotment reference number is already in use.");
+        }
+        updates.premisesRefNo = ref || null;
       }
       if (body.fromDate !== undefined) updates.fromDate = String(body.fromDate ?? "").trim();
       if (body.toDate !== undefined) updates.toDate = String(body.toDate ?? "").trim();

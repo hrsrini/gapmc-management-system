@@ -3,7 +3,7 @@
  */
 import { and, eq, inArray, or } from "drizzle-orm";
 import { db } from "./db";
-import { iomsReceipts, rentInvoices } from "@shared/db-schema";
+import { iomsReceipts, rentDepositLedger, rentInvoices } from "@shared/db-schema";
 import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
 import { unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 
@@ -16,7 +16,11 @@ export type M03RentInvoiceDueRow = {
   yardId: string;
   totalAmount: number;
   paidAmount: number;
+  /** Outstanding rent invoice principal (rent + GST), excluding arrears interest. */
   outstandingAmount: number;
+  outstandingRentAmount: number;
+  outstandingInterestAmount: number;
+  unpaidInterestLedgerEntryIds: string[];
   status: string;
 };
 
@@ -44,7 +48,33 @@ function paidPrincipalByInvoice(
   return paidByInvoice;
 }
 
-function invoiceRowsToDues(
+async function unpaidInterestByInvoice(
+  invoiceIds: string[],
+): Promise<Record<string, { amount: number; entryIds: string[] }>> {
+  if (invoiceIds.length === 0) return {};
+  const rows = await db
+    .select()
+    .from(rentDepositLedger)
+    .where(and(inArray(rentDepositLedger.invoiceId, invoiceIds), eq(rentDepositLedger.entryType, "Interest")));
+  const result: Record<string, { amount: number; entryIds: string[] }> = {};
+  for (const row of rows) {
+    if (String(row.interestPaymentStatus ?? "").trim() === "Paid") continue;
+    const invId = String(row.invoiceId ?? "").trim();
+    if (!invId) continue;
+    const debit = Number(row.debit ?? 0);
+    if (debit <= 0.005) continue;
+    const bucket = result[invId] ?? { amount: 0, entryIds: [] };
+    bucket.amount += debit;
+    bucket.entryIds.push(row.id);
+    result[invId] = bucket;
+  }
+  for (const invId of Object.keys(result)) {
+    result[invId].amount = Math.round(result[invId].amount * 100) / 100;
+  }
+  return result;
+}
+
+async function invoiceRowsToDues(
   invs: Array<{
     id: string;
     invoiceNo: string | null;
@@ -55,13 +85,18 @@ function invoiceRowsToDues(
     status: string | null;
   }>,
   paidByInvoice: Record<string, number>,
-): M03RentInvoiceDueRow[] {
+): Promise<M03RentInvoiceDueRow[]> {
+  const invoiceIds = invs.map((i) => i.id);
+  const interestByInvoice = await unpaidInterestByInvoice(invoiceIds);
   const dues: M03RentInvoiceDueRow[] = [];
   for (const i of invs) {
     const total = Number(i.totalAmount ?? 0);
     const paid = Number(paidByInvoice[i.id] ?? 0);
-    const outstanding = Math.max(0, Math.round((total - paid) * 100) / 100);
-    if (outstanding <= 0.005) continue;
+    const outstandingRent = Math.max(0, Math.round((total - paid) * 100) / 100);
+    const interest = interestByInvoice[i.id];
+    const outstandingInterest = interest?.amount ?? 0;
+    const unpaidInterestLedgerEntryIds = interest?.entryIds ?? [];
+    if (outstandingRent <= 0.005 && outstandingInterest <= 0.005) continue;
     dues.push({
       kind: "RentInvoice",
       invoiceId: i.id,
@@ -71,7 +106,10 @@ function invoiceRowsToDues(
       yardId: i.yardId,
       totalAmount: total,
       paidAmount: paid,
-      outstandingAmount: outstanding,
+      outstandingAmount: outstandingRent,
+      outstandingRentAmount: outstandingRent,
+      outstandingInterestAmount: outstandingInterest,
+      unpaidInterestLedgerEntryIds,
       status: String(i.status ?? ""),
     });
   }
@@ -101,7 +139,7 @@ export async function listM03RentInvoiceDuesForTraderLicence(
           .from(iomsReceipts)
           .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
 
-  return invoiceRowsToDues(invs, paidPrincipalByInvoice(recs));
+  return await invoiceRowsToDues(invs, paidPrincipalByInvoice(recs));
 }
 
 /** Track B (non-Govt): entity id on `entity_id` and/or unified `TB:<entity_id>` tenant key. */
@@ -130,5 +168,5 @@ export async function listM03RentInvoiceDuesForTrackBEntity(
           .from(iomsReceipts)
           .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
 
-  return invoiceRowsToDues(invs, paidPrincipalByInvoice(recs));
+  return await invoiceRowsToDues(invs, paidPrincipalByInvoice(recs));
 }

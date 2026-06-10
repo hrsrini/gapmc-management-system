@@ -11,8 +11,38 @@ export type RentRevisionMode = (typeof RENT_REVISION_MODES)[number];
 export const ENTITY_ALLOTMENT_APPROVAL = ["Draft", "Verified", "Approved", "Rejected"] as const;
 export type EntityAllotmentApprovalStatus = (typeof ENTITY_ALLOTMENT_APPROVAL)[number];
 
-export const PREMISES_STATUS_VALUES = ["Active", "UnsafeForOccupation", "Demolished"] as const;
+export const PREMISES_STATUS_VALUES = [
+  "Vacant",
+  "Vacating",
+  "Allocated",
+  "UnsafeForOccupation",
+  "Demolished",
+] as const;
 export type PremisesStatus = (typeof PREMISES_STATUS_VALUES)[number];
+
+const PREMISES_STATUS_LABELS: Record<PremisesStatus, string> = {
+  Vacant: "Vacant",
+  Vacating: "Vacating",
+  Allocated: "Allocated",
+  UnsafeForOccupation: "Unsafe for Occupation",
+  Demolished: "Demolished",
+};
+
+export function premisesStatusLabel(status: string | null | undefined): string {
+  const s = String(status ?? "").trim();
+  if (s === "Active") return PREMISES_STATUS_LABELS.Vacant;
+  if ((PREMISES_STATUS_VALUES as readonly string[]).includes(s)) {
+    return PREMISES_STATUS_LABELS[s as PremisesStatus];
+  }
+  return s || "—";
+}
+
+/** True when a new allotment may be created on this premises. */
+export function isPremisesVacantForAllotment(status: string | null | undefined): boolean {
+  const s = String(status ?? "").trim();
+  if (s === "Active") return true;
+  return s === "Vacant";
+}
 
 /** Tenancy row status (distinct from DO/DV/DA approval_status). */
 export const ENTITY_TENANCY_STATUS = ["Pending", "Active", "Vacating", "Vacated"] as const;
@@ -32,6 +62,7 @@ export function normalizeRentRevisionMode(v: unknown): RentRevisionMode | null {
 
 export function normalizePremisesStatus(v: unknown): PremisesStatus | null {
   const s = String(v ?? "").trim();
+  if (s === "Active") return "Vacant";
   if (PREMISES_STATUS_VALUES.includes(s as PremisesStatus)) return s as PremisesStatus;
   return null;
 }

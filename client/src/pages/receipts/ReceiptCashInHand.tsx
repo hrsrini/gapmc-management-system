@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,11 +20,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { formatInr } from "@/lib/formatInr";
 import { formatApiDateOrDateTime } from "@/lib/dateFormat";
-import { CalendarClock, Landmark, Loader2, Mail, Wallet } from "lucide-react";
+import { CalendarClock, ChevronDown, Landmark, Loader2, Mail, Wallet } from "lucide-react";
 import { Link } from "wouter";
 
 interface UndepositedRow {
@@ -37,6 +42,9 @@ interface UndepositedRow {
   daysSinceIssue: number;
   depositOverdue: boolean;
   depositDeferredUntil?: string | null;
+  yardId?: string;
+  yardName?: string | null;
+  sourceModule?: string | null;
 }
 
 interface CashInHandResponse {
@@ -49,10 +57,10 @@ interface CashInHandResponse {
   deferredReceipts?: UndepositedRow[];
 }
 
-interface YardRef {
-  id: string;
-  name: string;
-  code: string;
+interface CashInHandLocationContext {
+  canSelectAll: boolean;
+  defaultYardId: string | null;
+  yards: Array<{ id: string; name: string; code: string; type: string }>;
 }
 
 function tomorrowYmd(): string {
@@ -68,23 +76,43 @@ export default function ReceiptCashInHand() {
   const tiers = user?.roles?.map((r) => r.tier) ?? [];
   const canSendSummary = tiers.includes("DV") || tiers.includes("DA") || tiers.includes("ADMIN");
   const canDefer = tiers.includes("DO") || tiers.includes("DV") || tiers.includes("DA") || tiers.includes("ADMIN");
-  const [yardId, setYardId] = useState("");
+  const [yardFilter, setYardFilter] = useState<string | undefined>(undefined);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deferOpen, setDeferOpen] = useState(false);
   const [deferUntil, setDeferUntil] = useState(tomorrowYmd);
+  const [eodHelpOpen, setEodHelpOpen] = useState(false);
 
-  const { data: yards = [] } = useQuery<YardRef[]>({ queryKey: ["/api/yards"] });
-  const queryKey = yardId
-    ? `/api/ioms/receipt-deposits/cash-in-hand?yardId=${encodeURIComponent(yardId)}`
-    : "/api/ioms/receipt-deposits/cash-in-hand";
+  const { data: locCtx } = useQuery<CashInHandLocationContext>({
+    queryKey: ["/api/ioms/receipt-deposits/cash-in-hand/locations"],
+    queryFn: async () => {
+      const res = await fetch("/api/ioms/receipt-deposits/cash-in-hand/locations", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load locations");
+      return res.json();
+    },
+  });
+
+  useEffect(() => {
+    if (locCtx && yardFilter === undefined) {
+      setYardFilter(locCtx.defaultYardId ?? "");
+    }
+  }, [locCtx, yardFilter]);
+
+  const yards = locCtx?.yards ?? [];
+  const canSelectAll = locCtx?.canSelectAll ?? false;
+  const showAllLocations = !yardFilter;
+
+  const cashInHandUrl =
+    yardFilter !== undefined
+      ? yardFilter
+        ? `/api/ioms/receipt-deposits/cash-in-hand?yardId=${encodeURIComponent(yardFilter)}`
+        : "/api/ioms/receipt-deposits/cash-in-hand"
+      : "";
 
   const { data, isLoading } = useQuery<CashInHandResponse>({
-    queryKey: [queryKey],
+    queryKey: [cashInHandUrl],
+    enabled: yardFilter !== undefined,
     queryFn: async () => {
-      const url = yardId
-        ? `/api/ioms/receipt-deposits/cash-in-hand?yardId=${encodeURIComponent(yardId)}`
-        : "/api/ioms/receipt-deposits/cash-in-hand";
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(cashInHandUrl, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load cash-in-hand");
       return res.json();
     },
@@ -109,7 +137,11 @@ export default function ReceiptCashInHand() {
       if (!res.ok) throw new Error((data as { message?: string }).message ?? res.statusText);
       return data;
     },
-    onSuccess: () => toast({ title: "EOD summary sent", description: "Check NOTIFY_EMAIL_TO / webhook." }),
+    onSuccess: () =>
+      toast({
+        title: "EOD summary sent",
+        description: "Check configured email (NOTIFY_EMAIL_TO) or server logs if SMTP is not set.",
+      }),
     onError: (e: Error) => toast({ title: "Send failed", description: e.message, variant: "destructive" }),
   });
 
@@ -146,15 +178,24 @@ export default function ReceiptCashInHand() {
     [receipts],
   );
 
+  const selectValue = yardFilter === undefined ? undefined : yardFilter || "__all__";
+
   return (
     <AppShell breadcrumbs={[{ label: "Receipts", href: "/receipts/ioms" }, { label: "Cash-in-hand" }]}>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <Select value={yardId || "__all__"} onValueChange={(v) => { setYardId(v === "__all__" ? "" : v); setSelected(new Set()); }}>
+        <Select
+          value={selectValue}
+          onValueChange={(v) => {
+            setYardFilter(v === "__all__" ? "" : v);
+            setSelected(new Set());
+          }}
+          disabled={yardFilter === undefined}
+        >
           <SelectTrigger className="w-56">
-            <SelectValue placeholder="All locations" />
+            <SelectValue placeholder="Loading locations…" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">All locations</SelectItem>
+            {canSelectAll ? <SelectItem value="__all__">All locations</SelectItem> : null}
             {yards.map((y) => (
               <SelectItem key={y.id} value={y.id}>
                 {y.name}
@@ -185,6 +226,44 @@ export default function ReceiptCashInHand() {
           )}
         </div>
       </div>
+
+      {canSendSummary ? (
+        <Collapsible open={eodHelpOpen} onOpenChange={setEodHelpOpen} className="mb-4">
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-muted-foreground">
+              <ChevronDown className={`h-4 w-4 mr-1 transition-transform ${eodHelpOpen ? "rotate-180" : ""}`} />
+              How to use Send EOD summary
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <Card className="mt-1 border-dashed">
+              <CardContent className="pt-4 text-sm text-muted-foreground space-y-2">
+                <p>
+                  <strong className="text-foreground">Who can send:</strong> users with DV, DA, or ADMIN role tier.
+                </p>
+                <p>
+                  <strong className="text-foreground">What it does:</strong> runs the same end-of-day cash-in-hand digest as
+                  the scheduled job — totals per location, overdue counts, and optional overdue alerts.
+                </p>
+                <p>
+                  <strong className="text-foreground">Email delivery:</strong> set server environment variables{" "}
+                  <code className="text-xs">NOTIFY_EMAIL_TO</code>, <code className="text-xs">SMTP_HOST</code>,{" "}
+                  <code className="text-xs">SMTP_PORT</code>, and credentials on the app host. Without SMTP, the summary is
+                  still written to server logs.
+                </p>
+                <p>
+                  <strong className="text-foreground">Webhook (optional):</strong> set{" "}
+                  <code className="text-xs">NOTIFY_WEBHOOK_URL</code> to POST JSON notifications to an external system.
+                </p>
+                <p>
+                  Verify configuration locally with{" "}
+                  <code className="text-xs">npm run smoke:receipt-deposit-notify</code>.
+                </p>
+              </CardContent>
+            </Card>
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-4 mb-4">
         <Card>
@@ -221,7 +300,7 @@ export default function ReceiptCashInHand() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
+          {isLoading || yardFilter === undefined ? (
             <Loader2 className="h-6 w-6 animate-spin" />
           ) : receiptTable.length === 0 ? (
             <p className="text-sm text-muted-foreground">No undeposited receipts due for deposit.</p>
@@ -232,6 +311,7 @@ export default function ReceiptCashInHand() {
                   <tr className="border-b text-left text-muted-foreground">
                     {canDefer ? <th className="py-2 pr-2 w-8" /> : null}
                     <th className="py-2 pr-3">Receipt no.</th>
+                    {showAllLocations ? <th className="py-2 pr-3">Location</th> : null}
                     <th className="py-2 pr-3">Date</th>
                     <th className="py-2 pr-3">Payer</th>
                     <th className="py-2 pr-3">Mode</th>
@@ -253,6 +333,9 @@ export default function ReceiptCashInHand() {
                           {r.receiptNo}
                         </Link>
                       </td>
+                      {showAllLocations ? (
+                        <td className="py-2 pr-3 text-muted-foreground">{r.yardName ?? "—"}</td>
+                      ) : null}
                       <td className="py-2 pr-3">{formatApiDateOrDateTime(r.createdAt)}</td>
                       <td className="py-2 pr-3">{r.payerName ?? "—"}</td>
                       <td className="py-2 pr-3">{r.paymentMode}</td>
@@ -288,6 +371,7 @@ export default function ReceiptCashInHand() {
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="py-2 pr-3">Receipt no.</th>
+                    {showAllLocations ? <th className="py-2 pr-3">Location</th> : null}
                     <th className="py-2 pr-3">Deferred until</th>
                     <th className="py-2 pr-3">Mode</th>
                     <th className="py-2 pr-3 text-right">Amount</th>
@@ -301,6 +385,9 @@ export default function ReceiptCashInHand() {
                           {r.receiptNo}
                         </Link>
                       </td>
+                      {showAllLocations ? (
+                        <td className="py-2 pr-3 text-muted-foreground">{r.yardName ?? "—"}</td>
+                      ) : null}
                       <td className="py-2 pr-3">{r.depositDeferredUntil?.slice(0, 10) ?? "—"}</td>
                       <td className="py-2 pr-3">{r.paymentMode}</td>
                       <td className="py-2 pr-3 text-right">{formatInr(r.totalAmount)}</td>

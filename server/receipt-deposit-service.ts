@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "./db";
 import {
@@ -199,8 +199,20 @@ export type UndepositedReceiptRow = {
   totalAmount: number;
   daysSinceIssue: number;
   yardId: string;
+  yardName?: string | null;
+  sourceModule?: string | null;
   depositDeferredUntil: string | null;
 };
+
+function undepositedDepositStatusCond() {
+  return or(
+    eq(iomsReceipts.depositStatus, "Undeposited"),
+    and(
+      isNull(iomsReceipts.depositStatus),
+      inArray(iomsReceipts.paymentMode, ["Cash", "Cheque", "DD"]),
+    ),
+  );
+}
 
 export async function listUndepositedReceipts(args: {
   yardIds: string[];
@@ -210,7 +222,7 @@ export async function listUndepositedReceipts(args: {
   const today = new Date().toISOString().slice(0, 10);
   const conds = [
     inArray(iomsReceipts.status, ["Paid", "Reconciled"]),
-    eq(iomsReceipts.depositStatus, "Undeposited"),
+    undepositedDepositStatusCond(),
     inArray(iomsReceipts.paymentMode, ["Cash", "Cheque", "DD"]),
     sql`coalesce(${iomsReceipts.depositDeferredUntil}, '1900-01-01') <= ${today}`,
   ];
@@ -219,8 +231,20 @@ export async function listUndepositedReceipts(args: {
   if (args.toYmd) conds.push(sql`${iomsReceipts.createdAt} <= ${args.toYmd + "T23:59:59"}`);
 
   const rows = await db
-    .select()
+    .select({
+      id: iomsReceipts.id,
+      receiptNo: iomsReceipts.receiptNo,
+      createdAt: iomsReceipts.createdAt,
+      payerName: iomsReceipts.payerName,
+      paymentMode: iomsReceipts.paymentMode,
+      totalAmount: iomsReceipts.totalAmount,
+      yardId: iomsReceipts.yardId,
+      sourceModule: iomsReceipts.sourceModule,
+      depositDeferredUntil: iomsReceipts.depositDeferredUntil,
+      yardName: yards.name,
+    })
     .from(iomsReceipts)
+    .leftJoin(yards, eq(yards.id, iomsReceipts.yardId))
     .where(and(...conds))
     .orderBy(iomsReceipts.createdAt);
 
@@ -233,6 +257,8 @@ export async function listUndepositedReceipts(args: {
     totalAmount: Number(r.totalAmount ?? 0),
     daysSinceIssue: daysSinceIssueYmd(r.createdAt),
     yardId: r.yardId,
+    yardName: r.yardName,
+    sourceModule: r.sourceModule,
     depositDeferredUntil: r.depositDeferredUntil,
   }));
 }
@@ -243,15 +269,27 @@ export async function listDeferredUndepositedReceipts(args: {
   const today = new Date().toISOString().slice(0, 10);
   const conds = [
     inArray(iomsReceipts.status, ["Paid", "Reconciled"]),
-    eq(iomsReceipts.depositStatus, "Undeposited"),
+    undepositedDepositStatusCond(),
     inArray(iomsReceipts.paymentMode, ["Cash", "Cheque", "DD"]),
     sql`${iomsReceipts.depositDeferredUntil} > ${today}`,
   ];
   if (args.yardIds.length > 0) conds.push(inArray(iomsReceipts.yardId, args.yardIds));
 
   const rows = await db
-    .select()
+    .select({
+      id: iomsReceipts.id,
+      receiptNo: iomsReceipts.receiptNo,
+      createdAt: iomsReceipts.createdAt,
+      payerName: iomsReceipts.payerName,
+      paymentMode: iomsReceipts.paymentMode,
+      totalAmount: iomsReceipts.totalAmount,
+      yardId: iomsReceipts.yardId,
+      sourceModule: iomsReceipts.sourceModule,
+      depositDeferredUntil: iomsReceipts.depositDeferredUntil,
+      yardName: yards.name,
+    })
     .from(iomsReceipts)
+    .leftJoin(yards, eq(yards.id, iomsReceipts.yardId))
     .where(and(...conds))
     .orderBy(iomsReceipts.depositDeferredUntil);
 
@@ -264,6 +302,8 @@ export async function listDeferredUndepositedReceipts(args: {
     totalAmount: Number(r.totalAmount ?? 0),
     daysSinceIssue: daysSinceIssueYmd(r.createdAt),
     yardId: r.yardId,
+    yardName: r.yardName,
+    sourceModule: r.sourceModule,
     depositDeferredUntil: r.depositDeferredUntil,
   }));
 }
@@ -359,7 +399,10 @@ export async function createReceiptDepositBatch(args: {
 
   for (const r of receipts) {
     if (r.yardId !== args.yardId) throw new Error(`Receipt ${r.receiptNo} is not for this yard`);
-    if (r.depositStatus !== "Undeposited") {
+    const undeposited =
+      r.depositStatus === "Undeposited" ||
+      (!r.depositStatus && isPhysicalDepositPaymentMode(r.paymentMode));
+    if (!undeposited) {
       throw new Error(`Receipt ${r.receiptNo} is not undeposited (${r.depositStatus ?? "—"})`);
     }
     if (!isPhysicalDepositPaymentMode(r.paymentMode)) {

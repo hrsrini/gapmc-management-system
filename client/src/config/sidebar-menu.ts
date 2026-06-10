@@ -37,7 +37,6 @@ import {
   Grid3X3,
   PanelLeft,
   Clock,
-  Store,
   KeyRound,
   ShieldAlert,
   Bug,
@@ -100,10 +99,9 @@ export const SIDEBAR_MENU_GROUPS: SidebarMenuGroup[] = [
   {
     group: "Assets (IOMS M-02)",
     items: [
-      { title: "Asset Register", icon: Building2, href: "/assets", requirePermission: { module: "M-02", action: "Read" } },
+      { title: "Premises Register", icon: Building2, href: "/assets", requirePermission: { module: "M-02", action: "Read" } },
       { title: "Premises Master Registration", icon: PlusCircle, href: "/assets/new", requirePermission: { module: "M-02", action: "Create" } },
       { title: "Shop Allotments", icon: KeyRound, href: "/assets/allotments", requirePermission: { module: "M-02", action: "Read" } },
-      { title: "Shop Vacant", icon: Store, href: "/assets/vacant", requirePermission: { module: "M-02", action: "Read" } },
     ],
   },
   {

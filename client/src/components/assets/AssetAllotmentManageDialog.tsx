@@ -19,6 +19,11 @@ import { useAuth, type AuthUser } from "@/context/AuthContext";
 import { Loader2, ExternalLink, FileText } from "lucide-react";
 import { localCalendarYmd, RENT_REVISION_MODES } from "@shared/premises-allocation";
 import { invalidateAssetAllotmentQueries } from "@/lib/invalidate-asset-allotments";
+import { invalidatePremisesRegisterQueries } from "@/lib/premisesRegisterCache";
+import {
+  TenancyVacateConfirmDialog,
+  tenancyStatusChangeNeedsConfirm,
+} from "@/components/premises/TenancyVacateConfirmDialog";
 
 export interface ManagedAssetAllotment {
   id: string;
@@ -36,6 +41,7 @@ export interface ManagedAssetAllotment {
   rentRevisionMode?: string | null;
   agreementDocFile?: string | null;
   premisesRefNo?: string | null;
+  allotmentDate?: string | null;
 }
 
 function userTierSet(user: AuthUser | null): Set<string> {
@@ -64,6 +70,8 @@ export function AssetAllotmentManageDialog({
   const canUpdate = can("M-02", "Update");
 
   const [mAllottee, setMAllottee] = useState("");
+  const [mAllotmentDate, setMAllotmentDate] = useState("");
+  const [mAllotmentRefNo, setMAllotmentRefNo] = useState("");
   const [mFrom, setMFrom] = useState("");
   const [mTo, setMTo] = useState("");
   const [mRent, setMRent] = useState("");
@@ -73,11 +81,15 @@ export function AssetAllotmentManageDialog({
   const [mGapOv, setMGapOv] = useState(false);
   const [agreementFile, setAgreementFile] = useState<File | null>(null);
   const [tenancyVacateOn, setTenancyVacateOn] = useState("");
+  const [pendingTenancyStatus, setPendingTenancyStatus] = useState<string | null>(null);
+  const [tenancyConfirmOpen, setTenancyConfirmOpen] = useState(false);
 
   useEffect(() => {
     const r = row;
     if (!r) return;
     setMAllottee(r.allotteeName ?? "");
+    setMAllotmentDate(r.allotmentDate?.slice(0, 10) ?? localCalendarYmd());
+    setMAllotmentRefNo(r.premisesRefNo ?? "");
     setMFrom(r.fromDate ?? "");
     setMTo(r.toDate ?? "");
     setMRent(r.monthlyRent != null ? String(r.monthlyRent) : "");
@@ -94,7 +106,7 @@ export function AssetAllotmentManageDialog({
   const afterMutation = (next: ManagedAssetAllotment) => {
     invalidateAssetAllotmentQueries(queryClient);
     if (invalidateVacant) {
-      queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets/vacant"] });
+      invalidatePremisesRegisterQueries(queryClient);
     }
     onRowUpdated(next);
     toast({ title: "Saved" });
@@ -136,7 +148,7 @@ export function AssetAllotmentManageDialog({
     onSuccess: (next) => {
       invalidateAssetAllotmentQueries(queryClient);
       if (invalidateVacant) {
-        queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets/vacant"] });
+        invalidatePremisesRegisterQueries(queryClient);
       }
       onRowUpdated(next);
       setAgreementFile(null);
@@ -158,7 +170,7 @@ export function AssetAllotmentManageDialog({
         {!manageRow ? null : (
           <>
             <DialogHeader>
-              <DialogTitle>Manage shop allotment</DialogTitle>
+              <DialogTitle>Manage premises allocation</DialogTitle>
               <p className="text-sm text-muted-foreground font-mono">
                 {assetDisplayMap[manageRow.assetId] ?? manageRow.assetId}
                 {manageRow.premisesRefNo?.trim() ? ` · ${manageRow.premisesRefNo}` : ""}
@@ -195,6 +207,14 @@ export function AssetAllotmentManageDialog({
                     <Input value={mAllottee} onChange={(e) => setMAllottee(e.target.value)} />
                   </div>
                   <div className="space-y-1">
+                    <Label>Allotment date</Label>
+                    <Input type="date" value={mAllotmentDate} onChange={(e) => setMAllotmentDate(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Allotment reference no.</Label>
+                    <Input value={mAllotmentRefNo} onChange={(e) => setMAllotmentRefNo(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
                     <Label>Agreement from</Label>
                     <Input type="date" value={mFrom} onChange={(e) => setMFrom(e.target.value)} />
                   </div>
@@ -208,7 +228,7 @@ export function AssetAllotmentManageDialog({
                     />
                   </div>
                   <div className="space-y-1 md:col-span-2">
-                    <Label>Monthly rent</Label>
+                    <Label>Monthly Rent (Rs.)</Label>
                     <Input value={mRent} onChange={(e) => setMRent(e.target.value)} inputMode="decimal" />
                   </div>
                   <div className="space-y-1 md:col-span-2">
@@ -249,6 +269,8 @@ export function AssetAllotmentManageDialog({
                           allocId: manageRow.id,
                           body: {
                             allotteeName: mAllottee.trim(),
+                            allotmentDate: mAllotmentDate,
+                            premisesRefNo: mAllotmentRefNo.trim() || null,
                             fromDate: mFrom,
                             toDate: mTo,
                             monthlyRent: Number(mRent),
@@ -266,7 +288,7 @@ export function AssetAllotmentManageDialog({
               {["Draft", "Rejected"].includes(String(manageRow.approvalStatus ?? "")) &&
               (tiers.has("DO") || tiers.has("ADMIN")) ? (
                 <div className="border-t pt-3 space-y-2">
-                  <Label>Upload notarised agreement (PDF)</Label>
+                  <Label>Upload Agreement Copy (PDF)</Label>
                   <Input
                     type="file"
                     accept="application/pdf"
@@ -421,6 +443,13 @@ export function AssetAllotmentManageDialog({
                           });
                           return;
                         }
+                      }
+                      if (tenancyStatusChangeNeedsConfirm(cur, v)) {
+                        setPendingTenancyStatus(v);
+                        setTenancyConfirmOpen(true);
+                        return;
+                      }
+                      if (v === "Vacated") {
                         patchAllotMutation.mutate({
                           allocId: manageRow.id,
                           body: { status: v, toDate: tenancyVacateOn },
@@ -454,6 +483,33 @@ export function AssetAllotmentManageDialog({
                 </div>
               ) : null}
             </div>
+
+            <TenancyVacateConfirmDialog
+              open={tenancyConfirmOpen}
+              onOpenChange={(o) => {
+                setTenancyConfirmOpen(o);
+                if (!o) setPendingTenancyStatus(null);
+              }}
+              allotteeName={manageRow.allotteeName ?? ""}
+              premisesName={assetDisplayMap[manageRow.assetId] ?? manageRow.assetId}
+              loading={patchAllotMutation.isPending}
+              onConfirm={() => {
+                const v = pendingTenancyStatus;
+                if (!v) return;
+                const done = () => {
+                  setTenancyConfirmOpen(false);
+                  setPendingTenancyStatus(null);
+                };
+                if (v === "Vacated") {
+                  patchAllotMutation.mutate(
+                    { allocId: manageRow.id, body: { status: v, toDate: tenancyVacateOn } },
+                    { onSettled: done },
+                  );
+                } else {
+                  patchAllotMutation.mutate({ allocId: manageRow.id, body: { status: v } }, { onSettled: done });
+                }
+              }}
+            />
           </>
         )}
       </DialogContent>

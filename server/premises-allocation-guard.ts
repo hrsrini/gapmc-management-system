@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "./db";
 import { assetAllotments, assets, entityAllotments } from "@shared/db-schema";
+import { isPremisesVacantForAllotment, normalizePremisesStatus } from "@shared/premises-allocation";
 export async function assertPremisesNotAlreadyAllocatedActive(params: {
   assetId: string;
   excludeEntityAllotmentId?: string;
@@ -30,7 +31,7 @@ export async function assertPremisesNotAlreadyAllocatedActive(params: {
   };
 }
 
-/** True when premises master allows allocation (active + lifecycle Active). */
+/** True when premises master allows a new allotment (Vacant only). */
 export function isPremisesAllocatable(asset: {
   isActive?: boolean | null;
   premisesStatus?: string | null;
@@ -38,16 +39,21 @@ export function isPremisesAllocatable(asset: {
   if (asset.isActive === false) {
     return { ok: false, code: "E-PRE-004", message: "Premises is inactive; allocation is blocked." };
   }
-  const ps = String(asset.premisesStatus ?? "Active").trim() || "Active";
-  if (ps === "UnsafeForOccupation" || ps === "Demolished") {
-    return {
-      ok: false,
-      code: "E-PRE-004",
-      message:
-        ps === "Demolished"
-          ? "Premises is marked Demolished; allocation is blocked."
-          : "Premises is marked Unsafe for Occupation; allocation is blocked.",
-    };
+  const ps = normalizePremisesStatus(asset.premisesStatus) ?? "Vacant";
+  if (ps === "Demolished") {
+    return { ok: false, code: "E-PRE-004", message: "Premises is marked Demolished; allocation is blocked." };
+  }
+  if (ps === "UnsafeForOccupation") {
+    return { ok: false, code: "E-PRE-004", message: "Premises is marked Unsafe for Occupation; allocation is blocked." };
+  }
+  if (ps === "Vacating") {
+    return { ok: false, code: "E-PRE-004", message: "Premises is Vacating; allocation is blocked until possession is handed over." };
+  }
+  if (ps === "Allocated") {
+    return { ok: false, code: "E-PRE-004", message: "Premises is already Allocated; only Vacant premises can receive a new allotment." };
+  }
+  if (!isPremisesVacantForAllotment(ps)) {
+    return { ok: false, code: "E-PRE-004", message: "Only Vacant premises are available for new allotment." };
   }
   return { ok: true };
 }

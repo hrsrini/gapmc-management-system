@@ -4,6 +4,7 @@ import {
   formatBankWithBranch,
   type DuesPaymentTypeUi,
 } from "@shared/dues-counter-payment";
+import { initialDepositStatusForPaymentMode } from "@shared/receipt-deposit";
 
 export class DuesCounterPaymentError extends Error {
   constructor(
@@ -142,10 +143,12 @@ export function counterPaymentCreateParams(parsed: ParsedCounterDuesPayment) {
 /** DB update when marking a counter receipt Paid (preserve UTR / avoid overwriting cheque). */
 export function counterPaymentPaidUpdate(parsed: ParsedCounterDuesPayment): {
   status: "Paid";
+  depositStatus: ReturnType<typeof initialDepositStatusForPaymentMode>;
   gatewayRef?: string;
 } {
   return {
     status: "Paid",
+    depositStatus: initialDepositStatusForPaymentMode(parsed.paymentMode),
     ...(parsed.gatewayRef != null ? { gatewayRef: parsed.gatewayRef } : {}),
   };
 }

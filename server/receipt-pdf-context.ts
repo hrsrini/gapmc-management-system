@@ -96,6 +96,9 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
   if (rh === "MarketFee") {
     return `Market fee payment (${payWord}).`;
   }
+  if (rh === "SecurityDeposit") {
+    return "Being amount received towards Security Deposit.";
+  }
   return `Being amount received towards ${rh || "payment"}.`;
 }
 
@@ -117,6 +120,8 @@ async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParti
 
   if (rh === "MarketFee") {
     rows.push({ label: "Market Fee", amount: Number(receipt.amount ?? 0) });
+  } else if (rh === "SecurityDeposit") {
+    rows.push({ label: "Security Deposit", amount: Number(receipt.totalAmount ?? receipt.amount ?? 0) });
   } else if (rh === "RentArrearsInterest") {
     const interest = Number(receipt.amount ?? 0);
     if (interest > 0.005) rows.push({ label: "Interest on Rent", amount: interest });

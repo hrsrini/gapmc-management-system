@@ -40,7 +40,16 @@ import {
 import { formatInr } from "@/lib/formatInr";
 import { govtGstCategoriesForSelect } from "@/lib/govtGstExemptSelect";
 import { invalidateAssetAllotmentQueries } from "@/lib/invalidate-asset-allotments";
-import { inferAgreementTypeFromDates, RENT_REVISION_MODES } from "@shared/premises-allocation";
+import { invalidatePremisesRegisterQueries } from "@/lib/premisesRegisterCache";
+import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
+import {
+  buildCounterDuesPaymentApiBody,
+  defaultPaymentPreferenceValue,
+  validatePaymentPreference,
+  type PaymentPreferenceValue,
+} from "@/lib/duesCounterPayment";
+import { downloadIomsReceiptPdf } from "@/lib/downloadIomsReceiptPdf";
+import { inferAgreementTypeFromDates, localCalendarYmd, RENT_REVISION_MODES } from "@shared/premises-allocation";
 import { buildAssetDisplayByRowId, formatPremisesAssetLabel } from "@/lib/asset-premises-display";
 import {
   PREMISES_ALLOCATION_COLUMNS,
@@ -183,7 +192,7 @@ interface RenewPreview {
 export default function TraderLicenceDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canUpdateLicence = can("M-02", "Update");
@@ -204,12 +213,17 @@ export default function TraderLicenceDetail() {
   const [manageAllotment, setManageAllotment] = useState<AssetAllotmentRow | null>(null);
   const [allotDialogOpen, setAllotDialogOpen] = useState(false);
   const [allotAssetId, setAllotAssetId] = useState("");
+  const [allotAllotmentDate, setAllotAllotmentDate] = useState("");
+  const [allotRefNo, setAllotRefNo] = useState("");
   const [allotFromDate, setAllotFromDate] = useState("");
   const [allotToDate, setAllotToDate] = useState("");
   const [allotMonthlyRent, setAllotMonthlyRent] = useState("");
   const [allotRentRevisionMode, setAllotRentRevisionMode] = useState("StandardConsecutiveRenewal");
   const [allotConsecutiveRenewalCount, setAllotConsecutiveRenewalCount] = useState("0");
   const [allotSecurityDeposit, setAllotSecurityDeposit] = useState("");
+  const [allotSecurityDepositPayment, setAllotSecurityDepositPayment] = useState<PaymentPreferenceValue>(() =>
+    defaultPaymentPreferenceValue(),
+  );
   const [allotAgreementTypeOverride, setAllotAgreementTypeOverride] = useState("__auto__");
 
   const { data: licence, isLoading, isError } = useQuery<Licence>({
@@ -287,7 +301,28 @@ export default function TraderLicenceDetail() {
   });
   const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
   const vacantByAssetPk = useMemo(() => Object.fromEntries(vacantRows.map((r) => [r.asset.id, r])), [vacantRows]);
+
+  useEffect(() => {
+    if (!allotDialogOpen) return;
+    setAllotAllotmentDate((prev) => prev || localCalendarYmd());
+  }, [allotDialogOpen]);
+
+  useEffect(() => {
+    if (!allotDialogOpen) return;
+    setAllotSecurityDepositPayment(defaultPaymentPreferenceValue());
+  }, [allotDialogOpen]);
+
+  useEffect(() => {
+    if (!allotDialogOpen) return;
+    const n = Number(allotSecurityDeposit);
+    if (!Number.isFinite(n) || n <= 0) return;
+    setAllotSecurityDepositPayment((p) => ({ ...p, paidAmount: String(Math.round(n * 100) / 100) }));
+  }, [allotSecurityDeposit, allotDialogOpen]);
+
   const selectedVacant = allotAssetId ? vacantByAssetPk[allotAssetId] : undefined;
+  const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
+  const allotSecDepAmount = allotSecurityDeposit.trim() ? Number(allotSecurityDeposit) : 0;
+  const showAllotSecDepPayment = Number.isFinite(allotSecDepAmount) && allotSecDepAmount > 0;
   const inferredAgType =
     allotFromDate && allotToDate ? inferAgreementTypeFromDates(allotFromDate, allotToDate) : null;
   const licenceCanReceiveAllotment = Boolean(
@@ -305,6 +340,11 @@ export default function TraderLicenceDetail() {
     },
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const allotReceivedAtLabel = useMemo(() => {
+    const yardId = selectedVacant?.asset?.yardId;
+    if (!yardId) return "—";
+    return yardById[yardId] ?? yardId;
+  }, [selectedVacant?.asset?.yardId, yardById]);
   const receiptById = Object.fromEntries(receipts.map((r) => [r.id, r.receiptNo]));
   const assetDisplayById = useMemo(() => buildAssetDisplayByRowId(assets), [assets]);
   const gstCategoriesForSelect = useMemo(
@@ -435,24 +475,40 @@ export default function TraderLicenceDetail() {
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: async (data) => {
       invalidateAssetAllotmentQueries(queryClient);
-      queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets/vacant"] });
+      invalidatePremisesRegisterQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/receipts"] });
       if (id) {
         queryClient.invalidateQueries({
           queryKey: [`/api/ioms/asset-allotments?traderLicenceId=${encodeURIComponent(id)}`],
         });
       }
+
+      const receipt = data?.securityDepositReceipt as { receiptId?: string; receiptNo?: string } | null | undefined;
+      let description = "Upload the agreement copy (PDF), then DV verifies and DA approves.";
+      if (receipt?.receiptId && receipt?.receiptNo) {
+        try {
+          await downloadIomsReceiptPdf(receipt.receiptId, receipt.receiptNo);
+          description = `Security deposit receipt ${receipt.receiptNo} issued and downloaded. ${description}`;
+        } catch {
+          description = `Security deposit receipt ${receipt.receiptNo} issued. Open Receipts to download the PDF if needed. ${description}`;
+        }
+      }
+
       toast({
         title: "Draft allocation created",
-        description: "Upload the notarised agreement, then DV verifies and DA approves.",
+        description,
       });
       setAllotDialogOpen(false);
       setAllotAssetId("");
+      setAllotAllotmentDate("");
+      setAllotRefNo("");
       setAllotFromDate("");
       setAllotToDate("");
       setAllotMonthlyRent("");
       setAllotSecurityDeposit("");
+      setAllotSecurityDepositPayment(defaultPaymentPreferenceValue());
       setAllotConsecutiveRenewalCount("0");
       setAllotAgreementTypeOverride("__auto__");
     },
@@ -1095,6 +1151,14 @@ export default function TraderLicenceDetail() {
                   <p className="text-xs text-muted-foreground">Taken from this licence.</p>
                 </div>
                 <div className="space-y-1">
+                  <Label>Allotment date *</Label>
+                  <Input type="date" value={allotAllotmentDate} onChange={(e) => setAllotAllotmentDate(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Allotment reference no.</Label>
+                  <Input value={allotRefNo} onChange={(e) => setAllotRefNo(e.target.value)} placeholder="Optional" />
+                </div>
+                <div className="space-y-1">
                   <Label>Agreement from *</Label>
                   <Input type="date" value={allotFromDate} onChange={(e) => setAllotFromDate(e.target.value)} />
                 </div>
@@ -1122,7 +1186,7 @@ export default function TraderLicenceDetail() {
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <Label>Monthly rent *</Label>
+                  <Label>Monthly Rent (Rs.) *</Label>
                   <Input
                     value={allotMonthlyRent}
                     onChange={(e) => setAllotMonthlyRent(e.target.value)}
@@ -1161,6 +1225,21 @@ export default function TraderLicenceDetail() {
                     inputMode="decimal"
                   />
                 </div>
+                {showAllotSecDepPayment ? (
+                  <div className="md:col-span-2 rounded-md border p-3 bg-muted/20">
+                    <p className="text-sm font-medium mb-2">Security deposit payment</p>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Record how the deposit was received. A paid receipt is issued immediately when you create the draft.
+                    </p>
+                    <PaymentPreferenceForm
+                      value={allotSecurityDepositPayment}
+                      onChange={setAllotSecurityDepositPayment}
+                      receivedByLabel={receivedByLabel}
+                      receivedAtLabel={allotReceivedAtLabel}
+                      summaryAmount={String(allotSecDepAmount)}
+                    />
+                  </div>
+                ) : null}
               </div>
             )}
             <DialogFooter>
@@ -1173,6 +1252,7 @@ export default function TraderLicenceDetail() {
                   !licenceCanReceiveAllotment ||
                   createAllotmentMutation.isPending ||
                   !allotAssetId ||
+                  !allotAllotmentDate ||
                   !allotFromDate ||
                   !allotToDate ||
                   !Number.isFinite(Number(allotMonthlyRent)) ||
@@ -1188,6 +1268,7 @@ export default function TraderLicenceDetail() {
                     assetId: allotAssetId,
                     traderLicenceId: id,
                     allotteeName,
+                    allotmentDate: allotAllotmentDate,
                     fromDate: allotFromDate,
                     toDate: allotToDate,
                     status: "Pending",
@@ -1198,6 +1279,17 @@ export default function TraderLicenceDetail() {
                     securityDeposit: allotSecurityDeposit.trim() ? Number(allotSecurityDeposit) : null,
                   };
                   if (allotAgreementTypeOverride !== "__auto__") body.agreementType = allotAgreementTypeOverride;
+                  if (allotRefNo.trim()) body.premisesRefNo = allotRefNo.trim();
+                  const secAmt = allotSecurityDeposit.trim() ? Number(allotSecurityDeposit) : 0;
+                  if (Number.isFinite(secAmt) && secAmt > 0) {
+                    const pref = { ...allotSecurityDepositPayment, paidAmount: allotSecurityDeposit };
+                    const prefErr = validatePaymentPreference(pref);
+                    if (prefErr) {
+                      toast({ title: "Security deposit payment", description: prefErr, variant: "destructive" });
+                      return;
+                    }
+                    Object.assign(body, buildCounterDuesPaymentApiBody(pref, secAmt));
+                  }
                   createAllotmentMutation.mutate(body);
                 }}
               >

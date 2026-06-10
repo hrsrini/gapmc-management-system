@@ -899,16 +899,23 @@ export const assets = gapmc.table("assets", {
   id: text("id").primaryKey(),
   assetId: text("asset_id").notNull().unique(), // [LOC]/[TYPE]-[NNN]
   yardId: text("yard_id").notNull(),
-  assetType: text("asset_type").notNull(), // Shop | Godown | Office | Building
+  assetType: text("asset_type").notNull(), // Premises type catalogue (Shop, Godown, Auction Shed, …)
   complexName: text("complex_name"),
+  premisesLocation: text("premises_location"),
+  propertyTaxAuthority: text("property_tax_authority"),
+  houseNo: text("house_no"),
+  electricityConnectionType: text("electricity_connection_type"),
+  contractAccountNo: text("contract_account_no"),
+  waterConnectionType: text("water_connection_type"),
+  consumerId: text("consumer_id"),
   area: text("area"),
   plinthAreaSqft: doublePrecision("plinth_area_sqft"),
   value: doublePrecision("value"),
   fileNumber: text("file_number"),
   orderNumber: text("order_number"),
   isActive: boolean("is_active").default(true),
-  /** US-M02-003 / E-PRE-004: Active | UnsafeForOccupation | Demolished */
-  premisesStatus: text("premises_status").default("Active").notNull(),
+  /** M-02 lifecycle: Vacant | Vacating | Allocated | UnsafeForOccupation | Demolished */
+  premisesStatus: text("premises_status").default("Vacant").notNull(),
 });
 
 export const assetAllotments = gapmc.table("asset_allotments", {
@@ -925,6 +932,8 @@ export const assetAllotments = gapmc.table("asset_allotments", {
   dvUser: text("dv_user"),
   daUser: text("da_user"),
   approvalStatus: text("approval_status").notNull().default("Draft"),
+  /** Date the allocation was recorded (distinct from agreement from). */
+  allotmentDate: text("allotment_date"),
   premisesRefNo: text("premises_ref_no"),
   monthlyRent: doublePrecision("monthly_rent").notNull().default(0),
   gstApplicable: boolean("gst_applicable").notNull().default(true),
@@ -992,6 +1001,8 @@ export const entityAllotments = gapmc.table("entity_allotments", {
   dvUser: text("dv_user"),
   daUser: text("da_user"),
   approvalStatus: text("approval_status").notNull().default("Draft"),
+  /** Date the allocation was recorded (distinct from agreement from). */
+  allotmentDate: text("allotment_date"),
   premisesRefNo: text("premises_ref_no"),
   monthlyRent: doublePrecision("monthly_rent").notNull().default(0),
   gstApplicable: boolean("gst_applicable").notNull().default(true),

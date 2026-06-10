@@ -59,8 +59,13 @@ interface DueRentInvoice {
   totalAmount: number;
   paidAmount: number;
   outstandingAmount: number;
+  outstandingRentAmount?: number;
+  outstandingInterestAmount?: number;
+  unpaidInterestLedgerEntryIds?: string[];
   status: string;
 }
+
+type RentPayMode = "rent_only" | "interest_only" | "combined";
 interface DuePreReceipt {
   kind: "PreReceipt";
   preReceiptId: string;
@@ -101,7 +106,8 @@ const columns: ReportTableColumn[] = [
   { key: "assetLabel", header: "Asset" },
   { key: "_amount", header: "Amount" },
   { key: "_paid", header: "Paid" },
-  { key: "_outstanding", header: "Outstanding" },
+  { key: "_outstanding", header: "Rent due" },
+  { key: "_interestDue", header: "Interest due" },
   { key: "_status", header: "Status" },
   { key: "_actions", header: "Actions" },
 ];
@@ -146,7 +152,14 @@ export default function OutstandingDues() {
 
   const totalOutstanding = useMemo(() => {
     return dues.reduce((s, d) => {
-      if (d.kind === "RentInvoice" || d.kind === "MarketFeePurchase") return s + Number(d.outstandingAmount ?? 0);
+      if (d.kind === "RentInvoice") {
+        return (
+          s +
+          Number(d.outstandingRentAmount ?? d.outstandingAmount ?? 0) +
+          Number(d.outstandingInterestAmount ?? 0)
+        );
+      }
+      if (d.kind === "MarketFeePurchase") return s + Number(d.outstandingAmount ?? 0);
       return s + Number(d.amount ?? 0);
     }, 0);
   }, [dues]);
@@ -158,6 +171,8 @@ export default function OutstandingDues() {
   const [payMarket, setPayMarket] = useState<DueMarketFeePurchase | null>(null);
   const [payYardId, setPayYardId] = useState("");
   const [payAmount, setPayAmount] = useState("");
+  const [rentPayMode, setRentPayMode] = useState<RentPayMode>("rent_only");
+  const [rentAmountInput, setRentAmountInput] = useState("");
   const [paymentPref, setPaymentPref] = useState<PaymentPreferenceValue>(() => defaultPaymentPreferenceValue());
   const [onlineReceiptHref, setOnlineReceiptHref] = useState<string>("");
 
@@ -172,33 +187,99 @@ export default function OutstandingDues() {
     setPayInvoice(invoice);
     setPayMarket(market);
     setPayYardId(yardId);
-    setPayAmount(String(Math.max(0, outstanding)));
-    setPaymentPref(defaultPaymentPreferenceValue(outstanding));
+    if (kind === "rent" && invoice) {
+      const rentDue = Number(invoice.outstandingRentAmount ?? invoice.outstandingAmount ?? 0);
+      const interestDue = Number(invoice.outstandingInterestAmount ?? 0);
+      const defaultMode: RentPayMode =
+        rentDue > 0 ? "rent_only" : interestDue > 0 ? "interest_only" : "rent_only";
+      setRentPayMode(defaultMode);
+      setRentAmountInput(String(Math.max(0, rentDue)));
+      const totalDue = Math.round((rentDue + (defaultMode === "rent_only" ? 0 : interestDue)) * 100) / 100;
+      setPayAmount(String(totalDue || Math.max(0, outstanding)));
+      setPaymentPref(defaultPaymentPreferenceValue(totalDue || outstanding));
+    } else {
+      setRentPayMode("rent_only");
+      setRentAmountInput("");
+      setPayAmount(String(Math.max(0, outstanding)));
+      setPaymentPref(defaultPaymentPreferenceValue(outstanding));
+    }
     setPayStep("summary");
     setPayOpen(true);
   };
 
+  const rentDueForDialog = Number(payInvoice?.outstandingRentAmount ?? payInvoice?.outstandingAmount ?? 0);
+  const interestDueForDialog = Number(payInvoice?.outstandingInterestAmount ?? 0);
+  const interestEntryIds = payInvoice?.unpaidInterestLedgerEntryIds ?? [];
+
+  const rentPayTotal = useMemo(() => {
+    if (payKind !== "rent") return Number(payAmount) || 0;
+    const rent = rentPayMode === "interest_only" ? 0 : Number(rentAmountInput) || 0;
+    const interest = rentPayMode === "rent_only" ? 0 : interestDueForDialog;
+    return Math.round((rent + interest) * 100) / 100;
+  }, [payKind, payAmount, rentPayMode, rentAmountInput, interestDueForDialog]);
+
+  const receiptParticularsPreview = useMemo(() => {
+    if (payKind !== "rent" || rentPayTotal <= 0) return [];
+    const rentPay = rentPayMode === "interest_only" ? 0 : Number(rentAmountInput) || 0;
+    const interestPay = rentPayMode === "rent_only" ? 0 : interestDueForDialog;
+    const rows: Array<{ label: string; amount: number }> = [];
+    if (rentPay > 0.005) {
+      rows.push({ label: "Rent", amount: rentPay });
+      rows.push({ label: "CGST", amount: 0 });
+      rows.push({ label: "SGST", amount: 0 });
+    }
+    if (interestPay > 0.005) rows.push({ label: "Interest on Rent", amount: interestPay });
+    return rows;
+  }, [payKind, rentPayTotal, rentPayMode, rentAmountInput, interestDueForDialog]);
+
   const payMutation = useMutation({
     mutationFn: async () => {
-      const prefErr = validatePaymentPreference({ ...paymentPref, paidAmount: paymentPref.paidAmount || payAmount });
+      const amt = payKind === "rent" ? rentPayTotal : Number(paymentPref.paidAmount || payAmount);
+      const prefErr = validatePaymentPreference({ ...paymentPref, paidAmount: String(amt) });
       if (prefErr) throw new Error(prefErr);
-      const amt = Number(paymentPref.paidAmount || payAmount);
       if (!Number.isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
       const payBody = buildCounterDuesPaymentApiBody({ ...paymentPref, paidAmount: String(amt) }, amt);
       if (payKind === "rent") {
         if (!payInvoice) throw new Error("Select an invoice");
-        const res = await fetch("/api/ioms/dues/pay-rent-invoice", {
+        const rentAmt = rentPayMode === "interest_only" ? 0 : Number(rentAmountInput);
+        if ((rentPayMode === "rent_only" || rentPayMode === "combined") && (!Number.isFinite(rentAmt) || rentAmt <= 0)) {
+          throw new Error("Enter a valid rent amount.");
+        }
+        if (
+          (rentPayMode === "interest_only" || rentPayMode === "combined") &&
+          (interestDueForDialog <= 0 || interestEntryIds.length === 0)
+        ) {
+          throw new Error("No unpaid interest is available for this invoice.");
+        }
+        if (rentPayMode === "rent_only" && rentAmt > rentDueForDialog + 0.02) {
+          throw new Error("Rent amount exceeds outstanding rent.");
+        }
+        if (rentPayMode === "combined" && rentAmt > rentDueForDialog + 0.02) {
+          throw new Error("Rent amount exceeds outstanding rent.");
+        }
+        const res = await fetch("/api/ioms/rent/ledger/record-payment", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ invoiceId: payInvoice.invoiceId, ...payBody }),
+          body: JSON.stringify({
+            invoiceId: payInvoice.invoiceId,
+            mode: rentPayMode,
+            rentAmount: rentPayMode === "interest_only" ? undefined : rentAmt,
+            interestLedgerEntryIds: rentPayMode === "rent_only" ? undefined : interestEntryIds,
+            ...payBody,
+            amount: rentPayTotal,
+          }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           const msg = (data as { message?: string; error?: string }).message ?? (data as { error?: string }).error;
           throw new Error(msg ?? res.statusText);
         }
-        return { kind: "rent" as const, receiptNo: (data as { receiptNo?: string }).receiptNo ?? "" };
+        return {
+          kind: "rent" as const,
+          receiptNo: (data as { receiptNo?: string }).receiptNo ?? "",
+          receiptId: (data as { receiptId?: string }).receiptId ?? "",
+        };
       }
       if (!payMarket) throw new Error("Select a purchase");
       const res = await fetch("/api/ioms/dues/pay-market-fee", {
@@ -216,9 +297,15 @@ export default function OutstandingDues() {
     },
     onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: [duesUrl] });
+      const receiptHref =
+        r.kind === "rent" && "receiptId" in r && r.receiptId
+          ? `/receipts/ioms/${encodeURIComponent(r.receiptId)}`
+          : "";
       toast({
         title: "Payment recorded",
-        description: r.receiptNo ? `Receipt ${r.receiptNo}.` : "Payment saved.",
+        description: r.receiptNo
+          ? `Receipt ${r.receiptNo}.${receiptHref ? " Open the receipt for the consolidated PDF." : ""}`
+          : "Payment saved.",
       });
       setPayOpen(false);
       setPayStep("summary");
@@ -226,6 +313,8 @@ export default function OutstandingDues() {
       setPayMarket(null);
       setPayYardId("");
       setPayAmount("");
+      setRentAmountInput("");
+      setRentPayMode("rent_only");
       setPaymentPref(defaultPaymentPreferenceValue());
     },
     onError: (e: Error) => toast({ title: "Payment failed", description: e.message, variant: "destructive" }),
@@ -345,13 +434,23 @@ export default function OutstandingDues() {
         assetLabel: assetLabelById[d.assetId] ?? d.assetId,
         _amount: `${formatInr(Number(d.totalAmount ?? 0))}`,
         _paid: `${formatInr(Number(d.paidAmount ?? 0))}`,
-        _outstanding: `${formatInr(Number(d.outstandingAmount ?? 0))}`,
+        _outstanding: `${formatInr(Number(d.outstandingRentAmount ?? d.outstandingAmount ?? 0))}`,
+        _interestDue: `${formatInr(Number(d.outstandingInterestAmount ?? 0))}`,
         _status: <span>{d.status}</span>,
         _actions: (
           <Button
             size="sm"
             disabled={!canMarkPaid}
-            onClick={() => openPayDialog("rent", d, null, d.outstandingAmount, d.yardId)}
+            onClick={() =>
+              openPayDialog(
+                "rent",
+                d,
+                null,
+                Number(d.outstandingRentAmount ?? d.outstandingAmount ?? 0) +
+                  Number(d.outstandingInterestAmount ?? 0),
+                d.yardId,
+              )
+            }
           >
             <CheckCircle className="h-4 w-4 mr-1" />
             Pay
@@ -446,14 +545,16 @@ export default function OutstandingDues() {
             setPayMarket(null);
             setPayYardId("");
             setPayAmount("");
+            setRentAmountInput("");
+            setRentPayMode("rent_only");
             setPaymentPref(defaultPaymentPreferenceValue());
             setOnlineReceiptHref("");
           }
         }}
       >
-        <DialogContent className={payStep === "payment" ? "sm:max-w-2xl max-h-[90vh]" : "sm:max-w-md"}>
+        <DialogContent className={payStep === "payment" ? "sm:max-w-2xl max-h-[90vh]" : "sm:max-w-lg"}>
           <DialogHeader>
-            <DialogTitle>{payKind === "rent" ? "Pay rent invoice" : "Pay market fee (M-04)"}</DialogTitle>
+            <DialogTitle>{payKind === "rent" ? "Pay outstanding dues" : "Pay market fee (M-04)"}</DialogTitle>
           </DialogHeader>
           {payStep === "summary" ? (
             <div className="space-y-3">
@@ -462,9 +563,9 @@ export default function OutstandingDues() {
                   <AlertTitle className="text-sm">After a cheque/DD dishonour</AlertTitle>
                   <AlertDescription className="text-xs text-muted-foreground space-y-1">
                     <p>
-                      If this invoice had a reversed receipt earlier, the replacement receipt may show an{" "}
-                      <strong>arrears interest disclosure</strong> (not added to the receipt total). Open the new receipt
-                      from the register after you pay here, or review the invoice workflow.
+                      If this invoice had a reversed receipt earlier, accrued interest may appear as a separate line.
+                      Use <strong>Pay (Interest)</strong> or <strong>Pay Both</strong> to settle interest on one receipt
+                      with rent (CGST/SGST split on the rent portion).
                     </p>
                     <Link
                       className="text-primary font-medium hover:underline inline-block"
@@ -475,14 +576,21 @@ export default function OutstandingDues() {
                   </AlertDescription>
                 </Alert>
               ) : null}
-              <div className="text-sm">
+              <div className="text-sm space-y-1">
                 {payKind === "rent" ? (
                   <>
-                    <span className="text-muted-foreground">Invoice:</span>{" "}
-                    <span className="font-mono">{payInvoice?.invoiceNo ?? payInvoice?.invoiceId}</span>
-                    <br />
-                    <span className="text-muted-foreground">Outstanding:</span>{" "}
-                    <span className="font-medium">{formatInr(Number(payInvoice?.outstandingAmount ?? 0))}</span>
+                    <div>
+                      <span className="text-muted-foreground">Invoice:</span>{" "}
+                      <span className="font-mono">{payInvoice?.invoiceNo ?? payInvoice?.invoiceId}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Outstanding rent:</span>{" "}
+                      <span className="font-medium">{formatInr(rentDueForDialog)}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Outstanding interest:</span>{" "}
+                      <span className="font-medium">{formatInr(interestDueForDialog)}</span>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -494,10 +602,88 @@ export default function OutstandingDues() {
                   </>
                 )}
               </div>
-              <div className="space-y-1">
-                <Label>Amount</Label>
-                <Input value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder="e.g. 11800" />
-              </div>
+              {payKind === "rent" ? (
+                <>
+                  <div className="space-y-1">
+                    <Label>Payment action</Label>
+                    <Select
+                      value={rentPayMode}
+                      onValueChange={(v) => {
+                        const mode = v as RentPayMode;
+                        setRentPayMode(mode);
+                        const rent = mode === "interest_only" ? 0 : rentDueForDialog;
+                        if (mode !== "interest_only") setRentAmountInput(String(rentDueForDialog));
+                        const total =
+                          Math.round((rent + (mode === "rent_only" ? 0 : interestDueForDialog)) * 100) / 100;
+                        setPayAmount(String(total));
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="rent_only" disabled={rentDueForDialog <= 0}>
+                          Pay (Rent)
+                        </SelectItem>
+                        <SelectItem value="interest_only" disabled={interestDueForDialog <= 0}>
+                          Pay (Interest)
+                        </SelectItem>
+                        <SelectItem
+                          value="combined"
+                          disabled={rentDueForDialog <= 0 || interestDueForDialog <= 0}
+                        >
+                          Pay Both (Rent + Interest)
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {(rentPayMode === "rent_only" || rentPayMode === "combined") && (
+                    <div className="space-y-1">
+                      <Label>Rent amount (₹)</Label>
+                      <Input
+                        value={rentAmountInput}
+                        onChange={(e) => {
+                          setRentAmountInput(e.target.value);
+                          const rent = Number(e.target.value) || 0;
+                          const interest = rentPayMode === "combined" ? interestDueForDialog : 0;
+                          setPayAmount(String(Math.round((rent + interest) * 100) / 100));
+                        }}
+                        inputMode="decimal"
+                        placeholder={`Max ${formatInr(rentDueForDialog)}`}
+                      />
+                    </div>
+                  )}
+                  {rentPayTotal > 0 ? (
+                    <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
+                      <p className="font-medium">Receipt particulars (preview)</p>
+                      {receiptParticularsPreview.map((row) => (
+                        <div key={row.label} className="flex justify-between gap-4">
+                          <span className="text-muted-foreground">{row.label}</span>
+                          <span className="tabular-nums">
+                            {row.label === "CGST" || row.label === "SGST"
+                              ? "As per rent split"
+                              : formatInr(row.amount)}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between gap-4 border-t pt-2 font-medium">
+                        <span>Total</span>
+                        <span className="tabular-nums">{formatInr(rentPayTotal)}</span>
+                      </div>
+                      {rentPayMode === "combined" ? (
+                        <p className="text-xs text-muted-foreground pt-1">
+                          One consolidated receipt is issued for the combined payment.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className="space-y-1">
+                  <Label>Amount</Label>
+                  <Input value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder="e.g. 11800" />
+                </div>
+              )}
             </div>
           ) : (
             <PaymentPreferenceForm
@@ -505,7 +691,7 @@ export default function OutstandingDues() {
               onChange={setPaymentPref}
               receivedByLabel={receivedByLabel}
               receivedAtLabel={receivedAtLabel}
-              summaryAmount={payAmount}
+              summaryAmount={payKind === "rent" ? String(rentPayTotal) : payAmount}
             />
           )}
           <DialogFooter className="flex-wrap gap-2">
@@ -514,7 +700,10 @@ export default function OutstandingDues() {
                 variant="outline"
                 onClick={() => {
                   setPayStep("summary");
-                  setPaymentPref((p) => ({ ...p, paidAmount: payAmount }));
+                  setPaymentPref((p) => ({
+                    ...p,
+                    paidAmount: payKind === "rent" ? String(rentPayTotal) : payAmount,
+                  }));
                 }}
               >
                 Back
@@ -539,21 +728,35 @@ export default function OutstandingDues() {
                 </Button>
                 <Button
                   onClick={() => {
-                    const amt = Number(payAmount);
+                    const amt = payKind === "rent" ? rentPayTotal : Number(payAmount);
                     if (!Number.isFinite(amt) || amt <= 0) {
                       toast({ title: "Invalid amount", description: "Enter a valid amount.", variant: "destructive" });
                       return;
+                    }
+                    if (payKind === "rent") {
+                      const rentAmt = rentPayMode === "interest_only" ? 0 : Number(rentAmountInput);
+                      if ((rentPayMode === "rent_only" || rentPayMode === "combined") && (!Number.isFinite(rentAmt) || rentAmt <= 0)) {
+                        toast({ title: "Rent amount", description: "Enter a valid rent amount.", variant: "destructive" });
+                        return;
+                      }
+                      if (
+                        (rentPayMode === "interest_only" || rentPayMode === "combined") &&
+                        interestDueForDialog <= 0
+                      ) {
+                        toast({ title: "Interest", description: "No unpaid interest for this invoice.", variant: "destructive" });
+                        return;
+                      }
                     }
                     setPaymentPref(defaultPaymentPreferenceValue(amt));
                     setPayStep("payment");
                   }}
                   disabled={
-                    !Number.isFinite(Number(payAmount)) ||
-                    Number(payAmount) <= 0 ||
-                    (payKind === "rent" ? !payInvoice : !payMarket)
+                    payKind === "rent"
+                      ? !payInvoice || rentPayTotal <= 0
+                      : !Number.isFinite(Number(payAmount)) || Number(payAmount) <= 0 || !payMarket
                   }
                 >
-                  Pay
+                  Continue
                 </Button>
               </>
             ) : (

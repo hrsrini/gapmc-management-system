@@ -5,8 +5,14 @@
 import type { Express } from "express";
 import { asc, eq, sql } from "drizzle-orm";
 import { db } from "./db";
-import { govtGstExemptCategories, iomsRevenueHeadLedgerMap, tallyLedgers } from "@shared/db-schema";
+import {
+  govtGstExemptCategories,
+  iomsRevenueHeadLedgerMap,
+  manualReceiptTypes,
+  tallyLedgers,
+} from "@shared/db-schema";
 import { sendApiError } from "./api-errors";
+import { buildReceiptRevenueHeadOptions } from "@shared/receipt-revenue-head-options";
 
 export function registerFinanceReferenceRoutes(app: Express) {
   app.get("/api/ioms/reference/govt-gst-exempt-categories", async (_req, res) => {
@@ -26,6 +32,33 @@ export function registerFinanceReferenceRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch Tally ledger catalogue");
+    }
+  });
+
+  /** All applicable M-05 receipt revenue heads (Tally catalogue + manual types + standard IOMS buckets). */
+  app.get("/api/ioms/reference/receipt-revenue-heads", async (_req, res) => {
+    try {
+      const [ledgerRows, manualRows, mapRows] = await Promise.all([
+        db
+          .select({ ledgerName: tallyLedgers.ledgerName })
+          .from(tallyLedgers)
+          .orderBy(asc(tallyLedgers.sortOrder), asc(tallyLedgers.ledgerName)),
+        db
+          .select({ ledgerName: manualReceiptTypes.ledgerName })
+          .from(manualReceiptTypes)
+          .where(eq(manualReceiptTypes.isActive, true))
+          .orderBy(asc(manualReceiptTypes.sortOrder), asc(manualReceiptTypes.ledgerName)),
+        db.select({ revenueHead: iomsRevenueHeadLedgerMap.revenueHead }).from(iomsRevenueHeadLedgerMap),
+      ]);
+      const options = buildReceiptRevenueHeadOptions({
+        tallyLedgerNames: ledgerRows.map((r) => r.ledgerName),
+        manualReceiptLedgerNames: manualRows.map((r) => r.ledgerName),
+        extraHeads: mapRows.map((r) => r.revenueHead),
+      });
+      res.json(options);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch receipt revenue heads");
     }
   });
 

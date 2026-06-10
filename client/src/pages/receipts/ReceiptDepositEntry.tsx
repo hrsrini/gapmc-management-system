@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,25 +37,42 @@ interface BankAccount {
   ifscCode?: string | null;
 }
 
-interface YardRef {
-  id: string;
-  name: string;
-  code: string;
+interface CashInHandLocationContext {
+  canSelectAll: boolean;
+  defaultYardId: string | null;
+  yards: Array<{ id: string; name: string; code: string; type: string }>;
 }
 
 export default function ReceiptDepositEntry() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [yardId, setYardId] = useState("");
+  const [yardId, setYardId] = useState<string | undefined>(undefined);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bankAccountId, setBankAccountId] = useState("");
   const [depositDate, setDepositDate] = useState(() => new Date().toISOString().slice(0, 10));
 
-  const { data: yards = [] } = useQuery<YardRef[]>({ queryKey: ["/api/yards"] });
+  const { data: locCtx } = useQuery<CashInHandLocationContext>({
+    queryKey: ["/api/ioms/receipt-deposits/cash-in-hand/locations"],
+    queryFn: async () => {
+      const res = await fetch("/api/ioms/receipt-deposits/cash-in-hand/locations", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load locations");
+      return res.json();
+    },
+  });
 
-  const undepositedUrl = yardId
-    ? `/api/ioms/receipt-deposits/undeposited?yardId=${encodeURIComponent(yardId)}`
-    : "";
+  useEffect(() => {
+    if (locCtx && yardId === undefined) {
+      const initial = locCtx.defaultYardId ?? locCtx.yards[0]?.id ?? "";
+      setYardId(initial);
+    }
+  }, [locCtx, yardId]);
+
+  const yards = locCtx?.yards ?? [];
+
+  const undepositedUrl =
+    yardId !== undefined && yardId
+      ? `/api/ioms/receipt-deposits/undeposited?yardId=${encodeURIComponent(yardId)}`
+      : "";
   const { data: undeposited = [], isLoading } = useQuery<UndepositedRow[]>({
     queryKey: [undepositedUrl],
     enabled: Boolean(yardId),
@@ -142,9 +159,16 @@ export default function ReceiptDepositEntry() {
           <div className="grid gap-3 md:grid-cols-3">
             <div className="space-y-1">
               <Label>Location *</Label>
-              <Select value={yardId || undefined} onValueChange={(v) => { setYardId(v); setSelected(new Set()); }}>
+              <Select
+                value={yardId === undefined ? undefined : yardId || undefined}
+                onValueChange={(v) => {
+                  setYardId(v);
+                  setSelected(new Set());
+                }}
+                disabled={yardId === undefined}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select yard" />
+                  <SelectValue placeholder={yardId === undefined ? "Loading locations…" : "Select yard"} />
                 </SelectTrigger>
                 <SelectContent>
                   {yards.map((y) => (

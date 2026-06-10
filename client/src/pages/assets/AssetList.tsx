@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { Building2, AlertCircle, Plus } from "lucide-react";
+import { premisesStatusLabel } from "@shared/premises-allocation";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
@@ -16,18 +17,19 @@ interface Asset {
   assetId: string;
   yardId: string;
   assetType: string;
-  complexName?: string | null;
+  premisesLocation?: string | null;
+  propertyTaxAuthority?: string | null;
   value?: number | null;
-  isActive?: boolean;
+  premisesStatus?: string | null;
 }
 
 const columns: ReportTableColumn[] = [
-  { key: "_assetId", header: "Asset ID", sortField: "assetId" },
+  { key: "_assetId", header: "Premises ID", sortField: "assetId" },
   { key: "yardName", header: "Yard" },
-  { key: "assetType", header: "Type" },
-  { key: "complexName", header: "Complex" },
-  { key: "value", header: "Value" },
-  { key: "_status", header: "Status", sortField: "statusSort" },
+  { key: "assetType", header: "Premises type" },
+  { key: "premisesLocation", header: "Location" },
+  { key: "value", header: "Valuation (Rs.)" },
+  { key: "_status", header: "Premises status", sortField: "statusSort" },
 ];
 
 export default function AssetList() {
@@ -44,7 +46,8 @@ export default function AssetList() {
 
   const sourceRows = useMemo((): Record<string, unknown>[] => {
     return (assets ?? []).map((a) => {
-      const active = a.isActive !== false;
+      const statusLabel = premisesStatusLabel(a.premisesStatus);
+      const vacant = statusLabel === "Vacant";
       return {
         id: a.id,
         assetId: a.assetId,
@@ -57,10 +60,10 @@ export default function AssetList() {
         ),
         yardName: yardById[a.yardId] ?? a.yardId,
         assetType: a.assetType,
-        complexName: a.complexName ?? "—",
+        premisesLocation: a.premisesLocation ?? "—",
         value: a.value != null ? a.value : "—",
-        statusSort: active ? "Active" : "Inactive",
-        _status: <Badge variant={active ? "default" : "secondary"}>{active ? "Active" : "Inactive"}</Badge>,
+        statusSort: statusLabel,
+        _status: <Badge variant={vacant ? "default" : "secondary"}>{statusLabel}</Badge>,
       };
     });
   }, [assets, yardById, canUpdate]);
@@ -107,8 +110,8 @@ export default function AssetList() {
             <ClientDataGrid
               columns={columns}
               sourceRows={sourceRows}
-              searchKeys={["assetId", "yardName", "assetType", "complexName", "value", "statusSort"]}
-              searchPlaceholder="Search by asset ID, yard, type, complex…"
+              searchKeys={["assetId", "yardName", "assetType", "premisesLocation", "value", "statusSort"]}
+              searchPlaceholder="Search by premises ID, yard, type, status…"
               defaultSortKey="assetId"
               defaultSortDir="asc"
               emptyMessage="No assets in register."

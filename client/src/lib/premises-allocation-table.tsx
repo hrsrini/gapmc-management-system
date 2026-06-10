@@ -9,7 +9,7 @@ export const PREMISES_ALLOCATION_COLUMNS: ReportTableColumn[] = [
   { key: "allotteeName", header: "Allottee" },
   { key: "fromDate", header: "Agreement from" },
   { key: "toDate", header: "Agreement to" },
-  { key: "monthlyRent", header: "Monthly rent (₹)" },
+  { key: "monthlyRent", header: "Monthly Rent (Rs.)" },
   { key: "securityDeposit", header: "Security deposit (₹)" },
   { key: "_approval", header: "Approval", sortField: "approvalStatus" },
   { key: "_tenancy", header: "Tenancy", sortField: "status" },

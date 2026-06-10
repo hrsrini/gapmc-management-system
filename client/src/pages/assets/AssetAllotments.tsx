@@ -29,6 +29,7 @@ import { useAuth } from "@/context/AuthContext";
 import { KeyRound, AlertCircle, Plus, Loader2, Pencil } from "lucide-react";
 import { localCalendarYmd, RENT_REVISION_MODES } from "@shared/premises-allocation";
 import { invalidateAssetAllotmentQueries } from "@/lib/invalidate-asset-allotments";
+import { invalidatePremisesRegisterQueries } from "@/lib/premisesRegisterCache";
 import { formatInr } from "@/lib/formatInr";
 import {
   AssetAllotmentManageDialog,
@@ -161,7 +162,7 @@ export default function AssetAllotments() {
     },
     onSuccess: () => {
       invalidateAssetAllotmentQueries(queryClient);
-      queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets/vacant"] });
+      invalidatePremisesRegisterQueries(queryClient);
       toast({ title: "Allotment created" });
       setDialogOpen(false);
       setAllotteeName("");
@@ -225,7 +226,7 @@ export default function AssetAllotments() {
             </CardTitle>
             <p className="text-sm text-muted-foreground mt-1">
               Tenancy status (Pending / Active / Vacated) follows the approval workflow for new lines: open{" "}
-              <strong>Manage</strong>, upload the notarised agreement, then DV verifies and DA approves — Approved sets
+              <strong>Manage</strong>, upload the agreement copy (PDF), then DV verifies and DA approves — Approved sets
               tenancy to Active. Use Manage to edit draft fields or run approvals.
             </p>
           </div>
@@ -285,7 +286,7 @@ export default function AssetAllotments() {
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <Label>Monthly rent *</Label>
+                      <Label>Monthly Rent (Rs.) *</Label>
                       <Input type="number" step="0.01" value={monthlyRent} onChange={(e) => setMonthlyRent(e.target.value)} required />
                     </div>
                     <div>

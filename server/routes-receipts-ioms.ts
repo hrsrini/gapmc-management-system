@@ -439,11 +439,18 @@ export function registerReceiptsIomsRoutes(app: Express) {
   app.get("/api/ioms/receipts/dashboard/cash-in-hand", async (req, res) => {
     try {
       const yardId = String(req.query.yardId ?? "").trim();
-      const scopedIds = req.scopedLocationIds;
-      if (yardId && scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
-        return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      const { resolveCashInHandYardIds, CashInHandYardAccessError } = await import(
+        "./receipt-deposit-location-scope"
+      );
+      let yardIds: string[];
+      try {
+        yardIds = await resolveCashInHandYardIds(req, yardId || undefined);
+      } catch (e) {
+        if (e instanceof CashInHandYardAccessError) {
+          return sendApiError(res, 403, "RECEIPT_YARD_ACCESS_DENIED", "You do not have access to this yard");
+        }
+        throw e;
       }
-      const yardIds = yardId ? [yardId] : scopedIds && scopedIds.length > 0 ? scopedIds : [];
       const { computeCashInHandSummary } = await import("./receipt-deposit-service");
       const { getMergedSystemConfig, parseSystemConfigNumber } = await import("./system-config");
       const cfg = await getMergedSystemConfig();

@@ -80,8 +80,21 @@ import {
 } from "@shared/premises-allocation";
 import { hasPermission } from "./auth";
 import { routeParamString } from "./route-params";
-import { registerEntityAllotmentRoutes } from "./entity-allotment-routes";
-import { assertPremisesNotAlreadyAllocatedActive } from "./premises-allocation-guard";
+import {
+  issueSecurityDepositReceiptOnAllotmentDraft,
+  SecurityDepositReceiptError,
+} from "./allotment-security-deposit-receipt";
+import { premisesRefNoTaken, registerEntityAllotmentRoutes } from "./entity-allotment-routes";
+import { assertPremisesNotAlreadyAllocatedActive, isPremisesAllocatable } from "./premises-allocation-guard";
+import { syncPremisesStatusFromTenancy } from "./premises-status-sync";
+import { fetchPremisesRegister } from "./premises-register";
+import {
+  migrateLegacyPremisesType,
+  normalizePremisesLocation,
+  normalizePremisesType,
+  normalizePropertyTaxAuthority,
+  normalizeUtilityConnection,
+} from "@shared/premises-master";
 import { buildPreReceiptPdfA4Double } from "./pre-receipt-pdf";
 import {
   billingMonthWithinAllotment,
@@ -737,8 +750,8 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
         return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       }
-      if (String(inv.status) !== "Approved" && String(inv.status) !== "Paid") {
-        return sendApiError(res, 400, "DUES_PAY_STATUS", "Only Approved/Paid invoices can be paid via counter flow");
+      if (String(inv.status) !== "Approved" && String(inv.status) !== "Overdue" && String(inv.status) !== "Paid") {
+        return sendApiError(res, 400, "DUES_PAY_STATUS", "Only Approved, Overdue, or Paid invoices can be paid via counter flow");
       }
 
       const recs = await db
@@ -845,8 +858,8 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
           return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
         }
-        if (String(inv.status) !== "Approved" && String(inv.status) !== "Paid") {
-          return sendApiError(res, 400, "DUES_PAY_STATUS", "Only Approved/Paid invoices can be paid");
+        if (String(inv.status) !== "Approved" && String(inv.status) !== "Overdue" && String(inv.status) !== "Paid") {
+          return sendApiError(res, 400, "DUES_PAY_STATUS", "Only Approved, Overdue, or Paid invoices can be paid");
         }
 
         const recs = await db
@@ -2730,6 +2743,25 @@ export function registerTradersAssetsRoutes(app: Express) {
   });
 
   // ----- Assets -----
+  app.get("/api/ioms/premises-register", async (req, res) => {
+    try {
+      const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+      const data = await fetchPremisesRegister({
+        yardId: req.query.yardId as string | undefined,
+        premisesType: req.query.premisesType as string | undefined,
+        premisesStatus: req.query.premisesStatus as string | undefined,
+        allottee: req.query.allottee as string | undefined,
+        assetId: req.query.assetId as string | undefined,
+        agreementExpiry: req.query.agreementExpiry as string | undefined,
+        scopedLocationIds: scopedIds,
+      });
+      res.json(data);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch premises register");
+    }
+  });
+
   app.get("/api/ioms/assets", async (req, res) => {
     try {
       const yardId = req.query.yardId as string | undefined;
@@ -2784,6 +2816,8 @@ export function registerTradersAssetsRoutes(app: Express) {
         lastRentAmount: number | null;
       }> = [];
       for (const asset of allAssets) {
+        const ps = normalizePremisesStatus(asset.premisesStatus) ?? "Vacant";
+        if (ps !== "Vacant") continue;
         const list = allotmentsByAsset.get(asset.id) ?? allotmentsByAsset.get(asset.assetId) ?? [];
         const latest = list[0];
         if (latest && latest.status === "Active") continue;
@@ -2919,6 +2953,18 @@ export function registerTradersAssetsRoutes(app: Express) {
         );
       }
 
+      const allotmentDate = String((body as Record<string, unknown>).allotmentDate ?? "").trim();
+      const adErr = ymdFieldError("Allotment date", allotmentDate, true);
+      if (adErr) return sendApiError(res, 400, "ALLOTMENT_DATE", adErr);
+
+      const premisesRefNo =
+        (body as Record<string, unknown>).premisesRefNo != null
+          ? String((body as Record<string, unknown>).premisesRefNo).trim()
+          : "";
+      if (premisesRefNo && (await premisesRefNoTaken(premisesRefNo))) {
+        return sendApiError(res, 400, "PREMISES_REF_DUPLICATE", "Allotment reference number is already in use.");
+      }
+
       // Validate agreement dates + finance fields (US-M02-003)
       const fromDate = String(body.fromDate ?? "").trim();
       let toDate = String(body.toDate ?? "").trim();
@@ -2950,6 +2996,8 @@ export function registerTradersAssetsRoutes(app: Express) {
         toDate = capVacatedOnYmd(toDate);
       }
       if (nextStatus === "Active") {
+        const allocPrem = isPremisesAllocatable(assetRow);
+        if (!allocPrem.ok) return sendApiError(res, 400, allocPrem.code, allocPrem.message);
         const check = await assertPremisesNotAlreadyAllocatedActive({ assetId: aid });
         if (!check.ok) {
           return sendApiError(
@@ -2976,7 +3024,8 @@ export function registerTradersAssetsRoutes(app: Express) {
         dvUser: null,
         daUser: null,
         approvalStatus: approvalStatus as any,
-        premisesRefNo: null,
+        allotmentDate,
+        premisesRefNo: premisesRefNo || null,
         monthlyRent: roundedMoney2(monthlyRent),
         gstApplicable: !Boolean((lic as unknown as { isNonGstEntity?: boolean | null }).isNonGstEntity),
         gstLocked: false,
@@ -2995,9 +3044,37 @@ export function registerTradersAssetsRoutes(app: Express) {
         agreementGapDaOverride: false,
         daGstOverride: false,
       });
+      if (nextStatus === "Active") {
+        await syncPremisesStatusFromTenancy(aid);
+      }
       const [row] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, id));
       if (row) writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
-      res.status(201).json(row);
+
+      let securityDepositReceipt: { receiptId: string; receiptNo: string } | null = null;
+      const secAmt = body.securityDeposit != null ? Number(body.securityDeposit) : 0;
+      if (Number.isFinite(secAmt) && secAmt > 0 && approvalStatus === "Draft") {
+        try {
+          securityDepositReceipt = await issueSecurityDepositReceiptOnAllotmentDraft({
+            req,
+            allotmentId: id,
+            yardId: assetRow.yardId,
+            securityDepositAmount: secAmt,
+            payerName: String(body.allotteeName ?? "").trim() || String(lic.firmName ?? lic.contactName ?? ""),
+            payerType: "Trader",
+            payerRefId: traderLicenceId,
+            unifiedEntityId: unifiedEntityIdFromTrackA(traderLicenceId),
+            premisesAssetId: assetRow.assetId,
+            paymentBody: body as Record<string, unknown>,
+          });
+        } catch (err) {
+          if (err instanceof SecurityDepositReceiptError) {
+            return sendApiError(res, 400, err.code, err.message);
+          }
+          throw err;
+        }
+      }
+
+      res.status(201).json({ ...row, securityDepositReceipt });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create allotment");
@@ -3038,7 +3115,7 @@ export function registerTradersAssetsRoutes(app: Express) {
 
         if (currentApproval === "Draft" && newApproval === "Verified") {
           if (!existingAllot.agreementDocFile)
-            return sendApiError(res, 400, "E-AST-011", "Notarised agreement PDF must be uploaded before DV verification.");
+            return sendApiError(res, 400, "E-AST-011", "Agreement copy (PDF) must be uploaded before DV verification.");
         }
 
         if (currentApproval === "Verified" && newApproval === "Draft") {
@@ -3050,7 +3127,7 @@ export function registerTradersAssetsRoutes(app: Express) {
 
         if (newApproval === "Approved") {
           if (!existingAllot.agreementDocFile)
-            return sendApiError(res, 400, "E-AST-011", "Notarised agreement PDF is mandatory before DA approval.");
+            return sendApiError(res, 400, "E-AST-011", "Agreement copy (PDF) is mandatory before DA approval.");
 
           let premRef = existingAllot.premisesRefNo ?? null;
           if (!premRef) {
@@ -3138,6 +3215,19 @@ export function registerTradersAssetsRoutes(app: Express) {
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
       if (financeEditable) {
+        if ((body as Record<string, unknown>).allotmentDate !== undefined) {
+          const ad = String((body as Record<string, unknown>).allotmentDate ?? "").trim();
+          const adFieldErr = ymdFieldError("Allotment date", ad, true);
+          if (adFieldErr) return sendApiError(res, 400, "ALLOTMENT_DATE", adFieldErr);
+          updates.allotmentDate = ad;
+        }
+        if ((body as Record<string, unknown>).premisesRefNo !== undefined) {
+          const ref = String((body as Record<string, unknown>).premisesRefNo ?? "").trim();
+          if (ref && (await premisesRefNoTaken(ref, undefined, id))) {
+            return sendApiError(res, 400, "PREMISES_REF_DUPLICATE", "Allotment reference number is already in use.");
+          }
+          updates.premisesRefNo = ref || null;
+        }
         if ((body as Record<string, unknown>).monthlyRent !== undefined) {
           updates.monthlyRent = roundedMoney2(Number((body as Record<string, unknown>).monthlyRent));
         }
@@ -3178,6 +3268,9 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
 
       await db.update(assetAllotments).set(updates as Record<string, string | number | null>).where(eq(assetAllotments.id, id));
+      if (updates.status !== undefined) {
+        await syncPremisesStatusFromTenancy(existingAllot.assetId);
+      }
       const [row] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, id));
       if (!row) return sendApiError(res, 404, "ALLOTMENT_NOT_FOUND", "Not found");
       writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existingAllot, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -3208,24 +3301,46 @@ export function registerTradersAssetsRoutes(app: Express) {
       const yv = await assertPremisesYardLocation(yid);
       if (!yv.ok) return sendApiError(res, 400, yv.code, yv.message);
       const id = nanoid();
+      const rawType = (body as Record<string, unknown>).assetType ?? (body as Record<string, unknown>).asset_type;
+      const assetType = normalizePremisesType(rawType) ?? migrateLegacyPremisesType(String(rawType ?? "Shop"));
       await db.insert(assets).values({
         id,
         assetId: String(body.assetId ?? ""),
         yardId: yid,
-        assetType: String(body.assetType ?? "Shop"),
+        assetType,
         complexName: body.complexName ? String(body.complexName) : null,
+        premisesLocation: normalizePremisesLocation((body as Record<string, unknown>).premisesLocation ?? (body as Record<string, unknown>).premises_location),
+        propertyTaxAuthority: normalizePropertyTaxAuthority(
+          (body as Record<string, unknown>).propertyTaxAuthority ?? (body as Record<string, unknown>).property_tax_authority,
+        ),
+        houseNo: (body as Record<string, unknown>).houseNo
+          ? String((body as Record<string, unknown>).houseNo).trim()
+          : (body as Record<string, unknown>).house_no
+            ? String((body as Record<string, unknown>).house_no).trim()
+            : null,
+        electricityConnectionType: normalizeUtilityConnection(
+          (body as Record<string, unknown>).electricityConnectionType ?? (body as Record<string, unknown>).electricity_connection_type,
+        ),
+        contractAccountNo: (body as Record<string, unknown>).contractAccountNo
+          ? String((body as Record<string, unknown>).contractAccountNo).trim()
+          : (body as Record<string, unknown>).contract_account_no
+            ? String((body as Record<string, unknown>).contract_account_no).trim()
+            : null,
+        waterConnectionType: normalizeUtilityConnection(
+          (body as Record<string, unknown>).waterConnectionType ?? (body as Record<string, unknown>).water_connection_type,
+        ),
+        consumerId: (body as Record<string, unknown>).consumerId
+          ? String((body as Record<string, unknown>).consumerId).trim()
+          : (body as Record<string, unknown>).consumer_id
+            ? String((body as Record<string, unknown>).consumer_id).trim()
+            : null,
         area: body.area ? String(body.area) : null,
         plinthAreaSqft: body.plinthAreaSqft != null ? Number(body.plinthAreaSqft) : null,
         value: body.value != null ? Number(body.value) : null,
         fileNumber: body.fileNumber ? String(body.fileNumber) : null,
         orderNumber: body.orderNumber ? String(body.orderNumber) : null,
-        isActive: body.isActive !== undefined ? Boolean(body.isActive) : true,
-        premisesStatus: (() => {
-          const raw = (body as Record<string, unknown>).premisesStatus ?? (body as Record<string, unknown>).premises_status;
-          if (raw === undefined || raw === null) return "Active";
-          const n = normalizePremisesStatus(raw);
-          return n ?? "Active";
-        })(),
+        isActive: true,
+        premisesStatus: "Vacant",
       });
       const [row] = await db.select().from(assets).where(eq(assets.id, id));
       if (row) writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -3249,30 +3364,47 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
       const yvPut = await assertPremisesYardLocation(newYard);
       if (!yvPut.ok) return sendApiError(res, 400, yvPut.code, yvPut.message);
-      const allowed = [
-        "assetId",
-        "yardId",
-        "assetType",
-        "complexName",
-        "area",
-        "plinthAreaSqft",
-        "value",
-        "fileNumber",
-        "orderNumber",
-        "isActive",
-        "premisesStatus",
-        "premises_status",
-      ];
+      const raw = body as Record<string, unknown>;
       const updates: Record<string, unknown> = {};
-      for (const k of allowed) {
-        if (body[k] === undefined) continue;
-        if (k === "plinthAreaSqft" || k === "value") updates[k] = body[k] == null ? null : Number(body[k]);
-        else if (k === "isActive") updates.isActive = Boolean(body.isActive);
-        else if (k === "premisesStatus" || k === "premises_status") {
-          const n = normalizePremisesStatus(body[k]);
-          if (!n) continue;
-          updates.premisesStatus = n;
-        } else updates[k] = body[k] == null ? null : String(body[k]);
+      if (raw.assetId !== undefined) updates.assetId = raw.assetId == null ? null : String(raw.assetId);
+      if (raw.yardId !== undefined) updates.yardId = String(raw.yardId);
+      if (raw.assetType !== undefined || raw.asset_type !== undefined) {
+        const t = normalizePremisesType(raw.assetType ?? raw.asset_type) ?? migrateLegacyPremisesType(String(raw.assetType ?? raw.asset_type ?? existing.assetType));
+        updates.assetType = t;
+      }
+      if (raw.complexName !== undefined) updates.complexName = raw.complexName == null ? null : String(raw.complexName);
+      if (raw.premisesLocation !== undefined || raw.premises_location !== undefined) {
+        updates.premisesLocation = normalizePremisesLocation(raw.premisesLocation ?? raw.premises_location);
+      }
+      if (raw.propertyTaxAuthority !== undefined || raw.property_tax_authority !== undefined) {
+        updates.propertyTaxAuthority = normalizePropertyTaxAuthority(raw.propertyTaxAuthority ?? raw.property_tax_authority);
+      }
+      if (raw.houseNo !== undefined || raw.house_no !== undefined) {
+        const v = raw.houseNo ?? raw.house_no;
+        updates.houseNo = v == null || String(v).trim() === "" ? null : String(v).trim();
+      }
+      if (raw.electricityConnectionType !== undefined || raw.electricity_connection_type !== undefined) {
+        updates.electricityConnectionType = normalizeUtilityConnection(raw.electricityConnectionType ?? raw.electricity_connection_type);
+      }
+      if (raw.contractAccountNo !== undefined || raw.contract_account_no !== undefined) {
+        const v = raw.contractAccountNo ?? raw.contract_account_no;
+        updates.contractAccountNo = v == null || String(v).trim() === "" ? null : String(v).trim();
+      }
+      if (raw.waterConnectionType !== undefined || raw.water_connection_type !== undefined) {
+        updates.waterConnectionType = normalizeUtilityConnection(raw.waterConnectionType ?? raw.water_connection_type);
+      }
+      if (raw.consumerId !== undefined || raw.consumer_id !== undefined) {
+        const v = raw.consumerId ?? raw.consumer_id;
+        updates.consumerId = v == null || String(v).trim() === "" ? null : String(v).trim();
+      }
+      if (raw.area !== undefined) updates.area = raw.area == null ? null : String(raw.area);
+      if (raw.plinthAreaSqft !== undefined) updates.plinthAreaSqft = raw.plinthAreaSqft == null ? null : Number(raw.plinthAreaSqft);
+      if (raw.value !== undefined) updates.value = raw.value == null ? null : Number(raw.value);
+      if (raw.fileNumber !== undefined) updates.fileNumber = raw.fileNumber == null ? null : String(raw.fileNumber);
+      if (raw.orderNumber !== undefined) updates.orderNumber = raw.orderNumber == null ? null : String(raw.orderNumber);
+      if (raw.premisesStatus !== undefined || raw.premises_status !== undefined) {
+        const n = normalizePremisesStatus(raw.premisesStatus ?? raw.premises_status);
+        if (n) updates.premisesStatus = n;
       }
       await db.update(assets).set(updates as Record<string, string | number | boolean | null>).where(eq(assets.id, id));
       const [row] = await db.select().from(assets).where(eq(assets.id, id));

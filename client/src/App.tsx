@@ -64,8 +64,7 @@ import TraderLicences from "@/pages/traders/TraderLicences";
 import TraderLicenceForm from "@/pages/traders/TraderLicenceForm";
 import TraderLicenceDetail from "@/pages/traders/TraderLicenceDetail";
 import TraderBlockingLog from "@/pages/traders/TraderBlockingLog";
-import AssetList from "@/pages/assets/AssetList";
-import AssetsVacant from "@/pages/assets/AssetsVacant";
+import PremisesRegister from "@/pages/assets/PremisesRegister";
 import AssetAllotments from "@/pages/assets/AssetAllotments";
 import AssetForm from "@/pages/assets/AssetForm";
 import IomsRentInvoices from "@/pages/rent/IomsRentInvoices";
@@ -528,7 +527,9 @@ function Router() {
         <ProtectedRoute><AssetAllotments /></ProtectedRoute>
       </Route>
       <Route path="/assets/vacant">
-        <ProtectedRoute><AssetsVacant /></ProtectedRoute>
+        <ProtectedRoute>
+          <Redirect to="/assets?status=Vacant" />
+        </ProtectedRoute>
       </Route>
       <Route path="/assets/new">
         <ProtectedRoute><RequirePermission module="M-02" action="Create"><AssetForm /></RequirePermission></ProtectedRoute>
@@ -537,7 +538,7 @@ function Router() {
         <ProtectedRoute><RequirePermission module="M-02" action="Update"><AssetForm /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/assets">
-        <ProtectedRoute><AssetList /></ProtectedRoute>
+        <ProtectedRoute><RequirePermission module="M-02" action="Read"><PremisesRegister /></RequirePermission></ProtectedRoute>
       </Route>
       <Route component={NotFound} />
     </Switch>
