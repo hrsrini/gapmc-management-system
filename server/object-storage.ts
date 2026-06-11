@@ -1,5 +1,5 @@
 /**
- * Upload blob storage: local `uploads/<key>` or S3-compatible bucket (SRS §15.1).
+ * Upload blob storage: Supabase Storage (default), local `uploads/<key>`, or S3-compatible bucket (SRS §15.1).
  * Keys are relative paths (no leading slash), e.g. `dak/inward/{id}/{file}.pdf`.
  *
  * Local disk root defaults to `<project>/uploads` (parent of `server/` in dev, parent of `dist/` when
@@ -17,16 +17,25 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
 } from "@aws-sdk/client-s3";
+import { STANDARD_OBJECT_STORAGE_DRIVER } from "@shared/supabase-storage-standard";
+import {
+  getSupabaseAdmin,
+  getSupabaseStorageBucket,
+  getSupabaseStoragePrefix,
+  isSupabaseStorageNotFoundError,
+} from "./supabase-admin";
 
-export type ObjectStorageDriver = "local" | "s3";
+export type ObjectStorageDriver = "supabase" | "local" | "s3";
 
 export interface ObjectStorageAdapter {
   readonly driver: ObjectStorageDriver;
 }
 
 export function getConfiguredObjectStorageDriver(): ObjectStorageDriver {
-  const d = (process.env.OBJECT_STORAGE_DRIVER ?? "local").trim().toLowerCase();
-  return d === "s3" ? "s3" : "local";
+  const d = (process.env.OBJECT_STORAGE_DRIVER ?? STANDARD_OBJECT_STORAGE_DRIVER).trim().toLowerCase();
+  if (d === "s3") return "s3";
+  if (d === "local") return "local";
+  return "supabase";
 }
 
 export function getObjectStorageAdapter(): ObjectStorageAdapter {
@@ -235,12 +244,84 @@ class S3UploadBlobStore implements UploadBlobStore {
   }
 }
 
+class SupabaseUploadBlobStore implements UploadBlobStore {
+  private readonly bucket: string;
+  private readonly prefix: string;
+
+  constructor() {
+    this.bucket = getSupabaseStorageBucket();
+    this.prefix = getSupabaseStoragePrefix();
+  }
+
+  private objectKey(key: string): string {
+    const safe = assertSafeUploadRelativeKey(key);
+    if (!this.prefix) return safe;
+    return `${this.prefix}/${safe}`;
+  }
+
+  private splitFolderAndName(objectKey: string): { folder: string; name: string } {
+    const idx = objectKey.lastIndexOf("/");
+    if (idx < 0) return { folder: "", name: objectKey };
+    return { folder: objectKey.slice(0, idx), name: objectKey.slice(idx + 1) };
+  }
+
+  async put(key: string, body: Buffer, contentType: string): Promise<void> {
+    const objectKey = this.objectKey(key);
+    const { error } = await getSupabaseAdmin().storage.from(this.bucket).upload(objectKey, body, {
+      contentType: contentType || "application/octet-stream",
+      upsert: true,
+    });
+    if (error) {
+      throw new Error(`Supabase Storage upload failed (${objectKey}): ${error.message}`);
+    }
+  }
+
+  async get(key: string): Promise<Buffer | null> {
+    const objectKey = this.objectKey(key);
+    const { data, error } = await getSupabaseAdmin().storage.from(this.bucket).download(objectKey);
+    if (error) {
+      if (isSupabaseStorageNotFoundError(error)) return null;
+      throw new Error(`Supabase Storage download failed (${objectKey}): ${error.message}`);
+    }
+    if (!data) return null;
+    return Buffer.from(await data.arrayBuffer());
+  }
+
+  async del(key: string): Promise<void> {
+    const objectKey = this.objectKey(key);
+    const { error } = await getSupabaseAdmin().storage.from(this.bucket).remove([objectKey]);
+    if (error && !isSupabaseStorageNotFoundError(error)) {
+      throw new Error(`Supabase Storage delete failed (${objectKey}): ${error.message}`);
+    }
+  }
+
+  async exists(key: string): Promise<boolean> {
+    const objectKey = this.objectKey(key);
+    const { folder, name } = this.splitFolderAndName(objectKey);
+    const { data, error } = await getSupabaseAdmin().storage.from(this.bucket).list(folder, {
+      limit: 100,
+      search: name,
+    });
+    if (error) {
+      if (isSupabaseStorageNotFoundError(error)) return false;
+      throw new Error(`Supabase Storage list failed (${objectKey}): ${error.message}`);
+    }
+    return (data ?? []).some((entry) => entry.name === name && entry.id != null);
+  }
+}
+
 let cachedStore: UploadBlobStore | null = null;
 
 export function getUploadBlobStore(): UploadBlobStore {
   if (cachedStore) return cachedStore;
   const driver = getConfiguredObjectStorageDriver();
-  cachedStore = driver === "s3" ? new S3UploadBlobStore() : new LocalUploadBlobStore();
+  if (driver === "s3") {
+    cachedStore = new S3UploadBlobStore();
+  } else if (driver === "local") {
+    cachedStore = new LocalUploadBlobStore();
+  } else {
+    cachedStore = new SupabaseUploadBlobStore();
+  }
   return cachedStore;
 }
 

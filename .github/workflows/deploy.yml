@@ -40,6 +40,9 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
+      # ECS task must set the same Supabase Storage env as local .env (see docs/DEPLOY-SUPABASE-STORAGE.md):
+      # OBJECT_STORAGE_DRIVER, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+      # SUPABASE_STORAGE_BUCKET=gapmc-uploads, SUPABASE_STORAGE_PREFIX=storage
       - name: Deploy to ECS
         run: |
           aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force-new-deployment

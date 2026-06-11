@@ -7,7 +7,6 @@ import { eq, and, desc, sql, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import multer from "multer";
 import path from "path";
-import fs, { createReadStream } from "fs";
 import { z } from "zod";
 import { db } from "./db";
 import {
@@ -21,9 +20,7 @@ import { createBugBodySchema, patchBugSchema, bugCommentSchema, BUG_STATUSES } f
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import type { AuthUser } from "./auth";
-import { resolveLocalUploadsRoot } from "./object-storage";
-
-const UPLOAD_ROOT = path.join(resolveLocalUploadsRoot(), "bugs");
+import { readBugAttachmentBuffer, writeBugAttachmentBuffer } from "./bug-attachment-storage";
 
 const ALLOWED_MIMES = new Set([
   "image/jpeg",
@@ -82,10 +79,6 @@ function serveAttachmentContentType(ext: string, storedMime: string): string {
   return "application/octet-stream";
 }
 
-function ensureUploadDir(): void {
-  fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
-}
-
 function isAdmin(user: AuthUser | undefined): boolean {
   return Boolean(user?.roles?.some((r) => r.tier === "ADMIN"));
 }
@@ -117,20 +110,8 @@ async function nextTicketNo(): Promise<string> {
   return `BUG-${year}-${String(seq).padStart(5, "0")}`;
 }
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    ensureUploadDir();
-    cb(null, UPLOAD_ROOT);
-  },
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const safeExt = ALLOWED_EXT.has(ext) ? ext : "";
-    cb(null, `${nanoid(24)}${safeExt}`);
-  },
-});
-
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024, files: 5 },
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
@@ -408,16 +389,18 @@ export function registerBugRoutes(app: Express): void {
           reported === "binary/octet-stream" ||
           reported === "";
         if (!ALLOWED_EXT.has(ext) || !acceptedMime) {
-          fs.unlink(f.path, () => {});
           continue;
         }
+        const storedFilename = `${nanoid(24)}${ext}`;
+        const mimeType = persistAttachmentMime(ext, f.mimetype);
+        await writeBugAttachmentBuffer(storedFilename, f.buffer, mimeType);
         await db.insert(bugAttachments).values({
           id: nanoid(),
           bugTicketId: id,
           uploadedByUserId: user.id,
           originalFilename: path.basename(f.originalname).slice(0, 255),
-          storedFilename: f.filename,
-          mimeType: persistAttachmentMime(ext, f.mimetype),
+          storedFilename,
+          mimeType,
           sizeBytes: f.size,
           createdAt: ts,
         });
@@ -561,8 +544,8 @@ export function registerBugRoutes(app: Express): void {
       if (!att) return sendApiError(res, 404, "BUG_ATTACHMENT_NOT_FOUND", "Attachment not found");
 
       const safeName = path.basename(att.storedFilename);
-      const fullPath = path.join(UPLOAD_ROOT, safeName);
-      if (!fullPath.startsWith(UPLOAD_ROOT) || !fs.existsSync(fullPath)) {
+      const buf = await readBugAttachmentBuffer(safeName);
+      if (!buf) {
         return sendApiError(res, 404, "BUG_ATTACHMENT_FILE_MISSING", "File not found");
       }
 
@@ -577,11 +560,7 @@ export function registerBugRoutes(app: Express): void {
       res.setHeader("Content-Type", contentType);
       res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${fname}"`);
       res.setHeader("Cache-Control", "private, max-age=3600");
-      const stream = createReadStream(path.resolve(fullPath));
-      stream.on("error", () => {
-        if (!res.headersSent) sendApiError(res, 500, "INTERNAL_ERROR", "File transfer failed");
-      });
-      stream.pipe(res);
+      res.send(buf);
     } catch (e) {
       console.error(e);
       if (!res.headersSent) sendApiError(res, 500, "INTERNAL_ERROR", "Download failed");

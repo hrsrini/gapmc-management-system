@@ -1,8 +1,11 @@
-import fs from "fs/promises";
 import path from "path";
-import { ensureLocalUploadsRoot } from "./object-storage";
+import { getUploadBlobStore } from "./object-storage";
 
 const DIR = "asset-allotment-agreements";
+
+export function assetAllotmentAgreementBlobKey(allotmentId: string, storedFileName: string): string {
+  return `${DIR}/${path.basename(allotmentId)}/${path.basename(storedFileName)}`;
+}
 
 export function extFromAssetAllotmentAgreementMime(mime: string): string | null {
   const m = String(mime ?? "").toLowerCase();
@@ -18,24 +21,18 @@ export function contentTypeForAssetAllotmentAgreement(_fileName: string): string
   return "application/pdf";
 }
 
-function allotmentDir(allotmentId: string): string {
-  ensureLocalUploadsRoot();
-  const root = process.env.UPLOADS_DIR ? String(process.env.UPLOADS_DIR) : path.join(process.cwd(), "uploads");
-  return path.join(root, DIR, allotmentId);
-}
-
-export async function writeAssetAllotmentAgreementBuffer(allotmentId: string, fileName: string, buf: Buffer): Promise<void> {
-  const dir = allotmentDir(allotmentId);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, fileName), buf);
+export async function writeAssetAllotmentAgreementBuffer(
+  allotmentId: string,
+  fileName: string,
+  buf: Buffer,
+): Promise<void> {
+  await getUploadBlobStore().put(
+    assetAllotmentAgreementBlobKey(allotmentId, fileName),
+    buf,
+    contentTypeForAssetAllotmentAgreement(fileName),
+  );
 }
 
 export async function readAssetAllotmentAgreementBuffer(allotmentId: string, fileName: string): Promise<Buffer | null> {
-  try {
-    const p = path.join(allotmentDir(allotmentId), fileName);
-    return await fs.readFile(p);
-  } catch {
-    return null;
-  }
+  return getUploadBlobStore().get(assetAllotmentAgreementBlobKey(allotmentId, fileName));
 }
-

@@ -56,6 +56,12 @@
 | `npm run db:verify-schema` | Read-only check: IOMS columns + optional land triggers |
 | `npm run db:apply-land-immutable` | Install `land_records` UPDATE/DELETE block triggers |
 | `npm run db:create-gapmc` | Create/seed GAPMC schema |
+| `npm run storage:ensure-bucket` | Create shared Supabase Storage bucket (once) |
+| `npm run storage:smoke` | Verify upload/download to Supabase Storage |
+
+## File uploads (Supabase Storage)
+
+Local, dev, and production share **one** bucket: `gapmc-uploads` with prefix `storage/`. Configure `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env` (see `.env.example`). Production ECS must use the **same** values — see [docs/DEPLOY-SUPABASE-STORAGE.md](docs/DEPLOY-SUPABASE-STORAGE.md).
 
 ## Tech stack
 
