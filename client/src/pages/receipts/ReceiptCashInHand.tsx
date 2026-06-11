@@ -137,10 +137,10 @@ export default function ReceiptCashInHand() {
       if (!res.ok) throw new Error((data as { message?: string }).message ?? res.statusText);
       return data;
     },
-    onSuccess: () =>
+    onSuccess: (data: { message?: string }) =>
       toast({
         title: "EOD summary sent",
-        description: "Check configured email (NOTIFY_EMAIL_TO) or server logs if SMTP is not set.",
+        description: data.message ?? "Check server logs if email did not arrive.",
       }),
     onError: (e: Error) => toast({ title: "Send failed", description: e.message, variant: "destructive" }),
   });
@@ -246,10 +246,9 @@ export default function ReceiptCashInHand() {
                   the scheduled job — totals per location, overdue counts, and optional overdue alerts.
                 </p>
                 <p>
-                  <strong className="text-foreground">Email delivery:</strong> set server environment variables{" "}
-                  <code className="text-xs">NOTIFY_EMAIL_TO</code>, <code className="text-xs">SMTP_HOST</code>,{" "}
-                  <code className="text-xs">SMTP_PORT</code>, and credentials on the app host. Without SMTP, the summary is
-                  still written to server logs.
+                  <strong className="text-foreground">Email delivery:</strong> configure{" "}
+                  <strong className="text-foreground">Admin → Config → Gmail SMTP</strong> (enable, Gmail app password,
+                  and default notify inbox). Without SMTP, the summary is still written to server logs.
                 </p>
                 <p>
                   <strong className="text-foreground">Webhook (optional):</strong> set{" "}

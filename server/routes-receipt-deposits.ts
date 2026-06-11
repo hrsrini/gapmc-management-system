@@ -298,8 +298,22 @@ export function registerReceiptDepositRoutes(app: Express) {
         return sendApiError(res, 403, "FORBIDDEN", "DV or DA role required");
       }
       const { runReceiptDepositDailyJobs } = await import("./cron-receipt-deposit");
-      await runReceiptDepositDailyJobs();
-      res.json({ ok: true, message: "Cash-in-hand summary dispatched (see NOTIFY_EMAIL_TO / webhook)." });
+      const { getEmailConfigStatus } = await import("./smtp-config");
+      const dispatch = await runReceiptDepositDailyJobs();
+      const email = await getEmailConfigStatus();
+      let message = "Cash-in-hand summary written to server logs.";
+      if (dispatch.emailSent) {
+        message = `Cash-in-hand summary emailed to ${email.notifyEmailTo}.`;
+      } else if (email.notifyDigestsReady) {
+        message = "Cash-in-hand summary processed; check server logs if email did not arrive.";
+      } else if (email.smtpReady) {
+        message =
+          "Summary logged. Set Default notify inbox under Admin → Config → Gmail SMTP to receive digest email.";
+      } else {
+        message =
+          "Summary logged to server console. Configure Gmail SMTP under Admin → Config to enable email delivery.";
+      }
+      res.json({ ok: true, message, email, dispatch });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to send summary");

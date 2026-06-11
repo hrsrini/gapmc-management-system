@@ -1,8 +1,26 @@
 /**
- * Notifications: console + optional NOTIFY_WEBHOOK_URL + optional SMTP (NOTIFY_EMAIL_TO, SMTP_*)
- * + optional NOTIFY_SMS_WEBHOOK_URL (client/NIC SMS gateway — POST JSON same shape as generic webhook).
- * Failures are logged; never throw to callers of sendNotificationStub.
+ * Notifications: console + optional NOTIFY_WEBHOOK_URL + SMTP (Admin → Config → Gmail SMTP)
+ * + optional NOTIFY_SMS_WEBHOOK_URL.
+ *
+ * Email entry points (all use resolveSmtpSettings / Admin Gmail config):
+ * - dispatchNotification → default notify inbox (digests, SLA, HR alerts, M-02/M-05 crons)
+ * - sendTransactionalEmailTo → employee login provision (M-01), portal access (M-10)
+ *
+ * Callers: sla-reminder, cron-receipt-deposit, cron-hr-retirement, cron-hr-leave-accrual,
+ * cron-m02-entity-alerts, cron-operational-reminders, cron-amc-renewal-digest, routes-hr,
+ * hr-employee-login, routes-portal.
  */
+import { getEmailConfigStatus, resolveSmtpSettings, sendSmtpMail } from "./smtp-config";
+
+export type { EmailConfigStatus } from "./smtp-config";
+export { getEmailConfigStatus } from "./smtp-config";
+
+export interface NotificationDispatchResult {
+  consoleLogged: boolean;
+  webhookSent: boolean;
+  emailSent: boolean;
+  smsSent: boolean;
+}
 export type SlaReminderPayload = {
   kind: "sla_reminder";
   workflow: string;
@@ -156,9 +174,16 @@ function payloadSummary(payload: NotificationPayload): { subject: string; text: 
   };
 }
 
-export async function dispatchNotification(payload: NotificationPayload): Promise<void> {
+export async function dispatchNotification(payload: NotificationPayload): Promise<NotificationDispatchResult> {
   const { subject, text } = payloadSummary(payload);
   console.log(`[NOTIFY] ${subject} — ${text.split("\n")[0]}`);
+
+  const result: NotificationDispatchResult = {
+    consoleLogged: true,
+    webhookSent: false,
+    emailSent: false,
+    smsSent: false,
+  };
 
   const webhook = process.env.NOTIFY_WEBHOOK_URL?.trim();
   if (webhook) {
@@ -173,30 +198,28 @@ export async function dispatchNotification(payload: NotificationPayload): Promis
           sentAt: new Date().toISOString(),
         }),
       });
+      result.webhookSent = true;
     } catch (e) {
       console.error("[NOTIFY] webhook failed:", e);
     }
   }
 
-  const host = process.env.SMTP_HOST?.trim();
-  const from = process.env.SMTP_FROM?.trim();
-  const to = process.env.NOTIFY_EMAIL_TO?.trim();
-  if (host && from && to) {
-    try {
-      const nodemailer = await import("nodemailer");
-      const transporter = nodemailer.createTransport({
-        host,
-        port: Number(process.env.SMTP_PORT || "587"),
-        secure: process.env.SMTP_SECURE === "true",
-        auth:
-          process.env.SMTP_USER?.trim() != null && process.env.SMTP_USER !== ""
-            ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS ?? "" }
-            : undefined,
-      });
-      await transporter.sendMail({ from, to, subject, text });
-    } catch (e) {
-      console.error("[NOTIFY] SMTP failed:", e);
+  try {
+    const emailStatus = await getEmailConfigStatus();
+    if (emailStatus.notifyDigestsReady) {
+      await sendSmtpMail({ to: emailStatus.notifyEmailTo, subject, text });
+      result.emailSent = true;
+    } else if (emailStatus.smtpReady) {
+      console.warn(
+        "[NOTIFY] SMTP is configured but default notify inbox is empty — set Admin → Config → Gmail SMTP → Default notify inbox.",
+      );
+    } else {
+      console.log(
+        "[NOTIFY] email skipped (Gmail SMTP not configured — enable in Admin → Config → Gmail SMTP).",
+      );
     }
+  } catch (e) {
+    console.error("[NOTIFY] SMTP failed:", e);
   }
 
   const smsUrl = process.env.NOTIFY_SMS_WEBHOOK_URL?.trim();
@@ -213,10 +236,13 @@ export async function dispatchNotification(payload: NotificationPayload): Promis
           sentAt: new Date().toISOString(),
         }),
       });
+      result.smsSent = true;
     } catch (e) {
       console.error("[NOTIFY] SMS webhook failed:", e);
     }
   }
+
+  return result;
 }
 
 /** Fire-and-forget wrapper for cron / SLA loops. */
@@ -229,25 +255,20 @@ export function sendNotificationStub(payload: NotificationPayload): void {
  * US-M10-001: provisioning notice to the employee sign-in address. Failures are logged only.
  */
 export async function sendTransactionalEmailTo(to: string, subject: string, text: string): Promise<void> {
-  const host = process.env.SMTP_HOST?.trim();
-  const from = process.env.SMTP_FROM?.trim();
   const recipient = to.trim();
-  if (!host || !from || !recipient) {
-    console.log(`[NOTIFY] skip transactional email (SMTP_HOST/SMTP_FROM or empty to): ${subject}`);
+  if (!recipient) {
+    console.log(`[NOTIFY] skip transactional email (empty to): ${subject}`);
     return;
   }
   try {
-    const nodemailer = await import("nodemailer");
-    const transporter = nodemailer.createTransport({
-      host,
-      port: Number(process.env.SMTP_PORT || "587"),
-      secure: process.env.SMTP_SECURE === "true",
-      auth:
-        process.env.SMTP_USER?.trim() != null && process.env.SMTP_USER !== ""
-          ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS ?? "" }
-          : undefined,
-    });
-    await transporter.sendMail({ from, to: recipient, subject, text });
+    const smtp = await resolveSmtpSettings();
+    if (!smtp) {
+      console.log(
+        `[NOTIFY] skip transactional email (Gmail SMTP not configured — Admin → Config): ${subject}`,
+      );
+      return;
+    }
+    await sendSmtpMail({ to: recipient, subject, text });
     console.log(`[NOTIFY] transactional email sent to ${recipient}: ${subject}`);
   } catch (e) {
     console.error("[NOTIFY] transactional SMTP failed:", e);

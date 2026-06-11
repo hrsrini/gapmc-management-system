@@ -43,6 +43,14 @@ import {
   writeReceiptLogoUpload,
 } from "./receipt-logo-storage";
 import { HrEmployeeRuleError, normalizeMobile10 } from "./hr-employee-rules";
+import { SMTP_EMAIL_CONFIG_KEYS } from "@shared/smtp-email-config";
+import {
+  adminEmailConfigDto,
+  adminEmailConfigDtoAsync,
+  saveEmailConfigValues,
+  validateAndNormalizeEmailConfigPut,
+} from "./admin-email-config";
+import { pickEmailConfigValues, sendSmtpMail, verifySmtpConnection } from "./smtp-config";
 
 function redactSystemConfigForAudit(map: Record<SystemConfigKey, string>): Record<string, string> {
   const o: Record<string, string> = { ...map };
@@ -179,10 +187,76 @@ export function registerAdminRoutes(app: Express) {
   app.get("/api/admin/config", async (_req, res) => {
     try {
       const merged = await getMergedSystemConfig();
-      res.json(merged);
+      const out: Record<string, string> = { ...merged };
+      for (const k of SMTP_EMAIL_CONFIG_KEYS) {
+        delete out[k];
+      }
+      res.json(out);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch config");
+    }
+  });
+
+  app.get("/api/admin/email-config", async (_req, res) => {
+    try {
+      const merged = await getMergedSystemConfig();
+      res.json(await adminEmailConfigDtoAsync(merged));
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch email config");
+    }
+  });
+
+  app.put("/api/admin/email-config", async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const body = req.body as Record<string, unknown>;
+      const merged = await getMergedSystemConfig();
+      const before = pickEmailConfigValues(merged);
+      const { values, error } = await validateAndNormalizeEmailConfigPut(body, before);
+      if (error) {
+        return sendApiError(res, 400, error.code, error.message);
+      }
+      await saveEmailConfigValues(userId, values, SMTP_EMAIL_CONFIG_KEYS);
+      const afterMerged = await getMergedSystemConfig();
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "Update",
+        recordId: "email_config",
+        beforeValue: adminEmailConfigDto(merged),
+        afterValue: adminEmailConfigDto(afterMerged),
+      }).catch((err) => console.error("Audit log failed:", err));
+      res.json(await adminEmailConfigDtoAsync(afterMerged));
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update email config");
+    }
+  });
+
+  app.post("/api/admin/email-config/test", async (req, res) => {
+    try {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const merged = await getMergedSystemConfig();
+      const dto = await adminEmailConfigDtoAsync(merged);
+      const to = String(body.to ?? dto.notify_email_to ?? "").trim();
+      if (!to) {
+        return sendApiError(res, 400, "SMTP_TEST_TO", "Set default notify inbox or provide a test recipient email.");
+      }
+      await verifySmtpConnection();
+      const ts = new Date().toISOString();
+      await sendSmtpMail({
+        to,
+        subject: "[GAPMC IOMS] Gmail SMTP test",
+        text:
+          `This is a test message from GAPMC IOMS at ${ts}.\n\n` +
+          `If you received this, Admin → Config → Gmail SMTP is working.`,
+      });
+      res.json({ ok: true, to, sentAt: ts });
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : "SMTP test failed";
+      sendApiError(res, 400, "SMTP_TEST_FAILED", msg);
     }
   });
 

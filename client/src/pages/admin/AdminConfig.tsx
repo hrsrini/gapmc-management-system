@@ -6,7 +6,15 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Settings, AlertCircle, ImageIcon, Trash2, Upload, Calculator } from "lucide-react";
+import { Settings, AlertCircle, ImageIcon, Trash2, Upload, Calculator, Mail } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Link } from "wouter";
 import { useState, useEffect, useRef } from "react";
 import { apiRequest, fetchApiGet, queryClient, readApiErrorMessage } from "@/lib/queryClient";
@@ -48,11 +56,58 @@ export default function AdminConfig() {
     queryKey: ["/api/admin/branding/receipt-logo/status"],
     queryFn: () => fetchApiGet("/api/admin/branding/receipt-logo/status"),
   });
+  const { data: emailConfig, isLoading: emailConfigLoading } = useQuery<{
+    smtp_enabled: string;
+    smtp_provider: string;
+    smtp_host: string;
+    smtp_port: string;
+    smtp_secure: string;
+    smtp_user: string;
+    smtp_from: string;
+    smtp_from_display_name: string;
+    notify_email_to: string;
+    smtp_pass_configured: boolean;
+    env_fallback_configured: boolean;
+    smtp_ready: boolean;
+    notify_digests_ready: boolean;
+    config_source: "database" | "environment" | "none";
+  }>({
+    queryKey: ["/api/admin/email-config"],
+    queryFn: () => fetchApiGet("/api/admin/email-config"),
+  });
   const [values, setValues] = useState<Record<string, string>>({});
+  const [emailValues, setEmailValues] = useState({
+    smtp_enabled: "false",
+    smtp_provider: "gmail",
+    smtp_host: "smtp.gmail.com",
+    smtp_port: "587",
+    smtp_secure: "false",
+    smtp_user: "",
+    smtp_from: "",
+    smtp_from_display_name: "GAPLMB IOMS",
+    notify_email_to: "",
+  });
+  const [smtpPassDraft, setSmtpPassDraft] = useState("");
 
   useEffect(() => {
     if (config) setValues({ ...config });
   }, [config]);
+
+  useEffect(() => {
+    if (!emailConfig) return;
+    setEmailValues({
+      smtp_enabled: emailConfig.smtp_enabled ?? "false",
+      smtp_provider: emailConfig.smtp_provider ?? "gmail",
+      smtp_host: emailConfig.smtp_host ?? "smtp.gmail.com",
+      smtp_port: emailConfig.smtp_port ?? "587",
+      smtp_secure: emailConfig.smtp_secure ?? "false",
+      smtp_user: emailConfig.smtp_user ?? "",
+      smtp_from: emailConfig.smtp_from ?? "",
+      smtp_from_display_name: emailConfig.smtp_from_display_name ?? "GAPLMB IOMS",
+      notify_email_to: emailConfig.notify_email_to ?? "",
+    });
+    setSmtpPassDraft("");
+  }, [emailConfig]);
 
   const updateMutation = useMutation({
     mutationFn: (body: Record<string, string>) => apiRequest("PUT", "/api/admin/config", body),
@@ -124,6 +179,47 @@ export default function AdminConfig() {
     onError: (e: Error) => {
       toast({ title: "Snapshot failed", description: e.message, variant: "destructive" });
     },
+  });
+
+  const saveEmailMutation = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, string> = { ...emailValues };
+      if (smtpPassDraft.trim()) body.smtp_pass = smtpPassDraft.trim();
+      const res = await fetch("/api/admin/email-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await readApiErrorMessage(res));
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/email-config"] });
+      setSmtpPassDraft("");
+      toast({ title: "Email settings saved", description: "Gmail SMTP configuration updated." });
+    },
+    onError: (e: Error) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
+  });
+
+  const testEmailMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/admin/email-config/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ to: emailValues.notify_email_to.trim() || undefined }),
+      });
+      if (!res.ok) throw new Error(await readApiErrorMessage(res));
+      return res.json() as Promise<{ ok: boolean; to: string }>;
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Test email sent",
+        description: `Check the inbox for ${data.to}.`,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Test email failed", description: e.message, variant: "destructive" }),
   });
 
   const deleteLogoMutation = useMutation({
@@ -289,6 +385,198 @@ export default function AdminConfig() {
                 </div>
               </div>
             ))
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="h-5 w-5" />
+            Gmail SMTP (outbound email)
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Sends system notifications (cash-in-hand digests, HR alerts, SLA reminders, employee login notices).
+            Use a Google Workspace or Gmail account with a 16-character{" "}
+            <a
+              href="https://myaccount.google.com/apppasswords"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary underline"
+            >
+              App Password
+            </a>{" "}
+            (2-Step Verification required). Settings are stored in the database and apply on every app instance.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {emailConfigLoading ? (
+            <Skeleton className="h-40 w-full" />
+          ) : (
+            <>
+              {emailConfig?.smtp_ready ? (
+                <p className="text-xs text-green-800 dark:text-green-300 rounded-md border border-green-200 dark:border-green-900 bg-green-50 dark:bg-green-950/40 px-3 py-2">
+                  SMTP active ({emailConfig.config_source === "database" ? "Admin config" : "legacy env fallback"}
+                  ).{" "}
+                  {emailConfig.notify_digests_ready
+                    ? "System digests will email the default notify inbox."
+                    : "Set default notify inbox below for cash-in-hand and alert digests."}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
+                  SMTP not configured — enable below or set legacy <code className="text-xs">SMTP_*</code> env on the
+                  server.
+                </p>
+              )}
+              {emailConfig?.env_fallback_configured && emailValues.smtp_enabled !== "true" ? (
+                <p className="text-xs text-amber-700 dark:text-amber-400 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 px-3 py-2">
+                  Legacy server <code className="text-xs">SMTP_*</code> environment variables are set. Enable Gmail
+                  here to use Admin-managed SMTP instead.
+                </p>
+              ) : null}
+              <div className="flex items-start gap-3 rounded-md border p-3">
+                <Checkbox
+                  id="smtp-enabled"
+                  checked={emailValues.smtp_enabled === "true"}
+                  onCheckedChange={(c) =>
+                    setEmailValues((v) => ({ ...v, smtp_enabled: c === true ? "true" : "false" }))
+                  }
+                />
+                <div className="space-y-1">
+                  <Label htmlFor="smtp-enabled" className="cursor-pointer">
+                    Enable Gmail SMTP
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    When off, optional legacy <code className="text-xs">SMTP_*</code> env vars may still be used.
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Provider</Label>
+                  <Select
+                    value={emailValues.smtp_provider}
+                    onValueChange={(v) =>
+                      setEmailValues((prev) => ({
+                        ...prev,
+                        smtp_provider: v,
+                        ...(v === "gmail"
+                          ? { smtp_host: "smtp.gmail.com", smtp_port: "587", smtp_secure: "false" }
+                          : {}),
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="gmail">Gmail (smtp.gmail.com)</SelectItem>
+                      <SelectItem value="custom">Custom SMTP</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="smtp-user">Gmail address</Label>
+                  <Input
+                    id="smtp-user"
+                    type="email"
+                    autoComplete="off"
+                    value={emailValues.smtp_user}
+                    onChange={(e) => setEmailValues((v) => ({ ...v, smtp_user: e.target.value }))}
+                    placeholder="your-org@gmail.com"
+                  />
+                </div>
+                <div className="space-y-1 md:col-span-2">
+                  <Label htmlFor="smtp-pass">App Password</Label>
+                  <Input
+                    id="smtp-pass"
+                    type="password"
+                    autoComplete="new-password"
+                    value={smtpPassDraft}
+                    onChange={(e) => setSmtpPassDraft(e.target.value)}
+                    placeholder={
+                      emailConfig?.smtp_pass_configured
+                        ? "Leave blank to keep existing App Password"
+                        : "16-character App Password"
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="smtp-from">From email (optional)</Label>
+                  <Input
+                    id="smtp-from"
+                    type="email"
+                    value={emailValues.smtp_from}
+                    onChange={(e) => setEmailValues((v) => ({ ...v, smtp_from: e.target.value }))}
+                    placeholder="Defaults to Gmail address"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="smtp-from-name">From display name</Label>
+                  <Input
+                    id="smtp-from-name"
+                    value={emailValues.smtp_from_display_name}
+                    onChange={(e) => setEmailValues((v) => ({ ...v, smtp_from_display_name: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1 md:col-span-2">
+                  <Label htmlFor="notify-email-to">Default notify inbox</Label>
+                  <Input
+                    id="notify-email-to"
+                    type="email"
+                    value={emailValues.notify_email_to}
+                    onChange={(e) => setEmailValues((v) => ({ ...v, notify_email_to: e.target.value }))}
+                    placeholder="ops@example.com"
+                  />
+                </div>
+                {emailValues.smtp_provider === "custom" ? (
+                  <>
+                    <div className="space-y-1">
+                      <Label htmlFor="smtp-host">SMTP host</Label>
+                      <Input
+                        id="smtp-host"
+                        value={emailValues.smtp_host}
+                        onChange={(e) => setEmailValues((v) => ({ ...v, smtp_host: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="smtp-port">SMTP port</Label>
+                      <Input
+                        id="smtp-port"
+                        inputMode="numeric"
+                        value={emailValues.smtp_port}
+                        onChange={(e) => setEmailValues((v) => ({ ...v, smtp_port: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 md:col-span-2">
+                      <Checkbox
+                        id="smtp-secure"
+                        checked={emailValues.smtp_secure === "true"}
+                        onCheckedChange={(c) =>
+                          setEmailValues((v) => ({ ...v, smtp_secure: c === true ? "true" : "false" }))
+                        }
+                      />
+                      <Label htmlFor="smtp-secure" className="cursor-pointer text-sm">
+                        Use implicit TLS (port 465)
+                      </Label>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" onClick={() => saveEmailMutation.mutate()} disabled={saveEmailMutation.isPending}>
+                  Save email settings
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={testEmailMutation.isPending}
+                  onClick={() => testEmailMutation.mutate()}
+                >
+                  Send test email
+                </Button>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>

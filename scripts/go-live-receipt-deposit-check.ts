@@ -57,4 +57,6 @@ if (!noNotify) {
 
 console.log("\n========== Go-live check complete ==========");
 console.log("Next: manual UAT per docs/test_plan.csv TP-M05-007 through TP-M05-011");
-console.log("Staging/prod: set NOTIFY_EMAIL_TO + SMTP_* and redeploy app with latest main.");
+console.log(
+  "Staging/prod: configure Gmail SMTP under Admin → Config (enable, app password, default notify inbox) and redeploy.",
+);

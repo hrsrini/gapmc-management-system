@@ -3,9 +3,9 @@
  */
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { buildCashInHandEodDigest, buildDepositOverdueAlert } from "./receipt-deposit-service";
-import { sendNotificationStub } from "./notify";
+import { dispatchNotification, type NotificationDispatchResult } from "./notify";
 
-export async function runReceiptDepositEodSummary(): Promise<void> {
+export async function runReceiptDepositEodSummary(): Promise<NotificationDispatchResult> {
   const cfg = await getMergedSystemConfig();
   const maxDays = parseSystemConfigNumber(cfg, "receipt_deposit_carry_forward_days") || 2;
   const digest = await buildCashInHandEodDigest(maxDays);
@@ -17,7 +17,7 @@ export async function runReceiptDepositEodSummary(): Promise<void> {
         `${l.yardName}: cash ₹${l.hardCashBalance.toFixed(2)}, cheques ₹${l.chequesPendingDeposit.toFixed(2)}, overdue ${l.overdueCount}`,
     );
 
-  sendNotificationStub({
+  return dispatchNotification({
     kind: "receipt_deposit_eod",
     asOfDate: digest.asOfDate,
     totalUndeposited: digest.totals.total,
@@ -28,13 +28,13 @@ export async function runReceiptDepositEodSummary(): Promise<void> {
   });
 }
 
-export async function runReceiptDepositOverdueAlerts(): Promise<void> {
+export async function runReceiptDepositOverdueAlerts(): Promise<NotificationDispatchResult | null> {
   const cfg = await getMergedSystemConfig();
   const maxDays = parseSystemConfigNumber(cfg, "receipt_deposit_carry_forward_days") || 2;
   const alert = await buildDepositOverdueAlert(maxDays);
-  if (alert.overdueReceiptCount <= 0) return;
+  if (alert.overdueReceiptCount <= 0) return null;
 
-  sendNotificationStub({
+  return dispatchNotification({
     kind: "receipt_deposit_overdue",
     maxCarryForwardDays: maxDays,
     overdueReceiptCount: alert.overdueReceiptCount,
@@ -42,7 +42,13 @@ export async function runReceiptDepositOverdueAlerts(): Promise<void> {
   });
 }
 
-export async function runReceiptDepositDailyJobs(): Promise<void> {
-  await runReceiptDepositEodSummary();
-  await runReceiptDepositOverdueAlerts();
+export async function runReceiptDepositDailyJobs(): Promise<NotificationDispatchResult> {
+  const eod = await runReceiptDepositEodSummary();
+  const overdue = await runReceiptDepositOverdueAlerts();
+  return {
+    consoleLogged: eod.consoleLogged,
+    webhookSent: eod.webhookSent || Boolean(overdue?.webhookSent),
+    emailSent: eod.emailSent || Boolean(overdue?.emailSent),
+    smsSent: eod.smsSent || Boolean(overdue?.smsSent),
+  };
 }

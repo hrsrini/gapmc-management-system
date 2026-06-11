@@ -1,3 +1,5 @@
+import { SMTP_EMAIL_CONFIG_DEFAULTS, SMTP_EMAIL_CONFIG_LABELS } from "./smtp-email-config";
+
 /**
  * Canonical keys and defaults for gapmc.system_config (M-10 Admin → Config).
  * Keep in sync with seed-ioms-m10 and Admin Config UI.
@@ -118,12 +120,13 @@ export const SYSTEM_CONFIG_DEFAULTS = {
    * Env AADHAAR_HMAC_SECRET is used only when this value is empty (legacy / bootstrap).
    */
   aadhaar_hmac_secret: "",
+  ...SMTP_EMAIL_CONFIG_DEFAULTS,
 } as const;
 
 export type SystemConfigKey = keyof typeof SYSTEM_CONFIG_DEFAULTS;
 
 /** Omitted from GET /api/system/config so non-admin sessions never receive secrets. */
-export const SYSTEM_CONFIG_KEYS_SENSITIVE: readonly SystemConfigKey[] = ["aadhaar_hmac_secret"];
+export const SYSTEM_CONFIG_KEYS_SENSITIVE: readonly SystemConfigKey[] = ["aadhaar_hmac_secret", "smtp_pass"];
 
 /** Stable field order for Admin Config UI and server validation. */
 export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
@@ -241,6 +244,7 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   leave_holidays_json: "M-01 Leave: holidays JSON array (YYYY-MM-DD)",
   aadhaar_hmac_secret:
     "M-01 HR: Aadhaar HMAC secret (fingerprint for dedup; use a long random value; keep stable — rotating changes new fingerprints)",
+  ...SMTP_EMAIL_CONFIG_LABELS,
 };
 
 /** Parse `true` / `false` system_config values; unknown strings fall back to `defaultValue`. */

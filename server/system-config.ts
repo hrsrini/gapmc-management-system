@@ -6,8 +6,9 @@ import {
   SYSTEM_CONFIG_KEYS_SENSITIVE,
   type SystemConfigKey,
 } from "@shared/system-config-defaults";
+import { SMTP_EMAIL_CONFIG_KEYS } from "@shared/smtp-email-config";
 
-const keySet = new Set<string>(SYSTEM_CONFIG_KEYS);
+const keySet = new Set<string>([...SYSTEM_CONFIG_KEYS, ...SMTP_EMAIL_CONFIG_KEYS]);
 
 /** DB values merged over code defaults (only known keys). */
 export async function getMergedSystemConfig(): Promise<Record<SystemConfigKey, string>> {

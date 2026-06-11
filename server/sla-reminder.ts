@@ -1,6 +1,6 @@
 /**
- * CC-07: periodic SLA check using gapmc.sla_config + overdue workflow rows (stub notify).
- * Set SLA_REMINDER=false to disable. Wire sendNotificationStub → provider for production.
+ * CC-07: periodic SLA check using gapmc.sla_config + overdue workflow rows.
+ * Set SLA_REMINDER=false to disable. Alerts use sendNotificationStub → Admin Gmail SMTP (notify_email_to).
  */
 import { and, desc, eq, isNotNull, lte, ne, or } from "drizzle-orm";
 import { db } from "./db";
