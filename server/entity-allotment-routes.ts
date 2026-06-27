@@ -9,7 +9,7 @@ import { nanoid } from "nanoid";
 import { assetAllotments, assets, entities, entityAllotments, iomsReceipts, yards } from "@shared/db-schema";
 import { unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { db, pool } from "./db";
-import { sendApiError } from "./api-errors";
+import { describeStorageFailure, sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { routeParamString } from "./route-params";
@@ -48,7 +48,7 @@ import {
   writeEntityAllotmentAgreementBuffer,
 } from "./entity-allotment-agreement-storage";
 
-type EntityAllotmentAgreementUploadFile = { buffer: Buffer; mimetype: string };
+type EntityAllotmentAgreementUploadFile = { buffer: Buffer; mimetype: string; originalname?: string };
 
 type EntityAllotmentRow = InferSelectModel<typeof entityAllotments>;
 
@@ -333,7 +333,7 @@ export function registerEntityAllotmentRoutes(app: Express) {
 
       const file = (req as Request & { file?: EntityAllotmentAgreementUploadFile }).file;
       if (!file) return sendApiError(res, 400, "AGREEMENT_FILE_REQUIRED", "Upload file required (field name: file)");
-      const ext = extFromEntityAllotmentAgreementMime(file.mimetype);
+      const ext = extFromEntityAllotmentAgreementMime(file.mimetype, file.originalname);
       if (!ext) return sendApiError(res, 400, "AGREEMENT_FILE_TYPE", "Only PDF uploads are accepted for scanned agreements.");
 
       const storedName = `agreement-${Date.now()}-${nanoid(10)}${ext}`;
@@ -352,7 +352,7 @@ export function registerEntityAllotmentRoutes(app: Express) {
       res.json(fresh);
     } catch (e) {
       console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to upload agreement");
+      sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to upload agreement"));
     }
   });
 
@@ -371,7 +371,7 @@ export function registerEntityAllotmentRoutes(app: Express) {
       res.send(buf);
     } catch (e) {
       console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read agreement PDF");
+      sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to read agreement PDF"));
     }
   });
 

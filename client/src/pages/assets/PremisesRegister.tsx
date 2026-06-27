@@ -25,6 +25,7 @@ import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { useAuth } from "@/context/AuthContext";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
 import { formatInr } from "@/lib/formatInr";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
 import { PREMISES_TYPE_VALUES } from "@shared/premises-master";
@@ -128,6 +129,7 @@ export default function PremisesRegister() {
   const [applied, setApplied] = useState<RegisterFilters>(initialFilters);
 
   const { data: yards = [] } = useScopedActiveYards();
+  const premiseYardOptions = useMemo(() => filterYardTypeLocations(yards), [yards]);
 
   const registerUrl = useMemo(() => buildRegisterQuery(applied), [applied]);
   const filterKey = JSON.stringify(applied);
@@ -331,7 +333,7 @@ export default function PremisesRegister() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Yards</SelectItem>
-                    {yards.map((y) => (
+                    {premiseYardOptions.map((y) => (
                       <SelectItem key={y.id} value={y.id}>
                         {y.name ?? y.id}
                       </SelectItem>

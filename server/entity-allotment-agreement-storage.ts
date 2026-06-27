@@ -1,15 +1,14 @@
 import path from "path";
 import { getUploadBlobStore } from "./object-storage";
+import { extFromPdfUpload } from "./upload-pdf-mime";
 
 export function entityAllotmentAgreementBlobKey(entityAllotmentId: string, storedFileName: string): string {
   return `entity-allotments/${path.basename(entityAllotmentId)}/${path.basename(storedFileName)}`;
 }
 
 /** Notarised agreement: PDF only (US-M02-003). */
-export function extFromEntityAllotmentAgreementMime(mime: string): ".pdf" | null {
-  const m = String(mime ?? "").toLowerCase();
-  if (m === "application/pdf") return ".pdf";
-  return null;
+export function extFromEntityAllotmentAgreementMime(mime: string, fileName?: string | null): ".pdf" | null {
+  return extFromPdfUpload(mime, fileName);
 }
 
 export function isAllowedEntityAllotmentAgreementFileName(name: string): boolean {

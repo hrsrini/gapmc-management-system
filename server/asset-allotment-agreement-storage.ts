@@ -1,5 +1,6 @@
 import path from "path";
 import { getUploadBlobStore } from "./object-storage";
+import { extFromPdfUpload } from "./upload-pdf-mime";
 
 const DIR = "asset-allotment-agreements";
 
@@ -7,10 +8,8 @@ export function assetAllotmentAgreementBlobKey(allotmentId: string, storedFileNa
   return `${DIR}/${path.basename(allotmentId)}/${path.basename(storedFileName)}`;
 }
 
-export function extFromAssetAllotmentAgreementMime(mime: string): string | null {
-  const m = String(mime ?? "").toLowerCase();
-  if (m === "application/pdf") return ".pdf";
-  return null;
+export function extFromAssetAllotmentAgreementMime(mime: string, fileName?: string | null): string | null {
+  return extFromPdfUpload(mime, fileName);
 }
 
 export function isAllowedAssetAllotmentAgreementFileName(fileName: string): boolean {

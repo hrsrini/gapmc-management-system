@@ -43,7 +43,7 @@ import {
   assertSegregationDoDvDa,
   canTransitionEntityAllotmentApproval,
 } from "./workflow";
-import { sendApiError } from "./api-errors";
+import { describeStorageFailure, sendApiError } from "./api-errors";
 import { disablePortalAccessForUnifiedEntity } from "./routes-portal";
 import { parseReportPaging, parseReportSort, reportSearchPattern } from "./report-paging";
 import { orderLicenceReport, LICENCE_REPORT_SORT_ALLOW } from "./report-order";
@@ -2892,9 +2892,9 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!["Draft", "Rejected"].includes(appr)) {
         return sendApiError(res, 400, "AGREEMENT_UPLOAD_STATE", "Agreement uploads are allowed only in Draft or Rejected status.");
       }
-      const file = (req as unknown as { file?: { buffer: Buffer; mimetype: string } }).file;
+      const file = (req as unknown as { file?: { buffer: Buffer; mimetype: string; originalname?: string } }).file;
       if (!file) return sendApiError(res, 400, "AGREEMENT_FILE_REQUIRED", "Upload file required (field name: file)");
-      const ext = extFromAssetAllotmentAgreementMime(file.mimetype);
+      const ext = extFromAssetAllotmentAgreementMime(file.mimetype, file.originalname);
       if (!ext) return sendApiError(res, 400, "AGREEMENT_FILE_TYPE", "Only PDF uploads are accepted for scanned agreements.");
 
       const storedName = `agreement-${Date.now()}-${nanoid(10)}${ext}`;
@@ -2906,7 +2906,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       return res.json(fresh);
     } catch (e) {
       console.error(e);
-      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to upload agreement");
+      return sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to upload agreement"));
     }
   });
 
@@ -2925,7 +2925,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       return res.send(buf);
     } catch (e) {
       console.error(e);
-      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read agreement PDF");
+      return sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to read agreement PDF"));
     }
   });
 
