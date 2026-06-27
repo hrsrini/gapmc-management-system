@@ -59,6 +59,32 @@ export default function AdminConfig() {
     queryKey: ["/api/admin/branding/receipt-logo/status"],
     queryFn: () => fetchApiGet("/api/admin/branding/receipt-logo/status"),
   });
+  const showSavedLogo = Boolean(logoStatus?.hasLogo) && !pendingLogo;
+  const {
+    data: savedLogoObjectUrl,
+    isLoading: savedLogoLoading,
+    isError: savedLogoError,
+  } = useQuery({
+    queryKey: ["/api/admin/branding/receipt-logo/image", logoPreviewNonce],
+    enabled: showSavedLogo,
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/branding/receipt-logo/image?x=${logoPreviewNonce}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await readApiErrorMessage(res));
+      const blob = await res.blob();
+      if (!blob.size) throw new Error("Logo file is empty.");
+      return URL.createObjectURL(blob);
+    },
+    staleTime: 0,
+  });
+
+  useEffect(() => {
+    return () => {
+      if (savedLogoObjectUrl) URL.revokeObjectURL(savedLogoObjectUrl);
+    };
+  }, [savedLogoObjectUrl]);
+
   const { data: emailConfig, isLoading: emailConfigLoading } = useQuery<{
     smtp_enabled: string;
     smtp_provider: string;
@@ -147,6 +173,7 @@ export default function AdminConfig() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/branding/receipt-logo/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/branding/receipt-logo/image"] });
       setLogoPreviewNonce((n) => n + 1);
       setPendingLogo(null);
       if (logoFileRef.current) logoFileRef.current.value = "";
@@ -233,6 +260,7 @@ export default function AdminConfig() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/branding/receipt-logo/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/branding/receipt-logo/image"] });
       setLogoPreviewNonce((n) => n + 1);
       setPendingLogo(null);
       toast({ title: "Logo removed", description: "PDFs will fall back to env logo or text-only header." });
@@ -641,11 +669,19 @@ export default function AdminConfig() {
                   />
                 </div>
               ) : logoStatus?.hasLogo ? (
-                <img
-                  src={`/api/admin/branding/receipt-logo/image?x=${logoPreviewNonce}`}
-                  alt="Current receipt PDF logo"
-                  className="max-h-28 max-w-[200px] object-contain border rounded-md bg-muted/30 p-2"
-                />
+                savedLogoLoading ? (
+                  <Skeleton className="h-28 w-[200px]" />
+                ) : savedLogoError || !savedLogoObjectUrl ? (
+                  <p className="text-sm text-destructive max-w-xs">
+                    Could not load logo preview. Remove and re-upload, or check Supabase Storage on the server.
+                  </p>
+                ) : (
+                  <img
+                    src={savedLogoObjectUrl}
+                    alt="Current receipt PDF logo"
+                    className="max-h-28 max-w-[200px] object-contain border rounded-md bg-muted/30 p-2"
+                  />
+                )
               ) : (
                 <p className="text-sm text-muted-foreground">No logo uploaded yet.</p>
               )}

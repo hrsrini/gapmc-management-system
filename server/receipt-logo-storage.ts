@@ -2,16 +2,27 @@ import { getUploadBlobStore } from "./object-storage";
 
 const LOGO_KEYS = ["branding/receipt-pdf-logo.png", "branding/receipt-pdf-logo.jpg", "branding/receipt-pdf-logo.jpeg"] as const;
 
-export async function getActiveReceiptLogoKey(): Promise<string | null> {
+/** First readable logo blob (png → jpg → jpeg). Used for Admin preview and receipt PDFs. */
+export async function loadActiveReceiptLogo(): Promise<{ key: string; buffer: Buffer } | null> {
   const store = getUploadBlobStore();
   for (const k of LOGO_KEYS) {
-    if (await store.exists(k)) return k;
+    try {
+      const buf = await store.get(k);
+      if (buf != null && buf.length > 0) return { key: k, buffer: buf };
+    } catch (e) {
+      console.warn(`[receipt-logo] get ${k} failed`, e);
+    }
   }
   return null;
 }
 
+export async function getActiveReceiptLogoKey(): Promise<string | null> {
+  const loaded = await loadActiveReceiptLogo();
+  return loaded?.key ?? null;
+}
+
 export async function hasUploadedReceiptLogo(): Promise<boolean> {
-  return (await getActiveReceiptLogoKey()) != null;
+  return (await loadActiveReceiptLogo()) != null;
 }
 
 /** Storage ref (blob key) for the active logo, or null. */
@@ -32,13 +43,10 @@ export function mimeForReceiptLogoPath(filePathOrKey: string): string {
 
 export async function readUploadedReceiptLogoBuffer(): Promise<Buffer | null> {
   try {
-    const key = await getActiveReceiptLogoKey();
-    if (!key) return null;
-    const buf = await getUploadBlobStore().get(key);
-    if (!buf?.length) return null;
-    return buf;
+    const loaded = await loadActiveReceiptLogo();
+    return loaded?.buffer ?? null;
   } catch (e) {
-    /* S3/network errors must not block receipt PDFs */
+    /* Storage/network errors must not block receipt PDFs */
     console.warn("[receipt-logo] read skipped", e);
     return null;
   }

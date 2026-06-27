@@ -300,7 +300,6 @@ class SupabaseUploadBlobStore implements UploadBlobStore {
     const { folder, name } = this.splitFolderAndName(objectKey);
     const { data, error } = await getSupabaseAdmin().storage.from(this.bucket).list(folder, {
       limit: 100,
-      search: name,
     });
     if (error) {
       if (isSupabaseStorageNotFoundError(error)) return false;

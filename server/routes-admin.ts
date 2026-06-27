@@ -36,10 +36,9 @@ import { writeAuditLog } from "./audit";
 import { describeStorageFailure, sendApiError } from "./api-errors";
 import {
   clearReceiptLogoFiles,
-  getActiveReceiptLogoKey,
   hasUploadedReceiptLogo,
+  loadActiveReceiptLogo,
   mimeForReceiptLogoKey,
-  readUploadedReceiptLogoBuffer,
   writeReceiptLogoUpload,
 } from "./receipt-logo-storage";
 import { getConfiguredObjectStorageDriver } from "./object-storage";
@@ -518,13 +517,13 @@ export function registerAdminRoutes(app: Express) {
 
   app.get("/api/admin/branding/receipt-logo/image", async (_req, res) => {
     try {
-      const key = await getActiveReceiptLogoKey();
-      if (!key) return sendApiError(res, 404, "ADMIN_RECEIPT_LOGO_NOT_FOUND", "No logo uploaded yet.");
-      const buf = await readUploadedReceiptLogoBuffer();
-      if (!buf) return sendApiError(res, 404, "ADMIN_RECEIPT_LOGO_NOT_FOUND", "No logo uploaded yet.");
-      res.setHeader("Content-Type", mimeForReceiptLogoKey(key));
+      const loaded = await loadActiveReceiptLogo();
+      if (!loaded) {
+        return sendApiError(res, 404, "ADMIN_RECEIPT_LOGO_NOT_FOUND", "No logo uploaded yet.");
+      }
+      res.setHeader("Content-Type", mimeForReceiptLogoKey(loaded.key));
       res.setHeader("Cache-Control", "no-store");
-      res.send(buf);
+      res.send(loaded.buffer);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to read logo"));
