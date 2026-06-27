@@ -55,6 +55,40 @@ function advanceAfterWrappedText(
   return y + h + gap;
 }
 
+function drawReceivedFromLine(
+  doc: PdfDoc,
+  payerDisplayName: string,
+  x: number,
+  y: number,
+  width: number,
+): number {
+  const prefix = "Received with thanks From : ";
+  doc.font("Helvetica").fontSize(8.5);
+  const prefixW = doc.widthOfString(prefix);
+  const name = pdfSafeText(payerDisplayName);
+  const nameW = Math.max(width - prefixW, 40);
+  const nameH = doc.heightOfString(name, { width: nameW, lineGap: 0 });
+  doc.text(prefix, x, y, { lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(8.5);
+  doc.text(name, x + prefixW, y, { width: nameW, lineGap: 0 });
+  return y + Math.max(nameH, 12) + 3;
+}
+
+function drawLogoWatermark(
+  doc: PdfDoc,
+  logoPng: Buffer,
+  box: { x: number; y: number; width: number; height: number },
+): void {
+  try {
+    const size = Math.min(box.width * 0.42, box.height * 0.38);
+    const wx = box.x + (box.width - size) / 2;
+    const wy = box.y + box.height * 0.36;
+    doc.save().opacity(0.1).image(logoPng, wx, wy, { fit: [size, size] }).opacity(1).restore();
+  } catch {
+    /* skip watermark */
+  }
+}
+
 /** Full grid: outer border, column rules, header/body/total separators. */
 function drawParticularsTable(
   doc: PdfDoc,
@@ -115,11 +149,10 @@ function drawParticularsTable(
   }
 
   // Total row: label in particulars column, amount right-aligned
-  const totalStr = formatReceiptTotalLine(totalAmount);
   const totalTextY = bodyBottom + (TOTAL_ROW_H - 9) / 2;
   doc.font("Helvetica-Bold").fontSize(8);
   doc.text("Total", partX + 3, totalTextY, { width: partW - 6, align: "left", lineBreak: false });
-  doc.text(pdfSafeText(totalStr), amtX, totalTextY, { width: amtW - 3, align: "right", lineBreak: false });
+  doc.text(formatReceiptTotalLine(totalAmount), amtX, totalTextY, { width: amtW - 3, align: "right", lineBreak: false });
 
   return tableBottom + 4;
 }
@@ -141,6 +174,10 @@ export function drawGaplmbReceiptSlip(
 ): number {
   const { x, y, width, height } = box;
   doc.rect(x, y, width, height).lineWidth(0.75).stroke();
+
+  if (opts.logoPng && !opts.bodyOnly) {
+    drawLogoWatermark(doc, opts.logoPng, box);
+  }
 
   const innerX = x + PAD;
   const innerW = width - PAD * 2;
@@ -183,7 +220,7 @@ export function drawGaplmbReceiptSlip(
   doc.text(pdfSafeText(`Date : ${ctx.dateLabel}`), rightX, cy, { width: rightW, align: "right", lineBreak: false });
   cy += 11;
 
-  cy = advanceAfterWrappedText(doc, ctx.receivedFromLine, innerX, cy, innerW, 3);
+  cy = drawReceivedFromLine(doc, ctx.payerDisplayName, innerX, cy, innerW);
 
   if (ctx.showLicenceNo && ctx.licenceNo?.trim()) {
     doc.text(pdfSafeText(`Licence No:${ctx.licenceNo.trim()}`), rightX, cy, {
@@ -216,7 +253,7 @@ export function drawGaplmbReceiptSlip(
   cy += 10;
 
   doc.fontSize(8);
-  cy = advanceAfterWrappedText(doc, `Remarks : ${ctx.remarks}`, innerX, cy, innerW, 4);
+  cy = advanceAfterWrappedText(doc, ctx.remarks, innerX, cy, innerW, 4);
 
   if (ctx.isGracePeriod) {
     doc.fontSize(7).fillColor("#92400e");

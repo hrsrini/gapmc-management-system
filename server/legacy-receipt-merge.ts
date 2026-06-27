@@ -4,8 +4,9 @@
 import type { InferSelectModel } from "drizzle-orm";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { iomsReceipts, yards } from "@shared/db-schema";
+import { iomsReceipts, manualReceiptTypes, yards } from "@shared/db-schema";
 import type { Receipt } from "@shared/schema";
+import { receiptRevenueHeadDisplayLabel } from "@shared/receipt-revenue-head-options";
 import { attachCreatedByDisplayNames, type WithCreatedByDisplayName } from "./ioms-receipt-created-by-display";
 import { attachPayerDisplayNames, type WithPayerDisplayName } from "./ioms-receipt-payer-display";
 
@@ -38,10 +39,22 @@ function normalizeLegacyRevenueHead(head: string): string {
 
 function revenueHeadToLegacyType(head: string): Receipt["type"] {
   const h = normalizeLegacyRevenueHead(head);
-  if (h === "Rent" || h === "GSTInvoice") return "Rent";
+  if (h === "Rent" || h === "GSTInvoice" || h === "RentArrearsInterest") return "Rent";
   if (h === "MarketFee") return "Market Fee";
-  if (h === "LicenceFee" || h === "SecurityDeposit") return "License Fee";
+  if (h === "LicenceFee") return "License Fee";
+  if (h === "SecurityDeposit") return "Other";
   return "Other";
+}
+
+function resolveTallyHeadLabel(
+  r: IomsReceiptRow,
+  manualLedgerByTypeId: Map<string, string>,
+): string {
+  if (String(r.sourceModule ?? "").trim() === "M-05-MANUAL" && r.manualReceiptTypeId) {
+    const ledger = manualLedgerByTypeId.get(String(r.manualReceiptTypeId));
+    if (ledger?.trim()) return receiptRevenueHeadDisplayLabel(ledger.trim());
+  }
+  return receiptRevenueHeadDisplayLabel(normalizeLegacyRevenueHead(r.revenueHead));
 }
 
 function iomsStatusToLegacy(status: string): Receipt["status"] {
@@ -61,6 +74,7 @@ function iomsPaymentToLegacy(mode: string): Receipt["paymentMode"] {
 function mapEnrichedIomsRow(
   r: IomsReceiptEnriched,
   yardById: Map<string, { code: string | null; name: string | null }>,
+  manualLedgerByTypeId: Map<string, string>,
 ): Receipt {
   const y = yardById.get(r.yardId);
   const code = String(y?.code ?? "")
@@ -78,6 +92,8 @@ function mapEnrichedIomsRow(
   const sgst = Number(r.sgst ?? 0);
   const tds = Number(r.tdsAmount ?? 0);
 
+  const tallyHeadLabel = resolveTallyHeadLabel(r, manualLedgerByTypeId);
+
   return {
     id: r.id,
     receiptNo: r.receiptNo,
@@ -85,7 +101,7 @@ function mapEnrichedIomsRow(
     type: revenueHeadToLegacyType(r.revenueHead),
     traderId: String(r.payerRefId ?? r.unifiedEntityId ?? r.createdBy ?? ""),
     traderName: payerLabel,
-    head: normalizeLegacyRevenueHead(r.revenueHead),
+    head: tallyHeadLabel,
     /** IOMS yard UUID — used by All Receipts location filter (Yard / HO / Check-post). */
     iomsYardId: r.yardId,
     amount: Number(r.amount ?? 0),
@@ -106,6 +122,26 @@ function mapEnrichedIomsRow(
   } as Receipt;
 }
 
+async function loadManualReceiptLedgerNames(rows: IomsReceiptRow[]): Promise<Map<string, string>> {
+  const typeIds = [
+    ...new Set(
+      rows
+        .filter((r) => String(r.sourceModule ?? "").trim() === "M-05-MANUAL" && r.manualReceiptTypeId)
+        .map((r) => String(r.manualReceiptTypeId)),
+    ),
+  ];
+  const map = new Map<string, string>();
+  if (typeIds.length === 0) return map;
+  const types = await db
+    .select({ id: manualReceiptTypes.id, ledgerName: manualReceiptTypes.ledgerName })
+    .from(manualReceiptTypes)
+    .where(inArray(manualReceiptTypes.id, typeIds));
+  for (const t of types) {
+    if (t.ledgerName?.trim()) map.set(t.id, t.ledgerName.trim());
+  }
+  return map;
+}
+
 export async function fetchIomsReceiptsMappedToLegacy(scopedLocationIds: string[] | undefined): Promise<Receipt[]> {
   const scoped = scopedLocationIds ?? [];
   const rows =
@@ -124,7 +160,10 @@ export async function fetchIomsReceiptsMappedToLegacy(scopedLocationIds: string[
 
   const withPayer = await attachPayerDisplayNames(rows);
   const enriched = await attachCreatedByDisplayNames(withPayer);
-  return (enriched as IomsReceiptEnriched[]).map((r) => mapEnrichedIomsRow(r, yardById));
+  const manualLedgerByTypeId = await loadManualReceiptLedgerNames(rows);
+  return (enriched as IomsReceiptEnriched[]).map((r) =>
+    mapEnrichedIomsRow(r, yardById, manualLedgerByTypeId),
+  );
 }
 
 export async function fetchSingleIomsReceiptAsLegacy(id: string): Promise<Receipt | null> {
@@ -134,7 +173,8 @@ export async function fetchSingleIomsReceiptAsLegacy(id: string): Promise<Receip
   const yardById = new Map(yardList.map((y) => [y.id, { code: y.code, name: y.name }]));
   const [withPayer] = await attachPayerDisplayNames([row]);
   const [enriched] = await attachCreatedByDisplayNames([withPayer]);
-  return mapEnrichedIomsRow(enriched as IomsReceiptEnriched, yardById);
+  const manualLedgerByTypeId = await loadManualReceiptLedgerNames([row]);
+  return mapEnrichedIomsRow(enriched as IomsReceiptEnriched, yardById, manualLedgerByTypeId);
 }
 
 export async function isIomsReceiptId(id: string): Promise<boolean> {

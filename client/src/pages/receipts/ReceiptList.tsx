@@ -42,7 +42,7 @@ import { useAuth } from '@/context/AuthContext';
 import { formatInr } from "@/lib/formatInr";
 import type { Receipt } from '@shared/schema';
 import { normalizeLedgerName, revenueHeadForLedgerName } from '@shared/manual-receipt-types';
-import type { ReceiptRevenueHeadOption } from '@shared/receipt-revenue-head-options';
+import { receiptRevenueHeadDisplayLabel, type ReceiptRevenueHeadOption } from '@shared/receipt-revenue-head-options';
 
 type ReceiptRow = Receipt & { iomsYardId?: string };
 
@@ -86,8 +86,20 @@ const typeColors: Record<string, string> = {
   Rent: 'bg-primary/10 text-primary border-primary/20',
   'Market Fee': 'bg-accent/10 text-accent border-accent/20',
   'License Fee': 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+  'Licence Fee': 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+  'Security Deposit': 'bg-amber-500/10 text-amber-600 border-amber-500/20',
   Other: 'bg-muted text-muted-foreground border-muted',
 };
+
+function receiptTypeBadgeClass(displayLabel: string, legacyType: string): string {
+  const l = displayLabel.toLowerCase();
+  if (l === 'rent' || l.includes('gst invoice') || l.includes('arrears interest')) {
+    return typeColors.Rent;
+  }
+  if (l.includes('market fee')) return typeColors['Market Fee'];
+  if (l.includes('licen') || l.includes('security deposit')) return typeColors['Security Deposit'];
+  return typeColors[legacyType] ?? typeColors.Other;
+}
 
 function isIomsUnifiedReceiptNo(receiptNo: string): boolean {
   return String(receiptNo ?? '').startsWith('GAPLMB/');
@@ -204,7 +216,9 @@ export default function ReceiptList() {
   }, [receipts, selectedLocation, selectedRevenueHead, yards]);
 
   const sourceRows = useMemo((): Record<string, unknown>[] => {
-    return filteredReceipts.map((receipt) => ({
+    return filteredReceipts.map((receipt) => {
+      const tallyHead = receiptRevenueHeadDisplayLabel(receipt.head);
+      return {
       id: receipt.id,
       receiptNo: receipt.receiptNo,
       _receiptNo: isIomsUnifiedReceiptNo(receipt.receiptNo) ? (
@@ -218,14 +232,14 @@ export default function ReceiptList() {
         typeof receipt.receiptDate === 'string'
           ? receipt.receiptDate.slice(0, 10)
           : String(receipt.receiptDate ?? ''),
-      type: receipt.type,
+      type: tallyHead,
       _type: (
-        <Badge variant="outline" className={typeColors[receipt.type] ?? typeColors.Other}>
-          {receipt.type}
+        <Badge variant="outline" className={receiptTypeBadgeClass(tallyHead, receipt.type)}>
+          {tallyHead}
         </Badge>
       ),
       traderName: receipt.traderName,
-      head: receipt.head,
+      head: tallyHead,
       total: receipt.total,
       _total: `${formatInr(receipt.total)}`,
       paymentMode: receipt.paymentMode,
@@ -277,7 +291,8 @@ export default function ReceiptList() {
           )}
         </div>
       ),
-    }));
+    };
+    });
   }, [filteredReceipts, voidMutation, canDelete, deleteMutation.isPending, downloadReceiptPdf, pdfLoadingId]);
 
   const filterKey = `${selectedLocation}|${selectedRevenueHead}`;

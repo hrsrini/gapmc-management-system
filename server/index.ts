@@ -8,20 +8,12 @@ import { createServer } from "http";
 import { pool } from "./db";
 import { ensureLocalUploadsRoot, getConfiguredObjectStorageDriver } from "./object-storage";
 import {
-  assertSharedSupabaseStorageConfig,
+  ensureSupabaseStorageConfigReady,
   formatSupabaseStorageStartupLine,
-  requireSupabaseServiceRoleKey,
-  requireSupabaseUrl,
   verifySupabaseStorageBucketReady,
 } from "./supabase-admin";
 
 ensureLocalUploadsRoot();
-if (getConfiguredObjectStorageDriver() === "supabase") {
-  requireSupabaseUrl();
-  requireSupabaseServiceRoleKey();
-  assertSharedSupabaseStorageConfig();
-  console.log(formatSupabaseStorageStartupLine());
-}
 
 // Suppress known PostCSS plugin warning (same as in script/build.ts)
 const postcssFromWarning = "A PostCSS plugin did not pass the `from` option to `postcss.parse`";
@@ -124,6 +116,8 @@ app.use((req, res, next) => {
 (async () => {
   if (getConfiguredObjectStorageDriver() === "supabase") {
     try {
+      ensureSupabaseStorageConfigReady();
+      log(formatSupabaseStorageStartupLine());
       await verifySupabaseStorageBucketReady();
       log("Supabase Storage bucket verified.");
     } catch (e) {

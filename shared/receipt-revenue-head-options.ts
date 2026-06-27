@@ -21,6 +21,17 @@ const STANDARD_REVENUE_HEAD_LABELS: Record<StandardRevenueHead, string> = {
   Miscellaneous: "Miscellaneous",
 };
 
+/** Human-readable Tally / revenue head for All Receipts Type and Revenue head columns. */
+export function receiptRevenueHeadDisplayLabel(rawHead: string): string {
+  const h = String(rawHead ?? "").trim();
+  if (!h) return "—";
+  if (h === "M-02-PRE-RECEIPT") return STANDARD_REVENUE_HEAD_LABELS.Rent;
+  if (isStandardRevenueHead(h)) {
+    return STANDARD_REVENUE_HEAD_LABELS[h as StandardRevenueHead];
+  }
+  return normalizeLedgerName(h);
+}
+
 /** Build deduplicated revenue-head filter options for All Receipts / reports. */
 export function buildReceiptRevenueHeadOptions(sources: {
   tallyLedgerNames?: string[];

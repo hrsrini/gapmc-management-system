@@ -91,7 +91,7 @@ export function assertSharedSupabaseStorageConfig(): void {
   }
 }
 
-/** Safe one-line log for ops (no secrets). */
+/** Safe one-line log for ops (no secrets). Call after {@link ensureSupabaseStorageConfigReady}. */
 export function formatSupabaseStorageStartupLine(): string {
   const url = requireSupabaseUrl();
   let host = url;
@@ -103,8 +103,18 @@ export function formatSupabaseStorageStartupLine(): string {
   return `[storage] driver=${STANDARD_OBJECT_STORAGE_DRIVER} host=${host} bucket=${getSupabaseStorageBucket()} prefix=${getSupabaseStoragePrefix()}/`;
 }
 
+/**
+ * Validate Supabase Storage env (sync). Call at startup after env is loaded — not at module import time.
+ */
+export function ensureSupabaseStorageConfigReady(): void {
+  requireSupabaseUrl();
+  requireSupabaseServiceRoleKey();
+  assertSharedSupabaseStorageConfig();
+}
+
 export function getSupabaseAdmin(): SupabaseClient {
   if (cached) return cached;
+  ensureSupabaseStorageConfigReady();
   cached = createClient(requireSupabaseUrl(), requireSupabaseServiceRoleKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
   });

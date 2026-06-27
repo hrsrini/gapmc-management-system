@@ -245,12 +245,12 @@ class S3UploadBlobStore implements UploadBlobStore {
 }
 
 class SupabaseUploadBlobStore implements UploadBlobStore {
-  private readonly bucket: string;
-  private readonly prefix: string;
+  private get bucket(): string {
+    return getSupabaseStorageBucket();
+  }
 
-  constructor() {
-    this.bucket = getSupabaseStorageBucket();
-    this.prefix = getSupabaseStoragePrefix();
+  private get prefix(): string {
+    return getSupabaseStoragePrefix();
   }
 
   private objectKey(key: string): string {

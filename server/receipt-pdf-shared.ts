@@ -1,5 +1,4 @@
 import { integerInrToWords } from "./inr-amount-words";
-import { formatInrPdf } from "@shared/format-inr";
 
 /** Receipt face date: DD-MM-YYYY (e.g. 21-05-2025) per GAPLMB sample. */
 export function formatReceiptDateDmYyyy(isoLike: string | null | undefined): string {
@@ -35,7 +34,9 @@ export function formatReceiptAmountCell(amountInr: number): string {
 }
 
 export function formatReceiptTotalLine(amountInr: number): string {
-  return formatInrPdf(amountInr, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const rounded = Math.round(amountInr * 100) / 100;
+  const num = rounded.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `₹ ${num}`;
 }
 
 export function mapReceiptPaymentModeLabel(mode: string | null | undefined): string {
@@ -65,7 +66,7 @@ export function formatReceiptPaymentDetailLine(receipt: ReceiptPaymentInstrument
     const no = String(receipt.chequeNo ?? "").trim() || "—";
     const dt = formatReceiptDateDmYyyy(receipt.chequeDate ?? receipt.createdAt);
     const bank = String(receipt.bankName ?? "").trim() || "—";
-    return `Cheque/DD Payment made vide ${instrument} No. ${no} dated ${dt} drawn on ${bank}`;
+    return `${instrument} No. ${no} dated ${dt} drawn on ${bank}`;
   }
 
   if (mode === "Online") {

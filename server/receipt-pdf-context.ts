@@ -73,7 +73,7 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
   const payWord = mode === "Cash" ? "Cash" : mode === "Cheque" || mode === "DD" ? "Cheque" : mode || "payment";
   if (isManualReceipt(receipt)) {
     const ledger = await resolveManualLedgerLabel(receipt);
-    if (ledger) return `Being amount received towards ${ledger}.`;
+    if (ledger) return `${ledger}.`;
   }
   if (String(receipt.sourceModule ?? "") === "M-03" && receipt.sourceRecordId) {
     const [inv] = await db
@@ -89,7 +89,7 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
     if (inv) {
       const month = formatBillingMonthLabel(inv.periodMonth, String(receipt.createdAt ?? ""));
       const premises = await resolveRentReceiptPremisesPrint(inv);
-      return `Being amount received towards Rent,CGST,SGST for the month of ${month} of ${premises.premisesLabel}.`;
+      return `Rent,CGST,SGST for the month of ${month} of ${premises.premisesLabel}.`;
     }
   }
   const rh = String(receipt.revenueHead ?? "").trim();
@@ -97,9 +97,9 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
     return `Market fee payment (${payWord}).`;
   }
   if (rh === "SecurityDeposit") {
-    return "Being amount received towards Security Deposit.";
+    return "Security Deposit.";
   }
-  return `Being amount received towards ${rh || "payment"}.`;
+  return `${rh || "payment"}.`;
 }
 
 async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParticularRow[]> {
