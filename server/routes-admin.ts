@@ -33,7 +33,7 @@ import { SIDEBAR_MENU_VISIBILITY_PAGE_HREF } from "@shared/nav-sidebar-hidden";
 import { getMergedSystemConfig } from "./system-config";
 import { getDataRetentionSummary } from "./data-retention-audit";
 import { writeAuditLog } from "./audit";
-import { sendApiError } from "./api-errors";
+import { describeStorageFailure, sendApiError } from "./api-errors";
 import {
   clearReceiptLogoFiles,
   getActiveReceiptLogoKey,
@@ -42,6 +42,7 @@ import {
   readUploadedReceiptLogoBuffer,
   writeReceiptLogoUpload,
 } from "./receipt-logo-storage";
+import { getConfiguredObjectStorageDriver } from "./object-storage";
 import { HrEmployeeRuleError, normalizeMobile10 } from "./hr-employee-rules";
 import { SMTP_EMAIL_CONFIG_KEYS } from "@shared/smtp-email-config";
 import {
@@ -51,6 +52,7 @@ import {
   validateAndNormalizeEmailConfigPut,
 } from "./admin-email-config";
 import { pickEmailConfigValues, sendSmtpMail, verifySmtpConnection } from "./smtp-config";
+import { getSupabaseStorageBucket, getSupabaseStoragePrefix } from "./supabase-admin";
 
 function redactSystemConfigForAudit(map: Record<SystemConfigKey, string>): Record<string, string> {
   const o: Record<string, string> = { ...map };
@@ -73,8 +75,12 @@ const receiptLogoUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024 },
   fileFilter(_req, file, cb) {
-    if (file.mimetype === "image/png" || file.mimetype === "image/jpeg") cb(null, true);
-    else cb(new Error("ADMIN_RECEIPT_LOGO_TYPE: Only PNG or JPEG images are allowed."));
+    const mime = file.mimetype.toLowerCase().split(";")[0].trim();
+    if (mime === "image/png" || mime === "image/jpeg" || mime === "image/jpg" || mime === "image/pjpeg") {
+      cb(null, true);
+    } else {
+      cb(new Error("ADMIN_RECEIPT_LOGO_TYPE: Only PNG or JPEG images are allowed."));
+    }
   },
 });
 
@@ -494,10 +500,19 @@ export function registerAdminRoutes(app: Express) {
   // ----- Receipt PDF logo (uploads/branding; overrides env RECEIPT_PDF_LOGO_* for PDF generation) -----
   app.get("/api/admin/branding/receipt-logo/status", async (_req, res) => {
     try {
-      res.json({ hasLogo: await hasUploadedReceiptLogo() });
+      const driver = getConfiguredObjectStorageDriver();
+      res.json({
+        hasLogo: await hasUploadedReceiptLogo(),
+        storage: {
+          driver,
+          ...(driver === "supabase"
+            ? { bucket: getSupabaseStorageBucket(), prefix: getSupabaseStoragePrefix() }
+            : {}),
+        },
+      });
     } catch (e) {
       console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read logo status");
+      sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to read logo status"));
     }
   });
 
@@ -512,7 +527,7 @@ export function registerAdminRoutes(app: Express) {
       res.send(buf);
     } catch (e) {
       console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read logo");
+      sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to read logo"));
     }
   });
 
@@ -532,7 +547,7 @@ export function registerAdminRoutes(app: Express) {
       res.status(201).json({ ok: true, hasLogo: true });
     } catch (e) {
       console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to save logo");
+      sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to save logo"));
     }
   });
 
@@ -549,7 +564,7 @@ export function registerAdminRoutes(app: Express) {
       res.json({ ok: true, hasLogo: false });
     } catch (e) {
       console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to remove logo");
+      sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to remove logo"));
     }
   });
 

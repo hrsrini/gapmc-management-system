@@ -19,3 +19,22 @@ export function sendApiError(
   if (details !== undefined) body.details = details;
   res.status(status).json(body);
 }
+
+/** Map storage adapter failures to actionable Admin messages (no secrets). */
+export function describeStorageFailure(e: unknown, action: string): string {
+  const detail = e instanceof Error ? e.message : String(e);
+  const lower = detail.toLowerCase();
+  if (
+    lower.includes("supabase_url") ||
+    lower.includes("service_role") ||
+    lower.includes("invalid jwt") ||
+    lower.includes("invalid api key") ||
+    lower.includes("jwt")
+  ) {
+    return `${action}: Supabase Storage is not configured on this server. Set OBJECT_STORAGE_DRIVER=supabase, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_STORAGE_BUCKET, and SUPABASE_STORAGE_PREFIX on ECS (see docs/DEPLOY-SUPABASE-STORAGE.md).`;
+  }
+  if (lower.includes("bucket") && lower.includes("not found")) {
+    return `${action}: Storage bucket missing. Run npm run storage:ensure-bucket against this Supabase project.`;
+  }
+  return `${action}: ${detail}`;
+}

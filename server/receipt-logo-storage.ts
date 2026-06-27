@@ -44,12 +44,24 @@ export async function readUploadedReceiptLogoBuffer(): Promise<Buffer | null> {
   }
 }
 
+function receiptLogoExtFromMime(mime: string): "jpg" | "png" {
+  const normalized = mime.toLowerCase().split(";")[0].trim();
+  if (normalized === "image/jpeg" || normalized === "image/jpg" || normalized === "image/pjpeg") {
+    return "jpg";
+  }
+  return "png";
+}
+
 export async function writeReceiptLogoUpload(buffer: Buffer, mime: string): Promise<void> {
-  await clearReceiptLogoFiles();
-  const ext = mime === "image/jpeg" ? "jpg" : "png";
+  try {
+    await clearReceiptLogoFiles();
+  } catch (e) {
+    console.warn("[receipt-logo] clear before upload failed (continuing)", e);
+  }
+  const ext = receiptLogoExtFromMime(mime);
   const key = `branding/receipt-pdf-logo.${ext}`;
-  const ct = mime === "image/jpeg" ? "image/jpeg" : "image/png";
-  await getUploadBlobStore().put(key, buffer, ct);
+  const contentType = ext === "jpg" ? "image/jpeg" : "image/png";
+  await getUploadBlobStore().put(key, buffer, contentType);
 }
 
 export async function clearReceiptLogoFiles(): Promise<void> {

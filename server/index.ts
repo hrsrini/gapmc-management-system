@@ -12,6 +12,7 @@ import {
   formatSupabaseStorageStartupLine,
   requireSupabaseServiceRoleKey,
   requireSupabaseUrl,
+  verifySupabaseStorageBucketReady,
 } from "./supabase-admin";
 
 ensureLocalUploadsRoot();
@@ -121,6 +122,18 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  if (getConfiguredObjectStorageDriver() === "supabase") {
+    try {
+      await verifySupabaseStorageBucketReady();
+      log("Supabase Storage bucket verified.");
+    } catch (e) {
+      console.error("[storage] bucket verification failed:", e);
+      if (process.env.NODE_ENV === "production") {
+        process.exit(1);
+      }
+    }
+  }
+
   await registerRoutes(httpServer, app);
 
   if (

@@ -52,7 +52,10 @@ export default function AdminConfig() {
   }>({
     queryKey: ["/api/admin/config/history?limit=25"],
   });
-  const { data: logoStatus, isLoading: logoStatusLoading } = useQuery<{ hasLogo: boolean }>({
+  const { data: logoStatus, isLoading: logoStatusLoading } = useQuery<{
+    hasLogo: boolean;
+    storage?: { driver: string; bucket?: string; prefix?: string };
+  }>({
     queryKey: ["/api/admin/branding/receipt-logo/status"],
     queryFn: () => fetchApiGet("/api/admin/branding/receipt-logo/status"),
   });
@@ -589,17 +592,28 @@ export default function AdminConfig() {
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             Upload a PNG or JPEG (max 2 MB) for the header on server-generated receipt PDFs (
-            <code className="text-xs bg-muted px-1 rounded">GET /api/ioms/receipts/:id/pdf</code>). This replaces any{" "}
+            <code className="text-xs bg-muted px-1 rounded">GET /api/ioms/receipts/:id/pdf</code>). Logos are stored in
+            Supabase Storage (same bucket as other uploads). This overrides legacy{" "}
             <code className="text-xs bg-muted px-1 rounded">RECEIPT_PDF_LOGO_PATH</code> /{" "}
-            <code className="text-xs bg-muted px-1 rounded">RECEIPT_PDF_LOGO_URL</code> environment settings until you
-            remove it.
+            <code className="text-xs bg-muted px-1 rounded">RECEIPT_PDF_LOGO_URL</code> until you remove it.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
+          {logoStatus?.storage?.driver === "supabase" ? (
+            <p className="text-xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
+              Storage: Supabase bucket <code className="text-xs">{logoStatus.storage.bucket}</code>
+              {logoStatus.storage.prefix ? ` / ${logoStatus.storage.prefix}` : ""}
+            </p>
+          ) : logoStatus?.storage?.driver === "local" ? (
+            <p className="text-xs text-amber-700 dark:text-amber-400 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 px-3 py-2">
+              Storage driver is <code className="text-xs">local</code> — uploads may not persist on ECS. Set{" "}
+              <code className="text-xs">OBJECT_STORAGE_DRIVER=supabase</code> and Supabase env vars on the server.
+            </p>
+          ) : null}
           <input
             ref={logoFileRef}
             type="file"
-            accept="image/png,image/jpeg"
+            accept="image/png,image/jpeg,image/jpg"
             className="sr-only"
             aria-hidden
             tabIndex={-1}

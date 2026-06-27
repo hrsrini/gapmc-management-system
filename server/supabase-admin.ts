@@ -111,6 +111,21 @@ export function getSupabaseAdmin(): SupabaseClient {
   return cached;
 }
 
+/** Fail fast when the configured bucket does not exist (common ECS misconfiguration). */
+export async function verifySupabaseStorageBucketReady(): Promise<void> {
+  const bucket = getSupabaseStorageBucket();
+  const admin = getSupabaseAdmin();
+  const { data: buckets, error } = await admin.storage.listBuckets();
+  if (error) {
+    throw new Error(`Supabase Storage listBuckets failed: ${error.message}`);
+  }
+  if (!buckets?.some((b) => b.name === bucket)) {
+    throw new Error(
+      `Supabase Storage bucket "${bucket}" not found. Run: npm run storage:ensure-bucket (same SUPABASE_URL as this server).`,
+    );
+  }
+}
+
 /** True when Storage API reports a missing object (not a permission/network failure). */
 export function isSupabaseStorageNotFoundError(error: { message?: string; statusCode?: string | number } | null): boolean {
   if (!error) return false;
