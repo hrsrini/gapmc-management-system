@@ -12,7 +12,7 @@ const FS_LABEL = 7;
 const FS_VALUE = 8;
 const FS_SMALL = 7;
 const ROW_H = 16;
-const PARTY_ROW_H = 44;
+const PARTY_ROW_H = 56;
 
 function strokeBox(doc: PdfDoc, x: number, y: number, w: number, h: number): void {
   doc.save().lineWidth(LINE).strokeColor("#000000").rect(x, y, w, h).stroke().restore();
@@ -53,6 +53,7 @@ function drawPartyInBox(
   title: string,
   name: string,
   locationName: string,
+  gstinLine: string | null,
   stateLine: string,
 ): void {
   const innerW = w - PAD * 2;
@@ -62,7 +63,12 @@ function drawPartyInBox(
   doc.text(pdfSafeText(name), x + PAD, y + 14, { width: innerW, lineBreak: false });
   doc.font("Helvetica").fontSize(FS_VALUE);
   doc.text(pdfSafeText(locationName), x + PAD, y + 26, { width: innerW, lineBreak: false });
-  doc.text(pdfSafeText(stateLine), x + PAD, y + 38, { width: innerW, lineBreak: false });
+  if (gstinLine) {
+    doc.text(pdfSafeText(gstinLine), x + PAD, y + 38, { width: innerW, lineBreak: false });
+    doc.text(pdfSafeText(stateLine), x + PAD, y + 50, { width: innerW, lineBreak: false });
+  } else {
+    doc.text(pdfSafeText(stateLine), x + PAD, y + 38, { width: innerW, lineBreak: false });
+  }
 }
 
 function drawParticularsTable(
@@ -116,10 +122,11 @@ function drawParticularsTable(
   for (let i = 0; i < bodyRows; i++) {
     const line = ctx.lines[i];
     const rowY = y + headerH + i * ROW_H + 4;
-    if (i === 0) {
-      doc.text("1", slX, rowY, { width: slW, align: "center", lineBreak: false });
-    }
     if (!line) continue;
+
+    if (line.serialNo != null) {
+      doc.text(String(line.serialNo), slX, rowY, { width: slW, align: "center", lineBreak: false });
+    }
 
     const labelX = partX + PAD + (line.indent ? 10 : 0);
     doc.text(pdfSafeText(line.label), labelX, rowY, {
@@ -333,8 +340,19 @@ export function drawGsambRentTaxInvoice(doc: PdfDoc, ctx: RentInvoicePdfContext,
   hLine(doc, x, y + PARTY_ROW_H, midLeftW);
 
   const stateLine = `State Name: ${ctx.stateName}, Code: ${ctx.stateCode}`;
-  drawPartyInBox(doc, x, y, midLeftW, PARTY_ROW_H, "Consignee (Ship to)", ctx.consigneeName, ctx.buyerAddress, stateLine);
-  drawPartyInBox(doc, x, y + PARTY_ROW_H, midLeftW, PARTY_ROW_H, "Buyer (Bill to)", ctx.buyerName, ctx.buyerAddress, stateLine);
+  drawPartyInBox(doc, x, y, midLeftW, PARTY_ROW_H, "Consignee (Ship to)", ctx.consigneeName, ctx.buyerAddress, null, stateLine);
+  drawPartyInBox(
+    doc,
+    x,
+    y + PARTY_ROW_H,
+    midLeftW,
+    PARTY_ROW_H,
+    "Buyer (Bill to)",
+    ctx.buyerName,
+    ctx.buyerAddress,
+    ctx.buyerGstinLine,
+    stateLine,
+  );
 
   const rx = x + midLeftW;
   const rightMeta: [string, string, string, string][] = [

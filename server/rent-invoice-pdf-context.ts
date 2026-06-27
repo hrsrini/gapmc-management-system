@@ -4,8 +4,10 @@ import { buildRentInvoiceBillingBreakdown } from "@shared/rent-invoice-billing-d
 import { getReceiptPdfBranding } from "./receipt-pdf-shared";
 import {
   formatRentInvoiceRemarksMonth,
+  formatRentInvoiceNoForPdfDisplay,
   formatTaxInvoiceChargeableWords,
   formatTaxInvoiceDate,
+  formatTaxInvoicePartyGstinLine,
   formatTaxInvoiceTaxWords,
   inferGstRatePercent,
   lastDayOfPeriodMonthYmd,
@@ -22,6 +24,8 @@ export type RentInvoicePdfLine = {
   rateLabel?: string;
   perLabel?: string;
   indent?: boolean;
+  /** Main line items (rent, non-GST charges) show in Sl No. column; GST sub-rows omit. */
+  serialNo?: number;
 };
 
 export type RentInvoicePdfContext = {
@@ -37,6 +41,7 @@ export type RentInvoicePdfContext = {
   consigneeName: string;
   buyerName: string;
   buyerAddress: string;
+  buyerGstinLine: string;
   destination: string;
   dispatchDocNo: string;
   particularsTitle: string;
@@ -63,6 +68,7 @@ export type BuildRentInvoicePdfContextInput = {
   yardCode?: string | null;
   yardAddress?: string | null;
   counterpartyName: string;
+  counterpartyGstin?: string | null;
   assetCode: string;
   allotmentLabel: string;
   cgstPercent?: number | null;
@@ -99,11 +105,10 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
 
   const boardBanner = rentInvoicePdfBoardBanner();
   const sellerTitle = process.env.RENT_INVOICE_PDF_SELLER_TITLE?.trim() || boardBanner;
+  /** Supplier address: board HO (not sub-yard / yard location). */
   const sellerAddress =
     process.env.RENT_INVOICE_PDF_SELLER_ADDRESS?.trim() ||
-    (yardAddress?.trim()
-      ? yardAddress.trim().toUpperCase()
-      : `${yardName.toUpperCase()}, ${branding.placeLine.toUpperCase()}`);
+    branding.hoAddressLine.replace(/^HO Address\s*:\s*/i, "").trim().toUpperCase();
 
   const destination = yardName.toUpperCase();
   /** Consignee / buyer: yard location name only (not allotment or asset codes). */
@@ -144,11 +149,8 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
     (breakdown.billingType === "Overstay" ? "Overstay / Fine Rent" : "Rent Receipts");
 
   const lines: RentInvoicePdfLine[] = [
-    { label: particularsTitle, amount: rent, hsnSac, rateLabel: "", perLabel: "" },
+    { label: particularsTitle, amount: rent, hsnSac, rateLabel: "", perLabel: "", serialNo: 1 },
   ];
-  for (const c of nonGst) {
-    lines.push({ label: c.label, amount: c.amount, indent: true });
-  }
   if (!isGstExempt && cgst > 0) {
     lines.push({
       label: `CGST ${cgstRate % 1 === 0 ? cgstRate : cgstRate.toFixed(2)}%`,
@@ -166,6 +168,11 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
       perLabel: "%",
       indent: true,
     });
+  }
+  let nextSerial = 2;
+  for (const c of nonGst) {
+    lines.push({ label: c.label, amount: c.amount, serialNo: nextSerial });
+    nextSerial += 1;
   }
   if (roundOff !== 0) {
     lines.push({ label: "R. Off", amount: roundOff, indent: true });
@@ -191,11 +198,16 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
     stateName,
     stateCode,
     pan,
-    invoiceNo: String(invoice.invoiceNo ?? invoice.id),
+    invoiceNo: formatRentInvoiceNoForPdfDisplay(
+      String(invoice.invoiceNo ?? invoice.id),
+      invoice.periodMonth,
+      yardCode,
+    ),
     invoiceDate,
     consigneeName: counterpartyName,
     buyerName: counterpartyName,
     buyerAddress,
+    buyerGstinLine: formatTaxInvoicePartyGstinLine(input.counterpartyGstin),
     destination,
     dispatchDocNo,
     particularsTitle,

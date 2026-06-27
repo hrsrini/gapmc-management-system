@@ -337,6 +337,7 @@ export function registerRentIomsRoutes(app: Express) {
         yardCode,
         yardAddress,
         counterpartyName: counterparty.payerName,
+        counterpartyGstin: counterparty.payerGstin,
         assetCode,
         allotmentLabel,
         cgstPercent: Number.isFinite(cgstPercent) ? cgstPercent : null,

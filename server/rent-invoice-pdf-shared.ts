@@ -1,4 +1,5 @@
 import { integerInrToWords } from "./inr-amount-words";
+import { formatRentInvoiceNo } from "./rent-invoice-number";
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MONTH_LONG_UPPER = [
@@ -82,6 +83,41 @@ export function rentInvoicePdfSignatoryLine(): string {
   const raw = process.env.RENT_INVOICE_PDF_SIGNATORY_FOR?.trim();
   if (raw) return raw.startsWith("For ") || raw.startsWith("for ") ? raw : `For ${raw}`;
   return "For GAPLMB GST";
+}
+
+/** Party GSTIN line on tax invoice (hyphen when absent). */
+export function formatTaxInvoicePartyGstinLine(gstin: string | null | undefined): string {
+  const t = String(gstin ?? "").trim();
+  return t ? `GSTIN/UIN : ${t}` : "GSTIN/UIN : -";
+}
+
+/**
+ * PDF display for stored invoice numbers — converts legacy M03/{yard}/{YYYY-MM}/{seq} to Jan/2026/YARD/011.
+ */
+export function formatRentInvoiceNoForPdfDisplay(
+  invoiceNo: string | null | undefined,
+  periodMonth?: string | null,
+  yardCode?: string | null,
+): string {
+  const raw = String(invoiceNo ?? "").trim();
+  if (!raw) return "";
+  const legacy = /^M03\/([^/]+)\/(\d{4})-(\d{2})\/(\d+)$/i.exec(raw);
+  if (legacy) {
+    const [, yc, year, mo, seq] = legacy;
+    const idx = Number(mo) - 1;
+    const mon = idx >= 0 && idx < 12 ? MONTH_SHORT[idx] : mo;
+    const seqNum = Number(seq);
+    const padded = Number.isFinite(seqNum) ? String(seqNum).padStart(3, "0") : seq;
+    return `${mon}/${year}/${yc}/${padded}`;
+  }
+  if (/^[A-Za-z]{3}\/\d{4}\//.test(raw)) return raw;
+  if (periodMonth && yardCode) {
+    const seqTail = raw.split("/").pop();
+    if (seqTail && /^\d+$/.test(seqTail)) {
+      return formatRentInvoiceNo(yardCode, periodMonth, Number(seqTail));
+    }
+  }
+  return raw;
 }
 
 export function inferGstRatePercent(taxAmount: number, taxableRent: number): number {

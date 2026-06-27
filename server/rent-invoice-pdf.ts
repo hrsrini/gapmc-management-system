@@ -19,6 +19,7 @@ export type RentInvoicePdfInput = {
   yardCode?: string | null;
   yardAddress?: string | null;
   counterpartyName: string;
+  counterpartyGstin?: string | null;
   assetCode: string;
   allotmentLabel: string;
   cgstPercent?: number | null;

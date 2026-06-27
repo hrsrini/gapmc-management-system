@@ -1,11 +1,13 @@
 /**
  * M-03 rent tax invoice numbers: human-readable, unique per yard + billing month.
- * Format: M03/{yardCode}/{YYYY-MM}/{NNNNN}  (5-digit running sequence per yard per month)
+ * Format (SRS F.9): Jan/2026/PND/011 — month / year / yard code / 3-digit sequence.
  */
 import { eq } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { db } from "./db";
 import { yards } from "@shared/db-schema";
+
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function firstCell(r: unknown): string | number | bigint | null {
   if (r && typeof r === "object" && "rows" in r) {
@@ -47,7 +49,13 @@ export function formatRentInvoiceNo(
 ): string {
   const n = Number(seq);
   const safeSeq = Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
-  return `M03/${sanitizeYardCodeForInvoiceNo(yardCode)}/${sanitizePeriodMonthForInvoiceNo(periodMonth)}/${String(safeSeq).padStart(5, "0")}`;
+  const pm = sanitizePeriodMonthForInvoiceNo(periodMonth);
+  const m = /^(\d{4})-(\d{2})$/.exec(pm);
+  const year = m?.[1] ?? "0000";
+  const moIdx = m ? Number(m[2]) - 1 : 0;
+  const mon = moIdx >= 0 && moIdx < 12 ? MONTH_SHORT[moIdx] : "Jan";
+  const yc = sanitizeYardCodeForInvoiceNo(yardCode);
+  return `${mon}/${year}/${yc}/${String(safeSeq).padStart(3, "0")}`;
 }
 
 /** @deprecated Old suffix was `rent_invoices.id`; use numeric seq only. */
