@@ -1,4 +1,5 @@
 import {
+  isStandardRevenueHead,
   normalizeLedgerName,
   STANDARD_REVENUE_HEADS,
   type StandardRevenueHead,
