@@ -117,6 +117,8 @@ export function getSupabaseAdmin(): SupabaseClient {
   ensureSupabaseStorageConfigReady();
   cached = createClient(requireSupabaseUrl(), requireSupabaseServiceRoleKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
+    /** Storage-only server — Node 20 has no native WebSocket; avoid loading realtime transport. */
+    realtime: { enabled: false },
   });
   return cached;
 }
