@@ -3,6 +3,7 @@
  * Never expose SUPABASE_SERVICE_ROLE_KEY to the browser.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import ws from "ws";
 import {
   STANDARD_OBJECT_STORAGE_DRIVER,
   STANDARD_SUPABASE_STORAGE_BUCKET,
@@ -117,8 +118,8 @@ export function getSupabaseAdmin(): SupabaseClient {
   ensureSupabaseStorageConfigReady();
   cached = createClient(requireSupabaseUrl(), requireSupabaseServiceRoleKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
-    /** Storage-only server — Node 20 has no native WebSocket; avoid loading realtime transport. */
-    realtime: { enabled: false },
+    /** Node 20 has no native WebSocket; realtime-js still constructs on createClient. */
+    realtime: { transport: ws },
   });
   return cached;
 }
