@@ -25,7 +25,8 @@ import {
   applyM03ReceiptToRentDepositLedger,
   recordChequeDishonourLedgerForM03Receipt,
 } from "./rent-deposit-ledger-from-receipt";
-import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
+import { parseM03CombinedBundleBreakdown } from "@shared/rent-combined-invoice";
+import { settledPrincipalPaidForInvoice } from "./m03-invoice-payment-sum";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -55,18 +56,7 @@ export async function applyM03ReceiptToRentDepositLedgerWhenSettled(
 export async function maybeMarkM03InvoicePaidFromSettledReceipts(invoiceId: string): Promise<void> {
   const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
   if (!inv) return;
-  const allRecs = await db
-    .select()
-    .from(iomsReceipts)
-    .where(and(eq(iomsReceipts.sourceModule, "M-03"), eq(iomsReceipts.sourceRecordId, invoiceId)));
-  const paidSum = allRecs
-    .filter(
-      (r) =>
-        (String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled") &&
-        String(r.status ?? "") !== "Reversed" &&
-        depositStatusAllowsLedgerPosting(r.depositStatus),
-    )
-    .reduce((s, r) => s + m03ReceiptPrincipalTowardInvoice(r), 0);
+  const paidSum = await settledPrincipalPaidForInvoice(invoiceId);
   const total = Number(inv.totalAmount ?? 0);
   if (paidSum >= total - 0.01) {
     await db.update(rentInvoices).set({ status: "Paid" }).where(eq(rentInvoices.id, invoiceId));
@@ -81,21 +71,7 @@ export async function revertM03InvoicePaidAfterReceiptUnsettled(
   const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
   if (!inv || String(inv.status ?? "") !== "Paid") return;
 
-  const allRecs = await db
-    .select()
-    .from(iomsReceipts)
-    .where(and(eq(iomsReceipts.sourceModule, "M-03"), eq(iomsReceipts.sourceRecordId, invoiceId)));
-
-  const paidSum = allRecs
-    .filter((r) => {
-      if (excludeReceiptId && r.id === excludeReceiptId) return false;
-      if (String(r.status ?? "") === "Reversed") return false;
-      return (
-        (String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled") &&
-        depositStatusAllowsLedgerPosting(r.depositStatus)
-      );
-    })
-    .reduce((s, r) => s + m03ReceiptPrincipalTowardInvoice(r), 0);
+  const paidSum = await settledPrincipalPaidForInvoice(invoiceId, { excludeReceiptId });
 
   const total = Number(inv.totalAmount ?? 0);
   if (paidSum < total - 0.01) {
@@ -119,7 +95,14 @@ export async function finalizeDepositSettlementForReceipts(receiptIds: string[])
     const coll = await applyM03ReceiptToRentDepositLedgerWhenSettled(row);
     messages.push(...coll.messages.filter(Boolean));
     if (row.sourceModule === "M-03" && row.sourceRecordId) {
-      await maybeMarkM03InvoicePaidFromSettledReceipts(String(row.sourceRecordId));
+      const combined = parseM03CombinedBundleBreakdown(row.m03BreakdownJson);
+      if (combined?.invoiceAllocations?.length) {
+        for (const a of combined.invoiceAllocations) {
+          await maybeMarkM03InvoicePaidFromSettledReceipts(a.invoiceId);
+        }
+      } else {
+        await maybeMarkM03InvoicePaidFromSettledReceipts(String(row.sourceRecordId));
+      }
     }
   }
   return messages;

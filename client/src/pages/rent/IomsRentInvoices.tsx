@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Link, useSearchParams } from "wouter";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 import { formatInr } from "@/lib/formatInr";
-import { FileText, AlertCircle, CheckCircle, ShieldCheck, Plus, Download, CalendarClock, Percent, Loader2 } from "lucide-react";
+import { FileText, AlertCircle, CheckCircle, ShieldCheck, Plus, Download, CalendarClock, Percent, Loader2, FileStack } from "lucide-react";
 interface RentInvoice {
   id: string;
   invoiceNo?: string | null;
@@ -25,6 +25,7 @@ interface RentInvoice {
   totalAmount: number;
   status: string;
   isGovtEntity?: boolean;
+  combinedBundleId?: string | null;
 }
 interface AssetRef {
   id: string;
@@ -216,7 +217,7 @@ export default function IomsRentInvoices() {
       ),
       _actions: (
         <div className="flex flex-wrap items-center gap-2">
-          {r.status !== "Cancelled" ? (
+          {r.status !== "Cancelled" && !String(r.combinedBundleId ?? "").trim() ? (
             <Button
               type="button"
               size="sm"
@@ -232,6 +233,14 @@ export default function IomsRentInvoices() {
                 <Download className="h-3.5 w-3.5 mr-1" />
               )}
               PDF
+            </Button>
+          ) : null}
+          {String(r.combinedBundleId ?? "").trim() ? (
+            <Button asChild size="sm" variant="secondary">
+              <Link href={`/rent/ioms/combined-invoices/${r.combinedBundleId}`}>
+                <FileStack className="h-3.5 w-3.5 mr-1" />
+                Bundle
+              </Link>
             </Button>
           ) : null}
           {canVerify && r.status === "Draft" && (
@@ -375,6 +384,11 @@ export default function IomsRentInvoices() {
                 >
                   <CalendarClock className="h-4 w-4 mr-2" />
                   Generate monthly drafts
+                </Button>
+                <Button asChild size="sm" variant="outline">
+                  <Link href="/rent/ioms/combined-invoices">
+                    <FileStack className="h-4 w-4 mr-2" /> Combined invoices
+                  </Link>
                 </Button>
                 <Button asChild size="sm">
                   <Link href="/rent/ioms/invoices/new">

@@ -1113,6 +1113,34 @@ export const rentInvoices = gapmc.table("rent_invoices", {
   approvedAt: text("approved_at"),
   workflowRevisionCount: integer("workflow_revision_count").default(0),
   dvReturnRemarks: text("dv_return_remarks"),
+  /** When set, only the combined bundle PDF is issued (not individual premises PDF). */
+  combinedBundleId: text("combined_bundle_id"),
+});
+
+export const rentCombinedInvoices = gapmc.table("rent_combined_invoices", {
+  id: text("id").primaryKey(),
+  bundleInvoiceNo: text("bundle_invoice_no").notNull().unique(),
+  yardId: text("yard_id").notNull(),
+  tenantLicenceId: text("tenant_licence_id").notNull(),
+  unifiedEntityId: text("unified_entity_id"),
+  periodMonth: text("period_month").notNull(),
+  invoiceDate: text("invoice_date").notNull(),
+  totalRentAmount: doublePrecision("total_rent_amount").notNull().default(0),
+  totalCgst: doublePrecision("total_cgst").notNull().default(0),
+  totalSgst: doublePrecision("total_sgst").notNull().default(0),
+  totalTdsAmount: doublePrecision("total_tds_amount").notNull().default(0),
+  totalAmount: doublePrecision("total_amount").notNull().default(0),
+  status: text("status").notNull().default("Approved"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+export const rentInvoicePaymentAllocations = gapmc.table("rent_invoice_payment_allocations", {
+  id: text("id").primaryKey(),
+  receiptId: text("receipt_id").notNull(),
+  invoiceId: text("invoice_id").notNull(),
+  amountInr: doublePrecision("amount_inr").notNull(),
+  createdAt: text("created_at"),
 });
 
 /** M-03: Effective-dated prorata / overstay billing configuration. */
@@ -1301,6 +1329,65 @@ export const purchaseTransactions = gapmc.table("purchase_transactions", {
   /** M-04 adjusted return: links to an Approved original purchase row. */
   parentTransactionId: text("parent_transaction_id"),
   entryKind: text("entry_kind").notNull().default("Original"), // Original | Adjustment
+});
+
+/** M-04 unified transaction wizard (cases A–G); multi-commodity counter entry + receipt. */
+export const marketTransactions = gapmc.table("market_transactions", {
+  id: text("id").primaryKey(),
+  transactionNo: text("transaction_no").unique(),
+  caseType: text("case_type").notNull(),
+  entryLocationId: text("entry_location_id").notNull(),
+  transactionDate: text("transaction_date").notNull(),
+  transactionTime: text("transaction_time"),
+  captureMode: text("capture_mode").notNull().default("Normal"),
+  captureLocationText: text("capture_location_text"),
+  vehicleNumber: text("vehicle_number"),
+  vehicleMake: text("vehicle_make"),
+  vehicleCapacityKg: doublePrecision("vehicle_capacity_kg"),
+  traderLicenceId: text("trader_licence_id"),
+  traderManualName: text("trader_manual_name"),
+  traderManualContact: text("trader_manual_contact"),
+  traderManualAddress: text("trader_manual_address"),
+  receiverTraderLicenceId: text("receiver_trader_licence_id"),
+  feePayer: text("fee_payer"),
+  sellerType: text("seller_type"),
+  farmerType: text("farmer_type"),
+  farmerName: text("farmer_name"),
+  farmerKrishiCard: text("farmer_krishi_card"),
+  farmerContact: text("farmer_contact"),
+  farmerAddress: text("farmer_address"),
+  commoditySource: text("commodity_source"),
+  placeOfOrigin: text("place_of_origin"),
+  originatingState: text("originating_state"),
+  destinationState: text("destination_state"),
+  exitCheckpostsJson: text("exit_checkposts_json"),
+  anyExitCheckpost: boolean("any_exit_checkpost").default(false),
+  totalCommodityValue: doublePrecision("total_commodity_value").notNull().default(0),
+  totalMarketFee: doublePrecision("total_market_fee").notNull().default(0),
+  fineAmount: doublePrecision("fine_amount").notNull().default(0),
+  securityDepositAmount: doublePrecision("security_deposit_amount").notNull().default(0),
+  adminChargesAmount: doublePrecision("admin_charges_amount").notNull().default(0),
+  totalPayable: doublePrecision("total_payable").notNull().default(0),
+  paymentMode: text("payment_mode"),
+  paymentDetailJson: text("payment_detail_json"),
+  status: text("status").notNull().default("Draft"),
+  receiptId: text("receipt_id"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+  finalizedAt: text("finalized_at"),
+});
+
+export const marketTransactionCommodities = gapmc.table("market_transaction_commodities", {
+  id: text("id").primaryKey(),
+  transactionId: text("transaction_id").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  commodityId: text("commodity_id").notNull(),
+  quantity: doublePrecision("quantity").notNull(),
+  unit: text("unit").notNull(),
+  ratePerUnit: doublePrecision("rate_per_unit").notNull(),
+  commodityValue: doublePrecision("commodity_value").notNull(),
+  marketFeePercent: doublePrecision("market_fee_percent").notNull(),
+  marketFeeAmount: doublePrecision("market_fee_amount").notNull(),
 });
 
 export const checkPostInward = gapmc.table("check_post_inward", {

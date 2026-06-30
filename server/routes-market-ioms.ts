@@ -52,6 +52,9 @@ import { resolvePurchaseTransactionTraderRef, tradersRefEquivalent } from "./mar
 import { generateNextPurchaseTransactionNo, persistAllocatedTransactionNoIfMissing, ensurePurchaseTransactionNoForRow } from "./market-purchase-transaction-no";
 import { buildMarketReturnPdf } from "./market-return-pdf";
 import { assertTraderLicenceAccessibleInUserScope } from "./trader-licence-market-scope";
+import { registerMarketTransactionWizardRoutes } from "./market-transaction-wizard-routes";
+import { issueMarketFeeReceiptForPurchaseTransaction } from "./market-purchase-receipt-issue";
+import { ensureM04ImmediateCommodityBackfill } from "./m04-immediate-transaction-backfill";
 
 /** Trim; empty / whitespace → null so `??` does not keep bogus "" from joins. */
 function nzDisplayText(value: string | null | undefined): string | null {
@@ -1581,6 +1584,9 @@ export function registerMarketIomsRoutes(app: Express) {
   // ----- Purchase transactions (scoped by user yards) -----
   app.get("/api/ioms/market/transactions", async (req, res) => {
     try {
+      await ensureM04ImmediateCommodityBackfill().catch((e) =>
+        console.warn("M-04 immediate commodity backfill (purchase list):", e),
+      );
       const yardId = req.query.yardId as string | undefined;
       const status = req.query.status as string | undefined;
       const conditions = [];
@@ -2001,7 +2007,7 @@ export function registerMarketIomsRoutes(app: Express) {
         purchaseType,
         transactionDate,
         isGracePeriod: windowEval.isGrace,
-        status: "Draft",
+        status: "Approved",
         farmerId: body.farmerId ? String(body.farmerId) : null,
         weight,
         grade: body.grade ? String(body.grade) : null,
@@ -2013,6 +2019,8 @@ export function registerMarketIomsRoutes(app: Express) {
         entryKind: "Original",
       });
       await persistAllocatedTransactionNoIfMissing(id, transactionNo);
+      const createdBy = req.user?.id ?? "system";
+      await issueMarketFeeReceiptForPurchaseTransaction({ purchaseId: id, createdBy });
       const [row] = await db.select().from(purchaseTransactions).where(eq(purchaseTransactions.id, id));
       if (row) {
         writeAuditLog(req, { module: "Market", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -2059,6 +2067,45 @@ export function registerMarketIomsRoutes(app: Express) {
       const body = req.body;
       const newStatus = body.status !== undefined ? String(body.status) : existing.status;
       const statusChange = newStatus !== existing.status;
+
+      if (statusChange && newStatus === "Verified") {
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_WORKFLOW_DISABLED",
+          "Commodity transactions are effective on submit; verification workflow is not used.",
+        );
+      }
+      if (statusChange && existing.status === "Approved" && newStatus !== "Approved") {
+        return sendApiError(
+          res,
+          400,
+          "PURCHASE_TX_ALREADY_EFFECTIVE",
+          "Approved commodity transactions cannot be sent back through verification workflow.",
+        );
+      }
+      if (
+        statusChange &&
+        newStatus === "Approved" &&
+        (existing.status === "Draft" || existing.status === "Verified" || existing.status === "Submitted")
+      ) {
+        const createdBy = req.user?.id ?? "system";
+        await db
+          .update(purchaseTransactions)
+          .set({
+            status: "Approved",
+            daUser: existing.daUser ?? existing.doUser ?? createdBy,
+          })
+          .where(eq(purchaseTransactions.id, id));
+        await issueMarketFeeReceiptForPurchaseTransaction({ purchaseId: id, createdBy });
+        const [row] = await db.select().from(purchaseTransactions).where(eq(purchaseTransactions.id, id));
+        if (!row) return sendApiError(res, 404, "PURCHASE_TX_NOT_FOUND", "Not found");
+        writeAuditLog(req, { module: "Market", action: "ApproveImmediate", recordId: id, afterValue: row }).catch(
+          (e) => console.error("Audit log failed:", e),
+        );
+        return res.json(row);
+      }
+
       const transition = statusChange ? canTransitionPurchaseTransaction(req.user, existing.status, newStatus) : null;
 
       let dvReturnRemarks: string | null = null;
@@ -2296,105 +2343,14 @@ export function registerMarketIomsRoutes(app: Express) {
       // Phase-1 linkage: when a market purchase transaction is Approved,
       // ensure a MarketFee receipt exists and link it back.
       if (statusChange && newStatus === "Approved") {
-        const shouldCreateReceipt =
-          (responseRow.receiptId == null || responseRow.receiptId === "") &&
-          responseRow.marketFeeAmount != null &&
-          Number(responseRow.marketFeeAmount) >= 0;
-
-        if (shouldCreateReceipt) {
-          const [existingReceipt] = await db
-            .select()
-            .from(iomsReceipts)
-            .where(and(eq(iomsReceipts.sourceModule, "M-04"), eq(iomsReceipts.sourceRecordId, responseRow.id)))
-            .limit(1);
-
-          let receiptRow = existingReceipt ?? null;
-          if (!receiptRow) {
-            // US-M04-004: If trader has sufficient advance balance, auto-adjust and mark receipt Paid.
-            const advBal = await getMarketFeeAdvanceBalance(String(responseRow.traderLicenceId));
-            const feeDue = Number(responseRow.marketFeeAmount ?? 0) || 0;
-
-            const [licence] = await db
-              .select()
-              .from(traderLicences)
-              .where(eq(traderLicences.id, responseRow.traderLicenceId))
-              .limit(1);
-            const snapName =
-              responseRow.traderFirmNameSnapshot != null && String(responseRow.traderFirmNameSnapshot).trim() !== ""
-                ? String(responseRow.traderFirmNameSnapshot).trim()
-                : null;
-
-            const createdBy = req.user?.id ?? "system";
-            const created = await createIomsReceipt({
-              yardId: responseRow.yardId,
-              revenueHead: "MarketFee",
-              payerName: licence?.firmName ?? snapName ?? responseRow.traderLicenceId,
-              payerType: "TraderLicence",
-              payerRefId: responseRow.traderLicenceId,
-              isGracePeriod: Boolean((responseRow as { isGracePeriod?: boolean | null }).isGracePeriod),
-              amount: Number(responseRow.marketFeeAmount ?? 0),
-              paymentMode: "Cash",
-              sourceModule: "M-04",
-              sourceRecordId: responseRow.id,
-              unifiedEntityId: unifiedEntityIdFromTrackA(responseRow.traderLicenceId),
-              createdBy,
-            });
-
-            const [createdRow] = await db
-              .select()
-              .from(iomsReceipts)
-              .where(eq(iomsReceipts.id, created.id))
-              .limit(1);
-
-            receiptRow = createdRow ?? null;
-            if (createdRow) {
-              await writeAuditLog(req, {
-                module: "Receipts",
-                action: "Create",
-                recordId: createdRow.id,
-                afterValue: createdRow,
-              }).catch((e) => console.error("Audit log failed:", e));
-            }
-
-            if (feeDue > 0 && advBal >= feeDue - 0.01 && receiptRow?.id) {
-              // Debit advance ledger and mark receipt paid.
-              const now = new Date().toISOString();
-              await db.insert(marketFeeLedger).values({
-                id: nanoid(),
-                traderLicenceId: String(responseRow.traderLicenceId),
-                yardId: String(responseRow.yardId),
-                entryDate: String(responseRow.transactionDate).slice(0, 10),
-                entryType: "Adjustment",
-                amountInr: Number((-feeDue).toFixed(2)),
-                receiptId: receiptRow.id,
-                sourceModule: "M-04",
-                sourceRecordId: String(responseRow.id),
-                createdBy,
-                createdAt: now,
-              });
-              await db
-                .update(iomsReceipts)
-                .set({ status: "Paid", gatewayRef: "AdvanceAdjust" })
-                .where(eq(iomsReceipts.id, receiptRow.id));
-              const [paidRow] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, receiptRow.id)).limit(1);
-              receiptRow = paidRow ?? receiptRow;
-            }
-          }
-
-          if (receiptRow?.id) {
-            await db
-              .update(purchaseTransactions)
-              .set({ receiptId: receiptRow.id })
-              .where(eq(purchaseTransactions.id, responseRow.id));
-
-            const [updated] = await db
-              .select()
-              .from(purchaseTransactions)
-              .where(eq(purchaseTransactions.id, responseRow.id))
-              .limit(1);
-            if (updated) responseRow = updated;
-          }
-        }
+        const createdBy = req.user?.id ?? "system";
+        await issueMarketFeeReceiptForPurchaseTransaction({ purchaseId: responseRow.id, createdBy });
+        const [updated] = await db
+          .select()
+          .from(purchaseTransactions)
+          .where(eq(purchaseTransactions.id, responseRow.id))
+          .limit(1);
+        if (updated) responseRow = updated;
       }
 
       writeAuditLog(req, { module: "Market", action: "Update", recordId: id, beforeValue: existing, afterValue: responseRow }).catch((e) => console.error("Audit log failed:", e));
@@ -3493,4 +3449,6 @@ export function registerMarketIomsRoutes(app: Express) {
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update bank deposit");
     }
   });
+
+  registerMarketTransactionWizardRoutes(app);
 }

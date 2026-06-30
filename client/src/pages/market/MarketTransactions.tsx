@@ -23,8 +23,8 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { ApiUserError, readApiErrorEnvelope, fetchApiGet } from "@/lib/queryClient";
 import { formatInr } from "@/lib/formatInr";
-import { ArrowRightLeft, AlertCircle, ShieldCheck, CheckCircle, Plus, SendHorizontal } from "lucide-react";
-import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
+import { ArrowRightLeft, AlertCircle, Plus } from "lucide-react";
+import { Link } from "wouter";
 
 type ToastInvoker = (props: { title: string; description?: string; variant?: "destructive" }) => void;
 
@@ -232,7 +232,7 @@ function normalizeMarketTransactionList(raw: unknown): Transaction[] {
 }
 
 export default function MarketTransactions() {
-  const { user, can } = useAuth();
+  const { can } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
@@ -245,14 +245,8 @@ export default function MarketTransactions() {
   const [purchaseType, setPurchaseType] = useState("TraderPurchase");
   const [transactionDate, setTransactionDate] = useState(() => new Date().toISOString().slice(0, 10));
 
-  const roles = user?.roles?.map((r) => r.tier) ?? [];
-  const canUpdate = can("M-04", "Update");
-  const canVerify = (roles.includes("DV") || roles.includes("ADMIN")) && canUpdate;
-  const canApprove = (roles.includes("DA") || roles.includes("ADMIN")) && canUpdate;
   const canCreate = can("M-04", "Create");
 
-  const [returnDraftTxnId, setReturnDraftTxnId] = useState<string | null>(null);
-  const [returnDraftRemarks, setReturnDraftRemarks] = useState("");
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustParent, setAdjustParent] = useState<Transaction | null>(null);
   const [adjustFee, setAdjustFee] = useState("");
@@ -267,6 +261,25 @@ export default function MarketTransactions() {
       return normalizeMarketTransactionList(raw);
     },
     structuralSharing: false,
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
+
+  type WizardTransaction = {
+    id: string;
+    transactionNo?: string | null;
+    caseType: string;
+    entryLocationId: string;
+    transactionDate: string;
+    totalPayable?: number | null;
+    totalMarketFee?: number | null;
+    status: string;
+    receiptId?: string | null;
+    traderManualName?: string | null;
+  };
+  const { data: wizardList = [], isLoading: wizardLoading } = useQuery<WizardTransaction[]>({
+    queryKey: ["/api/ioms/market/transaction-wizard"],
+    queryFn: () => fetchApiGet<WizardTransaction[]>("/api/ioms/market/transaction-wizard"),
     staleTime: 0,
     refetchOnMount: "always",
   });
@@ -471,36 +484,6 @@ export default function MarketTransactions() {
     },
   });
 
-  const statusMutation = useMutation({
-    mutationFn: async (vars: { id: string } & Record<string, unknown>) => {
-      const { id, ...body } = vars;
-      const res = await fetch(`/api/ioms/market/transactions/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const { message, code } = await readApiErrorEnvelope(res);
-        throw new ApiUserError(message, code);
-      }
-      return res.json();
-    },
-    onSuccess: (_, vars) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/ioms/market/transactions"] });
-      toast({ title: "Status updated", description: `Transaction set to ${String(vars.status)}.` });
-      if (vars.status === "Draft" && "returnRemarks" in vars) {
-        setReturnDraftTxnId(null);
-        setReturnDraftRemarks("");
-      }
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : String(e);
-      const code = e instanceof ApiUserError ? e.code : undefined;
-      toastM04TransactionMutationFailure(toast, code, message, "Update failed");
-    },
-  });
-
   const adjustmentMutation = useMutation({
     mutationFn: async () => {
       if (!adjustParent) throw new Error("No parent transaction");
@@ -553,7 +536,7 @@ export default function MarketTransactions() {
     setAdjustOpen(true);
   }
 
-  const showTxnActions = canVerify || canApprove || canCreate;
+  const showTxnActions = canCreate;
 
   const txnColumns = useMemo((): ReportTableColumn[] => {
     const base: ReportTableColumn[] = [
@@ -572,6 +555,41 @@ export default function MarketTransactions() {
     if (showTxnActions) base.push({ key: "_actions", header: "Actions" });
     return base;
   }, [showTxnActions]);
+
+  const wizardColumns = useMemo(
+    (): ReportTableColumn[] => [
+      { key: "transactionNo", header: "Txn No" },
+      { key: "caseType", header: "Case" },
+      { key: "transactionDate", header: "Date" },
+      { key: "yardName", header: "Yard" },
+      { key: "_payable", header: "Payable (₹)", sortField: "totalPayable" },
+      { key: "_status", header: "Status", sortField: "status" },
+      { key: "_receipt", header: "Receipt" },
+    ],
+    [],
+  );
+
+  const wizardRows = useMemo((): Record<string, unknown>[] => {
+    return wizardList.map((t) => ({
+      id: t.id,
+      transactionNo: t.transactionNo ?? "—",
+      caseType: t.caseType,
+      transactionDate: t.transactionDate,
+      yardName: yardById.get(t.entryLocationId)?.name ?? t.entryLocationId,
+      totalPayable: Number(t.totalPayable ?? 0),
+      _payable: formatInr(Number(t.totalPayable ?? 0)),
+      status: t.status,
+      _status: <Badge variant={t.status === "Finalized" ? "default" : "secondary"}>{t.status}</Badge>,
+      _receipt:
+        t.receiptId && t.status === "Finalized" ? (
+          <Link href="/receipts/ioms" className="text-primary hover:underline text-sm">
+            View receipts
+          </Link>
+        ) : (
+          "—"
+        ),
+    }));
+  }, [wizardList, yardById]);
 
   const txnRows = useMemo((): Record<string, unknown>[] => {
     return (list ?? []).map((t) => {
@@ -647,42 +665,6 @@ export default function MarketTransactions() {
                 Adjust
               </Button>
             )}
-            {canVerify && t.status === "Draft" && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => statusMutation.mutate({ id: t.id, status: "Verified" })}
-                disabled={statusMutation.isPending}
-              >
-                <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-                {statusMutation.isPending ? "Updating..." : "Verify"}
-              </Button>
-            )}
-            {canVerify && t.status === "Verified" && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setReturnDraftTxnId(t.id);
-                  setReturnDraftRemarks("");
-                }}
-                disabled={statusMutation.isPending}
-              >
-                <SendHorizontal className="h-3.5 w-3.5 mr-1" />
-                Send back
-              </Button>
-            )}
-            {canApprove && t.status === "Verified" && (
-              <Button
-                size="sm"
-                variant="default"
-                onClick={() => statusMutation.mutate({ id: t.id, status: "Approved" })}
-                disabled={statusMutation.isPending}
-              >
-                <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                {statusMutation.isPending ? "Updating..." : "Approve"}
-              </Button>
-            )}
           </div>
         ) : null,
       };
@@ -694,9 +676,6 @@ export default function MarketTransactions() {
     licenceDisplayById,
     showTxnActions,
     canCreate,
-    canVerify,
-    canApprove,
-    statusMutation.isPending,
   ]);
 
   if (isError) {
@@ -722,14 +701,18 @@ export default function MarketTransactions() {
             Purchase Transactions (IOMS M-04)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Purchase/transaction entries at yards; market fee computation.
-            {canVerify && (
-              <span className="block mt-1">You can verify Draft → Verified, or return Verified → Draft with remarks.</span>
-            )}
-            {canApprove && <span className="block mt-1">You can approve Verified → Approved.</span>}
+            Purchase entries at yards — recorded and effective immediately on submit (no verification or approval).
+            Use the transaction wizard for cases A–G.
           </p>
           </div>
           {canCreate && (
+            <div className="flex gap-2">
+              <Button size="sm" asChild>
+                <Link href="/market/transactions/new">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Transaction wizard
+                </Link>
+              </Button>
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
               <DialogTrigger asChild>
                 <Button size="sm">
@@ -880,6 +863,7 @@ export default function MarketTransactions() {
                 </div>
               </DialogContent>
             </Dialog>
+            </div>
           )}
         </CardHeader>
         <CardContent>
@@ -918,53 +902,29 @@ export default function MarketTransactions() {
         </CardContent>
       </Card>
 
-      <Dialog
-        open={returnDraftTxnId !== null}
-        onOpenChange={(open) => {
-          if (!open) setReturnDraftTxnId(null);
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Send back to Draft</DialogTitle>
-          </DialogHeader>
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle className="text-base">Wizard transactions (cases A–G)</CardTitle>
           <p className="text-sm text-muted-foreground">
-            DV must record why the transaction is returned (min {MIN_WORKFLOW_REMARKS_LENGTH} characters).
+            Counter entries from the unified transaction wizard — effective immediately on submit (no verification or approval).
           </p>
-          <div className="space-y-2">
-            <Label htmlFor="m04-return-remarks">Return remarks</Label>
-            <Textarea
-              id="m04-return-remarks"
-              value={returnDraftRemarks}
-              onChange={(e) => setReturnDraftRemarks(e.target.value)}
-              rows={4}
+        </CardHeader>
+        <CardContent>
+          {wizardLoading ? (
+            <Skeleton className="h-32 w-full" />
+          ) : (
+            <ClientDataGrid
+              columns={wizardColumns}
+              sourceRows={wizardRows}
+              searchKeys={["transactionNo", "caseType", "transactionDate", "yardName", "status"]}
+              searchPlaceholder="Search wizard transactions…"
+              defaultSortKey="transactionDate"
+              defaultSortDir="desc"
+              emptyMessage="No wizard transactions yet. Use Transaction wizard to create one."
             />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setReturnDraftTxnId(null)}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={
-                !returnDraftTxnId ||
-                returnDraftRemarks.trim().length < MIN_WORKFLOW_REMARKS_LENGTH ||
-                statusMutation.isPending
-              }
-              onClick={() => {
-                if (!returnDraftTxnId) return;
-                statusMutation.mutate({
-                  id: returnDraftTxnId,
-                  status: "Draft",
-                  returnRemarks: returnDraftRemarks.trim(),
-                });
-              }}
-            >
-              Send back
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          )}
+        </CardContent>
+      </Card>
 
       <Dialog open={adjustOpen} onOpenChange={(o) => !o && setAdjustOpen(false)}>
         <DialogContent className="sm:max-w-md">

@@ -120,6 +120,7 @@ export const SIDEBAR_MENU_GROUPS: SidebarMenuGroup[] = [
       { title: "Fee rates (M-04)", icon: Percent, href: "/market/fee-rates", requirePermission: { module: "M-04", action: "Read" } },
       { title: "Farmers (M-04)", icon: Users, href: "/market/farmers", requirePermission: { module: "M-04", action: "Read" } },
       { title: "Transactions (M-04)", icon: ArrowRightLeft, href: "/market/transactions", requirePermission: { module: "M-04", action: "Read" } },
+      { title: "New transaction wizard", icon: PlusCircle, href: "/market/transactions/new", requirePermission: { module: "M-04", action: "Create" } },
       { title: "MSP settings (M-02)", icon: Percent, href: "/market/msp", requirePermission: { module: "M-02", action: "Read" } },
     ],
   },

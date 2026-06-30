@@ -58,6 +58,8 @@ import { normalizeRentRevisionBasis, yearMonthMinusOne } from "@shared/rent-revi
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
 import { rentPeriodMonthEndIso } from "./rent-interest";
 import { allocateRentInvoiceNo, allocateRentInvoiceNoInTx } from "./rent-invoice-number";
+import { registerRentCombinedInvoiceRoutes } from "./rent-combined-invoice-routes";
+import { sumAllPaidForInvoiceIds } from "./m03-invoice-payment-sum";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import {
   m03ReceiptPrincipalTowardInvoice,
@@ -154,27 +156,7 @@ function toCsvRow(arr: unknown[]): string {
 }
 
 async function sumPaidM03ByInvoiceIds(invoiceIds: string[]): Promise<Map<string, number>> {
-  const m = new Map<string, number>();
-  if (invoiceIds.length === 0) return m;
-  const recs = await db
-    .select({
-      sourceRecordId: iomsReceipts.sourceRecordId,
-      totalAmount: iomsReceipts.totalAmount,
-      status: iomsReceipts.status,
-      revenueHead: iomsReceipts.revenueHead,
-      sourceModule: iomsReceipts.sourceModule,
-      m03BreakdownJson: iomsReceipts.m03BreakdownJson,
-    })
-    .from(iomsReceipts)
-    .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
-  for (const r of recs) {
-    const id = String(r.sourceRecordId ?? "");
-    if (!id) continue;
-    const principal = m03ReceiptPrincipalTowardInvoice(r);
-    if (principal <= 0) continue;
-    m.set(id, (m.get(id) ?? 0) + principal);
-  }
-  return m;
+  return sumAllPaidForInvoiceIds(invoiceIds);
 }
 
 export function registerRentIomsRoutes(app: Express) {
@@ -308,6 +290,10 @@ export function registerRentIomsRoutes(app: Express) {
       }
       if (String(inv.status ?? "") === "Cancelled") {
         return sendApiError(res, 403, "RENT_INVOICE_CANCELLED_NO_PDF", RENT_INVOICE_CANCELLED_NO_PDF_MESSAGE);
+      }
+      if (String(inv.combinedBundleId ?? "").trim()) {
+        const { RENT_INVOICE_BUNDLE_ONLY_PDF_MESSAGE } = await import("./rent-combined-invoice-service");
+        return sendApiError(res, 403, "RENT_INVOICE_BUNDLE_ONLY_PDF", RENT_INVOICE_BUNDLE_ONLY_PDF_MESSAGE);
       }
       const [yard] = await db
         .select({ name: yards.name, code: yards.code, address: yards.address })
@@ -2219,4 +2205,6 @@ export function registerRentIomsRoutes(app: Express) {
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update credit note");
     }
   });
+
+  registerRentCombinedInvoiceRoutes(app);
 }

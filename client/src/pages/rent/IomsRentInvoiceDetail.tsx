@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useLocation } from "wouter";
+import { useParams, useLocation, Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -73,6 +73,7 @@ interface RentInvoice {
   workflowRevisionCount?: number | null;
   dvReturnRemarks?: string | null;
   nonGstChargesJson?: string | null;
+  combinedBundleId?: string | null;
 }
 interface YardRef {
   id: string;
@@ -381,7 +382,7 @@ export default function IomsRentInvoiceDetail() {
             {invoice.invoiceNo ?? invoice.id}
           </CardTitle>
           <div className="flex gap-2">
-            {!cancelled ? (
+            {!cancelled && !String(invoice.combinedBundleId ?? "").trim() ? (
               <Button
                 type="button"
                 variant="secondary"
@@ -414,6 +415,13 @@ export default function IomsRentInvoiceDetail() {
               >
                 <Download className="h-4 w-4 mr-1" />
                 PDF
+              </Button>
+            ) : null}
+            {String(invoice.combinedBundleId ?? "").trim() ? (
+              <Button asChild variant="secondary" size="sm">
+                <Link href={`/rent/ioms/combined-invoices/${invoice.combinedBundleId}`}>
+                  Combined bundle PDF
+                </Link>
               </Button>
             ) : null}
             <Button variant="ghost" size="sm" onClick={() => setLocation("/rent/ioms")}>

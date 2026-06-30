@@ -70,11 +70,15 @@ import AssetForm from "@/pages/assets/AssetForm";
 import IomsRentInvoices from "@/pages/rent/IomsRentInvoices";
 import IomsRentInvoiceDetail from "@/pages/rent/IomsRentInvoiceDetail";
 import IomsRentInvoiceForm from "@/pages/rent/IomsRentInvoiceForm";
+import IomsRentCombinedInvoices from "@/pages/rent/IomsRentCombinedInvoices";
+import IomsRentCombinedInvoiceForm from "@/pages/rent/IomsRentCombinedInvoiceForm";
+import IomsRentCombinedInvoiceDetail from "@/pages/rent/IomsRentCombinedInvoiceDetail";
 import IomsCreditNotes from "@/pages/rent/IomsCreditNotes";
 import RentLedger from "@/pages/rent/RentLedger";
 import RentRevisions from "@/pages/rent/RentRevisions";
 import CommoditiesList from "@/pages/market/CommoditiesList";
 import MarketTransactions from "@/pages/market/MarketTransactions";
+import MarketTransactionWizard from "@/pages/market/MarketTransactionWizard";
 import FeeRatesList from "@/pages/market/FeeRatesList";
 import FarmersList from "@/pages/market/FarmersList";
 import MspSettingsList from "@/pages/market/MspSettingsList";
@@ -181,6 +185,15 @@ function Router() {
       <Route path="/rent/ioms/invoices/:id">
         <ProtectedRoute><IomsRentInvoiceDetail /></ProtectedRoute>
       </Route>
+      <Route path="/rent/ioms/combined-invoices">
+        <ProtectedRoute><IomsRentCombinedInvoices /></ProtectedRoute>
+      </Route>
+      <Route path="/rent/ioms/combined-invoices/new">
+        <ProtectedRoute><RequirePermission module="M-03" action="Create"><IomsRentCombinedInvoiceForm /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/rent/ioms/combined-invoices/:id">
+        <ProtectedRoute><IomsRentCombinedInvoiceDetail /></ProtectedRoute>
+      </Route>
       <Route path="/rent/ioms/ledger">
         <ProtectedRoute><RequirePermission module="M-03" action="Read"><RentLedger /></RequirePermission></ProtectedRoute>
       </Route>
@@ -235,6 +248,9 @@ function Router() {
       </Route>
       <Route path="/market/commodity-reports">
         <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketCommodityReports /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/market/transactions/new">
+        <ProtectedRoute><RequirePermission module="M-04" action="Create"><MarketTransactionWizard /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/market/transactions">
         <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketTransactions /></RequirePermission></ProtectedRoute>

@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { db } from "./db";
 import { yards } from "@shared/db-schema";
+import { RENT_COMBINED_INVOICE_NO_SUFFIX } from "@shared/rent-combined-invoice";
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -56,6 +57,31 @@ export function formatRentInvoiceNo(
   const mon = moIdx >= 0 && moIdx < 12 ? MONTH_SHORT[moIdx] : "Jan";
   const yc = sanitizeYardCodeForInvoiceNo(yardCode);
   return `${mon}/${year}/${yc}/${String(safeSeq).padStart(3, "0")}`;
+}
+
+/** Combined bundle number: same yard/month sequence with consolidated suffix (e.g. Jan/2026/PND/011-CMB). */
+export function formatRentCombinedInvoiceNo(
+  yardCode: string | null | undefined,
+  periodMonth: string | null | undefined,
+  seq: number,
+): string {
+  return `${formatRentInvoiceNo(yardCode, periodMonth, seq)}${RENT_COMBINED_INVOICE_NO_SUFFIX}`;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function allocateRentCombinedInvoiceNoInTx(
+  tx: any,
+  args: { yardId: string; periodMonth: string; yardCode?: string | null },
+): Promise<string> {
+  const yardId = String(args.yardId ?? "").trim();
+  const periodMonth = sanitizePeriodMonthForInvoiceNo(args.periodMonth);
+  let yardCode = args.yardCode != null ? String(args.yardCode).trim() : "";
+  if (!yardCode) {
+    const [y] = await tx.select({ code: yards.code }).from(yards).where(eq(yards.id, yardId)).limit(1);
+    yardCode = y?.code ?? "YARD";
+  }
+  const seq = await nextRentInvoiceSeqTx(tx, yardId, periodMonth);
+  return formatRentCombinedInvoiceNo(yardCode, periodMonth, seq);
 }
 
 /** @deprecated Old suffix was `rent_invoices.id`; use numeric seq only. */

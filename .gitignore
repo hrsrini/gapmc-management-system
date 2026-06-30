@@ -8,6 +8,7 @@ vite.config.ts.*
 uploads/
 db_backups/
 db_table_backup.sql
+Commodity_transaction_Possible _Senarios/
 
 # Playwright
 /test-results/
