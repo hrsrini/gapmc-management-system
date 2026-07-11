@@ -28,6 +28,7 @@ import {
   sanitizeMobile10Input,
 } from "@shared/india-validation";
 import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
+import { TRADER_LICENCE_CRUD_DISABLED, TRADER_LICENCE_CRUD_DISABLED_MESSAGE } from "@shared/trader-licence-crud";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 import { AuthenticatedBlobPreviewDialog } from "@/components/attachment/AuthenticatedBlobPreviewDialog";
 import { PanInput } from "@/components/inputs/PanInput";
@@ -73,6 +74,11 @@ interface LicenceRow {
   entityPublicCode?: string | null;
   bmUndertakingAccepted?: boolean | null;
   govtGstExemptCategoryId?: string | null;
+  commodities?: string[] | null;
+  lmStatus?: string | null;
+  lmIsActive?: boolean | null;
+  lmLicenseClass?: string | null;
+  lmSyncedAt?: string | null;
 }
 
 
@@ -160,6 +166,7 @@ export default function TraderLicenceForm() {
   });
 
   const issued = Boolean(licence?.licenceNo && String(licence.licenceNo).trim());
+  const lmLinked = Boolean(licence?.lmSyncedAt);
 
   const gstCategoriesForSelect = useMemo(
     () => govtGstCategoriesForSelect(gstCategories, licence?.govtGstExemptCategoryId ?? null),
@@ -416,6 +423,23 @@ export default function TraderLicenceForm() {
     },
     onError: (e: Error) => toast({ title: "Remove failed", description: e.message, variant: "destructive" }),
   });
+
+  if (TRADER_LICENCE_CRUD_DISABLED) {
+    return (
+      <AppShell breadcrumbs={[{ label: "Licences", href: "/traders/licences" }, { label: isNew ? "New" : "Edit" }]}>
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Create / edit disabled</AlertTitle>
+          <AlertDescription>
+            {TRADER_LICENCE_CRUD_DISABLED_MESSAGE}{" "}
+            <Link href="/traders/licences" className="underline">
+              Back to licences
+            </Link>
+          </AlertDescription>
+        </Alert>
+      </AppShell>
+    );
+  }
 
   if (!isNew && !canUpdate) {
     return (
@@ -858,13 +882,29 @@ export default function TraderLicenceForm() {
                 <Input value={feeAmount} onChange={(e) => setFeeAmount(e.target.value)} inputMode="decimal" />
               </div>
               <div className="space-y-2">
-                <Label>Valid from</Label>
-                <Input type="date" value={validFrom} onChange={(e) => setValidFrom(e.target.value)} />
+                <Label>Valid from{lmLinked ? " (LM)" : ""}</Label>
+                <Input
+                  type="date"
+                  value={validFrom}
+                  onChange={(e) => setValidFrom(e.target.value)}
+                  disabled={issued || lmLinked}
+                />
               </div>
               <div className="space-y-2">
-                <Label>Valid to</Label>
-                <Input type="date" value={validTo} onChange={(e) => setValidTo(e.target.value)} />
+                <Label>Valid to{lmLinked ? " (LM)" : ""}</Label>
+                <Input
+                  type="date"
+                  value={validTo}
+                  onChange={(e) => setValidTo(e.target.value)}
+                  disabled={issued || lmLinked}
+                />
               </div>
+              {lmLinked && Array.isArray(licence?.commodities) && licence!.commodities!.length > 0 ? (
+                <div className="sm:col-span-2 space-y-1 text-sm">
+                  <Label>LM commodities (read-only)</Label>
+                  <p className="text-muted-foreground">{licence!.commodities!.join(", ")}</p>
+                </div>
+              ) : null}
               <div className="flex items-center gap-2 sm:col-span-2">
                 <Checkbox id="non-gst" checked={nonGst} onCheckedChange={(c) => setNonGst(c === true)} />
                 <Label htmlFor="non-gst" className="font-normal cursor-pointer">

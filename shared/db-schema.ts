@@ -17,6 +17,7 @@ import {
   boolean,
   jsonb,
   primaryKey,
+  timestamp,
 } from "drizzle-orm/pg-core";
 
 export const gapmc = pgSchema("gapmc");
@@ -866,6 +867,16 @@ export const traderLicences = gapmc.table("trader_licences", {
   entityPublicCode: text("entity_public_code"),
   /** US-M02-001: Form BM undertaking accepted (required when submitting Pending for BM types). */
   bmUndertakingAccepted: boolean("bm_undertaking_accepted").default(false).notNull(),
+  /** License Manager sync: commodities allowed on the LM licence (jsonb string array). */
+  commodities: jsonb("commodities").$type<string[] | null>(),
+  /** License Manager raw status (e.g. License Issued / License Expired). */
+  lmStatus: text("lm_status"),
+  /** Derived from LM: issued, not superseded, not past expiry (IST date). */
+  lmIsActive: boolean("lm_is_active"),
+  /** LM Class A/B/C — not the same as App 2 licence_type. */
+  lmLicenseClass: text("lm_license_class"),
+  /** Last sync timestamp from public.applications trigger. */
+  lmSyncedAt: timestamp("lm_synced_at", { withTimezone: true, mode: "string" }),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });

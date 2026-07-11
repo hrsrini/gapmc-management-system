@@ -1,9 +1,17 @@
 /**
  * 1) Backs up all `gapmc` table data (INSERT dump + timestamped copy under db_backups/).
- * 2) TRUNCATEs every other `gapmc` table — removes traders, portal users, transactions, audit, etc.
+ * 2) TRUNCATEs every other `gapmc` table.
  *
- * Preserved: yards, commodities, employees (+ HR satellite tables), RBAC (users, roles, …),
- * system_config, sla_config, tally_ledgers, govt_gst_exempt_categories, ioms_revenue_head_ledger_map.
+ * Preserved (user retain list):
+ * 1. Roles — roles, permissions, role_permissions, user_roles, users, user_yards
+ * 2. Locations — yards
+ * 3. Config & PDF Logo — system_config, sla_config
+ * 4. Unit Master — measurement_units
+ * 5. Finance Mapping — tally_ledgers, govt_gst_exempt_categories, ioms_revenue_head_ledger_map
+ * 6. Designation Master — designation_master
+ * 7. Employee data — employees + HR satellite tables
+ * 8. Commodities (M-04) — commodities
+ * 9–10. Tapal Inward/Outward (M-09) — dak_inward, dak_outward + related dak logs/sequence
  *
  * Usage:
  *   npm run db:purge-retain-core-dry
@@ -19,8 +27,27 @@ const SCHEMA = "gapmc";
 
 /** Tables whose rows are kept (snake_case, as in PostgreSQL). */
 const KEEP_TABLES = new Set([
+  // 1. Roles / RBAC (+ login users & yard scope)
+  "roles",
+  "permissions",
+  "role_permissions",
+  "user_roles",
+  "users",
+  "user_yards",
+  // 2. Locations
   "yards",
-  "commodities",
+  // 3. Config & PDF Logo
+  "system_config",
+  "sla_config",
+  // 4. Unit Master
+  "measurement_units",
+  // 5. Finance Mapping
+  "tally_ledgers",
+  "govt_gst_exempt_categories",
+  "ioms_revenue_head_ledger_map",
+  // 6. Designation Master
+  "designation_master",
+  // 7. Employee data
   "employees",
   "employee_contracts",
   "employee_documents",
@@ -32,18 +59,14 @@ const KEEP_TABLES = new Set([
   "tour_programmes",
   "ltc_claims",
   "ta_da_claims",
-  "roles",
-  "permissions",
-  "role_permissions",
-  "user_roles",
-  "users",
-  "user_yards",
-  "system_config",
-  "sla_config",
-  /** Finance / licence reference masters (see npm run db:seed-tally-gst). */
-  "tally_ledgers",
-  "govt_gst_exempt_categories",
-  "ioms_revenue_head_ledger_map",
+  // 8. Commodities (IOMS M-04)
+  "commodities",
+  // 9–10. Tapal Inward / Outward (IOMS M-09) live data
+  "dak_inward",
+  "dak_outward",
+  "dak_action_log",
+  "dak_escalations",
+  "dak_diary_sequence",
 ]);
 
 function quoteIdent(ident: string): string {
@@ -83,10 +106,12 @@ async function main() {
       [SCHEMA]
     );
     const allTables = tablesResult.rows.map((r) => r.table_name);
+    const keepPresent = allTables.filter((t) => KEEP_TABLES.has(t));
     const truncateTables = allTables.filter((t) => !KEEP_TABLES.has(t));
 
     console.log(`Schema ${SCHEMA}: ${allTables.length} base table(s).`);
-    console.log(`Keeping ${KEEP_TABLES.size} table name(s) if present; truncating ${truncateTables.length} table(s).`);
+    console.log(`Keeping ${keepPresent.length} table(s): ${keepPresent.join(", ")}`);
+    console.log(`Truncating ${truncateTables.length} table(s).`);
     if (truncateTables.length > 0) {
       console.log("Truncate:", truncateTables.join(", "));
     }
@@ -129,8 +154,8 @@ async function main() {
       await client.query("ROLLBACK");
       throw e;
     }
-    console.log("Done. Core masters, employees, RBAC, and configuration rows are unchanged.");
-    console.log("portal_users and all other truncated tables are empty.");
+    console.log("Done. Retained masters / employees / RBAC / config / commodities / Tapal are unchanged.");
+    console.log("All other gapmc tables are empty.");
   } finally {
     client.release();
     await pool.end();

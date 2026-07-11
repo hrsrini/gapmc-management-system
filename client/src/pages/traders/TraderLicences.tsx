@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/context/AuthContext";
+import { TRADER_LICENCE_CRUD_DISABLED } from "@shared/trader-licence-crud";
 
 interface Licence {
   id: string;
@@ -22,6 +23,11 @@ interface Licence {
   validTo?: string | null;
   status: string;
   isBlocked?: boolean;
+  commodities?: string[] | null;
+  lmStatus?: string | null;
+  lmIsActive?: boolean | null;
+  lmLicenseClass?: string | null;
+  lmSyncedAt?: string | null;
 }
 
 interface PagedResponse {
@@ -33,14 +39,14 @@ interface PagedResponse {
 
 export default function TraderLicences() {
   const { can, user } = useAuth();
-  const canCreate = can("M-02", "Create");
+  const canCreate = !TRADER_LICENCE_CRUD_DISABLED && can("M-02", "Create");
   const isAdmin = Boolean(user?.roles?.some((r) => r.tier === "ADMIN"));
   const [allYards, setAllYards] = useState(false);
   const [tableParams, setTableParams] = useState<ReportPagedParams>({
     page: 1,
     pageSize: 25,
     q: "",
-    sortKey: "createdAt",
+    sortKey: "licenceNo",
     sortDir: "desc",
   });
 
@@ -69,7 +75,7 @@ export default function TraderLicences() {
   const { data, isLoading, isError } = useQuery<PagedResponse>({
     queryKey: [listUrl],
     queryFn: async () => {
-      const res = await fetch(listUrl, { credentials: "include" });
+      const res = await fetch(listUrl, { credentials: "include", cache: "no-store" });
       if (!res.ok) throw new Error("Failed to load");
       return res.json() as Promise<PagedResponse>;
     },
@@ -77,8 +83,10 @@ export default function TraderLicences() {
 
   const columns = useMemo(
     () => [
+      { key: "licenceNo", header: "License No", sortField: "licenceNo" },
       { key: "_firmLink", header: "Firm", sortField: "firmName" },
       { key: "licenceType", header: "Type" },
+      { key: "_lm", header: "LM" },
       { key: "yardDisplay", header: "Yard", sortField: "yardId" },
       { key: "mobile", header: "Mobile" },
       { key: "validTo", header: "Valid To" },
@@ -90,16 +98,29 @@ export default function TraderLicences() {
   const rowsForTable = useMemo(() => {
     return (data?.rows ?? []).map((l) => {
       const id = l.id;
+      const lmLinked = Boolean(l.lmSyncedAt);
       return {
         id,
+        licenceNo: l.licenceNo?.trim() ? (
+          <span className="font-mono tabular-nums text-right block">{l.licenceNo.trim()}</span>
+        ) : (
+          <span className="text-muted-foreground text-right block">—</span>
+        ),
         _firmLink: (
           <Link href={`/traders/licences/${id}`} className="text-primary hover:underline">
             {l.firmName}
           </Link>
         ),
         licenceType: l.licenceType,
+        _lm: lmLinked ? (
+          <Badge variant={l.lmIsActive ? "default" : "secondary"} title={l.lmStatus ?? undefined}>
+            {l.lmLicenseClass ? `LM ${l.lmLicenseClass}` : "LM linked"}
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground text-xs">—</span>
+        ),
         yardDisplay: yardById[l.yardId] ?? l.yardId,
-        mobile: l.mobile,
+        mobile: l.mobile?.trim() ? l.mobile : "—",
         validTo: l.validTo ?? "—",
         _status: (
           <Badge
@@ -144,8 +165,9 @@ export default function TraderLicences() {
               Trader Licences (M-02)
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              IOMS licence lifecycle — Associated, Functionary, Hamali, Weighman, Assistant. Search by trader name,
-              licence number, or mobile; use pagination for large lists.
+              {TRADER_LICENCE_CRUD_DISABLED
+                ? "Licences are synced from License Manager. Create, edit, and delete are disabled here — view-only."
+                : "IOMS licence lifecycle — Associated, Functionary, Hamali, Weighman, Assistant. Search by trader name, licence number, or mobile; use pagination for large lists."}
             </p>
           </div>
           {canCreate ? (

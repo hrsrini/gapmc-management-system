@@ -26,6 +26,7 @@ import { assertIsoTransactionDate, resolveMarketFeePercentForPurchase } from "./
 import { resolvePurchaseTransactionTraderRef } from "./market-purchase-trader-resolve";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
+import { assertLmLicenceAllowsOperation, LmLicenceGuardError } from "@shared/lm-licence-guard";
 
 export async function generateNextMarketTransactionNo(params: {
   yardId: string;
@@ -158,6 +159,37 @@ export async function validateMarketTransactionWizard(
     }
     if (licRow.licence.isBlocked) {
       return { ok: false, code: "MKT_TX_LICENCE_BLOCKED", message: "Trader licence is blocked" };
+    }
+    try {
+      const lineIds = Array.from(
+        new Set(
+          (input.commodities ?? [])
+            .map((c) => String(c.commodityId ?? "").trim())
+            .filter(Boolean),
+        ),
+      );
+      if (lineIds.length === 0) {
+        assertLmLicenceAllowsOperation(licRow.licence);
+      } else {
+        const names =
+          lineIds.length > 0
+            ? await db
+                .select({ id: commodities.id, name: commodities.name })
+                .from(commodities)
+                .where(inArray(commodities.id, lineIds))
+            : [];
+        const nameById = Object.fromEntries(names.map((n) => [n.id, String(n.name ?? "").trim()]));
+        for (const cid of lineIds) {
+          const name = nameById[cid];
+          if (name) assertLmLicenceAllowsOperation(licRow.licence, name);
+          else assertLmLicenceAllowsOperation(licRow.licence);
+        }
+      }
+    } catch (e) {
+      if (e instanceof LmLicenceGuardError) {
+        return { ok: false, code: e.code, message: e.message };
+      }
+      throw e;
     }
   }
 

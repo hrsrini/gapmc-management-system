@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { traderLicenceUsesBmSupplement } from "@shared/m02-licence-bm-bk";
+import { TRADER_LICENCE_CRUD_DISABLED, TRADER_LICENCE_CRUD_DISABLED_MESSAGE } from "@shared/trader-licence-crud";
 import {
   AssetAllotmentManageDialog,
   type ManagedAssetAllotment,
@@ -102,6 +103,11 @@ interface Licence {
   applicationSerial?: string | null;
   entityPublicCode?: string | null;
   bmUndertakingAccepted?: boolean | null;
+  commodities?: string[] | null;
+  lmStatus?: string | null;
+  lmIsActive?: boolean | null;
+  lmLicenseClass?: string | null;
+  lmSyncedAt?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -655,18 +661,26 @@ export default function TraderLicenceDetail() {
     onError: (e: Error) => toast({ title: "Renewal failed", description: e.message, variant: "destructive" }),
   });
 
-  const canRenew = Boolean(canUpdateLicence && licenceIssued && licence && !licence.isBlocked);
-  const canEditApplication =
-    Boolean(canUpdateLicence && licence && !licenceIssued && !licence.isBlocked && licence.status !== "Rejected");
-  const canReturnForQuery =
-    Boolean(
+  const canRenew = Boolean(
+    !TRADER_LICENCE_CRUD_DISABLED && canUpdateLicence && licenceIssued && licence && !licence.isBlocked,
+  );
+  const canEditApplication = Boolean(
+    !TRADER_LICENCE_CRUD_DISABLED &&
       canUpdateLicence &&
-        licence &&
-        !licenceIssued &&
-        !licence.isBlocked &&
-        licence.status !== "Query" &&
-        licence.status !== "Rejected",
-    );
+      licence &&
+      !licenceIssued &&
+      !licence.isBlocked &&
+      licence.status !== "Rejected",
+  );
+  const canReturnForQuery = Boolean(
+    !TRADER_LICENCE_CRUD_DISABLED &&
+      canUpdateLicence &&
+      licence &&
+      !licenceIssued &&
+      !licence.isBlocked &&
+      licence.status !== "Query" &&
+      licence.status !== "Rejected",
+  );
 
   if (!id) return null;
   if (isLoading || licence === undefined) {
@@ -742,6 +756,13 @@ export default function TraderLicenceDetail() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {TRADER_LICENCE_CRUD_DISABLED ? (
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>License Manager owns licence master data</AlertTitle>
+                <AlertDescription>{TRADER_LICENCE_CRUD_DISABLED_MESSAGE}</AlertDescription>
+              </Alert>
+            ) : null}
             <div className="text-sm">
               <span className="text-muted-foreground">Application serial</span>
               <br />
@@ -852,8 +873,40 @@ export default function TraderLicenceDetail() {
                 </>
               ) : null}
               <div><span className="text-muted-foreground">Aadhaar (masked)</span><br />{licence.aadhaarToken ?? "—"}</div>
-              <div><span className="text-muted-foreground">Valid from</span><br />{formatYmdToDisplay(licence.validFrom ?? "")}</div>
-              <div><span className="text-muted-foreground">Valid to</span><br />{formatYmdToDisplay(licence.validTo ?? "")}</div>
+              <div>
+                <span className="text-muted-foreground">Valid from</span>
+                <br />
+                {formatYmdToDisplay(licence.validFrom ?? "")}
+                {licence.lmSyncedAt ? <span className="ml-1 text-xs text-muted-foreground">(LM)</span> : null}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Valid to</span>
+                <br />
+                {formatYmdToDisplay(licence.validTo ?? "")}
+                {licence.lmSyncedAt ? <span className="ml-1 text-xs text-muted-foreground">(LM)</span> : null}
+              </div>
+              {licence.lmSyncedAt ? (
+                <>
+                  <div>
+                    <span className="text-muted-foreground">License Manager</span>
+                    <br />
+                    <Badge variant={licence.lmIsActive ? "default" : "secondary"}>
+                      {licence.lmIsActive ? "LM active" : "LM inactive"}
+                      {licence.lmLicenseClass ? ` · Class ${licence.lmLicenseClass}` : ""}
+                    </Badge>
+                    {licence.lmStatus ? (
+                      <span className="ml-2 text-xs text-muted-foreground">{licence.lmStatus}</span>
+                    ) : null}
+                  </div>
+                  <div className="md:col-span-2">
+                    <span className="text-muted-foreground">LM commodities</span>
+                    <br />
+                    {Array.isArray(licence.commodities) && licence.commodities.length > 0
+                      ? licence.commodities.join(", ")
+                      : "—"}
+                  </div>
+                </>
+              ) : null}
               <div><span className="text-muted-foreground">Fee amount</span><br />{licence.feeAmount != null ? formatInr(licence.feeAmount) : "—"}</div>
               <div><span className="text-muted-foreground">Receipt</span><br />{licence.receiptId ? (receiptById[licence.receiptId] ?? licence.receiptId) : "—"}</div>
               <div className="md:col-span-2">

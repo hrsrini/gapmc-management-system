@@ -8,6 +8,7 @@ import { FileCheck, AlertCircle, UserPlus } from "lucide-react";
 import { ReportDataTable, type ReportPagedParams } from "@/components/reports/ReportDataTable";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
+import { TRADER_LICENCE_CRUD_DISABLED } from "@shared/trader-licence-crud";
 
 interface Licence {
   id: string;
@@ -33,7 +34,7 @@ const FUNCTIONARY_TYPES = ["Functionary", "Hamali", "Weighman", "AssistantTrader
 
 export default function FunctionaryRegistrations() {
   const { can } = useAuth();
-  const canCreate = can("M-02", "Create");
+  const canCreate = !TRADER_LICENCE_CRUD_DISABLED && can("M-02", "Create");
   const [tableParams, setTableParams] = useState<ReportPagedParams>({
     page: 1,
     pageSize: 25,

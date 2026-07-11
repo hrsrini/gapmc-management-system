@@ -1,7 +1,7 @@
 /**
  * Server-side ORDER BY builders for paged IOMS report APIs (whitelist keys from parseReportSort).
  */
-import { asc, desc, type SQL } from "drizzle-orm";
+import { asc, desc, sql, type SQL } from "drizzle-orm";
 import {
   rentInvoices,
   paymentVouchers,
@@ -13,6 +13,13 @@ import type { ReportSortDir } from "./report-paging";
 
 function o(column: Parameters<typeof asc>[0], dir: ReportSortDir): SQL {
   return dir === "asc" ? asc(column) : desc(column);
+}
+
+/** Numeric sort for licence_no (text column holding LM numeric licence numbers). */
+function orderLicenceNoNumeric(dir: ReportSortDir): SQL {
+  // Zero-pad digits so ORDER BY is true numeric order (92 < 9999 < 10257).
+  const padded = sql`lpad(regexp_replace(coalesce(${traderLicences.licenceNo}, ''), '[^0-9]', '', 'g'), 20, '0')`;
+  return dir === "asc" ? sql`${padded} ASC NULLS LAST` : sql`${padded} DESC NULLS LAST`;
 }
 
 export const RENT_REPORT_SORT_ALLOW = [
@@ -151,7 +158,7 @@ export const LICENCE_REPORT_SORT_ALLOW = [
 
 export function orderLicenceReport(sortKey: string, sortDir: ReportSortDir): SQL[] {
   const map: Record<string, SQL> = {
-    licenceNo: o(traderLicences.licenceNo, sortDir),
+    licenceNo: orderLicenceNoNumeric(sortDir),
     firmName: o(traderLicences.firmName, sortDir),
     licenceType: o(traderLicences.licenceType, sortDir),
     mobile: o(traderLicences.mobile, sortDir),

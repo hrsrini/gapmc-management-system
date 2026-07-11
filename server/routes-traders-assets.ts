@@ -38,6 +38,13 @@ import {
   type ParsedCounterDuesPayment,
 } from "./dues-counter-payment";
 import { tenantLicenceIsGstExempt, resolveGovtGstExemptCategoryId } from "./gst-exempt";
+import { assertLmLicenceAllowsOperation, isLmLinkedLicence, LmLicenceGuardError } from "@shared/lm-licence-guard";
+import {
+  TRADER_LICENCE_CRUD_DISABLED,
+  TRADER_LICENCE_CRUD_DISABLED_CODE,
+  TRADER_LICENCE_CRUD_DISABLED_MESSAGE,
+  TRADER_LICENCE_OPERATIONAL_PATCH_KEYS,
+} from "@shared/trader-licence-crud";
 import {
   assertRecordDoDvDaSeparation,
   assertSegregationDoDvDa,
@@ -1692,10 +1699,14 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (yardId) conditions.push(eq(traderLicences.yardId, yardId));
       if (status) conditions.push(eq(traderLicences.status, status));
       if (licenceTypes.length > 0) conditions.push(inArray(traderLicences.licenceType, licenceTypes));
+      const lmLinked = String(req.query.lmLinked ?? "").trim() === "1";
+      const lmActive = String(req.query.lmActive ?? "").trim() === "1";
+      if (lmLinked) conditions.push(isNotNull(traderLicences.lmSyncedAt));
+      if (lmActive) conditions.push(eq(traderLicences.lmIsActive, true));
 
       if (paged) {
         const { page, pageSize, q } = parseReportPaging(req);
-        const { sortKey, sortDir } = parseReportSort(req, LICENCE_REPORT_SORT_ALLOW, "createdAt");
+        const { sortKey, sortDir } = parseReportSort(req, LICENCE_REPORT_SORT_ALLOW, "licenceNo");
         const pattern = reportSearchPattern(q);
         const all = [...conditions];
         if (pattern) {
@@ -1725,6 +1736,7 @@ export function registerTradersAssetsRoutes(app: Express) {
           pageSize === "all"
             ? await dataQ
             : await dataQ.limit(pageSize).offset((page - 1) * pageSize);
+        res.setHeader("Cache-Control", "no-store");
         return res.json({ total, page, pageSize, rows });
       }
 
@@ -1777,6 +1789,9 @@ export function registerTradersAssetsRoutes(app: Express) {
   /** Form BM: upload/replace supporting document file (PDF/JPEG/PNG; not after licence number issued). */
   app.post("/api/ioms/traders/licences/:id/bm-form-document", multerBmFormSingle, async (req, res) => {
     try {
+      if (TRADER_LICENCE_CRUD_DISABLED) {
+        return sendApiError(res, 403, TRADER_LICENCE_CRUD_DISABLED_CODE, TRADER_LICENCE_CRUD_DISABLED_MESSAGE);
+      }
       if (!hasPermission(req.user, "M-02", "Update") && !hasPermission(req.user, "M-02", "Create")) {
         return sendApiError(res, 403, "BM_FORM_UPLOAD_DENIED", "You do not have permission to upload BM documents.");
       }
@@ -1820,6 +1835,9 @@ export function registerTradersAssetsRoutes(app: Express) {
   /** Form BM: remove uploaded supporting document file. */
   app.delete("/api/ioms/traders/licences/:id/bm-form-document", async (req, res) => {
     try {
+      if (TRADER_LICENCE_CRUD_DISABLED) {
+        return sendApiError(res, 403, TRADER_LICENCE_CRUD_DISABLED_CODE, TRADER_LICENCE_CRUD_DISABLED_MESSAGE);
+      }
       if (!hasPermission(req.user, "M-02", "Update") && !hasPermission(req.user, "M-02", "Create")) {
         return sendApiError(res, 403, "BM_FORM_DELETE_DENIED", "You do not have permission to update trader licences.");
       }
@@ -2027,6 +2045,9 @@ export function registerTradersAssetsRoutes(app: Express) {
 
   app.post("/api/ioms/traders/licences", async (req, res) => {
     try {
+      if (TRADER_LICENCE_CRUD_DISABLED) {
+        return sendApiError(res, 403, TRADER_LICENCE_CRUD_DISABLED_CODE, TRADER_LICENCE_CRUD_DISABLED_MESSAGE);
+      }
       const body = req.body;
       const yid = String(body.yardId ?? "");
       if (!licenceYardAccessible(req, yid)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
@@ -2202,13 +2223,32 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!licenceYardAccessible(req, existing.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
 
       const issuedNo = existing.licenceNo != null && String(existing.licenceNo).trim() !== "";
+      const lmLinked = isLmLinkedLicence(existing);
       /** After licence number is issued, application data is frozen; these keys remain patchable (tax / operational). */
-      const ISSUED_ALLOWED_BODY_KEYS = new Set([
-        "govtGstExemptCategoryId",
-        "isNonGstEntity",
-        "isBlocked",
-        "blockReason",
-      ]);
+      const ISSUED_ALLOWED_BODY_KEYS = TRADER_LICENCE_OPERATIONAL_PATCH_KEYS;
+      /** LM-owned fields must not be overwritten by App 2 when linked. */
+      const LM_OWNED_BODY_KEYS = new Set(["validFrom", "validTo", "commodities", "lmStatus", "lmIsActive", "lmLicenseClass", "lmSyncedAt"]);
+      if (TRADER_LICENCE_CRUD_DISABLED) {
+        for (const key of Object.keys(body)) {
+          if (body[key] === undefined) continue;
+          if (!TRADER_LICENCE_OPERATIONAL_PATCH_KEYS.has(key)) {
+            return sendApiError(res, 403, TRADER_LICENCE_CRUD_DISABLED_CODE, TRADER_LICENCE_CRUD_DISABLED_MESSAGE);
+          }
+        }
+      }
+      if (lmLinked) {
+        for (const key of Object.keys(body)) {
+          if (body[key] === undefined) continue;
+          if (LM_OWNED_BODY_KEYS.has(key)) {
+            return sendApiError(
+              res,
+              403,
+              "LICENCE_LM_FIELDS_LOCKED",
+              "This licence is linked to License Manager. Expiry, commodities, and LM fields are read-only.",
+            );
+          }
+        }
+      }
       if (issuedNo) {
         for (const key of Object.keys(body)) {
           if (body[key] === undefined) continue;
@@ -2572,6 +2612,9 @@ export function registerTradersAssetsRoutes(app: Express) {
   /** Track A licence renewal: new Draft application prefilled from an issued licence (Form BK / Section 54). */
   app.post("/api/ioms/traders/licences/:id/renew", async (req, res) => {
     try {
+      if (TRADER_LICENCE_CRUD_DISABLED) {
+        return sendApiError(res, 403, TRADER_LICENCE_CRUD_DISABLED_CODE, TRADER_LICENCE_CRUD_DISABLED_MESSAGE);
+      }
       const id = req.params.id;
       const body = req.body as Record<string, unknown>;
       const [existing] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
@@ -2951,6 +2994,14 @@ export function registerTradersAssetsRoutes(app: Express) {
             ? "Trader licence is blocked and cannot receive a premises allocation."
             : `Trader licence must be Active for allocation (current status: ${lic.status}).`,
         );
+      }
+      try {
+        assertLmLicenceAllowsOperation(lic);
+      } catch (e) {
+        if (e instanceof LmLicenceGuardError) {
+          return sendApiError(res, 400, e.code, e.message);
+        }
+        throw e;
       }
 
       const allotmentDate = String((body as Record<string, unknown>).allotmentDate ?? "").trim();
