@@ -147,16 +147,22 @@ export function registerRentCombinedInvoiceRoutes(app: Express) {
       const id = routeParamString(req.params.id);
       const amount = Number(req.body?.amount);
       const allocations = Array.isArray(req.body?.allocations) ? req.body.allocations : [];
-      let counterPayment: ParsedCounterDuesPayment | null = null;
-      if (req.body?.paymentMode != null) {
-        try {
-          counterPayment = parseCounterDuesPaymentBody(req.body);
-        } catch (e) {
-          if (e instanceof DuesCounterPaymentError) {
-            return sendApiError(res, 400, e.code, e.message);
-          }
-          throw e;
+      if (req.body?.paymentMode == null || String(req.body.paymentMode).trim() === "") {
+        return sendApiError(
+          res,
+          400,
+          "COMBINED_PAYMENT_MODE_REQUIRED",
+          "Select a payment mode (Cash, Cheque, or NEFT/RTGS) before recording payment.",
+        );
+      }
+      let counterPayment: ParsedCounterDuesPayment;
+      try {
+        counterPayment = parseCounterDuesPaymentBody(req.body);
+      } catch (e) {
+        if (e instanceof DuesCounterPaymentError) {
+          return sendApiError(res, 400, e.code, e.message);
         }
+        throw e;
       }
       const createdBy = req.user?.id ?? "system";
       const result = await recordCombinedBundlePayment({

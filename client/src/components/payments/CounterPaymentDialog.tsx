@@ -35,6 +35,10 @@ export interface CounterPaymentDialogProps {
   onPayOnline?: () => void;
   payOnlinePending?: boolean;
   canAdvanceFromSummary?: boolean;
+  /** When dialog opens, start on summary or payment-mode step. */
+  initialStep?: "summary" | "payment";
+  /** Hide amount field on summary (caller already collected amount). */
+  hideAmountOnSummary?: boolean;
 }
 
 export function CounterPaymentDialog({
@@ -52,11 +56,13 @@ export function CounterPaymentDialog({
   onPayOnline,
   payOnlinePending = false,
   canAdvanceFromSummary = true,
+  initialStep = "summary",
+  hideAmountOnSummary = false,
 }: CounterPaymentDialogProps) {
   const { toast } = useToast();
   const { user } = useAuth();
   const { data: yards = [] } = useScopedActiveYards();
-  const [payStep, setPayStep] = useState<"summary" | "payment">("summary");
+  const [payStep, setPayStep] = useState<"summary" | "payment">(initialStep);
   const [paymentPref, setPaymentPref] = useState<PaymentPreferenceValue>(() => defaultPaymentPreferenceValue());
 
   const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
@@ -67,13 +73,17 @@ export function CounterPaymentDialog({
 
   useEffect(() => {
     if (!open) {
-      setPayStep("summary");
+      setPayStep(initialStep);
       setPaymentPref(defaultPaymentPreferenceValue());
+      return;
     }
-  }, [open]);
+    setPayStep(initialStep);
+    const amt = Number(amount);
+    setPaymentPref(defaultPaymentPreferenceValue(Number.isFinite(amt) && amt > 0 ? amt : undefined));
+  }, [open, initialStep, amount]);
 
   const handleClose = (next: boolean) => {
-    if (!next) setPayStep("summary");
+    if (!next) setPayStep(initialStep);
     onOpenChange(next);
   };
 
@@ -91,7 +101,7 @@ export function CounterPaymentDialog({
     }
     const payBody = buildCounterDuesPaymentApiBody(pref, amt);
     await onConfirm(payBody);
-    setPayStep("summary");
+    setPayStep(initialStep);
   };
 
   return (
@@ -103,10 +113,12 @@ export function CounterPaymentDialog({
         {payStep === "summary" ? (
           <div className="space-y-3">
             {summaryContent}
-            <div className="space-y-1">
-              <Label>{amountLabel}</Label>
-              <Input value={amount} onChange={(e) => onAmountChange(e.target.value)} placeholder="e.g. 11800" />
-            </div>
+            {!hideAmountOnSummary ? (
+              <div className="space-y-1">
+                <Label>{amountLabel}</Label>
+                <Input value={amount} onChange={(e) => onAmountChange(e.target.value)} placeholder="e.g. 11800" />
+              </div>
+            ) : null}
           </div>
         ) : (
           <PaymentPreferenceForm
@@ -118,7 +130,7 @@ export function CounterPaymentDialog({
           />
         )}
         <DialogFooter className="flex-wrap gap-2">
-          {payStep === "payment" ? (
+          {payStep === "payment" && initialStep !== "payment" ? (
             <Button
               variant="outline"
               onClick={() => {

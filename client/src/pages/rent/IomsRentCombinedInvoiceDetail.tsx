@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { formatInr } from "@/lib/formatInr";
 import { ArrowLeft, Download, Loader2, Banknote, ChevronUp, ChevronDown } from "lucide-react";
+import { CounterPaymentDialog } from "@/components/payments/CounterPaymentDialog";
 
 interface ChildInvoice {
   id: string;
@@ -46,6 +47,8 @@ export default function IomsRentCombinedInvoiceDetail() {
   const [pdfLoading, setPdfLoading] = useState(false);
   const [payAmount, setPayAmount] = useState("");
   const [allocRows, setAllocRows] = useState<AllocRow[]>([]);
+  const [payDialogOpen, setPayDialogOpen] = useState(false);
+  const [dialogAmount, setDialogAmount] = useState("");
 
   const { data: bundle, isLoading } = useQuery<BundleDetail>({
     queryKey: [`/api/ioms/rent/combined-invoices/${id}`],
@@ -78,17 +81,23 @@ export default function IomsRentCombinedInvoiceDetail() {
     });
   };
 
+  const activeAllocations = useMemo(
+    () =>
+      allocRows
+        .map((r) => ({ invoiceId: r.invoiceId, amount: Number(r.amount), label: r.label }))
+        .filter((a) => Number.isFinite(a.amount) && a.amount > 0),
+    [allocRows],
+  );
+
   const payMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (payBody: Record<string, unknown>) => {
       const amount = Number(payAmount);
-      const allocations = allocRows
-        .map((r) => ({ invoiceId: r.invoiceId, amount: Number(r.amount) }))
-        .filter((a) => Number.isFinite(a.amount) && a.amount > 0);
+      const allocations = activeAllocations.map((a) => ({ invoiceId: a.invoiceId, amount: a.amount }));
       const res = await fetch(`/api/ioms/rent/combined-invoices/${id}/record-payment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ amount, allocations }),
+        body: JSON.stringify({ ...payBody, amount, allocations }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -100,6 +109,7 @@ export default function IomsRentCombinedInvoiceDetail() {
       queryClient.invalidateQueries({ queryKey: [`/api/ioms/rent/combined-invoices/${id}`] });
       toast({ title: "Payment recorded", description: "Allocations applied in your chosen order." });
       setPayAmount("");
+      setPayDialogOpen(false);
     },
     onError: (e: Error) => {
       toast({ title: "Payment failed", description: e.message, variant: "destructive" });
@@ -107,6 +117,24 @@ export default function IomsRentCombinedInvoiceDetail() {
   });
 
   const allocSum = allocRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const canOpenPayDialog =
+    Number.isFinite(Number(payAmount)) &&
+    Number(payAmount) > 0 &&
+    activeAllocations.length > 0 &&
+    Math.abs(allocSum - Number(payAmount)) <= 0.02;
+
+  const openPaymentMode = () => {
+    if (!canOpenPayDialog) {
+      toast({
+        title: "Check amounts",
+        description: "Payment amount must match the allocation sum.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setDialogAmount(String(Number(payAmount)));
+    setPayDialogOpen(true);
+  };
 
   const downloadPdf = async () => {
     setPdfLoading(true);
@@ -206,7 +234,8 @@ export default function IomsRentCombinedInvoiceDetail() {
               Partial payment (user-selected allocation order)
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Set amounts per premises in the order you want them applied. Use arrows to reorder.
+              Set amounts per premises in the order you want them applied. Use arrows to reorder. Then Record payment to
+              choose Cash / Cheque / NEFT.
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -247,16 +276,51 @@ export default function IomsRentCombinedInvoiceDetail() {
               </div>
             ))}
             <p className="text-sm text-muted-foreground">Allocation sum: {formatInr(allocSum)}</p>
-            <Button
-              type="button"
-              disabled={payMutation.isPending || Math.abs(allocSum - Number(payAmount)) > 0.02}
-              onClick={() => payMutation.mutate()}
-            >
+            <Button type="button" disabled={payMutation.isPending || !canOpenPayDialog} onClick={openPaymentMode}>
               Record payment
             </Button>
           </CardContent>
         </Card>
       ) : null}
+
+      <CounterPaymentDialog
+        open={payDialogOpen}
+        onOpenChange={setPayDialogOpen}
+        title="Record combined invoice payment"
+        yardId={bundle.yardId}
+        amount={dialogAmount}
+        onAmountChange={setDialogAmount}
+        initialStep="payment"
+        hideAmountOnSummary
+        confirmPending={payMutation.isPending}
+        canAdvanceFromSummary={canOpenPayDialog}
+        summaryContent={
+          <div className="text-sm space-y-2">
+            <p>
+              <span className="text-muted-foreground">Bundle:</span>{" "}
+              <span className="font-mono">{bundle.bundleInvoiceNo}</span>
+            </p>
+            <p>
+              <span className="text-muted-foreground">Outstanding:</span>{" "}
+              <span className="font-medium">{formatInr(bundle.outstandingTotal)}</span>
+            </p>
+            <p>
+              <span className="text-muted-foreground">Paying:</span>{" "}
+              <span className="font-medium">{formatInr(Number(dialogAmount) || 0)}</span>
+            </p>
+            <ul className="list-disc pl-4 text-muted-foreground">
+              {activeAllocations.map((a) => (
+                <li key={a.invoiceId}>
+                  {a.label.split(" (outstanding")[0]} — {formatInr(a.amount)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        }
+        onConfirm={async (payBody) => {
+          await payMutation.mutateAsync(payBody);
+        }}
+      />
     </AppShell>
   );
 }
