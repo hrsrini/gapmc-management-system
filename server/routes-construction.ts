@@ -19,6 +19,18 @@ function yardInScope(req: Express.Request, yardId: string): boolean {
   return !scopedIds || scopedIds.length === 0 || scopedIds.includes(yardId);
 }
 
+/** Reject missing yard before scope check (empty string is "in scope" for unscoped admins). */
+function requireYardId(req: Express.Request, yardId: string): string | null {
+  const id = yardId.trim();
+  if (!id) return "Yard is required";
+  if (!yardInScope(req, id)) return "You do not have access to this yard";
+  return null;
+}
+
+function isYmd(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
+}
+
 export function registerConstructionRoutes(app: Express) {
   const now = () => new Date().toISOString();
 
@@ -347,21 +359,42 @@ export function registerConstructionRoutes(app: Express) {
   app.post("/api/ioms/amc", async (req, res) => {
     try {
       const body = req.body;
-      const yardId = String(body.yardId ?? "");
-      if (!yardInScope(req, yardId))
-        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      const yardId = String(body.yardId ?? "").trim();
+      const yardErr = requireYardId(req, yardId);
+      if (yardErr) {
+        return sendApiError(
+          res,
+          yardErr.includes("access") ? 403 : 400,
+          yardErr.includes("access") ? "WORK_YARD_ACCESS_DENIED" : "AMC_YARD_REQUIRED",
+          yardErr,
+        );
+      }
+      const contractorName = String(body.contractorName ?? "").trim();
+      if (!contractorName) return sendApiError(res, 400, "AMC_CONTRACTOR_REQUIRED", "Contractor name is required");
+      const amountPerPeriod = Number(body.amountPerPeriod);
+      if (!Number.isFinite(amountPerPeriod) || amountPerPeriod <= 0) {
+        return sendApiError(res, 400, "AMC_AMOUNT_INVALID", "Amount per period must be greater than zero");
+      }
+      const contractStart = String(body.contractStart ?? "").trim();
+      const contractEnd = String(body.contractEnd ?? "").trim();
+      if (!isYmd(contractStart) || !isYmd(contractEnd)) {
+        return sendApiError(res, 400, "AMC_DATES_REQUIRED", "Contract start and end dates are required (YYYY-MM-DD)");
+      }
+      if (contractEnd < contractStart) {
+        return sendApiError(res, 400, "AMC_DATE_RANGE", "Contract end must be on or after start date");
+      }
       const id = nanoid();
       await db.insert(amcContracts).values({
         id,
         yardId,
-        contractorName: String(body.contractorName ?? ""),
-        amountPerPeriod: Number(body.amountPerPeriod ?? 0),
-        contractStart: String(body.contractStart ?? ""),
-        contractEnd: String(body.contractEnd ?? ""),
-        status: String(body.status ?? "Active"),
-        description: body.description ? String(body.description) : null,
-        periodType: body.periodType ? String(body.periodType) : null,
-        daUser: body.daUser ? String(body.daUser) : null,
+        contractorName,
+        amountPerPeriod,
+        contractStart,
+        contractEnd,
+        status: String(body.status ?? "Active").trim() || "Active",
+        description: body.description ? String(body.description).trim() || null : null,
+        periodType: body.periodType ? String(body.periodType).trim() || null : null,
+        daUser: body.daUser ? String(body.daUser).trim() || null : null,
       });
       const [row] = await db.select().from(amcContracts).where(eq(amcContracts.id, id));
       if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -391,25 +424,48 @@ export function registerConstructionRoutes(app: Express) {
   app.post("/api/ioms/land-records", async (req, res) => {
     try {
       const body = req.body;
-      const yardId = String(body.yardId ?? "");
-      if (!yardInScope(req, yardId))
-        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      const yardId = String(body.yardId ?? "").trim();
+      const yardErr = requireYardId(req, yardId);
+      if (yardErr) {
+        return sendApiError(
+          res,
+          yardErr.includes("access") ? 403 : 400,
+          yardErr.includes("access") ? "WORK_YARD_ACCESS_DENIED" : "LAND_YARD_REQUIRED",
+          yardErr,
+        );
+      }
+      const surveyNo = String(body.surveyNo ?? "").trim();
+      if (!surveyNo) return sendApiError(res, 400, "LAND_SURVEY_REQUIRED", "Survey number is required");
+      const user = (req as Express.Request & { user?: AuthUser }).user;
+      const createdBy = user?.id?.trim() || user?.name?.trim() || "";
+      if (!createdBy) return sendApiError(res, 401, "AUTH_REQUIRED", "Sign in required to create land records");
+      let areaSqm: number | null = null;
+      if (body.areaSqm != null && body.areaSqm !== "") {
+        areaSqm = Number(body.areaSqm);
+        if (!Number.isFinite(areaSqm) || areaSqm < 0) {
+          return sendApiError(res, 400, "LAND_AREA_INVALID", "Area must be a non-negative number");
+        }
+      }
+      const saleDeedDate = body.saleDeedDate ? String(body.saleDeedDate).trim() : "";
+      if (saleDeedDate && !isYmd(saleDeedDate)) {
+        return sendApiError(res, 400, "LAND_DEED_DATE_INVALID", "Sale deed date must be YYYY-MM-DD");
+      }
       const id = nanoid();
-      const now = new Date().toISOString();
+      const createdAt = new Date().toISOString();
       await db.insert(landRecords).values({
         id,
         yardId,
-        surveyNo: String(body.surveyNo ?? ""),
-        createdBy: String(body.createdBy ?? ""),
-        createdAt: now,
-        village: body.village ? String(body.village) : null,
-        taluk: body.taluk ? String(body.taluk) : null,
-        district: body.district ? String(body.district) : null,
-        areaSqm: body.areaSqm != null ? Number(body.areaSqm) : null,
-        saleDeedNo: body.saleDeedNo ? String(body.saleDeedNo) : null,
-        saleDeedDate: body.saleDeedDate ? String(body.saleDeedDate) : null,
-        encumbrance: body.encumbrance ? String(body.encumbrance) : null,
-        remarks: body.remarks ? String(body.remarks) : null,
+        surveyNo,
+        createdBy,
+        createdAt,
+        village: body.village ? String(body.village).trim() || null : null,
+        taluk: body.taluk ? String(body.taluk).trim() || null : null,
+        district: body.district ? String(body.district).trim() || null : null,
+        areaSqm,
+        saleDeedNo: body.saleDeedNo ? String(body.saleDeedNo).trim() || null : null,
+        saleDeedDate: saleDeedDate || null,
+        encumbrance: body.encumbrance ? String(body.encumbrance).trim() || null : null,
+        remarks: body.remarks ? String(body.remarks).trim() || null : null,
       });
       const [row] = await db.select().from(landRecords).where(eq(landRecords.id, id));
       if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
@@ -420,7 +476,10 @@ export function registerConstructionRoutes(app: Express) {
     }
   });
 
-  /** Land register corrections after go-live: only DA or Admin (client clarification M-08). */
+  /**
+   * Land register is append-only at the database (migration 002 triggers).
+   * Updates are refused with a clear API error rather than a 500 from the trigger.
+   */
   app.put("/api/ioms/land-records/:id", async (req, res) => {
     try {
       const id = req.params.id;
@@ -436,34 +495,12 @@ export function registerConstructionRoutes(app: Express) {
       const [existing] = await db.select().from(landRecords).where(eq(landRecords.id, id)).limit(1);
       if (!existing) return sendApiError(res, 404, "LAND_RECORD_NOT_FOUND", "Not found");
       if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "LAND_RECORD_NOT_FOUND", "Not found");
-      const body = req.body;
-      const updates: Record<string, unknown> = {};
-      if (body.yardId !== undefined) {
-        const y = String(body.yardId ?? "");
-        if (!yardInScope(req, y)) return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
-        updates.yardId = y;
-      }
-      [
-        "surveyNo",
-        "village",
-        "taluk",
-        "district",
-        "saleDeedNo",
-        "saleDeedDate",
-        "encumbrance",
-        "remarks",
-      ].forEach((k) => {
-        if (body[k] !== undefined) updates[k] = body[k] == null ? null : String(body[k]);
-      });
-      if (body.areaSqm !== undefined) updates.areaSqm = body.areaSqm == null ? null : Number(body.areaSqm);
-      if (Object.keys(updates).length === 0) {
-        const [row] = await db.select().from(landRecords).where(eq(landRecords.id, id));
-        return res.json(row!);
-      }
-      await db.update(landRecords).set(updates as Record<string, string | number | null>).where(eq(landRecords.id, id));
-      const [row] = await db.select().from(landRecords).where(eq(landRecords.id, id));
-      if (row) writeAuditLog(req, { module: "Construction", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
-      res.json(row!);
+      return sendApiError(
+        res,
+        403,
+        "LAND_RECORD_IMMUTABLE",
+        "Land records are append-only and cannot be updated. Add a new record with corrections.",
+      );
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update land record");
@@ -489,25 +526,56 @@ export function registerConstructionRoutes(app: Express) {
   app.post("/api/ioms/fixed-assets", async (req, res) => {
     try {
       const body = req.body;
-      const yardId = String(body.yardId ?? "");
-      if (!yardInScope(req, yardId))
-        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      const yardId = String(body.yardId ?? "").trim();
+      const yardErr = requireYardId(req, yardId);
+      if (yardErr) {
+        return sendApiError(
+          res,
+          yardErr.includes("access") ? 403 : 400,
+          yardErr.includes("access") ? "WORK_YARD_ACCESS_DENIED" : "ASSET_YARD_REQUIRED",
+          yardErr,
+        );
+      }
+      const assetType = String(body.assetType ?? "").trim();
+      if (!assetType) return sendApiError(res, 400, "ASSET_TYPE_REQUIRED", "Asset type is required");
+      const acquisitionDate = String(body.acquisitionDate ?? "").trim();
+      if (!isYmd(acquisitionDate)) {
+        return sendApiError(res, 400, "ASSET_ACQ_DATE_REQUIRED", "Acquisition date is required (YYYY-MM-DD)");
+      }
+      const acquisitionValue = Number(body.acquisitionValue);
+      if (!Number.isFinite(acquisitionValue) || acquisitionValue < 0) {
+        return sendApiError(res, 400, "ASSET_ACQ_VALUE_INVALID", "Acquisition value must be a non-negative number");
+      }
+      let usefulLifeYears: number | null = null;
+      if (body.usefulLifeYears != null && body.usefulLifeYears !== "") {
+        usefulLifeYears = Number(body.usefulLifeYears);
+        if (!Number.isFinite(usefulLifeYears) || usefulLifeYears <= 0) {
+          return sendApiError(res, 400, "ASSET_LIFE_INVALID", "Useful life must be a positive number of years");
+        }
+      }
+      let currentBookValue: number | null =
+        body.currentBookValue != null && body.currentBookValue !== ""
+          ? Number(body.currentBookValue)
+          : acquisitionValue;
+      if (currentBookValue != null && (!Number.isFinite(currentBookValue) || currentBookValue < 0)) {
+        return sendApiError(res, 400, "ASSET_BOOK_VALUE_INVALID", "Book value must be a non-negative number");
+      }
       const id = nanoid();
       await db.insert(fixedAssets).values({
         id,
         yardId,
-        assetType: String(body.assetType ?? ""),
-        acquisitionDate: String(body.acquisitionDate ?? ""),
-        acquisitionValue: Number(body.acquisitionValue ?? 0),
-        status: String(body.status ?? "Active"),
-        description: body.description ? String(body.description) : null,
-        usefulLifeYears: body.usefulLifeYears != null ? Number(body.usefulLifeYears) : null,
-        depreciationMethod: body.depreciationMethod ? String(body.depreciationMethod) : null,
-        currentBookValue: body.currentBookValue != null ? Number(body.currentBookValue) : null,
-        disposalDate: body.disposalDate ? String(body.disposalDate) : null,
-        disposalValue: body.disposalValue != null ? Number(body.disposalValue) : null,
-        disposalApprovedBy: body.disposalApprovedBy ? String(body.disposalApprovedBy) : null,
-        worksId: body.worksId ? String(body.worksId) : null,
+        assetType,
+        acquisitionDate,
+        acquisitionValue,
+        status: String(body.status ?? "Active").trim() || "Active",
+        description: body.description ? String(body.description).trim() || null : null,
+        usefulLifeYears,
+        depreciationMethod: body.depreciationMethod ? String(body.depreciationMethod).trim() || null : null,
+        currentBookValue,
+        disposalDate: body.disposalDate ? String(body.disposalDate).trim() || null : null,
+        disposalValue: body.disposalValue != null && body.disposalValue !== "" ? Number(body.disposalValue) : null,
+        disposalApprovedBy: body.disposalApprovedBy ? String(body.disposalApprovedBy).trim() || null : null,
+        worksId: body.worksId ? String(body.worksId).trim() || null : null,
       });
       const [row] = await db.select().from(fixedAssets).where(eq(fixedAssets.id, id));
       if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
