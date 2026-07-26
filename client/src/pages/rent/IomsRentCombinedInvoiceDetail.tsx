@@ -31,6 +31,8 @@ interface BundleDetail {
   bundleInvoiceNo: string;
   periodMonth: string;
   yardId: string;
+  tenantLicenceId?: string;
+  tenantName?: string | null;
   totalAmount: number;
   totalTdsAmount: number;
   outstandingTotal: number;
@@ -182,6 +184,12 @@ export default function IomsRentCombinedInvoiceDetail() {
           <div>
             <CardTitle className="font-mono">{bundle.bundleInvoiceNo}</CardTitle>
             <p className="text-sm text-muted-foreground mt-1">
+              {bundle.tenantName?.trim() ? (
+                <>
+                  <span className="text-foreground font-medium">{bundle.tenantName.trim()}</span>
+                  {" · "}
+                </>
+              ) : null}
               Billing month {bundle.periodMonth} · {bundle.children.length} premises · TDS computed per premises (total{" "}
               {formatInr(bundle.totalTdsAmount)})
             </p>

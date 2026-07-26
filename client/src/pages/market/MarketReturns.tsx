@@ -411,8 +411,9 @@ export default function MarketReturns() {
             <CardHeader>
               <CardTitle className="text-base">Step 2: Review purchases (auto-filled)</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Purchases are aggregated from Approved yard transactions + Verified checkpost inward entries. Enter sale
-                quantities as whole numbers only; sales cannot exceed opening qty + purchase qty for each commodity.
+                Purchases are aggregated from Finalized wizard transactions, Approved yard purchases, and Verified
+                checkpost inward entries. Enter sale quantities as whole numbers only; sales cannot exceed opening qty +
+                purchase qty for each commodity.
               </p>
             </CardHeader>
             <CardContent className="space-y-3">

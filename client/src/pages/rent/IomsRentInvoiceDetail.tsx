@@ -377,9 +377,14 @@ export default function IomsRentInvoiceDetail() {
     <AppShell breadcrumbs={[{ label: "Rent (IOMS)", href: "/rent/ioms" }, { label: invoice.invoiceNo ?? invoice.id }]}>
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <FileText className="h-5 w-5" />
-            {invoice.invoiceNo ?? invoice.id}
+          <CardTitle className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+            <span className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              {invoice.invoiceNo ?? invoice.id}
+            </span>
+            {tenantLabel ? (
+              <span className="text-base font-normal text-muted-foreground sm:ml-1">{tenantLabel}</span>
+            ) : null}
           </CardTitle>
           <div className="flex gap-2">
             {!cancelled && !String(invoice.combinedBundleId ?? "").trim() ? (

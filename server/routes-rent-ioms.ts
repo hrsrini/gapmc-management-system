@@ -198,7 +198,14 @@ export function registerRentIomsRoutes(app: Express) {
       const cgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_cgst_percent");
       const sgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_sgst_percent");
       const { withResolvedRentInvoiceGst } = await import("./rent-invoice-gst-display");
-      res.json(list.map((row) => withResolvedRentInvoiceGst(row, cgstPct, sgstPct)));
+      const { resolveRentInvoiceTenantNames } = await import("./rent-invoice-payer");
+      const tenantNames = await resolveRentInvoiceTenantNames(list);
+      res.json(
+        list.map((row) => ({
+          ...withResolvedRentInvoiceGst(row, cgstPct, sgstPct),
+          tenantName: tenantNames[row.id] ?? null,
+        })),
+      );
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch rent invoices");
@@ -1440,6 +1447,10 @@ export function registerRentIomsRoutes(app: Express) {
 
   app.get("/api/ioms/rent/ledger", async (req, res) => {
     try {
+      const { ensureM03RentDepositLedgerBackfill } = await import("./rent-deposit-ledger-from-receipt");
+      await ensureM03RentDepositLedgerBackfill().catch((e) =>
+        console.warn("M-03 rent deposit ledger backfill:", e),
+      );
       const unifiedRaw = String(req.query.unifiedEntityId ?? "").trim();
       const tenantLicenceId = req.query.tenantLicenceId as string | undefined;
       const assetId = req.query.assetId as string | undefined;

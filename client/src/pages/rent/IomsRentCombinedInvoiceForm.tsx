@@ -18,6 +18,7 @@ interface RentInvoiceRow {
   assetId: string;
   yardId: string;
   tenantLicenceId: string;
+  tenantName?: string | null;
   rentAmount: number;
   totalAmount: number;
   status: string;
@@ -148,7 +149,12 @@ export default function IomsRentCombinedInvoiceForm() {
             <div className="space-y-6">
               {groups.map(([key, rows]) => (
                 <div key={key} className="border rounded-md p-4 space-y-2">
-                  <p className="text-sm font-medium">Tenant {rows[0]!.tenantLicenceId} · Yard {rows[0]!.yardId}</p>
+                  <p className="text-sm font-medium">
+                    {rows[0]!.tenantName?.trim() || "Tenant"}{" "}
+                    <span className="text-muted-foreground font-normal font-mono text-xs">
+                      ({rows[0]!.tenantLicenceId})
+                    </span>
+                  </p>
                   {rows.map((inv: RentInvoiceRow) => (
                     <label key={inv.id} className="flex items-center gap-3 text-sm py-1">
                       <Checkbox

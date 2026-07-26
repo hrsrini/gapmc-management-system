@@ -10,9 +10,10 @@ import type { InferSelectModel } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "./db";
 import { writeAuditLogSystem } from "./audit";
-import { iomsReceipts, rentDepositLedger, rentInvoices } from "@shared/db-schema";
+import { iomsReceipts, rentDepositLedger, rentInvoices, rentInvoicePaymentAllocations } from "@shared/db-schema";
 import { latestRentDepositLedgerRowForInvoice, rentInvoiceLedgerScope } from "./rent-ledger-scope";
 import { parseM03ReceiptBreakdown } from "@shared/m03-receipt-breakdown";
+import { parseM03CombinedBundleBreakdown } from "@shared/rent-combined-invoice";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
 
@@ -40,27 +41,36 @@ function collectionCreditInr(r: ReceiptRow): number {
   return Math.round(Number(r.totalAmount ?? 0) * 100) / 100;
 }
 
-/** Idempotent: one Collection row per receipt id (rent / GST principal). */
-export async function recordRentCollectionForM03Receipt(r: ReceiptRow): Promise<{
-  ledgerId?: string;
-  message?: string;
-}> {
-  if (!isM03RentPrincipalReceipt(r)) return {};
+/** Idempotent: one Collection row per receipt + invoice (supports combined-bundle allocations). */
+export async function recordRentCollectionForInvoiceAmount(args: {
+  receipt: ReceiptRow;
+  invoiceId: string;
+  credit: number;
+}): Promise<{ ledgerId?: string; message?: string }> {
+  const r = args.receipt;
   if (r.status !== "Paid" && r.status !== "Reconciled") return {};
+  const invoiceId = String(args.invoiceId ?? "").trim();
+  const credit = Math.round(Number(args.credit ?? 0) * 100) / 100;
+  if (!invoiceId || !(credit > 0.005)) return {};
 
   const [dup] = await db
     .select({ id: rentDepositLedger.id })
     .from(rentDepositLedger)
-    .where(and(eq(rentDepositLedger.receiptId, r.id), eq(rentDepositLedger.entryType, "Collection")))
+    .where(
+      and(
+        eq(rentDepositLedger.receiptId, r.id),
+        eq(rentDepositLedger.invoiceId, invoiceId),
+        eq(rentDepositLedger.entryType, "Collection"),
+      ),
+    )
     .limit(1);
-  if (dup) return { ledgerId: dup.id, message: "Rent deposit ledger: Collection already recorded for this receipt." };
+  if (dup) return { ledgerId: dup.id, message: "Rent deposit ledger: Collection already recorded for this receipt/invoice." };
 
-  const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, r.sourceRecordId!)).limit(1);
-  if (!inv) return { message: "Rent deposit ledger: linked invoice not found; no Collection row posted." };
+  const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
+  if (!inv) return { message: `Rent deposit ledger: invoice ${invoiceId} not found; no Collection row posted.` };
 
   const prev = await latestRentDepositLedgerRowForInvoice(inv);
   const prevBal = prev != null ? Number(prev.balance ?? 0) : 0;
-  const credit = collectionCreditInr(r);
   const balance = prevBal - credit;
   const id = nanoid();
   const entryDate = new Date().toISOString().slice(0, 10);
@@ -98,6 +108,21 @@ export async function recordRentCollectionForM03Receipt(r: ReceiptRow): Promise<
     ledgerId: id,
     message: `Rent deposit ledger: Collection ₹${credit.toFixed(2)} posted (balance ₹${balance.toFixed(2)}).`,
   };
+}
+
+/** Idempotent: one Collection row per receipt id (rent / GST principal) for a single-invoice receipt. */
+export async function recordRentCollectionForM03Receipt(r: ReceiptRow): Promise<{
+  ledgerId?: string;
+  message?: string;
+}> {
+  if (!isM03RentPrincipalReceipt(r)) return {};
+  if (r.status !== "Paid" && r.status !== "Reconciled") return {};
+  const credit = collectionCreditInr(r);
+  return recordRentCollectionForInvoiceAmount({
+    receipt: r,
+    invoiceId: String(r.sourceRecordId ?? ""),
+    credit,
+  });
 }
 
 async function recordInterestSettlementForM03Receipt(
@@ -193,6 +218,7 @@ async function recordInterestOnlySettlementForM03Receipt(r: ReceiptRow): Promise
 /**
  * Apply all M-03 rent-deposit ledger effects for a Paid/Reconciled IOMS receipt (principal collection + optional interest).
  * Call after the receipt row is persisted with status Paid/Reconciled.
+ * Idempotent per receipt id (safe to re-run for backfill).
  */
 export async function applyM03ReceiptToRentDepositLedger(r: ReceiptRow): Promise<{ messages: string[] }> {
   const messages: string[] = [];
@@ -202,6 +228,38 @@ export async function applyM03ReceiptToRentDepositLedger(r: ReceiptRow): Promise
   if (isM03RentArrearsInterestReceipt(r)) {
     const msg = await recordInterestOnlySettlementForM03Receipt(r);
     if (msg) messages.push(msg);
+    return { messages };
+  }
+
+  if (!(r.revenueHead === "Rent" || r.revenueHead === "GSTInvoice")) return { messages };
+
+  const combined = parseM03CombinedBundleBreakdown(r.m03BreakdownJson);
+  let allocations = combined?.invoiceAllocations ?? [];
+  if (allocations.length === 0) {
+    const allocRows = await db
+      .select({
+        invoiceId: rentInvoicePaymentAllocations.invoiceId,
+        amountInr: rentInvoicePaymentAllocations.amountInr,
+      })
+      .from(rentInvoicePaymentAllocations)
+      .where(eq(rentInvoicePaymentAllocations.receiptId, r.id));
+    allocations = allocRows
+      .map((a) => ({
+        invoiceId: String(a.invoiceId ?? "").trim(),
+        amount: Math.round(Number(a.amountInr ?? 0) * 100) / 100,
+      }))
+      .filter((a) => a.invoiceId && a.amount > 0.005);
+  }
+
+  if (allocations.length > 0) {
+    for (const a of allocations) {
+      const coll = await recordRentCollectionForInvoiceAmount({
+        receipt: r,
+        invoiceId: a.invoiceId,
+        credit: a.amount,
+      });
+      if (coll.message) messages.push(coll.message);
+    }
     return { messages };
   }
 
@@ -216,10 +274,82 @@ export async function applyM03ReceiptToRentDepositLedger(r: ReceiptRow): Promise
       const msg = await recordInterestSettlementForM03Receipt(r, ids, ia);
       if (msg) messages.push(msg);
     }
-    return { messages };
   }
-
   return { messages };
+}
+
+/** Backfill Collection / InterestCollection for Paid M-03 receipts that never posted (e.g. Undeposited cash). */
+export async function backfillM03RentDepositLedgerFromPaidReceipts(): Promise<{
+  scanned: number;
+  posted: number;
+  errors: Array<{ receiptId: string; message: string }>;
+}> {
+  const rows = await db
+    .select()
+    .from(iomsReceipts)
+    .where(
+      and(
+        eq(iomsReceipts.sourceModule, "M-03"),
+        inArray(iomsReceipts.status, ["Paid", "Reconciled"]),
+        inArray(iomsReceipts.revenueHead, ["Rent", "GSTInvoice", "RentArrearsInterest"]),
+      ),
+    );
+  let posted = 0;
+  const errors: Array<{ receiptId: string; message: string }> = [];
+  for (const r of rows) {
+    try {
+      const before = await db
+        .select({ id: rentDepositLedger.id })
+        .from(rentDepositLedger)
+        .where(
+          and(
+            eq(rentDepositLedger.receiptId, r.id),
+            inArray(rentDepositLedger.entryType, ["Collection", "InterestCollection"]),
+          ),
+        )
+        .limit(1);
+      const result = await applyM03ReceiptToRentDepositLedger(r);
+      const after = await db
+        .select({ id: rentDepositLedger.id })
+        .from(rentDepositLedger)
+        .where(
+          and(
+            eq(rentDepositLedger.receiptId, r.id),
+            inArray(rentDepositLedger.entryType, ["Collection", "InterestCollection"]),
+          ),
+        )
+        .limit(1);
+      if (!before[0] && after[0]) posted += 1;
+      else if (result.messages.some((m) => m.includes("posted") || m.includes("settled"))) {
+        // message-based fallback
+        if (!before[0]) posted += 1;
+      }
+    } catch (e) {
+      errors.push({
+        receiptId: r.id,
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  return { scanned: rows.length, posted, errors };
+}
+
+let backfillOncePromise: Promise<{ scanned: number; posted: number; errors: Array<{ receiptId: string; message: string }> }> | null =
+  null;
+
+/** Runs Paid→ledger backfill at most once per server process. */
+export function ensureM03RentDepositLedgerBackfill(): Promise<{
+  scanned: number;
+  posted: number;
+  errors: Array<{ receiptId: string; message: string }>;
+}> {
+  if (!backfillOncePromise) {
+    backfillOncePromise = backfillM03RentDepositLedgerFromPaidReceipts().catch((e) => {
+      backfillOncePromise = null;
+      throw e;
+    });
+  }
+  return backfillOncePromise;
 }
 
 /** Reversal when cheque/DD dishonoured; M-03 rent/GST (Collection) or interest-only (InterestCollection). */

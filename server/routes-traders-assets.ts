@@ -691,16 +691,28 @@ export function registerTradersAssetsRoutes(app: Express) {
           });
         }
       } else if (parsed.kind === "TB") {
-        const entityId = parsed.refId;
-        const [ent] = await db.select().from(entities).where(eq(entities.id, entityId)).limit(1);
+        let entityId = parsed.refId;
+        let [ent] = await db.select().from(entities).where(eq(entities.id, entityId)).limit(1);
+        // Allow TB:<entity_code> (e.g. TB:ENT-2026-00001) in addition to internal id.
+        if (!ent) {
+          const [byCode] = await db.select().from(entities).where(eq(entities.entityCode, entityId)).limit(1);
+          if (byCode) {
+            ent = byCode;
+            entityId = byCode.id;
+          }
+        }
         if (!ent || !yardInScope(req, ent.yardId)) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
         let trackBBillingHint: string | undefined;
         if (!isTrackBGovtSubType(ent.subType)) {
-          const { listM03RentInvoiceDuesForTrackBEntity } = await import("./m03-rent-invoice-dues");
+          const {
+            listM03RentInvoiceDuesForTrackBEntity,
+            describeTrackBCoveredInvoices,
+          } = await import("./m03-rent-invoice-dues");
           const rentDues = await listM03RentInvoiceDuesForTrackBEntity(entityId);
           dues.push(...rentDues);
           if (rentDues.length === 0) {
-            trackBBillingHint = TRACKB_NON_GOV_DUES_API_HINT;
+            trackBBillingHint =
+              (await describeTrackBCoveredInvoices(entityId)) ?? TRACKB_NON_GOV_DUES_API_HINT;
           }
         } else {
           const prs = await db.select().from(preReceipts).where(eq(preReceipts.entityId, entityId));

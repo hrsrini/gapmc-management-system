@@ -92,10 +92,10 @@ function columnsForKind(kind: ReportKind): ReportTableColumn[] {
     case "rent":
       return [
         { key: "invoiceNo", header: "Invoice No." },
+        { key: "occupantName", header: "Trader / Entity name" },
         { key: "periodMonth", header: "Period (Month)" },
         { key: "yardName", header: "Yard Name", sortField: "yardId" },
         { key: "premisesId", header: "Premises ID", sortField: "assetId" },
-        { key: "occupantName", header: "Occupant Name" },
         { key: "_rent", header: "Rent (₹)", sortField: "rentAmount" },
         { key: "_sgst", header: "SGST (₹)", sortField: "sgst" },
         { key: "_cgst", header: "CGST (₹)", sortField: "cgst" },

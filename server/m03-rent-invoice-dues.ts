@@ -139,7 +139,21 @@ export async function listM03RentInvoiceDuesForTraderLicence(
           .from(iomsReceipts)
           .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
 
-  return await invoiceRowsToDues(invs, paidPrincipalByInvoice(recs));
+  const paidBy = paidPrincipalByInvoice(recs);
+  const { maybeMarkM03InvoicePaidFromSettledReceipts } = await import("./receipt-deposit-service");
+  for (const inv of invs) {
+    if (String(inv.status ?? "") === "Paid") continue;
+    try {
+      await maybeMarkM03InvoicePaidFromSettledReceipts(inv.id);
+      const paid = Number(paidBy[inv.id] ?? 0);
+      const total = Number(inv.totalAmount ?? 0);
+      if (paid >= total - 0.01 && total > 0) inv.status = "Paid";
+    } catch (e) {
+      console.warn("[m03-dues] invoice Paid sync failed:", inv.id, e);
+    }
+  }
+
+  return await invoiceRowsToDues(invs, paidBy);
 }
 
 /** Track B (non-Govt): entity id on `entity_id` and/or unified `TB:<entity_id>` tenant key. */
@@ -168,5 +182,69 @@ export async function listM03RentInvoiceDuesForTrackBEntity(
           .from(iomsReceipts)
           .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
 
+  // Self-heal: counter Paid receipts should flip Approved → Paid even before bank deposit.
+  const { maybeMarkM03InvoicePaidFromSettledReceipts } = await import("./receipt-deposit-service");
+  for (const inv of invs) {
+    if (String(inv.status ?? "") === "Paid") continue;
+    try {
+      await maybeMarkM03InvoicePaidFromSettledReceipts(inv.id);
+      const paid = Number(paidPrincipalByInvoice(recs)[inv.id] ?? 0);
+      const total = Number(inv.totalAmount ?? 0);
+      if (paid >= total - 0.01 && total > 0) inv.status = "Paid";
+    } catch (e) {
+      console.warn("[m03-dues] invoice Paid sync failed:", inv.id, e);
+    }
+  }
+
   return await invoiceRowsToDues(invs, paidPrincipalByInvoice(recs));
+}
+
+/** Explain why Track B Commercial/Ad-hoc dues are empty when invoices exist but are fully collected. */
+export async function describeTrackBCoveredInvoices(entityId: string): Promise<string | null> {
+  const eid = String(entityId ?? "").trim();
+  if (!eid) return null;
+  const tbUnified = unifiedEntityIdFromTrackB(eid);
+  const invs = await db
+    .select({
+      id: rentInvoices.id,
+      invoiceNo: rentInvoices.invoiceNo,
+      status: rentInvoices.status,
+      totalAmount: rentInvoices.totalAmount,
+    })
+    .from(rentInvoices)
+    .where(
+      and(
+        or(eq(rentInvoices.entityId, eid), eq(rentInvoices.tenantLicenceId, tbUnified)),
+        inArray(rentInvoices.status, [...OPEN_INVOICE_STATUSES]),
+      ),
+    );
+  if (invs.length === 0) return null;
+
+  const invoiceIds = invs.map((i) => i.id);
+  const recs = await db
+    .select()
+    .from(iomsReceipts)
+    .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
+  const paidByInvoice = paidPrincipalByInvoice(recs);
+
+  const covered: string[] = [];
+  for (const inv of invs) {
+    const total = Number(inv.totalAmount ?? 0);
+    const paid = Number(paidByInvoice[inv.id] ?? 0);
+    if (total > 0.005 && paid >= total - 0.01) {
+      const no = String(inv.invoiceNo ?? inv.id).trim();
+      const paidRec = recs.find(
+        (r) =>
+          String(r.sourceRecordId) === inv.id &&
+          (String(r.status) === "Paid" || String(r.status) === "Reconciled"),
+      );
+      const receiptBit = paidRec?.receiptNo ? ` (receipt ${paidRec.receiptNo})` : "";
+      covered.push(`${no}${receiptBit}`);
+    }
+  }
+  if (covered.length === 0) return null;
+  return (
+    `M-03 invoice(s) ${covered.join(", ")} are fully covered by Paid counter receipt(s), so outstanding is ₹0. ` +
+    `Nothing further is due at the counter. If payment was recorded in error, reverse the receipt first.`
+  );
 }

@@ -15,7 +15,7 @@ import { stringifyM03CombinedBundleBreakdown } from "@shared/rent-combined-invoi
 import { splitM03RentPaymentGst } from "@shared/m03-receipt-breakdown";
 import { db } from "./db";
 import { allocateRentCombinedInvoiceNoInTx } from "./rent-invoice-number";
-import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
+import { resolveRentInvoiceCounterparty, resolveRentInvoiceTenantNames } from "./rent-invoice-payer";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { applyM03ReceiptToRentDepositLedgerWhenSettled, maybeMarkM03InvoicePaidFromSettledReceipts } from "./receipt-deposit-service";
 import { counterPaymentCreateParams, counterPaymentPaidUpdate, type ParsedCounterDuesPayment } from "./dues-counter-payment";
@@ -47,6 +47,8 @@ export type CombinedRentInvoiceDetail = {
   bundleInvoiceNo: string;
   yardId: string;
   tenantLicenceId: string;
+  /** Trader firm / Track B entity / ad-hoc name for list & detail UI. */
+  tenantName: string | null;
   unifiedEntityId: string | null;
   periodMonth: string;
   invoiceDate: string;
@@ -189,11 +191,20 @@ export async function getCombinedRentInvoice(id: string): Promise<CombinedRentIn
     };
   });
 
+  const nameById = await resolveRentInvoiceTenantNames([
+    {
+      id: bundle.id,
+      tenantLicenceId: bundle.tenantLicenceId,
+      entityId: childrenRows[0]?.entityId ?? null,
+    },
+  ]);
+
   return {
     id: bundle.id,
     bundleInvoiceNo: bundle.bundleInvoiceNo,
     yardId: bundle.yardId,
     tenantLicenceId: bundle.tenantLicenceId,
+    tenantName: nameById[bundle.id] ?? null,
     unifiedEntityId: bundle.unifiedEntityId ?? null,
     periodMonth: bundle.periodMonth,
     invoiceDate: bundle.invoiceDate,

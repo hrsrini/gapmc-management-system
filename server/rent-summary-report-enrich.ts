@@ -3,7 +3,7 @@
  */
 import { inArray, or } from "drizzle-orm";
 import { db } from "./db";
-import { assets, entities, rentInvoices, traderLicences, yards } from "@shared/db-schema";
+import { assets, entities, rentInvoices, traderLicences, yards, adHocEntities } from "@shared/db-schema";
 import type { InferSelectModel } from "drizzle-orm";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 
@@ -46,12 +46,14 @@ export async function enrichRentSummaryRows(
 
   const traderIds = new Set<string>();
   const entityIds = new Set<string>();
+  const adHocIds = new Set<string>();
   for (const r of rows) {
     const tl = String(r.tenantLicenceId ?? "").trim();
     const parsed = parseUnifiedEntityId(tl);
     if (parsed?.kind === "TB") entityIds.add(parsed.refId);
     else if (parsed?.kind === "TA") traderIds.add(parsed.refId);
-    else if (tl && !tl.startsWith("TB:")) traderIds.add(tl);
+    else if (parsed?.kind === "AH") adHocIds.add(parsed.refId);
+    else if (tl && !tl.startsWith("TB:") && !tl.startsWith("AH:")) traderIds.add(tl);
     const eid = r.entityId != null ? String(r.entityId).trim() : "";
     if (eid) entityIds.add(eid);
   }
@@ -78,6 +80,17 @@ export async function enrichRentSummaryRows(
     }
   }
 
+  const nameByAdHocId = new Map<string, string>();
+  if (adHocIds.size > 0) {
+    const ahRows = await db
+      .select({ id: adHocEntities.id, name: adHocEntities.name })
+      .from(adHocEntities)
+      .where(inArray(adHocEntities.id, Array.from(adHocIds)));
+    for (const a of ahRows) {
+      nameByAdHocId.set(a.id, String(a.name ?? "").trim() || a.id);
+    }
+  }
+
   return rows.map((r) => {
     const pk = String(r.assetId ?? "").trim();
     const premisesId = premisesByPk.get(pk) ?? pk;
@@ -93,6 +106,8 @@ export async function enrichRentSummaryRows(
         tl;
     } else if (parsed?.kind === "TA") {
       occupantName = firmByTraderId.get(parsed.refId) ?? tl;
+    } else if (parsed?.kind === "AH") {
+      occupantName = nameByAdHocId.get(parsed.refId) ?? tl;
     } else if (tl.startsWith("TB:")) {
       const ref = tl.slice(3);
       occupantName = nameByEntityId.get(ref) ?? tl;

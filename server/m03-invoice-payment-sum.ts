@@ -82,3 +82,69 @@ export async function settledPrincipalPaidForInvoice(
   const m = await sumAllPaidForInvoiceIds([invoiceId], opts);
   return Math.round((m.get(invoiceId) ?? 0) * 100) / 100;
 }
+
+/**
+ * Principal collected at counter (Paid / Reconciled), including cash/cheque still Undeposited.
+ * Used for invoice "Paid" status and Outstanding dues (tenant no longer owes).
+ * Bank deposit settlement uses {@link settledPrincipalPaidForInvoice} instead.
+ */
+export async function collectedPrincipalPaidForInvoice(
+  invoiceId: string,
+  opts?: { excludeReceiptId?: string },
+): Promise<number> {
+  const invoiceIds = [invoiceId];
+  const recs = await db
+    .select({
+      id: iomsReceipts.id,
+      sourceRecordId: iomsReceipts.sourceRecordId,
+      totalAmount: iomsReceipts.totalAmount,
+      status: iomsReceipts.status,
+      revenueHead: iomsReceipts.revenueHead,
+      sourceModule: iomsReceipts.sourceModule,
+      m03BreakdownJson: iomsReceipts.m03BreakdownJson,
+    })
+    .from(iomsReceipts)
+    .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
+
+  let sum = 0;
+  for (const r of recs) {
+    if (opts?.excludeReceiptId && r.id === opts.excludeReceiptId) continue;
+    const st = String(r.status ?? "");
+    if (st !== "Paid" && st !== "Reconciled") continue;
+    sum += m03ReceiptPrincipalTowardInvoice(r);
+  }
+
+  const allocPaid = await sumPaidByInvoiceIdsViaAllocationsCollected(invoiceIds, opts);
+  sum += allocPaid.get(invoiceId) ?? 0;
+  return Math.round(sum * 100) / 100;
+}
+
+/** Allocation sums for collected (Paid) receipts — deposit status ignored. */
+async function sumPaidByInvoiceIdsViaAllocationsCollected(
+  invoiceIds: string[],
+  opts?: { excludeReceiptId?: string },
+): Promise<Map<string, number>> {
+  const m = new Map<string, number>();
+  if (invoiceIds.length === 0) return m;
+  const conditions = [inArray(rentInvoicePaymentAllocations.invoiceId, invoiceIds)];
+  if (opts?.excludeReceiptId) {
+    conditions.push(not(eq(rentInvoicePaymentAllocations.receiptId, opts.excludeReceiptId)));
+  }
+  const rows = await db
+    .select({
+      invoiceId: rentInvoicePaymentAllocations.invoiceId,
+      amountInr: rentInvoicePaymentAllocations.amountInr,
+      status: iomsReceipts.status,
+    })
+    .from(rentInvoicePaymentAllocations)
+    .innerJoin(iomsReceipts, eq(rentInvoicePaymentAllocations.receiptId, iomsReceipts.id))
+    .where(and(...conditions));
+  for (const r of rows) {
+    const st = String(r.status ?? "");
+    if (st !== "Paid" && st !== "Reconciled") continue;
+    const id = String(r.invoiceId ?? "");
+    if (!id) continue;
+    m.set(id, (m.get(id) ?? 0) + Number(r.amountInr ?? 0));
+  }
+  return m;
+}

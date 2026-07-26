@@ -19,6 +19,7 @@ interface CombinedBundle {
   periodMonth: string;
   yardId: string;
   tenantLicenceId: string;
+  tenantName?: string | null;
   totalAmount: number;
   outstandingTotal: number;
   status: string;
@@ -67,6 +68,7 @@ export default function IomsRentCombinedInvoices() {
 
   const columns = useMemo((): ReportTableColumn[] => [
     { key: "_no", header: "Bundle No", sortField: "bundleInvoiceNo" },
+    { key: "tenantName", header: "Trader / Entity name", sortField: "tenantName" },
     { key: "periodMonth", header: "Billing month" },
     { key: "yardName", header: "Yard" },
     { key: "_premises", header: "Premises" },
@@ -80,6 +82,7 @@ export default function IomsRentCombinedInvoices() {
     return (list ?? []).map((b) => ({
       id: b.id,
       bundleInvoiceNo: b.bundleInvoiceNo,
+      tenantName: b.tenantName?.trim() || "—",
       periodMonth: b.periodMonth,
       yardName: yardById[b.yardId] ?? b.yardId,
       totalAmount: b.totalAmount,
@@ -143,6 +146,7 @@ export default function IomsRentCombinedInvoices() {
             <ClientDataGrid
               columns={columns}
               sourceRows={rows}
+              searchKeys={["bundleInvoiceNo", "tenantName", "periodMonth", "yardName", "status"]}
               defaultSortKey="bundleInvoiceNo"
               defaultSortDir="desc"
             />

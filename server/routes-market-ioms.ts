@@ -13,6 +13,8 @@ import {
   marketFeeRates,
   farmers,
   purchaseTransactions,
+  marketTransactions,
+  marketTransactionCommodities,
   marketMonthlyReturns,
   marketMonthlyReturnLines,
   checkPostInward,
@@ -217,7 +219,22 @@ export function registerMarketIomsRoutes(app: Express) {
     return Array.from(byPeriod.values()).sort((a, b) => b.period.localeCompare(a.period));
   }
 
-  /** Cumulative market fee for the month from Approved purchases + Verified checkpost inward. */
+  /**
+   * Finalized wizard rows that count as stock purchases for a licence:
+   * A/B/F/G → trader_licence_id; D → receiver (destination) trader.
+   * Transit (E) and unregistered (C) are excluded.
+   */
+  function wizardPurchaseTraderMatch(traderLicenceId: string) {
+    return or(
+      and(
+        inArray(marketTransactions.caseType, ["A", "B", "F", "G"]),
+        eq(marketTransactions.traderLicenceId, traderLicenceId),
+      ),
+      and(eq(marketTransactions.caseType, "D"), eq(marketTransactions.receiverTraderLicenceId, traderLicenceId)),
+    );
+  }
+
+  /** Cumulative market fee for the month from Approved purchases + Finalized wizard + Verified checkpost inward. */
   async function computeReturnMarketFeeForPeriod(args: {
     traderLicenceId: string;
     period: string;
@@ -236,6 +253,18 @@ export function registerMarketIomsRoutes(app: Express) {
           lt(purchaseTransactions.transactionDate, to),
         ),
       );
+    const [wizardRow] = await db
+      .select({ sumFee: sql<number>`coalesce(sum(${marketTransactionCommodities.marketFeeAmount}), 0)` })
+      .from(marketTransactionCommodities)
+      .innerJoin(marketTransactions, eq(marketTransactionCommodities.transactionId, marketTransactions.id))
+      .where(
+        and(
+          eq(marketTransactions.status, "Finalized"),
+          gte(marketTransactions.transactionDate, from),
+          lt(marketTransactions.transactionDate, to),
+          wizardPurchaseTraderMatch(traderLicenceId),
+        ),
+      );
     const [inwardRow] = await db
       .select({ sumFee: sql<number>`coalesce(sum(${checkPostInwardCommodities.marketFeeAmount}), 0)` })
       .from(checkPostInwardCommodities)
@@ -249,7 +278,9 @@ export function registerMarketIomsRoutes(app: Express) {
         ),
       );
     const fromTransactions =
-      (Number(purchaseRow?.sumFee ?? 0) || 0) + (Number(inwardRow?.sumFee ?? 0) || 0);
+      (Number(purchaseRow?.sumFee ?? 0) || 0) +
+      (Number(wizardRow?.sumFee ?? 0) || 0) +
+      (Number(inwardRow?.sumFee ?? 0) || 0);
     if (fromTransactions > 0) return Math.round(fromTransactions * 100) / 100;
     if (totalPurchaseValueInr > 0) return Number(((totalPurchaseValueInr * 1) / 100).toFixed(2));
     return 0;
@@ -309,7 +340,7 @@ export function registerMarketIomsRoutes(app: Express) {
     const { traderLicenceId, period } = args;
     const { from, to } = monthToRange(period);
 
-    // Aggregate from Approved yard transactions (purchase_transactions).
+    // Aggregate from Approved yard transactions (legacy purchase_transactions).
     const purchaseAgg = await db
       .select({
         commodityId: purchaseTransactions.commodityId,
@@ -326,6 +357,25 @@ export function registerMarketIomsRoutes(app: Express) {
         ),
       )
       .groupBy(purchaseTransactions.commodityId);
+
+    // Aggregate from Finalized wizard transactions (cases A–G counter entries).
+    const wizardAgg = await db
+      .select({
+        commodityId: marketTransactionCommodities.commodityId,
+        purchaseQty: sql<number>`sum(${marketTransactionCommodities.quantity})`,
+        purchaseValueInr: sql<number>`sum(${marketTransactionCommodities.commodityValue})`,
+      })
+      .from(marketTransactionCommodities)
+      .innerJoin(marketTransactions, eq(marketTransactionCommodities.transactionId, marketTransactions.id))
+      .where(
+        and(
+          eq(marketTransactions.status, "Finalized"),
+          gte(marketTransactions.transactionDate, from),
+          lt(marketTransactions.transactionDate, to),
+          wizardPurchaseTraderMatch(traderLicenceId),
+        ),
+      )
+      .groupBy(marketTransactionCommodities.commodityId);
 
     // Aggregate from Verified checkpost inward commodity lines (qty/value).
     const inwardAgg = await db
@@ -347,21 +397,21 @@ export function registerMarketIomsRoutes(app: Express) {
       .groupBy(checkPostInwardCommodities.commodityId);
 
     const merged = new Map<string, { qty: number; val: number }>();
-    for (const r of purchaseAgg) {
-      const k = String(r.commodityId);
-      merged.set(k, {
-        qty: Number(r.purchaseQty ?? 0) || 0,
-        val: Number(r.purchaseValueInr ?? 0) || 0,
-      });
-    }
-    for (const r of inwardAgg) {
-      const k = String(r.commodityId);
-      const prev = merged.get(k) ?? { qty: 0, val: 0 };
-      merged.set(k, {
-        qty: prev.qty + (Number(r.purchaseQty ?? 0) || 0),
-        val: prev.val + (Number(r.purchaseValueInr ?? 0) || 0),
-      });
-    }
+    const addAgg = (
+      rows: Array<{ commodityId: string; purchaseQty: number | null; purchaseValueInr: number | null }>,
+    ) => {
+      for (const r of rows) {
+        const k = String(r.commodityId);
+        const prev = merged.get(k) ?? { qty: 0, val: 0 };
+        merged.set(k, {
+          qty: prev.qty + (Number(r.purchaseQty ?? 0) || 0),
+          val: prev.val + (Number(r.purchaseValueInr ?? 0) || 0),
+        });
+      }
+    };
+    addAgg(purchaseAgg);
+    addAgg(wizardAgg);
+    addAgg(inwardAgg);
 
     // Opening balances: take latest submitted/approved return prior to this period.
     let prior: Array<{ period: string; commodityId: string; closingQty: number | null }> = [];

@@ -26,6 +26,8 @@ interface RentInvoice {
   status: string;
   isGovtEntity?: boolean;
   combinedBundleId?: string | null;
+  /** Trader firm name (Track A) or entity name (Track B / ad-hoc). */
+  tenantName?: string | null;
 }
 interface AssetRef {
   id: string;
@@ -184,6 +186,7 @@ export default function IomsRentInvoices() {
   const invoiceColumns = useMemo((): ReportTableColumn[] => {
     const base: ReportTableColumn[] = [
       { key: "_invoiceNo", header: "Invoice No", sortField: "invoiceNoSort" },
+      { key: "tenantName", header: "Trader / Entity name", sortField: "tenantName" },
       { key: "periodMonth", header: "Period" },
       { key: "assetLabel", header: "Asset" },
       { key: "yardName", header: "Yard" },
@@ -204,6 +207,7 @@ export default function IomsRentInvoices() {
           {r.invoiceNo ?? r.id}
         </Link>
       ),
+      tenantName: r.tenantName?.trim() || "—",
       periodMonth: r.periodMonth,
       assetLabel: assetLabelById[r.assetId] ?? r.assetId,
       yardName: yardById[r.yardId] ?? r.yardId,
@@ -447,7 +451,7 @@ export default function IomsRentInvoices() {
             <ClientDataGrid
               columns={invoiceColumns}
               sourceRows={invoiceRows}
-              searchKeys={["invoiceNoSort", "periodMonth", "assetLabel", "yardName", "_rent", "_total", "status"]}
+              searchKeys={["invoiceNoSort", "tenantName", "periodMonth", "assetLabel", "yardName", "_rent", "_total", "status"]}
               defaultSortKey="periodMonth"
               defaultSortDir="desc"
               emptyMessage="No IOMS rent invoices. Existing invoices are under Rent & Tax."

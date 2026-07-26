@@ -325,10 +325,10 @@ export function registerReportsRoutes(app: Express) {
       if (format === "csv") {
         const headers = [
           "Invoice No.",
+          "Trader / Entity name",
           "Period (Month)",
           "Yard Name",
           "Premises ID",
-          "Occupant Name",
           "Rent (₹)",
           "SGST (₹)",
           "CGST (₹)",
@@ -337,10 +337,10 @@ export function registerReportsRoutes(app: Express) {
         ];
         const rows = enrichedList.map((r) => [
           r.invoiceNo ?? r.id,
+          r.occupantName,
           r.periodMonth,
           r.yardName,
           r.premisesId,
-          r.occupantName,
           r.rentAmount,
           r.sgst,
           r.cgst,

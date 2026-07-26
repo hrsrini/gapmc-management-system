@@ -20,11 +20,13 @@ interface CreditNote {
 interface RentInvoiceRef {
   id: string;
   invoiceNo?: string | null;
+  tenantName?: string | null;
 }
 
 const columns: ReportTableColumn[] = [
   { key: "creditNoteNo", header: "Credit Note No" },
   { key: "invoiceLabel", header: "Invoice" },
+  { key: "tenantName", header: "Trader / Entity name", sortField: "tenantName" },
   { key: "reason", header: "Reason" },
   { key: "amount", header: "Amount" },
   { key: "_status", header: "Status", sortField: "status" },
@@ -37,19 +39,26 @@ export default function IomsCreditNotes() {
   const { data: invoices = [] } = useQuery<RentInvoiceRef[]>({
     queryKey: ["/api/ioms/rent/invoices"],
   });
-  const invoiceLabelById = Object.fromEntries(invoices.map((i) => [i.id, i.invoiceNo ?? i.id]));
+  const invoiceById = useMemo(
+    () => Object.fromEntries(invoices.map((i) => [i.id, i])),
+    [invoices],
+  );
 
   const sourceRows = useMemo((): Record<string, unknown>[] => {
-    return (list ?? []).map((c) => ({
-      id: c.id,
-      creditNoteNo: c.creditNoteNo,
-      invoiceLabel: invoiceLabelById[c.invoiceId] ?? c.invoiceId,
-      reason: c.reason,
-      amount: c.amount,
-      status: c.status,
-      _status: <Badge variant="secondary">{c.status}</Badge>,
-    }));
-  }, [list, invoiceLabelById]);
+    return (list ?? []).map((c) => {
+      const inv = invoiceById[c.invoiceId];
+      return {
+        id: c.id,
+        creditNoteNo: c.creditNoteNo,
+        invoiceLabel: inv?.invoiceNo ?? c.invoiceId,
+        tenantName: inv?.tenantName?.trim() || "—",
+        reason: c.reason,
+        amount: c.amount,
+        status: c.status,
+        _status: <Badge variant="secondary">{c.status}</Badge>,
+      };
+    });
+  }, [list, invoiceById]);
 
   if (isError) {
     return (
@@ -81,7 +90,7 @@ export default function IomsCreditNotes() {
             <ClientDataGrid
               columns={columns}
               sourceRows={sourceRows}
-              searchKeys={["creditNoteNo", "invoiceLabel", "reason", "status"]}
+              searchKeys={["creditNoteNo", "invoiceLabel", "tenantName", "reason", "status"]}
               defaultSortKey="creditNoteNo"
               defaultSortDir="desc"
               emptyMessage="No credit notes."

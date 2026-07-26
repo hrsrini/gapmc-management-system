@@ -15,7 +15,6 @@ import {
 } from "@shared/db-schema";
 import {
   daysSinceIssueYmd,
-  depositStatusAllowsLedgerPosting,
   initialDepositStatusForPaymentMode,
   isPhysicalDepositPaymentMode,
   type DepositRecordStatus,
@@ -26,7 +25,7 @@ import {
   recordChequeDishonourLedgerForM03Receipt,
 } from "./rent-deposit-ledger-from-receipt";
 import { parseM03CombinedBundleBreakdown } from "@shared/rent-combined-invoice";
-import { settledPrincipalPaidForInvoice } from "./m03-invoice-payment-sum";
+import { collectedPrincipalPaidForInvoice } from "./m03-invoice-payment-sum";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -44,10 +43,16 @@ export async function setReceiptDepositStatusOnPaid(
   return depositStatus;
 }
 
+/**
+ * Post M-03 rent deposit ledger effects when a receipt is Paid/Reconciled at the counter.
+ * Tenant ledger (Collection / InterestCollection) must reflect payment immediately; bank deposit
+ * (`deposit_status`) is a separate cash-management workflow and must not block ledger visibility.
+ */
 export async function applyM03ReceiptToRentDepositLedgerWhenSettled(
   r: typeof iomsReceipts.$inferSelect,
 ): Promise<{ messages: string[] }> {
-  if (!depositStatusAllowsLedgerPosting(r.depositStatus)) {
+  const st = String(r.status ?? "");
+  if (st !== "Paid" && st !== "Reconciled") {
     return { messages: [] };
   }
   return applyM03ReceiptToRentDepositLedger(r);
@@ -56,8 +61,10 @@ export async function applyM03ReceiptToRentDepositLedgerWhenSettled(
 export async function maybeMarkM03InvoicePaidFromSettledReceipts(invoiceId: string): Promise<void> {
   const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
   if (!inv) return;
-  const paidSum = await settledPrincipalPaidForInvoice(invoiceId);
   const total = Number(inv.totalAmount ?? 0);
+  // Counter collection (Paid/Reconciled) retires the tenant due even while cash/cheque is Undeposited.
+  // Bank deposit settlement still gates ledger posting separately.
+  const paidSum = await collectedPrincipalPaidForInvoice(invoiceId);
   if (paidSum >= total - 0.01) {
     await db.update(rentInvoices).set({ status: "Paid" }).where(eq(rentInvoices.id, invoiceId));
   }
@@ -71,7 +78,7 @@ export async function revertM03InvoicePaidAfterReceiptUnsettled(
   const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
   if (!inv || String(inv.status ?? "") !== "Paid") return;
 
-  const paidSum = await settledPrincipalPaidForInvoice(invoiceId, { excludeReceiptId });
+  const paidSum = await collectedPrincipalPaidForInvoice(invoiceId, { excludeReceiptId });
 
   const total = Number(inv.totalAmount ?? 0);
   if (paidSum < total - 0.01) {
