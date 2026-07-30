@@ -263,6 +263,23 @@ async function assertPremisesYardLocation(
   return { ok: true };
 }
 
+/** Area (sq. meters): empty/null, or a non-negative number with at most two decimal places. */
+function normalizePremisesAreaSqm(
+  value: unknown,
+): { ok: true; value: string | null } | { ok: false; code: string; message: string } {
+  if (value == null) return { ok: true, value: null };
+  const t = String(value).trim();
+  if (!t) return { ok: true, value: null };
+  if (!/^\d+(\.\d{1,2})?$/.test(t)) {
+    return {
+      ok: false,
+      code: "AREA_INVALID",
+      message: "Area (sq. meters) must be numeric with up to two decimal places",
+    };
+  }
+  return { ok: true, value: t };
+}
+
 /** Canonical quantity label for a commodity (same rule as GET /api/ioms/commodities). */
 async function resolvedCommodityUnitLabel(commodityId: string): Promise<string | null> {
   const [r] = await db
@@ -3363,12 +3380,18 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!yardInScope(req, yid)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
       const yv = await assertPremisesYardLocation(yid);
       if (!yv.ok) return sendApiError(res, 400, yv.code, yv.message);
+      const premisesCode = String(body.assetId ?? "").trim();
+      if (!premisesCode) return sendApiError(res, 400, "ASSET_ID_REQUIRED", "Premises ID is required");
+      const [dupCreate] = await db.select({ id: assets.id }).from(assets).where(eq(assets.assetId, premisesCode)).limit(1);
+      if (dupCreate) return sendApiError(res, 400, "ASSET_ID_DUPLICATE", "Premises ID already exists");
+      const areaNorm = normalizePremisesAreaSqm(body.area);
+      if (!areaNorm.ok) return sendApiError(res, 400, areaNorm.code, areaNorm.message);
       const id = nanoid();
       const rawType = (body as Record<string, unknown>).assetType ?? (body as Record<string, unknown>).asset_type;
       const assetType = normalizePremisesType(rawType) ?? migrateLegacyPremisesType(String(rawType ?? "Shop"));
       await db.insert(assets).values({
         id,
-        assetId: String(body.assetId ?? ""),
+        assetId: premisesCode,
         yardId: yid,
         assetType,
         complexName: body.complexName ? String(body.complexName) : null,
@@ -3397,7 +3420,7 @@ export function registerTradersAssetsRoutes(app: Express) {
           : (body as Record<string, unknown>).consumer_id
             ? String((body as Record<string, unknown>).consumer_id).trim()
             : null,
-        area: body.area ? String(body.area) : null,
+        area: areaNorm.value,
         plinthAreaSqft: body.plinthAreaSqft != null ? Number(body.plinthAreaSqft) : null,
         value: body.value != null ? Number(body.value) : null,
         fileNumber: body.fileNumber ? String(body.fileNumber) : null,
@@ -3429,7 +3452,19 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!yvPut.ok) return sendApiError(res, 400, yvPut.code, yvPut.message);
       const raw = body as Record<string, unknown>;
       const updates: Record<string, unknown> = {};
-      if (raw.assetId !== undefined) updates.assetId = raw.assetId == null ? null : String(raw.assetId);
+      if (raw.assetId !== undefined) {
+        const premisesCode = raw.assetId == null ? "" : String(raw.assetId).trim();
+        if (!premisesCode) return sendApiError(res, 400, "ASSET_ID_REQUIRED", "Premises ID is required");
+        if (premisesCode !== existing.assetId) {
+          const [dupUpdate] = await db
+            .select({ id: assets.id })
+            .from(assets)
+            .where(and(eq(assets.assetId, premisesCode), ne(assets.id, id)))
+            .limit(1);
+          if (dupUpdate) return sendApiError(res, 400, "ASSET_ID_DUPLICATE", "Premises ID already exists");
+        }
+        updates.assetId = premisesCode;
+      }
       if (raw.yardId !== undefined) updates.yardId = String(raw.yardId);
       if (raw.assetType !== undefined || raw.asset_type !== undefined) {
         const t = normalizePremisesType(raw.assetType ?? raw.asset_type) ?? migrateLegacyPremisesType(String(raw.assetType ?? raw.asset_type ?? existing.assetType));
@@ -3460,7 +3495,11 @@ export function registerTradersAssetsRoutes(app: Express) {
         const v = raw.consumerId ?? raw.consumer_id;
         updates.consumerId = v == null || String(v).trim() === "" ? null : String(v).trim();
       }
-      if (raw.area !== undefined) updates.area = raw.area == null ? null : String(raw.area);
+      if (raw.area !== undefined) {
+        const areaNorm = normalizePremisesAreaSqm(raw.area);
+        if (!areaNorm.ok) return sendApiError(res, 400, areaNorm.code, areaNorm.message);
+        updates.area = areaNorm.value;
+      }
       if (raw.plinthAreaSqft !== undefined) updates.plinthAreaSqft = raw.plinthAreaSqft == null ? null : Number(raw.plinthAreaSqft);
       if (raw.value !== undefined) updates.value = raw.value == null ? null : Number(raw.value);
       if (raw.fileNumber !== undefined) updates.fileNumber = raw.fileNumber == null ? null : String(raw.fileNumber);

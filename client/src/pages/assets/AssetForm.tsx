@@ -51,6 +51,24 @@ interface Asset {
   premisesStatus?: string | null;
 }
 
+/** Allow digits and at most one decimal point with up to two fractional digits. */
+function sanitizeAreaSqmInput(raw: string): string {
+  let s = raw.replace(/[^\d.]/g, "");
+  const firstDot = s.indexOf(".");
+  if (firstDot !== -1) {
+    s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, "");
+    const [intPart, decPart = ""] = s.split(".");
+    s = `${intPart}.${decPart.slice(0, 2)}`;
+  }
+  return s;
+}
+
+function isValidAreaSqm(value: string): boolean {
+  const t = value.trim();
+  if (!t) return true;
+  return /^\d+(\.\d{1,2})?$/.test(t);
+}
+
 export default function AssetForm() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
@@ -101,7 +119,7 @@ export default function AssetForm() {
     setPremisesLocation(existing.premisesLocation ?? "");
     setPropertyTaxAuthority(existing.propertyTaxAuthority ?? "");
     setHouseNo(existing.houseNo ?? "");
-    setArea(existing.area ?? "");
+    setArea(sanitizeAreaSqmInput(existing.area ?? ""));
     setValue(existing.value != null ? String(existing.value) : "");
     setElectricityConnectionType(existing.electricityConnectionType ?? "");
     setContractAccountNo(existing.contractAccountNo ?? "");
@@ -187,6 +205,14 @@ export default function AssetForm() {
       toast({ title: "Validation", description: "Premises ID and Yard are required.", variant: "destructive" });
       return;
     }
+    if (!isValidAreaSqm(area)) {
+      toast({
+        title: "Validation",
+        description: "Area (sq. meters) must be numeric with up to two decimal places.",
+        variant: "destructive",
+      });
+      return;
+    }
     const payload = buildPayload();
     if (isEdit) updateMutation.mutate(payload);
     else createMutation.mutate(payload);
@@ -251,7 +277,6 @@ export default function AssetForm() {
                   onChange={(e) => setAssetId(e.target.value)}
                   placeholder="e.g. MGP/SHOP-001"
                   required
-                  disabled={isEdit}
                 />
               </div>
               <div className="space-y-2">
@@ -357,7 +382,12 @@ export default function AssetForm() {
               </div>
               <div className="space-y-2">
                 <Label>Area (sq. meters)</Label>
-                <Input value={area} onChange={(e) => setArea(e.target.value)} placeholder="Optional" />
+                <Input
+                  value={area}
+                  onChange={(e) => setArea(sanitizeAreaSqmInput(e.target.value))}
+                  inputMode="decimal"
+                  placeholder="e.g. 24.50"
+                />
               </div>
             </div>
 
