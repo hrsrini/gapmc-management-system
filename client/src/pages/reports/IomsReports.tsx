@@ -15,7 +15,12 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, Receipt, Banknote, Download, UserCircle, BarChart3, Table2, Truck, Clock } from "lucide-react";
-import { formatYearMonthToDisplay, formatYmdToDisplay, parseDisplayDateToYmd } from "@/lib/dateFormat";
+import {
+  formatYearMonthLabel,
+  formatYearMonthToDisplay,
+  formatYmdToDisplay,
+  parseDisplayDateToYmd,
+} from "@/lib/dateFormat";
 import { formatInr } from "@/lib/formatInr";
 import { finalizeEntityDisplayName } from "@shared/receipt-entity-display";
 import {
