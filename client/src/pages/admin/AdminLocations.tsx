@@ -37,6 +37,7 @@ interface Yard {
   phone?: string | null;
   mobile?: string | null;
   address?: string | null;
+  email?: string | null;
   isActive: boolean;
 }
 
@@ -60,6 +61,7 @@ export default function AdminLocations() {
   const [phone, setPhone] = useState("");
   const [mobile, setMobile] = useState("");
   const [address, setAddress] = useState("");
+  const [email, setEmail] = useState("");
   const [isActive, setIsActive] = useState(true);
 
   const openCreate = () => {
@@ -71,6 +73,7 @@ export default function AdminLocations() {
     setPhone("");
     setMobile("");
     setAddress("");
+    setEmail("");
     setIsActive(true);
     setOpen(true);
   };
@@ -84,6 +87,7 @@ export default function AdminLocations() {
     setPhone(y.phone ?? "");
     setMobile(sanitizeMobile10Input(y.mobile ?? ""));
     setAddress(y.address ?? "");
+    setEmail(y.email ?? "");
     setIsActive(y.isActive);
     setOpen(true);
   }, []);
@@ -94,6 +98,7 @@ export default function AdminLocations() {
       { key: "name", header: "Name" },
       { key: "_type", header: "Type", sortField: "type" },
       { key: "phoneDisplay", header: "Phone" },
+      { key: "_email", header: "Notify email", sortField: "email" },
       { key: "statusLabel", header: "Status", sortField: "isActive" },
     ];
     if (canUpdate) base.push({ key: "_actions", header: "" });
@@ -106,10 +111,18 @@ export default function AdminLocations() {
       code: y.code,
       name: y.name,
       type: y.type,
+      email: y.email ?? "",
       _type: (
         <Badge variant={y.type === "Yard" ? "default" : y.type === "HO" ? "outline" : "secondary"}>{y.type}</Badge>
       ),
       phoneDisplay: y.phone ?? y.mobile ?? "—",
+      _email: y.email?.trim() ? (
+        <span className="text-sm break-all">{y.email}</span>
+      ) : (
+        <Badge variant="outline" className="text-amber-700 border-amber-300">
+          Missing
+        </Badge>
+      ),
       isActive: y.isActive,
       statusLabel: y.isActive ? "Active" : "Inactive",
       _actions: canUpdate ? (
@@ -129,6 +142,7 @@ export default function AdminLocations() {
       phone: string | null;
       mobile: string | null;
       address: string | null;
+      email: string | null;
     }) => {
       const res = await fetch("/api/admin/yards", {
         method: "POST",
@@ -165,6 +179,7 @@ export default function AdminLocations() {
         phone: string | null;
         mobile: string | null;
         address: string | null;
+        email: string | null;
         isActive: boolean;
       };
     }) => {
@@ -200,6 +215,7 @@ export default function AdminLocations() {
         phone: phone.trim() || null,
         mobile: mobile.trim() || null,
         address: address.trim() || null,
+        email: email.trim() || null,
       });
       return;
     }
@@ -213,6 +229,7 @@ export default function AdminLocations() {
         phone: phone.trim() || null,
         mobile: mobile.trim() || null,
         address: address.trim() || null,
+        email: email.trim() || null,
         isActive,
       },
     });
@@ -242,7 +259,9 @@ export default function AdminLocations() {
             Locations
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            IOMS M-10: Yards and check posts. Seed with <code className="text-xs bg-muted px-1 rounded">npx tsx scripts/seed-ioms-m10.ts</code> if empty.
+            IOMS M-10: Yards and check posts. Set <span className="font-medium">Notification email</span> on each
+            location for leave Sanction Order copies. Seed with{" "}
+            <code className="text-xs bg-muted px-1 rounded">npx tsx scripts/seed-ioms-m10.ts</code> if empty.
           </p>
           {canCreate && (
             <div className="pt-2">
@@ -260,7 +279,7 @@ export default function AdminLocations() {
             <ClientDataGrid
               columns={locationColumns}
               sourceRows={locationRows}
-              searchKeys={["code", "name", "type", "phoneDisplay", "statusLabel"]}
+              searchKeys={["code", "name", "type", "phoneDisplay", "email", "statusLabel"]}
               defaultSortKey="code"
               defaultSortDir="asc"
               emptyMessage="No locations. Run the M-10 seed script."
@@ -315,6 +334,16 @@ export default function AdminLocations() {
             <div className="space-y-1">
               <Label htmlFor="loc-address">Address</Label>
               <Input id="loc-address" value={address} onChange={(e) => setAddress(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="loc-email">Notification email</Label>
+              <Input
+                id="loc-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Used for leave sanction order copies"
+              />
             </div>
             {dialogMode === "edit" ? (
               <div className="flex items-center gap-2 pt-1">

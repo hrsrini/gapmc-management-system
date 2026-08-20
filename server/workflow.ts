@@ -374,6 +374,7 @@ const LEAVE_REQUEST_FLOW: Record<string, string[]> = {
   Approved: [],
   Rejected: [],
   Cancelled: [],
+  Superseded: [],
 };
 
 export function canTransitionLeaveRequest(
@@ -664,6 +665,52 @@ export function canCreatePurchaseTransaction(user: AuthUser | undefined): boolea
 
 export function canEditDraftPurchaseTransaction(user: AuthUser | undefined): boolean {
   return hasAnyRole(user, [DO, ADMIN]);
+}
+
+// ----- M-08: Works documents (WO / bill / advance / SD release) Draft → Verified → Approved -----
+const WORKS_DOC_FLOW: Record<string, string[]> = {
+  Draft: ["Verified"],
+  Verified: ["Approved", "Draft"],
+  Approved: [],
+};
+
+export function canTransitionWorksDocument(
+  user: AuthUser | undefined,
+  currentStatus: string,
+  newStatus: string,
+): { allowed: boolean; setDvUser?: boolean; setDaUser?: boolean } {
+  if (!user) return { allowed: false };
+  if (hasRole(user, ADMIN)) {
+    return {
+      allowed: true,
+      setDvUser: newStatus === "Verified",
+      setDaUser: newStatus === "Approved",
+    };
+  }
+  const allowed = WORKS_DOC_FLOW[currentStatus];
+  if (!allowed || !allowed.includes(newStatus)) return { allowed: false };
+  if (currentStatus === "Draft" && newStatus === "Verified") {
+    return hasRole(user, DV) ? { allowed: true, setDvUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Approved") {
+    return hasRole(user, DA) ? { allowed: true, setDaUser: true } : { allowed: false };
+  }
+  if (currentStatus === "Verified" && newStatus === "Draft") {
+    return hasRole(user, DV) ? { allowed: true } : { allowed: false };
+  }
+  return { allowed: false };
+}
+
+export function canCreateWorksDocument(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, ADMIN]);
+}
+
+export function canEditDraftWorksDocument(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, ADMIN]);
+}
+
+export function canMarkWorkCompleted(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DA, ADMIN]);
 }
 
 // ----- M-04: Check post inward (Draft → Verified only; no do/dv/da columns) -----

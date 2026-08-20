@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { AlertCircle, CalendarDays, Plus, Trash2 } from "lucide-react";
+import { Link } from "wouter";
 import {
   Select,
   SelectContent,
@@ -29,9 +30,18 @@ interface BalanceRow {
   employeeId: string;
   leaveType: string;
   balanceDays: number;
+  setOffDays?: number | null;
+  setOffExpiryDate?: string | null;
 }
 
-type EditableRow = { key: string; employeeId: string; leaveType: string; balanceDays: string };
+type EditableRow = {
+  key: string;
+  employeeId: string;
+  leaveType: string;
+  balanceDays: string;
+  setOffDays: string;
+  setOffExpiryDate: string;
+};
 
 export default function HrLeaveBalances() {
   const { can } = useAuth();
@@ -54,12 +64,22 @@ export default function HrLeaveBalances() {
       employeeId: b.employeeId,
       leaveType: b.leaveType,
       balanceDays: String(b.balanceDays),
+      setOffDays: String(b.setOffDays ?? 0),
+      setOffExpiryDate: b.setOffExpiryDate ?? "",
     }));
     setRows(next);
   }, [balances]);
 
   const saveMutation = useMutation({
-    mutationFn: async (body: { rows: { employeeId: string; leaveType: string; balanceDays: number }[] }) => {
+    mutationFn: async (body: {
+      rows: {
+        employeeId: string;
+        leaveType: string;
+        balanceDays: number;
+        setOffDays?: number;
+        setOffExpiryDate?: string | null;
+      }[];
+    }) => {
       const res = await fetch("/api/hr/leave-balances", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -83,7 +103,7 @@ export default function HrLeaveBalances() {
     const first = employees[0]?.id ?? "";
     setRows((r) => [
       ...r,
-      { key: `new-${Date.now()}`, employeeId: first, leaveType: "EL", balanceDays: "0" },
+      { key: `new-${Date.now()}`, employeeId: first, leaveType: "EL", balanceDays: "0", setOffDays: "0", setOffExpiryDate: "" },
     ]);
   }
 
@@ -96,11 +116,18 @@ export default function HrLeaveBalances() {
   }
 
   function handleSave() {
-    const normalized: { employeeId: string; leaveType: string; balanceDays: number }[] = [];
+    const normalized: {
+      employeeId: string;
+      leaveType: string;
+      balanceDays: number;
+      setOffDays?: number;
+      setOffExpiryDate?: string | null;
+    }[] = [];
     for (const row of rows) {
       const employeeId = row.employeeId.trim();
       const leaveType = row.leaveType.trim();
       const balanceDays = Number(row.balanceDays);
+      const setOffDays = Number(row.setOffDays);
       if (!employeeId || !leaveType || !Number.isFinite(balanceDays) || balanceDays < 0) {
         toast({
           title: "Invalid row",
@@ -109,7 +136,17 @@ export default function HrLeaveBalances() {
         });
         return;
       }
-      normalized.push({ employeeId, leaveType, balanceDays });
+      if (!Number.isFinite(setOffDays) || setOffDays < 0) {
+        toast({ title: "Invalid row", description: "Set-off days must be ≥ 0.", variant: "destructive" });
+        return;
+      }
+      normalized.push({
+        employeeId,
+        leaveType,
+        balanceDays,
+        setOffDays,
+        setOffExpiryDate: row.setOffExpiryDate.trim() || null,
+      });
     }
     saveMutation.mutate({ rows: normalized });
   }
@@ -126,10 +163,15 @@ export default function HrLeaveBalances() {
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             Configure go-live opening balance per leave type. When a row exists for an employee and type, approving a
-            leave debits inclusive calendar days from that balance.
+            leave debits from that balance (EL uses set-off bucket first when valid).
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
+          {canUpdate && (
+            <Button type="button" variant="outline" size="sm" asChild>
+              <Link href="/hr/leave-balances/import">Bulk import JSON</Link>
+            </Button>
+          )}
           {!canUpdate && (
             <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100">
               <AlertCircle className="h-4 w-4 shrink-0" />
@@ -145,7 +187,7 @@ export default function HrLeaveBalances() {
               <div className="space-y-3">
                 {rows.map((row) => (
                   <div key={row.key} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end border-b pb-3">
-                    <div className="md:col-span-4 space-y-1">
+                    <div className="md:col-span-3 space-y-1">
                       <Label>Employee</Label>
                       <Select
                         value={row.employeeId}
@@ -164,7 +206,7 @@ export default function HrLeaveBalances() {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="md:col-span-3 space-y-1">
+                    <div className="md:col-span-2 space-y-1">
                       <Label>Leave type</Label>
                       <Input
                         value={row.leaveType}
@@ -173,7 +215,7 @@ export default function HrLeaveBalances() {
                         disabled={!canUpdate}
                       />
                     </div>
-                    <div className="md:col-span-3 space-y-1">
+                    <div className="md:col-span-2 space-y-1">
                       <Label>Balance (days)</Label>
                       <Input
                         type="number"
@@ -184,7 +226,27 @@ export default function HrLeaveBalances() {
                         disabled={!canUpdate}
                       />
                     </div>
-                    <div className="md:col-span-2 flex gap-1 justify-end">
+                    <div className="md:col-span-2 space-y-1">
+                      <Label>Set-off (EL)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={0.5}
+                        value={row.setOffDays}
+                        onChange={(e) => updateRow(row.key, { setOffDays: e.target.value })}
+                        disabled={!canUpdate}
+                      />
+                    </div>
+                    <div className="md:col-span-2 space-y-1">
+                      <Label>Set-off expiry</Label>
+                      <Input
+                        type="date"
+                        value={row.setOffExpiryDate}
+                        onChange={(e) => updateRow(row.key, { setOffExpiryDate: e.target.value })}
+                        disabled={!canUpdate}
+                      />
+                    </div>
+                    <div className="md:col-span-1 flex gap-1 justify-end">
                       <Button
                         type="button"
                         variant="outline"

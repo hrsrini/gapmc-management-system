@@ -94,11 +94,25 @@ export type ReceiptDepositOverduePayload = {
   sampleReceipts: Array<{ receiptNo: string; yardId: string; daysSinceIssue: number; totalAmount: number }>;
 };
 
+export type LeaveWorkflowPayload = {
+  kind: "leave_workflow";
+  leaveRequestId: string;
+  employeeId: string;
+  empId: string;
+  employeeName: string;
+  leaveType: string;
+  fromDate: string;
+  toDate: string;
+  status: string;
+  actorLabel?: string;
+};
+
 export type NotificationPayload =
   | SlaReminderPayload
   | RetirementReminderPayload
   | OperationalDigestPayload
   | LeaveElCapWarningPayload
+  | LeaveWorkflowPayload
   | EmployeeRegistrationPayload
   | M02EntityAlertsPayload
   | ReceiptDepositEodPayload
@@ -121,6 +135,16 @@ function payloadSummary(payload: NotificationPayload): { subject: string; text: 
     return {
       subject: `[GAPMC HR] EL cap warning: ${payload.name}`,
       text: `Employee ${payload.name} (${payload.empId}) has EL balance ${payload.balanceDays} days, above cap ${payload.capDays} (as of ${payload.date}).`,
+    };
+  }
+  if (payload.kind === "leave_workflow") {
+    const p = payload;
+    return {
+      subject: `[GAPMC HR] Leave ${p.status}: ${p.employeeName} (${p.leaveType})`,
+      text:
+        `Leave request ${p.leaveRequestId} for ${p.employeeName} (${p.empId})\n` +
+        `Type: ${p.leaveType} | ${p.fromDate} to ${p.toDate}\n` +
+        `Status: ${p.status}${p.actorLabel ? `\nActor: ${p.actorLabel}` : ""}`,
     };
   }
   if (payload.kind === "employee_registration") {
@@ -254,7 +278,12 @@ export function sendNotificationStub(payload: NotificationPayload): void {
  * Send one email to an arbitrary recipient (e.g. employee) when SMTP is configured.
  * US-M10-001: provisioning notice to the employee sign-in address. Failures are logged only.
  */
-export async function sendTransactionalEmailTo(to: string, subject: string, text: string): Promise<void> {
+export async function sendTransactionalEmailTo(
+  to: string,
+  subject: string,
+  text: string,
+  attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>,
+): Promise<void> {
   const recipient = to.trim();
   if (!recipient) {
     console.log(`[NOTIFY] skip transactional email (empty to): ${subject}`);
@@ -268,7 +297,7 @@ export async function sendTransactionalEmailTo(to: string, subject: string, text
       );
       return;
     }
-    await sendSmtpMail({ to: recipient, subject, text });
+    await sendSmtpMail({ to: recipient, subject, text, attachments });
     console.log(`[NOTIFY] transactional email sent to ${recipient}: ${subject}`);
   } catch (e) {
     console.error("[NOTIFY] transactional SMTP failed:", e);

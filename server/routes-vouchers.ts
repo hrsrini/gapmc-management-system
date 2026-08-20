@@ -501,6 +501,15 @@ export function registerVoucherRoutes(app: Express) {
         sourceModule: body.sourceModule ? String(body.sourceModule) : null,
         sourceRecordId: body.sourceRecordId ? String(body.sourceRecordId) : null,
         supportingDocs: Array.isArray(body.supportingDocs) ? body.supportingDocs : null,
+        tdsApplicable: body.tdsApplicable === true || body.tdsApplicable === "true",
+        tdsSection: body.tdsSection ? String(body.tdsSection) : null,
+        tdsRatePercent: body.tdsRatePercent != null && body.tdsRatePercent !== "" ? Number(body.tdsRatePercent) : null,
+        tdsApplicableAmount:
+          body.tdsApplicableAmount != null && body.tdsApplicableAmount !== ""
+            ? Number(body.tdsApplicableAmount)
+            : null,
+        tdsAmount: body.tdsAmount != null && body.tdsAmount !== "" ? Number(body.tdsAmount) : 0,
+        netPayable: body.netPayable != null && body.netPayable !== "" ? Number(body.netPayable) : null,
         doUser: req.user?.id ?? null,
         dvUser: null,
         daUser: null,
@@ -576,15 +585,48 @@ export function registerVoucherRoutes(app: Express) {
       }
 
       const updates: Record<string, unknown> = {};
-      ["voucherNo", "voucherType", "yardId", "expenditureHeadId", "payeeName", "payeeAccount", "payeeBank", "amount", "description", "sourceModule", "sourceRecordId", "status", "doUser", "dvUser", "daUser", "paidAt", "paymentRef"].forEach((k) => {
+      ["voucherNo", "voucherType", "yardId", "expenditureHeadId", "payeeName", "payeeAccount", "payeeBank", "amount", "description", "sourceModule", "sourceRecordId", "status", "doUser", "dvUser", "daUser", "paidAt", "paymentRef", "paymentMode", "tdsSection"].forEach((k) => {
         if (body[k] === undefined) return;
         if (k === "amount") updates.amount = Number(body.amount);
         else if (k === "supportingDocs") updates.supportingDocs = Array.isArray(body.supportingDocs) ? body.supportingDocs : null;
         else updates[k] = body[k] == null ? null : String(body[k]);
       });
+      if (body.tdsApplicable !== undefined) {
+        updates.tdsApplicable = body.tdsApplicable === true || body.tdsApplicable === "true";
+      }
+      if (body.tdsRatePercent !== undefined) {
+        updates.tdsRatePercent = body.tdsRatePercent == null || body.tdsRatePercent === "" ? null : Number(body.tdsRatePercent);
+      }
+      if (body.tdsApplicableAmount !== undefined) {
+        updates.tdsApplicableAmount =
+          body.tdsApplicableAmount == null || body.tdsApplicableAmount === ""
+            ? null
+            : Number(body.tdsApplicableAmount);
+      }
+      if (body.tdsAmount !== undefined) {
+        updates.tdsAmount = body.tdsAmount == null || body.tdsAmount === "" ? 0 : Number(body.tdsAmount);
+      }
+      if (body.netPayable !== undefined) {
+        updates.netPayable = body.netPayable == null || body.netPayable === "" ? null : Number(body.netPayable);
+      }
       if (transition?.setDvUser) updates.dvUser = req.user?.id ?? null;
       if (transition?.setDaUser) updates.daUser = req.user?.id ?? null;
-      if (newStatus === "Paid") updates.paidAt = now();
+      if (newStatus === "Paid") {
+        const mode = String(body.paymentMode ?? existing.paymentMode ?? "").trim();
+        if (!["Cash", "Cheque", "DD", "Online"].includes(mode)) {
+          return sendApiError(
+            res,
+            400,
+            "VOUCHER_PAYMENT_MODE_REQUIRED",
+            "Payment mode is required when marking Paid (Cash / Cheque / DD / Online)",
+          );
+        }
+        updates.paymentMode = mode;
+        updates.paidAt = now();
+        if (body.paymentRef !== undefined) {
+          updates.paymentRef = body.paymentRef == null || body.paymentRef === "" ? null : String(body.paymentRef);
+        }
+      }
 
       if (rejectionPayload) {
         updates.rejectionReasonCode = rejectionPayload.code;
@@ -602,6 +644,14 @@ export function registerVoucherRoutes(app: Express) {
       await db.update(paymentVouchers).set(updates as Record<string, unknown>).where(eq(paymentVouchers.id, id));
       const [row] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, id));
       if (!row) return sendApiError(res, 404, "VOUCHER_NOT_FOUND", "Not found");
+      if (statusChange && newStatus === "Approved") {
+        try {
+          const { lockWorksBillsForApprovedVoucher } = await import("./works-payment-lock");
+          await lockWorksBillsForApprovedVoucher(id);
+        } catch (lockErr) {
+          console.error("Works bill lock after voucher approve failed:", lockErr);
+        }
+      }
       writeAuditLog(req, { module: "Vouchers", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
       res.json(row);
     } catch (e) {

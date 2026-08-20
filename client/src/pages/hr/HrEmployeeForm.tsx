@@ -79,6 +79,8 @@ interface Employee {
   emergencyContactName?: string | null;
   emergencyContactMobile?: string | null;
   reportingOfficerEmployeeId?: string | null;
+  serviceBookNo?: string | null;
+  section?: string | null;
   locationPosted?: string | null;
   payLevel?: number | null;
   bankAccountNumber?: string | null;
@@ -150,6 +152,8 @@ export default function HrEmployeeForm() {
   const [emergencyContactName, setEmergencyContactName] = useState("");
   const [emergencyContactMobile, setEmergencyContactMobile] = useState("");
   const [reportingOfficerEmployeeId, setReportingOfficerEmployeeId] = useState("");
+  const [serviceBookNo, setServiceBookNo] = useState("");
+  const [section, setSection] = useState("");
   const [locationPosted, setLocationPosted] = useState("");
   const [payLevel, setPayLevel] = useState<string>("");
   const [bankAccountNumber, setBankAccountNumber] = useState("");
@@ -217,6 +221,8 @@ export default function HrEmployeeForm() {
       setEmergencyContactName(employee.emergencyContactName ?? "");
       setEmergencyContactMobile(sanitizeMobile10Input(employee.emergencyContactMobile ?? ""));
       setReportingOfficerEmployeeId(employee.reportingOfficerEmployeeId ?? "");
+      setServiceBookNo(employee.serviceBookNo ?? "");
+      setSection(employee.section ?? "");
       setLocationPosted(employee.locationPosted ?? "");
       setPayLevel(employee.payLevel != null && !Number.isNaN(Number(employee.payLevel)) ? String(employee.payLevel) : "");
       setBankAccountNumber(employee.bankAccountNumber ?? "");
@@ -488,6 +494,8 @@ export default function HrEmployeeForm() {
       emergencyContactName: emergencyContactName.trim() || null,
       emergencyContactMobile: emMobile,
       reportingOfficerEmployeeId: reportingOfficerEmployeeId.trim() || null,
+      serviceBookNo: serviceBookNo.trim() || null,
+      section: section.trim() || null,
       locationPosted: locationPosted.trim() || null,
       payLevel: payLevel ? parseInt(payLevel, 10) : null,
       bankAccountNumber: bankDigits || null,
@@ -1043,6 +1051,19 @@ export default function HrEmployeeForm() {
                               {(e.empId ?? e.id) + " — " + e.firstName + " " + e.surname}
                             </SelectItem>
                           ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div><Label>Service Book No.</Label><Input value={serviceBookNo} onChange={(e) => setServiceBookNo(e.target.value)} placeholder="e.g. 386" /></div>
+                  <div>
+                    <Label>Section (HO employees)</Label>
+                    <Select value={section || "__none__"} onValueChange={(v) => setSection(v === "__none__" ? "" : v)}>
+                      <SelectTrigger><SelectValue placeholder="N/A" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">N/A</SelectItem>
+                        <SelectItem value="Accounts Section">Accounts Section</SelectItem>
+                        <SelectItem value="Admin Section">Admin Section</SelectItem>
+                        <SelectItem value="Inspection Section">Inspection Section</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

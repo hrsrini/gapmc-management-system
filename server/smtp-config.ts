@@ -106,6 +106,7 @@ export async function sendSmtpMail(opts: {
   to: string;
   subject: string;
   text: string;
+  attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
 }): Promise<void> {
   const settings = await resolveSmtpSettings();
   const transporter = await createSmtpTransporter();
@@ -118,6 +119,11 @@ export async function sendSmtpMail(opts: {
     to,
     subject: opts.subject,
     text: opts.text,
+    attachments: opts.attachments?.map((a) => ({
+      filename: a.filename,
+      content: a.content,
+      contentType: a.contentType,
+    })),
   });
 }
 

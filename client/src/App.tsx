@@ -53,6 +53,8 @@ import HrDesignationMaster from "@/pages/hr/HrDesignationMaster";
 import LeaveRequests from "@/pages/hr/LeaveRequests";
 import HrClaims from "@/pages/hr/HrClaims";
 import HrLeaveBalances from "@/pages/hr/HrLeaveBalances";
+import HrLeaveBalanceImport from "@/pages/hr/HrLeaveBalanceImport";
+import HrHolidayCalendar from "@/pages/hr/HrHolidayCalendar";
 import Entities from "@/pages/traders/Entities";
 import EntityDetail from "@/pages/traders/EntityDetail";
 import PreReceipts from "@/pages/traders/PreReceipts";
@@ -108,6 +110,8 @@ import WorkDetail from "@/pages/construction/WorkDetail";
 import ConstructionAmc from "@/pages/construction/ConstructionAmc";
 import ConstructionLandRecords from "@/pages/construction/ConstructionLandRecords";
 import ConstructionFixedAssets from "@/pages/construction/ConstructionFixedAssets";
+import ConstructionVendors from "@/pages/construction/ConstructionVendors";
+import ConstructionTdsReport from "@/pages/construction/ConstructionTdsReport";
 import DakInward from "@/pages/correspondence/DakInward";
 import DakMyPending from "@/pages/correspondence/DakMyPending";
 import DakEscalations from "@/pages/correspondence/DakEscalations";
@@ -321,6 +325,12 @@ function Router() {
       <Route path="/construction/works/:id">
         <ProtectedRoute><WorkDetail /></ProtectedRoute>
       </Route>
+      <Route path="/construction/vendors">
+        <ProtectedRoute><ConstructionVendors /></ProtectedRoute>
+      </Route>
+      <Route path="/construction/tds-report">
+        <ProtectedRoute><ConstructionTdsReport /></ProtectedRoute>
+      </Route>
       <Route path="/construction/amc">
         <ProtectedRoute><ConstructionAmc /></ProtectedRoute>
       </Route>
@@ -489,6 +499,20 @@ function Router() {
         <ProtectedRoute>
           <RequirePermission module="M-01" action="Read">
             <HrLeaveBalances />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/hr/leave-balances/import">
+        <ProtectedRoute>
+          <RequirePermission module="M-01" action="Update">
+            <HrLeaveBalanceImport />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/hr/holiday-calendar">
+        <ProtectedRoute>
+          <RequirePermission module="M-01" action="Read">
+            <HrHolidayCalendar />
           </RequirePermission>
         </ProtectedRoute>
       </Route>

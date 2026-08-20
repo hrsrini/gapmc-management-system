@@ -19,6 +19,8 @@ import {
   serviceBookEntries,
   leaveRequests,
   employeeLeaveBalances,
+  hrHolidays,
+  leaveOrderSequence,
   tourProgrammes,
   ltcClaims,
   taDaClaims,
@@ -89,6 +91,17 @@ import {
 } from "./hr-employee-rules";
 import { aadhaarFingerprintHmac, maskAadhaar, readAadhaarRawFromRequestBody } from "./aadhaar-fingerprint";
 import { inclusiveCalendarDays } from "./hr-leave-utils";
+import { calculatePrefixSuffix, calculateDebitDays, validateRhDate } from "./hr-leave-prefix-suffix";
+import { debitLeaveBalanceOnApproval, creditLeaveBalanceOnReversal, balanceLeaveTypeFor } from "./hr-leave-balance-debit";
+import {
+  validateLeaveDurationCaps,
+  validateCclLifetimeCap,
+  assertSufficientBalanceForApproval,
+} from "./hr-leave-validation";
+import { emailSanctionOrderPdf } from "./hr-leave-sanction-email";
+import type { AuthUser } from "./auth";
+import { extFromPdfUpload } from "./upload-pdf-mime";
+import { assertSafeUploadRelativeKey, getUploadBlobStore } from "./object-storage";
 import {
   resolveDesignationForEmployeeUpsert,
   countEmployeesUsingDesignation,
@@ -125,6 +138,120 @@ const OFFICIAL_EMP_ID_RE = /^EMP-\d{3}$/i;
 function hasOfficialEmpId(empId: string | null | undefined): boolean {
   if (empId == null || String(empId).trim() === "") return false;
   return OFFICIAL_EMP_ID_RE.test(String(empId).trim());
+}
+
+function userCanSeeAllLeaveRequests(user: AuthUser | undefined): boolean {
+  return Boolean(user?.roles?.some((r) => ["ADMIN", "DV", "DA"].includes(String(r.tier))));
+}
+
+function requireLeaveRead(req: Request, res: Response): boolean {
+  if (!req.user) {
+    sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+    return false;
+  }
+  if (!hasPermission(req.user, "M-01", "Read")) {
+    sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-01 Read required", { required: "M-01:Read" });
+    return false;
+  }
+  return true;
+}
+
+function sanctionOrderBlobKey(leaveRequestId: string): string {
+  return assertSafeUploadRelativeKey(`leaves/sanction-orders/${leaveRequestId}.pdf`);
+}
+
+async function notifyLeaveStatusChange(
+  leaveRow: { id: string; employeeId: string; leaveType: string; fromDate: string; toDate: string; status: string },
+  actorLabel?: string,
+): Promise<void> {
+  const [emp] = await db.select().from(employees).where(eq(employees.id, leaveRow.employeeId)).limit(1);
+  if (!emp) return;
+  sendNotificationStub({
+    kind: "leave_workflow",
+    leaveRequestId: leaveRow.id,
+    employeeId: leaveRow.employeeId,
+    empId: emp.empId ?? emp.id,
+    employeeName: `${emp.firstName} ${emp.surname}`.trim(),
+    leaveType: leaveRow.leaveType,
+    fromDate: leaveRow.fromDate,
+    toDate: leaveRow.toDate,
+    status: leaveRow.status,
+    actorLabel,
+  });
+}
+
+async function appendLeaveServiceBookEntry(
+  leaveRow: {
+    id: string;
+    employeeId: string;
+    leaveType: string;
+    fromDate: string;
+    toDate: string;
+    debitDays?: number | null;
+    fileNo?: string | null;
+    doUser?: string | null;
+    dvUser?: string | null;
+    rejoiningDate?: string | null;
+  },
+  approvedByUserId: string | null,
+  kind: "leave_sanction" | "leave_rejoining" = "leave_sanction",
+): Promise<void> {
+  const ts = new Date().toISOString();
+  const fileNoText = leaveRow.fileNo?.trim() ? ` (File No: ${leaveRow.fileNo.trim()})` : "";
+  const text =
+    kind === "leave_rejoining"
+      ? `Rejoined duty on ${leaveRow.rejoiningDate ?? "—"} after ${leaveRow.leaveType} leave (${leaveRow.fromDate} to ${leaveRow.toDate})${fileNoText}`
+      : `${leaveRow.leaveType} leave sanction for ${leaveRow.fromDate} to ${leaveRow.toDate}${fileNoText}`;
+  await db.insert(serviceBookEntries).values({
+    id: nanoid(),
+    employeeId: leaveRow.employeeId,
+    section: "History",
+    content: {
+      type: kind,
+      leaveRequestId: leaveRow.id,
+      leaveType: leaveRow.leaveType,
+      fromDate: leaveRow.fromDate,
+      toDate: leaveRow.toDate,
+      debitDays: leaveRow.debitDays ?? null,
+      fileNo: leaveRow.fileNo ?? null,
+      rejoiningDate: leaveRow.rejoiningDate ?? null,
+      text,
+    },
+    isImmutable: true,
+    status: "Approved",
+    doUser: leaveRow.doUser ?? null,
+    dvUser: leaveRow.dvUser ?? null,
+    approvedBy: approvedByUserId,
+    approvedAt: ts,
+    rejectionReasonCode: null,
+    rejectionRemarks: null,
+    workflowRevisionCount: 0,
+    dvReturnRemarks: null,
+  });
+}
+
+async function generateAndEmailSanctionOrder(leaveId: string, employeeId: string): Promise<void> {
+  try {
+    const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
+    const { buffer, fileNo } = await generateSanctionOrderPdf(leaveId);
+    const store = getUploadBlobStore();
+    const blobKey = sanctionOrderBlobKey(leaveId);
+    await store.put(blobKey, buffer, "application/pdf");
+    await db.update(leaveRequests).set({ orderPdfUrl: `/api/hr/leaves/${leaveId}/sanction-order`, fileNo }).where(eq(leaveRequests.id, leaveId));
+    const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveId)).limit(1);
+    if (!lr) return;
+    await emailSanctionOrderPdf({
+      employeeId,
+      leaveRequestId: leaveId,
+      fileNo,
+      leaveType: lr.leaveType,
+      fromDate: lr.fromDate,
+      toDate: lr.toDate,
+      pdfBuffer: buffer,
+    });
+  } catch (e) {
+    console.error("Sanction order generate/email failed:", e);
+  }
 }
 
 export function registerHrRoutes(app: Express) {
@@ -660,6 +787,8 @@ export function registerHrRoutes(app: Express) {
             : null,
         emergencyContactMobile: normalizeMobile10(body.emergencyContactMobile ?? null),
         reportingOfficerEmployeeId: roId,
+        serviceBookNo: body.serviceBookNo != null ? String(body.serviceBookNo).trim() || null : null,
+        section: body.section != null ? String(body.section).trim() || null : null,
         locationPosted: srs411.locationPosted,
         payLevel: srs411.payLevel,
         bankAccountNumber: srs411.bankAccountNumber,
@@ -894,6 +1023,8 @@ export function registerHrRoutes(app: Express) {
         "emergencyContactName",
         "emergencyContactMobile",
         "reportingOfficerEmployeeId",
+        "serviceBookNo",
+        "section",
         "locationPosted",
         "payLevel",
         "bankAccountNumber",
@@ -1302,8 +1433,9 @@ export function registerHrRoutes(app: Express) {
   });
 
   // ----- Leave balances (opening / running per leave type) -----
-  app.get("/api/hr/leave-balances", async (_req, res) => {
+  app.get("/api/hr/leave-balances", async (req, res) => {
     try {
+      if (!requireLeaveRead(req, res)) return;
       const rows = await db.select().from(employeeLeaveBalances).orderBy(desc(employeeLeaveBalances.updatedAt));
       res.json(rows);
     } catch (e) {
@@ -1361,17 +1493,33 @@ export function registerHrRoutes(app: Express) {
       }
       const body = req.body as { rows?: unknown };
       const rows = Array.isArray(body.rows) ? body.rows : [];
-      const normalized: { employeeId: string; leaveType: string; balanceDays: number }[] = [];
+      const normalized: {
+        employeeId: string;
+        leaveType: string;
+        balanceDays: number;
+        setOffDays?: number;
+        setOffExpiryDate?: string | null;
+      }[] = [];
       for (const r of rows) {
         if (!r || typeof r !== "object") continue;
         const o = r as Record<string, unknown>;
         const employeeId = String(o.employeeId ?? "").trim();
         const leaveType = String(o.leaveType ?? "").trim();
         const balanceDays = Number(o.balanceDays);
+        const setOffDays = o.setOffDays !== undefined ? Number(o.setOffDays) : undefined;
+        const setOffExpiryDate =
+          o.setOffExpiryDate !== undefined
+            ? o.setOffExpiryDate === null || String(o.setOffExpiryDate).trim() === ""
+              ? null
+              : String(o.setOffExpiryDate).trim()
+            : undefined;
         if (!employeeId || !leaveType || !Number.isFinite(balanceDays) || balanceDays < 0) {
           return sendApiError(res, 400, "HR_LEAVE_BALANCE_ROW_INVALID", "Each row needs employeeId, leaveType, and balanceDays >= 0.");
         }
-        normalized.push({ employeeId, leaveType, balanceDays });
+        if (setOffDays !== undefined && (!Number.isFinite(setOffDays) || setOffDays < 0)) {
+          return sendApiError(res, 400, "HR_LEAVE_BALANCE_ROW_INVALID", "setOffDays must be >= 0 when provided.");
+        }
+        normalized.push({ employeeId, leaveType, balanceDays, setOffDays, setOffExpiryDate });
       }
       for (const r of normalized) {
         const [emp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, r.employeeId)).limit(1);
@@ -1383,17 +1531,19 @@ export function registerHrRoutes(app: Express) {
           .from(employeeLeaveBalances)
           .where(and(eq(employeeLeaveBalances.employeeId, r.employeeId), eq(employeeLeaveBalances.leaveType, r.leaveType)))
           .limit(1);
+        const patch: Record<string, unknown> = { balanceDays: r.balanceDays, updatedAt: now() };
+        if (r.setOffDays !== undefined) patch.setOffDays = r.setOffDays;
+        if (r.setOffExpiryDate !== undefined) patch.setOffExpiryDate = r.setOffExpiryDate;
         if (existing) {
-          await db
-            .update(employeeLeaveBalances)
-            .set({ balanceDays: r.balanceDays, updatedAt: now() })
-            .where(eq(employeeLeaveBalances.id, existing.id));
+          await db.update(employeeLeaveBalances).set(patch as Record<string, string | number | null>).where(eq(employeeLeaveBalances.id, existing.id));
         } else {
           await db.insert(employeeLeaveBalances).values({
             id: nanoid(),
             employeeId: r.employeeId,
             leaveType: r.leaveType,
             balanceDays: r.balanceDays,
+            setOffDays: r.setOffDays ?? 0,
+            setOffExpiryDate: r.setOffExpiryDate ?? null,
             updatedAt: now(),
           });
         }
@@ -1409,15 +1559,96 @@ export function registerHrRoutes(app: Express) {
     }
   });
 
+  // ----- Leave supporting document upload/download (M-01) -----
+  // Upload is used before POST /api/hr/leaves so supportingDocumentUrl can be stored.
+  const leaveSupportingDocUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // SRS: <= 5 MB
+  });
+
+  function multerLeaveSupportingDoc(req: Request, res: Response, next: () => void): void {
+    leaveSupportingDocUpload.single("file")(req, res, (err: unknown) => {
+      if (!err) return next();
+      const msg = err instanceof Error ? err.message : "Upload failed";
+      if (typeof err === "object" && err != null && "code" in err && (err as { code?: string }).code === "LIMIT_FILE_SIZE") {
+        sendApiError(res, 400, "LEAVE_DOC_TOO_LARGE", "Document must be 5 MB or smaller.");
+        return;
+      }
+      console.error(err);
+      sendApiError(res, 400, "LEAVE_DOC_UPLOAD_FAILED", msg);
+    });
+  }
+
+  app.post("/api/hr/leaves/supporting-document-upload", multerLeaveSupportingDoc, async (req, res) => {
+    try {
+      if (!req.user || !canCreateLeaveRequest(req.user)) {
+        return sendApiError(res, 403, "LEAVE_CREATE_DENIED", "Only DO/Admin can upload leave documents");
+      }
+
+      const file = req.file as Express.Multer.File | undefined;
+      if (!file) return sendApiError(res, 400, "LEAVE_DOC_REQUIRED", "Upload file required (field name: file)");
+
+      const ext = extFromPdfUpload(file.mimetype, file.originalname);
+      if (ext !== ".pdf") return sendApiError(res, 400, "LEAVE_DOC_TYPE", "Only PDF documents are allowed.");
+
+      const key = assertSafeUploadRelativeKey(`leaves/supporting-docs/${nanoid(16)}.pdf`);
+      const store = getUploadBlobStore();
+      await store.put(key, file.buffer, "application/pdf");
+
+      return res.status(201).json({
+        url: `/api/hr/leaves/supporting-document-download?key=${encodeURIComponent(key)}`,
+        key,
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to store leave document");
+    }
+  });
+
+  app.get("/api/hr/leaves/supporting-document-download", async (req, res) => {
+    try {
+      if (!req.user || !hasPermission(req.user, "M-01", "Read")) {
+        // Keep it simple: viewing is permission-gated like the rest of the M-01 UI.
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-01 Read required to download documents", { required: "M-01:Read" });
+      }
+
+      const keyRaw = String(req.query.key ?? "").trim();
+      if (!keyRaw) return sendApiError(res, 400, "LEAVE_DOC_KEY_REQUIRED", "key query param is required");
+
+      const safeKey = assertSafeUploadRelativeKey(keyRaw);
+      if (!safeKey.startsWith("leaves/supporting-docs/")) {
+        return sendApiError(res, 404, "LEAVE_DOC_NOT_FOUND", "Document not found");
+      }
+
+      const store = getUploadBlobStore();
+      const buf = await store.get(safeKey);
+      if (!buf) return sendApiError(res, 404, "LEAVE_DOC_MISSING", "Document missing");
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="Leave_Supporting_Document.pdf"`);
+      return res.send(buf);
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to download leave document");
+    }
+  });
+
   // ----- Leave requests -----
   app.get("/api/hr/leaves", async (req, res) => {
     try {
+      if (!requireLeaveRead(req, res)) return;
       const employeeId = req.query.employeeId as string | undefined;
       const pendingMyAction =
         req.query.pendingMyAction === "1" || String(req.query.pendingMyAction ?? "").toLowerCase() === "true";
+      const mineOnly = req.query.mine === "1" || String(req.query.mine ?? "").toLowerCase() === "true";
       let list = employeeId
         ? await db.select().from(leaveRequests).where(eq(leaveRequests.employeeId, employeeId)).orderBy(desc(leaveRequests.fromDate))
         : await db.select().from(leaveRequests).orderBy(desc(leaveRequests.fromDate));
+      if (mineOnly && req.user?.employeeId) {
+        list = list.filter((row) => row.employeeId === req.user!.employeeId);
+      } else if (!userCanSeeAllLeaveRequests(req.user) && req.user?.employeeId) {
+        list = list.filter((row) => row.employeeId === req.user!.employeeId);
+      }
       if (pendingMyAction) {
         list = list.filter((row) => leaveRequestAwaitingMyAction(req.user, row));
       }
@@ -1580,84 +1811,164 @@ export function registerHrRoutes(app: Express) {
 
   app.post("/api/hr/leaves", async (req, res) => {
     try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
       if (!canCreateLeaveRequest(req.user)) {
-        return sendApiError(
-          res,
-          403,
-          "LEAVE_CREATE_DENIED",
-          "Only Data Originator or Admin can create leave requests",
-        );
+        return sendApiError(res, 403, "LEAVE_CREATE_DENIED", "Only Data Originator or Admin can create leave requests");
+      }
+      if (!hasPermission(req.user, "M-01", "Create")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-01 Create required", { required: "M-01:Create" });
       }
       const body = req.body;
-      const leaveType = String(body.leaveType ?? "").trim();
+      const leaveType = String(body.leaveType ?? "").trim().toUpperCase();
       const employeeId = String(body.employeeId ?? "").trim();
       const fromDate = String(body.fromDate ?? "").trim();
       const toDate = String(body.toDate ?? "").trim();
       const isRetrospective = Boolean((body as Record<string, unknown>).isRetrospective);
+      const isExPostFacto = Boolean((body as Record<string, unknown>).isExPostFacto);
+      const halfDay = body.halfDay ? String(body.halfDay).trim() : null;
 
       if (!employeeId) return sendApiError(res, 400, "LEAVE_EMPLOYEE_REQUIRED", "employeeId is required");
       if (!fromDate || !toDate) return sendApiError(res, 400, "LEAVE_DATES_REQUIRED", "fromDate and toDate are required");
       if (fromDate > toDate) return sendApiError(res, 400, "LEAVE_DATES_INVALID", "fromDate must be <= toDate");
 
-      // BR-LVE-03: CL max 3 consecutive days per application.
-      if (leaveType.toUpperCase() === "CL") {
+      const durationErr = await validateLeaveDurationCaps(leaveType, fromDate, toDate);
+      if (durationErr) return sendApiError(res, 400, "LEAVE_DURATION_CAP", durationErr);
+      if (leaveType === "CCL") {
+        const cclErr = await validateCclLifetimeCap(employeeId, fromDate, toDate);
+        if (cclErr) return sendApiError(res, 400, "LEAVE_CCL_CAP", cclErr);
+      }
+
+      const VALID_TYPES = ["EL", "HPL", "COMMUTED", "CL", "RH", "SPL_H", "ML", "PL", "EOL", "CCL"];
+      if (!VALID_TYPES.includes(leaveType)) {
+        return sendApiError(res, 400, "LEAVE_INVALID_TYPE", `Leave type must be one of: ${VALID_TYPES.join(", ")}`);
+      }
+
+      // CL: max 3 consecutive days; half-day only for single day
+      if (leaveType === "CL") {
         const days = inclusiveCalendarDays(fromDate, toDate);
-        if (days > 3) {
-          return sendApiError(res, 400, "E_LVE_004", "CL max 3 consecutive days per application.");
-        }
+        if (days > 3) return sendApiError(res, 400, "E_LVE_004", "CL max 3 consecutive days per application.");
+        if (halfDay && days !== 1) return sendApiError(res, 400, "LEAVE_HALF_DAY_SINGLE", "Half-day CL only for single-day applications.");
       }
 
-      // BR-LVE-01: block holidays overlap (config-driven).
       const cfg = await getMergedSystemConfig();
-      let holidays: string[] = [];
-      try {
-        const v = JSON.parse(cfg.leave_holidays_json ?? "[]") as unknown;
-        holidays = Array.isArray(v) ? v.map((x) => String(x)) : [];
-      } catch {
-        holidays = [];
-      }
-      if (holidays.length > 0) {
-        const overlapsHoliday = holidays.some((d) => d >= fromDate && d <= toDate);
-        if (overlapsHoliday) {
-          return sendApiError(res, 400, "LEAVE_HOLIDAY_OVERLAP", "Leave dates overlap with a configured public holiday.");
+
+      // RH: validate date is on the Restricted list
+      if (leaveType === "RH") {
+        if (fromDate !== toDate) return sendApiError(res, 400, "LEAVE_RH_SINGLE_DAY", "Restricted Holiday must be a single day.");
+        const isValidRh = await validateRhDate(fromDate);
+        if (!isValidRh) return sendApiError(res, 400, "LEAVE_RH_NOT_IN_LIST", "Selected date is not on the Restricted Holiday list for that year.");
+        const rhYear = Number(fromDate.slice(0, 4));
+        const rhCount = (await db.select().from(leaveRequests).where(
+          and(eq(leaveRequests.employeeId, employeeId), eq(leaveRequests.leaveType, "RH"))
+        )).filter((r) => !["Rejected", "Cancelled"].includes(String(r.status)) && String(r.fromDate).startsWith(String(rhYear))).length;
+        const rhEntitlement = Number(cfg.leave_rh_entitlement_per_year ?? "2");
+        if (rhCount >= rhEntitlement) {
+          return sendApiError(res, 400, "LEAVE_RH_EXHAUSTED", `Already availed ${rhEntitlement} Restricted Holidays this year.`);
         }
       }
 
-      // Retrospective entries are restricted to Admin (HR policy).
+      // SPL_H: require duty date
+      if (leaveType === "SPL_H" && !body.dutyDateForSplH) {
+        return sendApiError(res, 400, "LEAVE_SPLH_DUTY_DATE", "Duty date (in lieu of) is required for Special Holiday.");
+      }
+
+      // Supporting doc mandatory for ML, PL, COMMUTED (MC), HPL (MC)
+      const supportingDocumentUrl = body.supportingDocumentUrl != null && String(body.supportingDocumentUrl).trim() !== "" ? String(body.supportingDocumentUrl).trim() : null;
+      const docMandatoryTypes = ["ML", "PL", "COMMUTED", "HPL"];
+      if (docMandatoryTypes.includes(leaveType) && !supportingDocumentUrl) {
+        return sendApiError(res, 400, "LEAVE_SUPPORTING_DOC_REQUIRED", "Supporting document is required for this leave type.", { leaveType });
+      }
+
+      // Retrospective / ex-post facto entries
       if (isRetrospective && !(req.user?.roles ?? []).some((r: { tier?: string }) => r.tier === "ADMIN")) {
         return sendApiError(res, 403, "LEAVE_RETRO_DENIED", "Only Admin can create retrospective entries");
       }
+      if (isExPostFacto && !(req.user?.roles ?? []).some((r: { tier?: string }) => r.tier === "DA" || r.tier === "ADMIN")) {
+        return sendApiError(res, 403, "LEAVE_EXPOSTFACTO_DENIED", "Only DA or Admin can create ex-post facto entries");
+      }
 
-      // Overlap check: block overlaps with any non-terminal leave (Pending/Verified/Approved).
+      // Overlap check (exclude superseded/cancelled/rejected; exclude leave being revised)
+      const revisedFromLeaveId =
+        body.revisedFromLeaveId != null && String(body.revisedFromLeaveId).trim() !== ""
+          ? String(body.revisedFromLeaveId).trim()
+          : null;
+      let originalApproved: {
+        id: string;
+        employeeId: string;
+        leaveType: string;
+        fromDate: string;
+        toDate: string;
+        status: string;
+        debitDays: number | null;
+        halfDay: string | null;
+        supersededByLeaveId: string | null;
+      } | null = null;
+      if (revisedFromLeaveId) {
+        const [orig] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, revisedFromLeaveId)).limit(1);
+        if (!orig || orig.employeeId !== employeeId) {
+          return sendApiError(res, 400, "LEAVE_REVISE_INVALID", "revisedFromLeaveId must be an approved leave of the same employee.");
+        }
+        if (orig.status !== "Approved") {
+          return sendApiError(res, 400, "LEAVE_REVISE_NOT_APPROVED", "Only an Approved leave can be revised.");
+        }
+        if (orig.supersededByLeaveId) {
+          return sendApiError(res, 400, "LEAVE_REVISE_ALREADY_SUPERSEDED", "That leave has already been superseded by a revision.");
+        }
+        originalApproved = orig;
+      }
+
       const existingForEmp = await db.select().from(leaveRequests).where(eq(leaveRequests.employeeId, employeeId));
-      const activeExisting = existingForEmp.filter((r) => !["Rejected", "Cancelled"].includes(String(r.status)));
+      const activeExisting = existingForEmp.filter(
+        (r) =>
+          !["Rejected", "Cancelled", "Superseded"].includes(String(r.status)) &&
+          !(revisedFromLeaveId && r.id === revisedFromLeaveId),
+      );
       const overlaps = activeExisting.some((r) => {
         const aFrom = String(r.fromDate);
         const aTo = String(r.toDate);
         return fromDate <= aTo && toDate >= aFrom;
       });
       if (overlaps) {
-        return sendApiError(
-          res,
-          400,
-          "LEAVE_OVERLAP",
-          "Leave dates overlap with an existing leave request (pending/verified/approved).",
-        );
+        return sendApiError(res, 400, "LEAVE_OVERLAP", "Leave dates overlap with an existing leave request (pending/verified/approved).");
       }
-      const supportingDocumentUrl =
-        body.supportingDocumentUrl != null && String(body.supportingDocumentUrl).trim() !== ""
-          ? String(body.supportingDocumentUrl).trim()
-          : null;
-      // SRS checklist: supporting docs required for certain leave types (ML/CCL).
-      if (["ML", "CCL"].includes(leaveType.toUpperCase()) && !supportingDocumentUrl) {
-        return sendApiError(
-          res,
-          400,
-          "LEAVE_SUPPORTING_DOC_REQUIRED",
-          "Supporting document is required for this leave type.",
-          { leaveType },
-        );
+
+      // Get employee for location-based prefix/suffix
+      const [emp] = await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1);
+      const locationType = emp?.locationPosted ?? undefined;
+      const prefixSuffix = await calculatePrefixSuffix(fromDate, toDate, locationType);
+      const debitDays = calculateDebitDays({ leaveType, fromDate, toDate, halfDay });
+
+      if (debitDays > 0 && !["ML", "PL", "EOL"].includes(leaveType)) {
+        try {
+          // For revisions, original debit is already taken — check net additional need
+          let needCheck = debitDays;
+          if (originalApproved) {
+            const origDebit =
+              originalApproved.debitDays != null
+                ? Number(originalApproved.debitDays)
+                : calculateDebitDays({
+                    leaveType: originalApproved.leaveType,
+                    fromDate: originalApproved.fromDate,
+                    toDate: originalApproved.toDate,
+                    halfDay: originalApproved.halfDay,
+                  });
+            if (balanceLeaveTypeFor(leaveType) === balanceLeaveTypeFor(originalApproved.leaveType)) {
+              needCheck = Math.max(0, debitDays - origDebit);
+            }
+          }
+          if (needCheck > 0) await assertSufficientBalanceForApproval(employeeId, leaveType, needCheck);
+        } catch {
+          return sendApiError(
+            res,
+            400,
+            "LEAVE_INSUFFICIENT_BALANCE",
+            leaveType === "COMMUTED"
+              ? "Insufficient HPL balance for commuted leave (debits at 2× calendar days)."
+              : "Insufficient leave balance for this leave type.",
+          );
+        }
       }
+
       const id = nanoid();
       await db.insert(leaveRequests).values({
         id,
@@ -1667,9 +1978,22 @@ export function registerHrRoutes(app: Express) {
         toDate,
         status: "Pending",
         reason: body.reason != null && String(body.reason).trim() !== "" ? String(body.reason).trim() : null,
-        supportingDocumentUrl:
-          supportingDocumentUrl,
+        supportingDocumentUrl,
         isRetrospective,
+        isExPostFacto,
+        halfDay,
+        prefixDays: prefixSuffix.prefixDays,
+        suffixDays: prefixSuffix.suffixDays,
+        prefixFromDate: prefixSuffix.prefixFromDate,
+        suffixToDate: prefixSuffix.suffixToDate,
+        debitDays,
+        substituteEmployeeId: body.substituteEmployeeId ? String(body.substituteEmployeeId).trim() : null,
+        addressDuringLeave: body.addressDuringLeave ? String(body.addressDuringLeave).trim() : null,
+        ltcProposed: body.ltcProposed === true,
+        leaveHq: body.leaveHq ? String(body.leaveHq).trim() : null,
+        dutyDateForSplH: body.dutyDateForSplH ? String(body.dutyDateForSplH).trim() : null,
+        copyToJson: body.copyToJson ? String(body.copyToJson) : null,
+        revisedFromLeaveId,
         cancelledAt: null,
         cancelledBy: null,
         doUser: req.user?.id ?? null,
@@ -1679,7 +2003,10 @@ export function registerHrRoutes(app: Express) {
         dvReturnRemarks: null,
       });
       const [row] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id));
-      if (row) writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      if (row) {
+        writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+        void notifyLeaveStatusChange(row, req.user?.name ?? req.user?.email ?? undefined);
+      }
       res.status(201).json(row);
     } catch (e) {
       console.error(e);
@@ -1689,6 +2016,10 @@ export function registerHrRoutes(app: Express) {
 
   app.put("/api/hr/leaves/:id", async (req, res) => {
     try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      if (!hasPermission(req.user, "M-01", "Update")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-01 Update required", { required: "M-01:Update" });
+      }
       const id = req.params.id;
       const [existing] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id));
       if (!existing) {
@@ -1769,8 +2100,8 @@ export function registerHrRoutes(app: Express) {
           dvReturnRemarks = ret.remarks;
         }
       } else {
-        if (["Approved", "Rejected", "Cancelled"].includes(existing.status)) {
-          return sendApiError(res, 403, "LEAVE_TERMINAL_NO_EDIT", "Approved/rejected/cancelled leave cannot be edited");
+        if (["Approved", "Rejected", "Cancelled", "Superseded"].includes(existing.status)) {
+          return sendApiError(res, 403, "LEAVE_TERMINAL_NO_EDIT", "Approved/rejected/cancelled/superseded leave cannot be edited");
         }
         if (existing.status !== "Pending") {
           return sendApiError(res, 403, "LEAVE_EDIT_DENIED", "Only pending leave requests can be edited");
@@ -1796,6 +2127,10 @@ export function registerHrRoutes(app: Express) {
         updates.dvUser = null;
         updates.approvedBy = null;
       }
+      // DV controlling officer remarks at Verify step
+      if (statusChange && newStatus === "Verified" && body.controllingOfficerRemarks) {
+        updates.controllingOfficerRemarks = String(body.controllingOfficerRemarks).trim();
+      }
       if (leaveRejection) {
         updates.rejectionReasonCode = leaveRejection.code;
         updates.rejectionRemarks = leaveRejection.remarks;
@@ -1809,8 +2144,47 @@ export function registerHrRoutes(app: Express) {
           updates[k] = body[k] === null || body[k] === "" ? null : String(body[k]);
         }
       });
+      if (!statusChange && body.copyToJson !== undefined) {
+        updates.copyToJson =
+          body.copyToJson === null || body.copyToJson === "" ? null : String(body.copyToJson);
+      }
+      ["halfDay", "substituteEmployeeId", "addressDuringLeave", "leaveHq", "dutyDateForSplH"].forEach((k) => {
+        if (body[k] !== undefined) {
+          updates[k] = body[k] === null || body[k] === "" ? null : String(body[k]);
+        }
+      });
+      if (!statusChange && body.ltcProposed !== undefined) {
+        updates.ltcProposed = body.ltcProposed === true;
+      }
 
       if (!statusChange) {
+        const effectiveLeaveTypeEdit = String((updates.leaveType as string | undefined) ?? existing.leaveType ?? "").trim();
+        const effectiveFromEdit = String((updates.fromDate as string | undefined) ?? existing.fromDate ?? "").trim();
+        const effectiveToEdit = String((updates.toDate as string | undefined) ?? existing.toDate ?? "").trim();
+        const durationErr = await validateLeaveDurationCaps(effectiveLeaveTypeEdit, effectiveFromEdit, effectiveToEdit);
+        if (durationErr) return sendApiError(res, 400, "LEAVE_DURATION_CAP", durationErr);
+        if (effectiveLeaveTypeEdit === "CCL") {
+          const cclErr = await validateCclLifetimeCap(existing.employeeId, effectiveFromEdit, effectiveToEdit, existing.id);
+          if (cclErr) return sendApiError(res, 400, "LEAVE_CCL_CAP", cclErr);
+        }
+        const datesOrTypeChanged =
+          updates.leaveType !== undefined || updates.fromDate !== undefined || updates.toDate !== undefined || updates.halfDay !== undefined;
+        if (datesOrTypeChanged) {
+          const [emp] = await db.select().from(employees).where(eq(employees.id, existing.employeeId)).limit(1);
+          const prefixSuffix = await calculatePrefixSuffix(effectiveFromEdit, effectiveToEdit, emp?.locationPosted ?? undefined);
+          const halfDayVal =
+            updates.halfDay !== undefined ? (updates.halfDay as string | null) : (existing.halfDay as string | null);
+          updates.prefixDays = prefixSuffix.prefixDays;
+          updates.suffixDays = prefixSuffix.suffixDays;
+          updates.prefixFromDate = prefixSuffix.prefixFromDate;
+          updates.suffixToDate = prefixSuffix.suffixToDate;
+          updates.debitDays = calculateDebitDays({
+            leaveType: effectiveLeaveTypeEdit,
+            fromDate: effectiveFromEdit,
+            toDate: effectiveToEdit,
+            halfDay: halfDayVal,
+          });
+        }
         const effectiveFrom = String((updates.fromDate as string | undefined) ?? existing.fromDate ?? "").trim();
         const effectiveTo = String((updates.toDate as string | undefined) ?? existing.toDate ?? "").trim();
         if (!effectiveFrom || !effectiveTo || effectiveFrom > effectiveTo) {
@@ -1818,7 +2192,7 @@ export function registerHrRoutes(app: Express) {
         }
         const existingForEmp = await db.select().from(leaveRequests).where(eq(leaveRequests.employeeId, existing.employeeId));
         const activeExisting = existingForEmp.filter(
-          (r) => r.id !== existing.id && !["Rejected", "Cancelled"].includes(String(r.status)),
+          (r) => r.id !== existing.id && !["Rejected", "Cancelled", "Superseded"].includes(String(r.status)),
         );
         const overlaps = activeExisting.some((r) => effectiveFrom <= String(r.toDate) && effectiveTo >= String(r.fromDate));
         if (overlaps) {
@@ -1847,25 +2221,78 @@ export function registerHrRoutes(app: Express) {
       try {
         await db.transaction(async (tx) => {
           if (statusChange && newStatus === "Approved" && existing.status === "Verified") {
-            const days = inclusiveCalendarDays(existing.fromDate, existing.toDate);
-            const [bal] = await tx
-              .select()
-              .from(employeeLeaveBalances)
-              .where(
-                and(
-                  eq(employeeLeaveBalances.employeeId, existing.employeeId),
-                  eq(employeeLeaveBalances.leaveType, existing.leaveType),
-                ),
-              )
-              .limit(1);
-            if (bal) {
-              if (bal.balanceDays + 1e-9 < days) {
-                throw new Error("LEAVE_INSUFFICIENT_BALANCE");
+            const debitDays = existing.debitDays != null
+              ? Number(existing.debitDays)
+              : calculateDebitDays({ leaveType: existing.leaveType, fromDate: existing.fromDate, toDate: existing.toDate, halfDay: existing.halfDay });
+
+            // Revised leave: reverse original debit, mark original Superseded, then debit new
+            if (existing.revisedFromLeaveId) {
+              const [orig] = await tx
+                .select()
+                .from(leaveRequests)
+                .where(eq(leaveRequests.id, existing.revisedFromLeaveId))
+                .limit(1);
+              if (!orig || orig.status !== "Approved") {
+                throw new Error("LEAVE_REVISE_SOURCE_INVALID");
+              }
+              const origDebit =
+                orig.debitDays != null
+                  ? Number(orig.debitDays)
+                  : calculateDebitDays({
+                      leaveType: orig.leaveType,
+                      fromDate: orig.fromDate,
+                      toDate: orig.toDate,
+                      halfDay: orig.halfDay,
+                    });
+              if (origDebit > 0) {
+                await creditLeaveBalanceOnReversal(tx, {
+                  employeeId: orig.employeeId,
+                  leaveType: orig.leaveType,
+                  creditDays: origDebit,
+                });
               }
               await tx
-                .update(employeeLeaveBalances)
-                .set({ balanceDays: bal.balanceDays - days, updatedAt: now() })
-                .where(eq(employeeLeaveBalances.id, bal.id));
+                .update(leaveRequests)
+                .set({ status: "Superseded", supersededByLeaveId: id })
+                .where(eq(leaveRequests.id, orig.id));
+            }
+
+            if (debitDays > 0) {
+              try {
+                await assertSufficientBalanceForApproval(existing.employeeId, existing.leaveType, debitDays);
+                await debitLeaveBalanceOnApproval(tx, {
+                  employeeId: existing.employeeId,
+                  leaveType: existing.leaveType,
+                  debitDays,
+                });
+              } catch {
+                throw new Error("LEAVE_INSUFFICIENT_BALANCE");
+              }
+            }
+
+            // Handle DA override of prefix/suffix
+            if (body.prefixSuffixDisallowed === true) {
+              updates.prefixSuffixDisallowed = true;
+              updates.prefixDays = 0;
+              updates.suffixDays = 0;
+              updates.prefixFromDate = null;
+              updates.suffixToDate = null;
+            } else if (body.prefixSuffixDisallowed === false && existing.prefixSuffixDisallowed === true) {
+              // If the admin/DA toggles "Nil" off, restore calculated prefix/suffix based on dates+location.
+              const [emp] = await db.select().from(employees).where(eq(employees.id, existing.employeeId)).limit(1);
+              const locationType = emp?.locationPosted ?? undefined;
+              const prefixSuffix = await calculatePrefixSuffix(existing.fromDate, existing.toDate, locationType);
+              updates.prefixSuffixDisallowed = false;
+              updates.prefixDays = prefixSuffix.prefixDays;
+              updates.suffixDays = prefixSuffix.suffixDays;
+              updates.prefixFromDate = prefixSuffix.prefixFromDate;
+              updates.suffixToDate = prefixSuffix.suffixToDate;
+            }
+            if (body.copyToJson !== undefined) {
+              updates.copyToJson =
+                body.copyToJson === null || body.copyToJson === ""
+                  ? null
+                  : String(body.copyToJson);
             }
           }
           await tx.update(leaveRequests).set(updates as Record<string, string | number | null>).where(eq(leaveRequests.id, id));
@@ -1879,11 +2306,24 @@ export function registerHrRoutes(app: Express) {
             "Insufficient leave balance for this leave type (calendar days exceed configured balance).",
           );
         }
+        if (e instanceof Error && e.message === "LEAVE_REVISE_SOURCE_INVALID") {
+          return sendApiError(res, 400, "LEAVE_REVISE_SOURCE_INVALID", "Cannot approve revision: original leave is not Approved.");
+        }
+        if (e instanceof Error && e.message === "LEAVE_BALANCE_MISSING") {
+          return sendApiError(res, 400, "LEAVE_BALANCE_MISSING", "Leave balance row missing for credit reversal.");
+        }
         throw e;
       }
       const [row] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id));
       if (!row) return sendApiError(res, 404, "LEAVE_REQUEST_NOT_FOUND", "Not found");
       writeAuditLog(req, { module: "HR", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
+      if (statusChange) {
+        void notifyLeaveStatusChange(row, req.user?.name ?? req.user?.email ?? undefined);
+        if (row.status === "Approved" && existing.status === "Verified") {
+          void appendLeaveServiceBookEntry(row, req.user?.id ?? null).catch((e) => console.error("Service book leave entry failed:", e));
+          void generateAndEmailSanctionOrder(row.id, row.employeeId);
+        }
+      }
       res.json(row);
     } catch (e) {
       console.error(e);
@@ -2557,6 +2997,506 @@ export function registerHrRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update service book entry");
+    }
+  });
+
+  app.get("/api/hr/leaves/:id/application-form", async (req, res) => {
+    try {
+      if (!requireLeaveRead(req, res)) return;
+      const { id } = req.params;
+      const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id)).limit(1);
+      if (!lr) return sendApiError(res, 404, "LEAVE_NOT_FOUND", "Leave request not found");
+      if (["Cancelled"].includes(String(lr.status))) {
+        return sendApiError(res, 400, "LEAVE_CANCELLED", "Cannot print application for a cancelled leave.");
+      }
+      const { generateLeaveApplicationPdf } = await import("./hr-leave-application-pdf");
+      const { buffer, leaveType, layout } = await generateLeaveApplicationPdf(id);
+      const kind = layout === "short" ? "Short_Application" : "Form1_Application";
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${kind}_${leaveType}_${id}.pdf"`,
+      );
+      res.send(buffer);
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : "Failed to generate application form";
+      sendApiError(res, 500, "INTERNAL_ERROR", msg);
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // REJOINING / DUTY RESUMPTION + JOINING REPORT
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.post("/api/hr/leaves/:id/rejoin", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      if (!hasPermission(req.user, "M-01", "Update") && !hasPermission(req.user, "M-01", "Create")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-01 Create or Update required", {
+          required: "M-01:Create or M-01:Update",
+        });
+      }
+      const { id } = req.params;
+      const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id)).limit(1);
+      if (!lr) return sendApiError(res, 404, "LEAVE_NOT_FOUND", "Leave request not found");
+      if (lr.status !== "Approved") {
+        return sendApiError(res, 400, "LEAVE_NOT_APPROVED", "Only approved leave can record rejoining.");
+      }
+      const isAdmin = (req.user.roles ?? []).some((r) => r.tier === "ADMIN");
+      if (!isAdmin && req.user.employeeId && lr.employeeId !== req.user.employeeId) {
+        return sendApiError(res, 403, "LEAVE_REJOIN_DENIED", "You can only record rejoining for your own leave.");
+      }
+
+      const body = req.body as Record<string, unknown>;
+      const rejoiningDate = String(body.rejoiningDate ?? "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(rejoiningDate)) {
+        return sendApiError(res, 400, "LEAVE_REJOIN_DATE", "rejoiningDate (YYYY-MM-DD) is required.");
+      }
+      const joiningReportScanUrl =
+        body.joiningReportScanUrl != null && String(body.joiningReportScanUrl).trim() !== ""
+          ? String(body.joiningReportScanUrl).trim()
+          : null;
+      const fitnessCertUrl =
+        body.fitnessCertUrl != null && String(body.fitnessCertUrl).trim() !== ""
+          ? String(body.fitnessCertUrl).trim()
+          : null;
+
+      const wasFirstRejoin = !lr.rejoiningDate;
+      const ts = now();
+      await db
+        .update(leaveRequests)
+        .set({
+          rejoiningDate,
+          rejoiningReportedAt: ts,
+          rejoiningReportedBy: req.user.id,
+          joiningReportScanUrl: joiningReportScanUrl ?? lr.joiningReportScanUrl,
+          fitnessCertUrl: fitnessCertUrl ?? lr.fitnessCertUrl,
+          joiningReportPdfUrl: `/api/hr/leaves/${id}/joining-report`,
+        })
+        .where(eq(leaveRequests.id, id));
+
+      const [row] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id)).limit(1);
+      if (row) {
+        writeAuditLog(req, { module: "HR", action: "LeaveRejoin", recordId: id, beforeValue: lr, afterValue: row }).catch(
+          (e) => console.error("Audit log failed:", e),
+        );
+        if (wasFirstRejoin) {
+          void appendLeaveServiceBookEntry(row, req.user.id, "leave_rejoining").catch((e) =>
+            console.error("Service book rejoining entry failed:", e),
+          );
+        }
+      }
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to record rejoining");
+    }
+  });
+
+  /** DV/Admin: acknowledge that signed Joining Report (hard copy / scan) was received. */
+  app.post("/api/hr/leaves/:id/joining-report-ack", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      const isDvOrAdmin = (req.user.roles ?? []).some((r) => ["DV", "DA", "ADMIN"].includes(String(r.tier)));
+      if (!isDvOrAdmin || !hasPermission(req.user, "M-01", "Update")) {
+        return sendApiError(res, 403, "LEAVE_JOINING_ACK_DENIED", "Only DV/DA/Admin with M-01 Update can acknowledge Joining Report.");
+      }
+      const { id } = req.params;
+      const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id)).limit(1);
+      if (!lr) return sendApiError(res, 404, "LEAVE_NOT_FOUND", "Leave request not found");
+      if (lr.status !== "Approved") {
+        return sendApiError(res, 400, "LEAVE_NOT_APPROVED", "Only approved leave can have Joining Report acknowledgment.");
+      }
+      if (!lr.rejoiningDate) {
+        return sendApiError(res, 400, "LEAVE_REJOIN_REQUIRED", "Employee must record rejoining date before acknowledgment.");
+      }
+      const remarks =
+        req.body?.remarks != null && String(req.body.remarks).trim() !== "" ? String(req.body.remarks).trim() : null;
+      const ts = now();
+      await db
+        .update(leaveRequests)
+        .set({
+          joiningReportAckAt: ts,
+          joiningReportAckBy: req.user.id,
+          joiningReportAckRemarks: remarks,
+        })
+        .where(eq(leaveRequests.id, id));
+      const [row] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id)).limit(1);
+      if (row) {
+        writeAuditLog(req, {
+          module: "HR",
+          action: "LeaveJoiningReportAck",
+          recordId: id,
+          beforeValue: lr,
+          afterValue: row,
+        }).catch((e) => console.error("Audit log failed:", e));
+      }
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to acknowledge Joining Report");
+    }
+  });
+
+  app.get("/api/hr/leaves/:id/joining-report", async (req, res) => {
+    try {
+      if (!requireLeaveRead(req, res)) return;
+      const { id } = req.params;
+      const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id)).limit(1);
+      if (!lr) return sendApiError(res, 404, "LEAVE_NOT_FOUND", "Leave request not found");
+      if (lr.status !== "Approved") {
+        return sendApiError(res, 400, "LEAVE_NOT_APPROVED", "Joining Report is only for approved leave");
+      }
+      if (!lr.rejoiningDate) {
+        return sendApiError(res, 400, "LEAVE_REJOIN_DATE_REQUIRED", "Enter rejoining date before generating Joining Report.");
+      }
+      const { generateJoiningReportPdf } = await import("./hr-leave-joining-report-pdf");
+      const { buffer } = await generateJoiningReportPdf(id);
+      const blobKey = assertSafeUploadRelativeKey(`leaves/joining-reports/${id}.pdf`);
+      const store = getUploadBlobStore();
+      await store.put(blobKey, buffer, "application/pdf");
+      await db.update(leaveRequests).set({ joiningReportPdfUrl: `/api/hr/leaves/${id}/joining-report` }).where(eq(leaveRequests.id, id));
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="Joining_Report_${id}.pdf"`);
+      res.send(buffer);
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : "Failed to generate joining report";
+      sendApiError(res, 500, "INTERNAL_ERROR", msg);
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // SANCTION ORDER PDF (/api/hr/leaves/:id/sanction-order)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/hr/leaves/:id/sanction-order", async (req, res) => {
+    try {
+      if (!requireLeaveRead(req, res)) return;
+      const { id } = req.params;
+      const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id)).limit(1);
+      if (!lr) return sendApiError(res, 404, "LEAVE_NOT_FOUND", "Leave request not found");
+      if (lr.status !== "Approved") {
+        return sendApiError(res, 400, "LEAVE_NOT_APPROVED", "Sanction Order can only be generated for approved leaves");
+      }
+      const blobKey = sanctionOrderBlobKey(id);
+      const store = getUploadBlobStore();
+      try {
+        const cached = await store.get(blobKey);
+        if (cached) {
+          res.setHeader("Content-Type", "application/pdf");
+          const fileLabel = (lr.fileNo ?? id).replace(/\//g, "_");
+          res.setHeader("Content-Disposition", `inline; filename="Sanction_Order_${fileLabel}.pdf"`);
+          res.send(cached);
+          return;
+        }
+      } catch {
+        /* generate fresh */
+      }
+      const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
+      const { buffer, fileNo } = await generateSanctionOrderPdf(id);
+      await store.put(blobKey, buffer, "application/pdf");
+      await db.update(leaveRequests).set({ orderPdfUrl: `/api/hr/leaves/${id}/sanction-order` }).where(eq(leaveRequests.id, id));
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="Sanction_Order_${fileNo.replace(/\//g, "_")}.pdf"`);
+      res.send(buffer);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate sanction order");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // LEAVE BALANCE STATEMENT PDF
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/hr/leave-balance-statement", async (req, res) => {
+    try {
+      if (!requireLeaveRead(req, res)) return;
+      const employeeIds = req.query.employeeIds ? String(req.query.employeeIds).split(",") : [];
+      const asOnDate = req.query.asOnDate ? String(req.query.asOnDate) : new Date().toISOString().slice(0, 10);
+
+      const PDFDocument = (await import("pdfkit")).default;
+      const doc = new PDFDocument({ size: "A4", margin: 50 });
+      const chunks: Buffer[] = [];
+      doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+      doc.fontSize(14).font("Helvetica-Bold").text("LEAVE BALANCE STATEMENT", { align: "center" });
+      doc.fontSize(10).font("Helvetica").text(`As on: ${asOnDate}`, { align: "center" });
+      doc.moveDown(1);
+
+      const empFilter = employeeIds.length > 0
+        ? employeeIds
+        : (await db.select({ id: employees.id }).from(employees).where(eq(employees.status, "Active"))).map((e) => e.id);
+
+      for (const empId of empFilter) {
+        const [emp] = await db.select().from(employees).where(eq(employees.id, empId)).limit(1);
+        if (!emp) continue;
+        const bals = await db.select().from(employeeLeaveBalances).where(eq(employeeLeaveBalances.employeeId, empId));
+        if (!bals.length) continue;
+
+        doc.font("Helvetica-Bold").fontSize(10).text(`${emp.firstName} ${emp.surname} (${emp.empId ?? emp.id}) — ${emp.designation}`);
+        doc.font("Helvetica").fontSize(9);
+        for (const b of bals) {
+          const balLine = `  ${b.leaveType}: ${Number(b.balanceDays ?? 0)} days`;
+          doc.text(balLine);
+          if (String(b.leaveType).toUpperCase() === "EL" && Number(b.setOffDays ?? 0) > 0) {
+            doc.text(`    Set-off (use before ${b.setOffExpiryDate ?? "expiry"}): ${Number(b.setOffDays ?? 0)} days`);
+          }
+        }
+        doc.moveDown(0.5);
+      }
+
+      doc.end();
+      await new Promise<void>((resolve) => doc.on("end", resolve));
+      const buffer = Buffer.concat(chunks);
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="Leave_Balance_Statement_${asOnDate}.pdf"`);
+      res.send(buffer);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate balance statement");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // SUBSTITUTE PICKER: employees not currently on leave
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/hr/leaves/available-substitutes", async (req, res) => {
+    try {
+      const fromDate = String(req.query.fromDate ?? "");
+      const toDate = String(req.query.toDate ?? "");
+      if (!fromDate || !toDate) return sendApiError(res, 400, "DATES_REQUIRED", "fromDate and toDate query params required");
+
+      const allActive = await db
+        .select({ id: employees.id, empId: employees.empId, firstName: employees.firstName, surname: employees.surname, yardId: employees.yardId, locationPosted: employees.locationPosted, section: employees.section })
+        .from(employees)
+        .where(eq(employees.status, "Active"));
+
+      const onLeave = await db.select({ employeeId: leaveRequests.employeeId }).from(leaveRequests).where(
+        and(
+          lte(leaveRequests.fromDate, toDate),
+          gte(leaveRequests.toDate, fromDate),
+        )
+      );
+      const onLeaveFiltered = onLeave.filter((r) => true); // already filtered by date in query
+      const onLeaveIds = new Set((await db.select({ employeeId: leaveRequests.employeeId, status: leaveRequests.status }).from(leaveRequests).where(
+        and(lte(leaveRequests.fromDate, toDate), gte(leaveRequests.toDate, fromDate))
+      )).filter((r) => ["Pending", "Verified", "Approved"].includes(String(r.status))).map((r) => r.employeeId));
+
+      const available = allActive.filter((e) => !onLeaveIds.has(e.id));
+      res.json(available);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch available substitutes");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PREFIX/SUFFIX PREVIEW (for UI)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/hr/leaves/prefix-suffix-preview", async (req, res) => {
+    try {
+      const fromDate = String(req.query.fromDate ?? "");
+      const toDate = String(req.query.toDate ?? "");
+      const locationType = req.query.locationType ? String(req.query.locationType) : undefined;
+      if (!fromDate || !toDate) return sendApiError(res, 400, "DATES_REQUIRED", "fromDate and toDate required");
+      const result = await calculatePrefixSuffix(fromDate, toDate, locationType);
+      res.json(result);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to compute prefix/suffix");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // HOLIDAY MASTER CRUD (/api/hr/holidays)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.get("/api/hr/holidays", async (req, res) => {
+    try {
+      const yearParam = req.query.year ? Number(req.query.year) : new Date().getFullYear();
+      const rows = await db
+        .select()
+        .from(hrHolidays)
+        .where(eq(hrHolidays.year, yearParam))
+        .orderBy(asc(hrHolidays.date));
+      res.json(rows);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch holidays");
+    }
+  });
+
+  app.post("/api/hr/holidays", async (req, res) => {
+    try {
+      const body = req.body;
+      const date = String(body.date ?? "").trim();
+      const name = String(body.name ?? "").trim();
+      const category = String(body.category ?? "").trim();
+      if (!date || !name || !category) {
+        return sendApiError(res, 400, "HOLIDAY_MISSING_FIELDS", "date, name, and category are required");
+      }
+      const validCategories = ["Public", "Special", "Restricted", "AdHoc"];
+      if (!validCategories.includes(category)) {
+        return sendApiError(res, 400, "HOLIDAY_INVALID_CATEGORY", `category must be one of: ${validCategories.join(", ")}`);
+      }
+      const year = Number(date.slice(0, 4));
+      if (!year || year < 2000 || year > 2100) {
+        return sendApiError(res, 400, "HOLIDAY_INVALID_DATE", "Invalid date year");
+      }
+      const id = nanoid();
+      const now = new Date().toISOString();
+      await db.insert(hrHolidays).values({
+        id,
+        year,
+        date,
+        name,
+        category,
+        isTentative: body.isTentative === true,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const [row] = await db.select().from(hrHolidays).where(eq(hrHolidays.id, id)).limit(1);
+      writeAuditLog(req, { module: "HR", action: "Create", recordId: id, afterValue: row }).catch(() => {});
+      res.status(201).json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create holiday");
+    }
+  });
+
+  app.put("/api/hr/holidays/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const [existing] = await db.select().from(hrHolidays).where(eq(hrHolidays.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "HOLIDAY_NOT_FOUND", "Holiday not found");
+      const body = req.body;
+      const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+      if (body.date !== undefined) {
+        updates.date = String(body.date).trim();
+        updates.year = Number(String(body.date).slice(0, 4));
+      }
+      if (body.name !== undefined) updates.name = String(body.name).trim();
+      if (body.category !== undefined) {
+        const validCategories = ["Public", "Special", "Restricted", "AdHoc"];
+        if (!validCategories.includes(body.category)) {
+          return sendApiError(res, 400, "HOLIDAY_INVALID_CATEGORY", `category must be one of: ${validCategories.join(", ")}`);
+        }
+        updates.category = body.category;
+      }
+      if (body.isTentative !== undefined) updates.isTentative = body.isTentative === true;
+      await db.update(hrHolidays).set(updates).where(eq(hrHolidays.id, id));
+      const [row] = await db.select().from(hrHolidays).where(eq(hrHolidays.id, id)).limit(1);
+      writeAuditLog(req, { module: "HR", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch(() => {});
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update holiday");
+    }
+  });
+
+  app.delete("/api/hr/holidays/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const [existing] = await db.select().from(hrHolidays).where(eq(hrHolidays.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "HOLIDAY_NOT_FOUND", "Holiday not found");
+      await db.delete(hrHolidays).where(eq(hrHolidays.id, id));
+      writeAuditLog(req, { module: "HR", action: "Delete", recordId: id, beforeValue: existing }).catch(() => {});
+      res.json({ success: true });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete holiday");
+    }
+  });
+
+  // Bulk import holidays (for seeding from GAD notification)
+  app.post("/api/hr/holidays/bulk", async (req, res) => {
+    try {
+      const { holidays } = req.body;
+      if (!Array.isArray(holidays) || holidays.length === 0) {
+        return sendApiError(res, 400, "HOLIDAY_BULK_EMPTY", "holidays array is required");
+      }
+      const now = new Date().toISOString();
+      const rows = holidays.map((h: { date: string; name: string; category: string; isTentative?: boolean }) => ({
+        id: nanoid(),
+        year: Number(String(h.date).slice(0, 4)),
+        date: String(h.date).trim(),
+        name: String(h.name).trim(),
+        category: String(h.category).trim(),
+        isTentative: h.isTentative === true,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await db.insert(hrHolidays).values(rows);
+      writeAuditLog(req, { module: "HR", action: "Create", recordId: `bulk-${rows.length}` }).catch(() => {});
+      res.status(201).json({ inserted: rows.length });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to bulk import holidays");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // LEAVE BALANCE IMPORT (Excel-ready endpoint)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  app.post("/api/hr/leave-balances/import", async (req, res) => {
+    try {
+      if (!req.user || !hasPermission(req.user, "M-01", "Update")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-01 Update required to import leave balances", {
+          required: "M-01:Update",
+        });
+      }
+      const { balances, cutoverDate } = req.body;
+      if (!Array.isArray(balances) || balances.length === 0) {
+        return sendApiError(res, 400, "BALANCE_IMPORT_EMPTY", "balances array is required");
+      }
+      const now = new Date().toISOString();
+      let upserted = 0;
+      for (const b of balances) {
+        const employeeId = String(b.employeeId ?? "").trim();
+        const leaveType = String(b.leaveType ?? "").trim();
+        const balanceDays = Number(b.balanceDays ?? 0);
+        const setOffDays = Number(b.setOffDays ?? 0);
+        const setOffExpiryDate = b.setOffExpiryDate ? String(b.setOffExpiryDate).trim() : null;
+        if (!employeeId || !leaveType) continue;
+
+        const [existing] = await db
+          .select()
+          .from(employeeLeaveBalances)
+          .where(and(eq(employeeLeaveBalances.employeeId, employeeId), eq(employeeLeaveBalances.leaveType, leaveType)))
+          .limit(1);
+
+        if (existing) {
+          await db
+            .update(employeeLeaveBalances)
+            .set({ balanceDays, setOffDays, setOffExpiryDate, updatedAt: now })
+            .where(eq(employeeLeaveBalances.id, existing.id));
+        } else {
+          await db.insert(employeeLeaveBalances).values({
+            id: nanoid(),
+            employeeId,
+            leaveType,
+            balanceDays,
+            setOffDays,
+            setOffExpiryDate,
+            updatedAt: now,
+          });
+        }
+        upserted++;
+      }
+      writeAuditLog(req, { module: "HR", action: "Create", recordId: `balance-import-${upserted}` }).catch(() => {});
+      res.json({ upserted, cutoverDate: cutoverDate ?? null });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to import leave balances");
     }
   });
 }

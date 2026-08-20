@@ -6,11 +6,11 @@
 import type { Express } from "express";
 import { eq, desc, and, inArray, sql } from "drizzle-orm";
 import { db } from "./db";
-import { works, worksBills, worksMilestones, worksFinalAccounts, amcContracts, amcBills, landRecords, fixedAssets } from "@shared/db-schema";
+import { works, worksMilestones, worksFinalAccounts, amcContracts, amcBills, landRecords, fixedAssets } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
-import { assertRecordDoDvDaSeparation, hasRole } from "./workflow";
+import { hasRole } from "./workflow";
 import type { AuthUser } from "./auth";
 import { computeAmcRenewalAlerts } from "./operational-alerts";
 
@@ -34,146 +34,7 @@ function isYmd(value: string): boolean {
 export function registerConstructionRoutes(app: Express) {
   const now = () => new Date().toISOString();
 
-  app.get("/api/ioms/works", async (req, res) => {
-    try {
-      const yardId = req.query.yardId as string | undefined;
-      const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
-      const conditions = [];
-      if (scopedIds && scopedIds.length > 0) conditions.push(inArray(works.yardId, scopedIds));
-      if (yardId) conditions.push(eq(works.yardId, yardId));
-      const base = db.select().from(works).orderBy(desc(works.startDate));
-      const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
-      res.json(list);
-    } catch (e) {
-      console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch works");
-    }
-  });
-
-  app.get("/api/ioms/works/:id", async (req, res) => {
-    try {
-      const [row] = await db.select().from(works).where(eq(works.id, req.params.id)).limit(1);
-      if (!row) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
-      if (!yardInScope(req, row.yardId)) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
-      res.json(row);
-    } catch (e) {
-      console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch work");
-    }
-  });
-
-  app.post("/api/ioms/works", async (req, res) => {
-    try {
-      const body = req.body;
-      const yardId = String(body.yardId ?? "");
-      if (!yardInScope(req, yardId))
-        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
-      const id = nanoid();
-      await db.insert(works).values({
-        id,
-        yardId,
-        workType: String(body.workType ?? ""),
-        status: String(body.status ?? "Planned"),
-        description: body.description ? String(body.description) : null,
-        location: body.location ? String(body.location) : null,
-        contractorName: body.contractorName ? String(body.contractorName) : null,
-        contractorContact: body.contractorContact ? String(body.contractorContact) : null,
-        estimateAmount: body.estimateAmount != null ? Number(body.estimateAmount) : null,
-        tenderValue: body.tenderValue != null ? Number(body.tenderValue) : null,
-        workOrderNo: body.workOrderNo ? String(body.workOrderNo) : null,
-        workOrderDate: body.workOrderDate ? String(body.workOrderDate) : null,
-        startDate: body.startDate ? String(body.startDate) : null,
-        endDate: body.endDate ? String(body.endDate) : null,
-        completionDate: body.completionDate ? String(body.completionDate) : null,
-        doUser: body.doUser ? String(body.doUser) : null,
-        dvUser: body.dvUser ? String(body.dvUser) : null,
-        daUser: body.daUser ? String(body.daUser) : null,
-        workNo: body.workNo ? String(body.workNo) : null,
-      });
-      const [row] = await db.select().from(works).where(eq(works.id, id));
-      if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
-      res.status(201).json(row);
-    } catch (e) {
-      console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create work");
-    }
-  });
-
-  app.put("/api/ioms/works/:id", async (req, res) => {
-    try {
-      const id = req.params.id;
-      const [existing] = await db.select().from(works).where(eq(works.id, id));
-      if (!existing) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
-      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
-      const body = req.body;
-      const newYardId = body.yardId !== undefined ? String(body.yardId) : existing.yardId;
-      if (body.yardId !== undefined && !yardInScope(req, newYardId))
-        return sendApiError(res, 403, "WORK_YARD_ACCESS_DENIED", "You do not have access to this yard");
-      const updates: Record<string, unknown> = {};
-      ["workNo", "yardId", "workType", "description", "location", "contractorName", "contractorContact", "estimateAmount", "tenderValue", "workOrderNo", "workOrderDate", "startDate", "endDate", "completionDate", "status", "doUser", "dvUser", "daUser"].forEach((k) => {
-        if (body[k] === undefined) return;
-        if (["estimateAmount", "tenderValue"].includes(k)) updates[k] = body[k] == null ? null : Number(body[k]);
-        else updates[k] = body[k] == null ? null : String(body[k]);
-      });
-      const mergedRoles = {
-        doUser: updates.doUser !== undefined ? (updates.doUser as string | null) : existing.doUser,
-        dvUser: updates.dvUser !== undefined ? (updates.dvUser as string | null) : existing.dvUser,
-        daUser: updates.daUser !== undefined ? (updates.daUser as string | null) : existing.daUser,
-      };
-      const seg = assertRecordDoDvDaSeparation(req.user, mergedRoles);
-      if (!seg.ok) return sendApiError(res, 403, "WORK_DO_DV_DA_SEGREGATION", seg.error);
-      await db.update(works).set(updates as Record<string, string | number | null>).where(eq(works.id, id));
-      const [row] = await db.select().from(works).where(eq(works.id, id));
-      if (!row) return sendApiError(res, 404, "WORK_NOT_FOUND", "Not found");
-      writeAuditLog(req, { module: "Construction", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
-      res.json(row);
-    } catch (e) {
-      console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update work");
-    }
-  });
-
-  app.get("/api/ioms/works/:workId/bills", async (req, res) => {
-    try {
-      const [work] = await db.select().from(works).where(eq(works.id, req.params.workId)).limit(1);
-      if (!work) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
-      if (!yardInScope(req, work.yardId)) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
-      const list = await db.select().from(worksBills).where(eq(worksBills.workId, req.params.workId)).orderBy(desc(worksBills.billDate));
-      res.json(list);
-    } catch (e) {
-      console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch bills");
-    }
-  });
-
-  app.post("/api/ioms/works/bills", async (req, res) => {
-    try {
-      const body = req.body;
-      const workId = String(body.workId ?? "");
-      const [work] = await db.select().from(works).where(eq(works.id, workId)).limit(1);
-      if (!work) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
-      if (!yardInScope(req, work.yardId))
-        return sendApiError(res, 403, "WORK_RECORD_YARD_ACCESS_DENIED", "You do not have access to this work's yard");
-      const id = nanoid();
-      await db.insert(worksBills).values({
-        id,
-        workId,
-        billDate: String(body.billDate ?? ""),
-        amount: Number(body.amount ?? 0),
-        cumulativePaid: body.cumulativePaid != null ? Number(body.cumulativePaid) : 0,
-        voucherId: body.voucherId ? String(body.voucherId) : null,
-        status: String(body.status ?? "Pending"),
-        approvedBy: body.approvedBy ? String(body.approvedBy) : null,
-        billNo: body.billNo ? String(body.billNo) : null,
-      });
-      const [row] = await db.select().from(worksBills).where(eq(worksBills.id, id));
-      if (row) writeAuditLog(req, { module: "Construction", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
-      res.status(201).json(row);
-    } catch (e) {
-      console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create bill");
-    }
-  });
+  // Works CRUD / bills / advances / SD-PBG / vendors: see registerWorksWoRoutes (routes-works-wo.ts)
 
   // --- US-M08-002: milestones / progress entries ---
   app.get("/api/ioms/works/:workId/milestones", async (req, res) => {

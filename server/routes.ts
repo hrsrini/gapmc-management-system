@@ -15,6 +15,7 @@ import { registerMarketIomsRoutes } from "./routes-market-ioms";
 import { registerVoucherRoutes } from "./routes-vouchers";
 import { registerFleetRoutes } from "./routes-fleet";
 import { registerConstructionRoutes } from "./routes-construction";
+import { registerWorksWoRoutes } from "./routes-works-wo";
 import { registerDakRoutes } from "./routes-dak";
 import { registerPortalRoutes } from "./routes-portal";
 import { registerBugRoutes } from "./routes-bugs";
@@ -426,6 +427,7 @@ export async function registerRoutes(
   registerFleetRoutes(app);
 
   // IOMS M-08: Construction & Maintenance
+  registerWorksWoRoutes(app);
   registerConstructionRoutes(app);
 
   // IOMS M-09: Correspondence (Dak) — underlying implementation

@@ -48,6 +48,12 @@ export default function VoucherCreate() {
   const [payeeBank, setPayeeBank] = useState("");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
+  const [sourceModule, setSourceModule] = useState("");
+  const [sourceRecordId, setSourceRecordId] = useState("");
+  const [tdsApplicable, setTdsApplicable] = useState(false);
+  const [tdsSection, setTdsSection] = useState("194C");
+  const [tdsRatePercent, setTdsRatePercent] = useState("2");
+  const [tdsApplicableAmount, setTdsApplicableAmount] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -56,11 +62,25 @@ export default function VoucherCreate() {
     const a = sp.get("amount")?.trim();
     const d = sp.get("description")?.trim();
     const vt = sp.get("voucherType")?.trim();
+    const sm = sp.get("sourceModule")?.trim();
+    const sr = sp.get("sourceRecordId")?.trim();
+    const payee = sp.get("payeeName")?.trim();
     if (y) setYardId(y);
     if (a) setAmount(a);
     if (d) setDescription(d);
     if (vt && VOUCHER_TYPES.includes(vt)) setVoucherType(vt);
+    if (sm) setSourceModule(sm);
+    if (sr) setSourceRecordId(sr);
+    if (payee) setPayeeName(payee);
   }, []);
+
+  const tdsPreview = (() => {
+    const gross = Number(amount) || 0;
+    const base = tdsApplicableAmount !== "" ? Number(tdsApplicableAmount) : gross;
+    const rate = Number(tdsRatePercent) || 0;
+    const tds = tdsApplicable ? Math.round(base * rate) / 100 : 0;
+    return { base, tds, net: Math.round((gross - tds) * 100) / 100 };
+  })();
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
   const { data: heads = [] } = useQuery<ExpenditureHead[]>({
@@ -110,6 +130,14 @@ export default function VoucherCreate() {
       payeeAccount: payeeAccount.trim() || undefined,
       payeeBank: payeeBank.trim() || undefined,
       description: description.trim() || undefined,
+      sourceModule: sourceModule || undefined,
+      sourceRecordId: sourceRecordId || undefined,
+      tdsApplicable,
+      tdsSection: tdsApplicable ? tdsSection : undefined,
+      tdsRatePercent: tdsApplicable ? Number(tdsRatePercent) : undefined,
+      tdsApplicableAmount: tdsApplicable ? tdsPreview.base : undefined,
+      tdsAmount: tdsApplicable ? tdsPreview.tds : 0,
+      netPayable: tdsPreview.net,
     });
   };
 
@@ -198,8 +226,44 @@ export default function VoucherCreate() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Amount *</Label>
+              <Label>Amount (gross) *</Label>
               <Input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" required />
+            </div>
+            <div className="rounded-md border p-3 space-y-3">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={tdsApplicable}
+                  onChange={(e) => setTdsApplicable(e.target.checked)}
+                />
+                TDS applicable
+              </label>
+              {tdsApplicable && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <Label>Section</Label>
+                    <Input value={tdsSection} onChange={(e) => setTdsSection(e.target.value)} placeholder="194C" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Rate %</Label>
+                    <Input type="number" step="0.01" value={tdsRatePercent} onChange={(e) => setTdsRatePercent(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Applicable amount (excl. GST default)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={tdsApplicableAmount}
+                      onChange={(e) => setTdsApplicableAmount(e.target.value)}
+                      placeholder={amount || "Gross"}
+                    />
+                  </div>
+                  <p className="md:col-span-3 text-sm text-muted-foreground">
+                    TDS {tdsPreview.tds.toLocaleString("en-IN", { maximumFractionDigits: 2 })} · Net payable{" "}
+                    {tdsPreview.net.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Description</Label>

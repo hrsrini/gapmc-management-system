@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Link } from "wouter";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { apiRequest, fetchApiGet, queryClient, readApiErrorMessage } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
@@ -31,12 +31,176 @@ import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 /** Module scope (not inside the component) avoids production TDZ from useMemo + .map over shared config maps. */
 const ADMIN_CONFIG_FIELDS: { key: SystemConfigKey; label: string }[] = SYSTEM_CONFIG_KEYS.filter(
   (key) => key !== "ui_sidebar_hidden_hrefs_json" && key !== "ui_dashboard_show_kpi_cards",
-).map(
-  (key) => ({
-    key,
-    label: SYSTEM_CONFIG_LABELS[key],
-  }),
+).map((key) => ({
+  key,
+  label: SYSTEM_CONFIG_LABELS[key],
+}));
+const LEAVE_CONFIG_FIELDS = ADMIN_CONFIG_FIELDS.filter(
+  (f) => f.key.startsWith("leave_") && f.key !== "leave_ho_section_emails_json",
 );
+const GENERAL_CONFIG_FIELDS = ADMIN_CONFIG_FIELDS.filter((f) => !f.key.startsWith("leave_"));
+
+const DEFAULT_HO_SECTIONS = ["Accounts Section", "Admin Section", "Inspection Section"] as const;
+
+function parseHoSectionEmailRows(raw: string | undefined): { section: string; email: string }[] {
+  try {
+    const parsed = JSON.parse(raw || "{}") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return DEFAULT_HO_SECTIONS.map((section) => ({ section, email: "" }));
+    }
+    const entries = Object.entries(parsed as Record<string, unknown>).map(([section, email]) => ({
+      section: String(section).trim(),
+      email: String(email ?? "").trim(),
+    }));
+    const byLower = new Map(entries.map((e) => [e.section.toLowerCase(), e]));
+    const rows: { section: string; email: string }[] = [];
+    for (const section of DEFAULT_HO_SECTIONS) {
+      const hit = byLower.get(section.toLowerCase());
+      rows.push({ section, email: hit?.email ?? "" });
+      byLower.delete(section.toLowerCase());
+    }
+    for (const e of byLower.values()) {
+      if (e.section) rows.push(e);
+    }
+    return rows.length ? rows : DEFAULT_HO_SECTIONS.map((section) => ({ section, email: "" }));
+  } catch {
+    return DEFAULT_HO_SECTIONS.map((section) => ({ section, email: "" }));
+  }
+}
+
+function serializeHoSectionEmailRows(rows: { section: string; email: string }[]): string {
+  const out: Record<string, string> = {};
+  for (const row of rows) {
+    const section = row.section.trim();
+    if (section) out[section] = row.email.trim();
+  }
+  return JSON.stringify(out);
+}
+
+function HoSectionEmailsEditor({
+  values,
+  setValues,
+}: {
+  values: Record<string, string>;
+  setValues: Dispatch<SetStateAction<Record<string, string>>>;
+}) {
+  const rows = parseHoSectionEmailRows(values.leave_ho_section_emails_json);
+
+  const commit = (next: { section: string; email: string }[]) => {
+    setValues((v) => ({ ...v, leave_ho_section_emails_json: serializeHoSectionEmailRows(next) }));
+  };
+
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <div>
+        <p className="text-sm font-medium">HO section emails (sanction order copies)</p>
+        <p className="text-xs text-muted-foreground">
+          For Head Office staff, the Sanction Order PDF is also emailed to the employee&apos;s section inbox.
+          Match section names used on the employee master (Accounts / Admin / Inspection).
+        </p>
+      </div>
+      <div className="space-y-2">
+        {rows.map((row, index) => (
+          <div key={`ho-sec-${index}`} className="grid grid-cols-1 md:grid-cols-5 gap-2 items-center">
+            <Input
+              className="md:col-span-2"
+              value={row.section}
+              placeholder="Section name"
+              onChange={(e) => {
+                const next = rows.map((r, i) => (i === index ? { ...r, section: e.target.value } : r));
+                commit(next);
+              }}
+            />
+            <Input
+              className="md:col-span-2"
+              type="email"
+              value={row.email}
+              placeholder="section@example.gov.in"
+              onChange={(e) => {
+                const next = rows.map((r, i) => (i === index ? { ...r, email: e.target.value } : r));
+                commit(next);
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={rows.length <= 1}
+              onClick={() => commit(rows.filter((_, i) => i !== index))}
+            >
+              Remove
+            </Button>
+          </div>
+        ))}
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => commit([...rows, { section: "", email: "" }])}
+      >
+        Add section
+      </Button>
+    </div>
+  );
+}
+
+function ConfigFieldRow({
+  keyName,
+  label,
+  values,
+  setValues,
+}: {
+  keyName: SystemConfigKey;
+  label: string;
+  values: Record<string, string>;
+  setValues: Dispatch<SetStateAction<Record<string, string>>>;
+}) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start">
+      <Label className="md:col-span-1 pt-2" htmlFor={`cfg-${keyName}`}>
+        {label}
+      </Label>
+      {keyName === "ta_da_entitlement_json" || keyName === "leave_weekly_offs_json" ? (
+        <Textarea
+          id={`cfg-${keyName}`}
+          className="md:col-span-2 font-mono text-sm min-h-[140px]"
+          value={values[keyName] ?? ""}
+          onChange={(e) => setValues((v) => ({ ...v, [keyName]: e.target.value }))}
+          spellCheck={false}
+        />
+      ) : keyName === "aadhaar_hmac_secret" ? (
+        <div className="md:col-span-2 flex flex-col sm:flex-row gap-2">
+          <Input
+            id={`cfg-${keyName}`}
+            type="password"
+            autoComplete="new-password"
+            className="font-mono text-sm flex-1 min-w-0"
+            value={values[keyName] ?? ""}
+            onChange={(e) => setValues((v) => ({ ...v, [keyName]: e.target.value }))}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0 self-start sm:self-auto"
+            onClick={() => setValues((v) => ({ ...v, [keyName]: randomHexSecret() }))}
+          >
+            Random secret
+          </Button>
+        </div>
+      ) : (
+        <Input
+          id={`cfg-${keyName}`}
+          className="md:col-span-2"
+          inputMode="decimal"
+          value={values[keyName] ?? ""}
+          onChange={(e) => setValues((v) => ({ ...v, [keyName]: e.target.value }))}
+        />
+      )}
+    </div>
+  );
+}
 
 export default function AdminConfig() {
   const { toast } = useToast();
@@ -318,49 +482,14 @@ export default function AdminConfig() {
             <Skeleton className="h-48 w-full" />
           ) : (
             <>
-              {ADMIN_CONFIG_FIELDS.map(({ key, label }) => (
-                <div key={key} className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start">
-                  <Label className="md:col-span-1 pt-2" htmlFor={`cfg-${key}`}>
-                    {label}
-                  </Label>
-                  {key === "ta_da_entitlement_json" ? (
-                    <Textarea
-                      id={`cfg-${key}`}
-                      className="md:col-span-2 font-mono text-sm min-h-[140px]"
-                      value={values[key] ?? ""}
-                      onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
-                      spellCheck={false}
-                    />
-                  ) : key === "aadhaar_hmac_secret" ? (
-                    <div className="md:col-span-2 flex flex-col sm:flex-row gap-2">
-                      <Input
-                        id={`cfg-${key}`}
-                        type="password"
-                        autoComplete="new-password"
-                        className="font-mono text-sm flex-1 min-w-0"
-                        value={values[key] ?? ""}
-                        onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="shrink-0 self-start sm:self-auto"
-                        onClick={() => setValues((v) => ({ ...v, [key]: randomHexSecret() }))}
-                      >
-                        Random secret
-                      </Button>
-                    </div>
-                  ) : (
-                    <Input
-                      id={`cfg-${key}`}
-                      className="md:col-span-2"
-                      inputMode="decimal"
-                      value={values[key] ?? ""}
-                      onChange={(e) => setValues((v) => ({ ...v, [key]: e.target.value }))}
-                    />
-                  )}
-                </div>
+              <p className="text-sm font-medium">Leave module (M-01)</p>
+              {LEAVE_CONFIG_FIELDS.map(({ key, label }) => (
+                <ConfigFieldRow key={key} keyName={key} label={label} values={values} setValues={setValues} />
+              ))}
+              <HoSectionEmailsEditor values={values} setValues={setValues} />
+              <p className="text-sm font-medium pt-4">General system config</p>
+              {GENERAL_CONFIG_FIELDS.map(({ key, label }) => (
+                <ConfigFieldRow key={key} keyName={key} label={label} values={values} setValues={setValues} />
               ))}
               <div className="flex flex-wrap gap-2">
                 <Button onClick={handleSave} disabled={updateMutation.isPending}>

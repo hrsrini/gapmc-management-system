@@ -113,8 +113,31 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   leave_hpl_credit_year_days: "20",
   /** M-01 Leave: EL balance cap (days) for warning. */
   leave_el_cap_days: "300",
-  /** M-01 Leave: JSON array of holiday ISO dates (YYYY-MM-DD). */
+  /** M-01 Leave: JSON array of holiday ISO dates (YYYY-MM-DD). @deprecated Use hr_holidays table instead. */
   leave_holidays_json: "[]",
+  /** M-01 Leave: weekly offs JSON — location-type → day numbers (0=Sun..6=Sat). Default: Yard/HO = Sat+Sun; Checkpost = none. */
+  leave_weekly_offs_json: '{"default":[0,6],"Checkpost":[]}',
+  /** M-01 Leave: RH entitlement per calendar year (days). */
+  leave_rh_entitlement_per_year: "2",
+  /** M-01 Leave: ML default days. */
+  leave_ml_default_days: "180",
+  /** M-01 Leave: PL default days. */
+  leave_pl_default_days: "15",
+  /** M-01 Leave: CCL lifetime cap (days). */
+  leave_ccl_lifetime_cap_days: "730",
+  /** M-01 Leave: Sanction Order signatory name. */
+  leave_order_signatory_name: "",
+  /** M-01 Leave: Sanction Order signatory designation. */
+  leave_order_signatory_designation: "Secretary",
+  /** M-01 Leave: upload max size bytes for supporting documents. */
+  leave_doc_max_size_bytes: "5242880",
+  /**
+   * HO section → email map for sanction-order copies when employee is posted at HO.
+   * JSON object: { "Accounts": "accounts@example.gov.in", "Admin": "admin@example.gov.in" }
+   */
+  leave_ho_section_emails_json: "{}",
+  /** EL set-off threshold: when balance > this and < cap, half-year credit is kept separately. */
+  leave_el_setoff_threshold_days: "285",
   /**
    * M-01 HR: SHA256-HMAC key for Aadhaar fingerprint (BR-EMP-09). Stored in DB; never exposed on GET /api/system/config.
    * Env AADHAAR_HMAC_SECRET is used only when this value is empty (legacy / bootstrap).
@@ -182,6 +205,16 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "leave_hpl_credit_year_days",
   "leave_el_cap_days",
   "leave_holidays_json",
+  "leave_weekly_offs_json",
+  "leave_rh_entitlement_per_year",
+  "leave_ml_default_days",
+  "leave_pl_default_days",
+  "leave_ccl_lifetime_cap_days",
+  "leave_order_signatory_name",
+  "leave_order_signatory_designation",
+  "leave_doc_max_size_bytes",
+  "leave_ho_section_emails_json",
+  "leave_el_setoff_threshold_days",
   "aadhaar_hmac_secret",
 ];
 
@@ -241,7 +274,17 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   leave_cl_credit_year_days: "M-01 Leave: CL credit per year (days)",
   leave_hpl_credit_year_days: "M-01 Leave: HPL credit per year (days)",
   leave_el_cap_days: "M-01 Leave: EL cap (days) for warning",
-  leave_holidays_json: "M-01 Leave: holidays JSON array (YYYY-MM-DD)",
+  leave_holidays_json: "M-01 Leave: holidays JSON array (YYYY-MM-DD) [deprecated — use Holiday Master]",
+  leave_weekly_offs_json: "M-01 Leave: weekly offs by location type (JSON)",
+  leave_rh_entitlement_per_year: "M-01 Leave: Restricted Holiday entitlement per year",
+  leave_ml_default_days: "M-01 Leave: Maternity Leave default days",
+  leave_pl_default_days: "M-01 Leave: Paternity Leave default days",
+  leave_ccl_lifetime_cap_days: "M-01 Leave: Child Care Leave lifetime cap (days)",
+  leave_order_signatory_name: "M-01 Leave: Sanction Order signatory name",
+  leave_order_signatory_designation: "M-01 Leave: Sanction Order signatory designation",
+  leave_doc_max_size_bytes: "M-01 Leave: max upload size for leave docs (bytes)",
+  leave_ho_section_emails_json: "M-01 Leave: HO section emails JSON (section name → email)",
+  leave_el_setoff_threshold_days: "M-01 Leave: EL set-off threshold days (default 285)",
   aadhaar_hmac_secret:
     "M-01 HR: Aadhaar HMAC secret (fingerprint for dedup; use a long random value; keep stable — rotating changes new fingerprints)",
   ...SMTP_EMAIL_CONFIG_LABELS,

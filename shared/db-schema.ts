@@ -208,6 +208,8 @@ export const yards = gapmc.table("yards", {
   phone: text("phone"),
   mobile: text("mobile"),
   address: text("address"),
+  /** Notification email for this location (sanction order copy). */
+  email: text("email"),
   isActive: boolean("is_active").default(true),
 });
 
@@ -606,6 +608,10 @@ export const employees = gapmc.table("employees", {
   emergencyContactMobile: text("emergency_contact_mobile"),
   /** Optional link to another employee record (reporting officer). */
   reportingOfficerEmployeeId: text("reporting_officer_employee_id"),
+  /** Service Book Number (used in Sanction Order file numbering). */
+  serviceBookNo: text("service_book_no"),
+  /** Section for HO-posted employees (Accounts / Admin / Inspection). */
+  section: text("section"),
   /** SRS §4.1.1 / SCR-EMP-02: posting location (text; may differ from home yard). */
   locationPosted: text("location_posted"),
   /** §4.1.1: pay level 1–18. */
@@ -719,6 +725,58 @@ export const leaveRequests = gapmc.table("leave_requests", {
   rejectionRemarks: text("rejection_remarks"),
   workflowRevisionCount: integer("workflow_revision_count").default(0),
   dvReturnRemarks: text("dv_return_remarks"),
+  /** Prefix days (weekends/public holidays before fromDate). */
+  prefixDays: integer("prefix_days").default(0),
+  /** Suffix days (weekends/public holidays after toDate). */
+  suffixDays: integer("suffix_days").default(0),
+  /** Prefix start date (YYYY-MM-DD) — first day of prefix. */
+  prefixFromDate: text("prefix_from_date"),
+  /** Suffix end date (YYYY-MM-DD) — last day of suffix. */
+  suffixToDate: text("suffix_to_date"),
+  /** Actual days debited from balance (may differ from calendar span for half-day, commuted 2×, etc.). */
+  debitDays: doublePrecision("debit_days"),
+  /** Substitute employee ID (optional). */
+  substituteEmployeeId: text("substitute_employee_id"),
+  /** Address during leave (Form-1 field). */
+  addressDuringLeave: text("address_during_leave"),
+  /** LTC proposed flag (Form-1 field). */
+  ltcProposed: boolean("ltc_proposed").default(false),
+  /** Leave headquarters / destination. */
+  leaveHq: text("leave_hq"),
+  /** Sanction Order file number (GAPLMB/{SBNo}/ADM-{YYYY}/{seq}). */
+  fileNo: text("file_no"),
+  /** URL/path of generated Sanction Order PDF. */
+  orderPdfUrl: text("order_pdf_url"),
+  /** Ex-post facto flag (emergency / applied after return). */
+  isExPostFacto: boolean("is_ex_post_facto").default(false),
+  /** JSON array of copy-to recipients (free text rows). */
+  copyToJson: text("copy_to_json"),
+  /** Half-day indicator: null = full day(s); "first_half" | "second_half" for CL. */
+  halfDay: text("half_day"),
+  /** Duty date for compensatory Special Holiday ("in lieu of duty on..."). */
+  dutyDateForSplH: text("duty_date_for_spl_h"),
+  /** Controlling officer remarks (filled at DV step). */
+  controllingOfficerRemarks: text("controlling_officer_remarks"),
+  /** DA may override prefix/suffix to Nil (true = disallowed). */
+  prefixSuffixDisallowed: boolean("prefix_suffix_disallowed").default(false),
+  /** Employee rejoining / duty resumption date (YYYY-MM-DD). */
+  rejoiningDate: text("rejoining_date"),
+  rejoiningReportedAt: text("rejoining_reported_at"),
+  rejoiningReportedBy: text("rejoining_reported_by"),
+  /** Generated Joining Report PDF URL. */
+  joiningReportPdfUrl: text("joining_report_pdf_url"),
+  /** Optional scanned signed Joining Report upload URL. */
+  joiningReportScanUrl: text("joining_report_scan_url"),
+  /** Optional fitness certificate upload (not mandatory). */
+  fitnessCertUrl: text("fitness_cert_url"),
+  /** When office acknowledges hard-copy / scanned Joining Report received. */
+  joiningReportAckAt: text("joining_report_ack_at"),
+  joiningReportAckBy: text("joining_report_ack_by"),
+  joiningReportAckRemarks: text("joining_report_ack_remarks"),
+  /** When this leave revises an already-sanctioned leave (fresh application). */
+  revisedFromLeaveId: text("revised_from_leave_id"),
+  /** Set on original leave when a revised leave is approved (points to revision id). */
+  supersededByLeaveId: text("superseded_by_leave_id"),
 });
 
 /** M-01: per-employee leave-type balance (opening set at go-live; debited on DA approval when row exists). */
@@ -727,7 +785,32 @@ export const employeeLeaveBalances = gapmc.table("employee_leave_balances", {
   employeeId: text("employee_id").notNull(),
   leaveType: text("leave_type").notNull(),
   balanceDays: doublePrecision("balance_days").notNull().default(0),
+  /** EL set-off bucket: max +15 days that must be used before next credit date or lapse. */
+  setOffDays: doublePrecision("set_off_days").default(0),
+  /** Date by which set-off days must be consumed (YYYY-MM-DD), else lapsed. */
+  setOffExpiryDate: text("set_off_expiry_date"),
   updatedAt: text("updated_at"),
+});
+
+/** M-01: Holiday calendar master (Public / Special / Restricted / AdHoc). */
+export const hrHolidays = gapmc.table("hr_holidays", {
+  id: text("id").primaryKey(),
+  year: integer("year").notNull(),
+  date: text("date").notNull(),
+  name: text("name").notNull(),
+  /** Public | Special | Restricted | AdHoc */
+  category: text("category").notNull(),
+  /** Moon-dependent / tentative dates flagged for admin update. */
+  isTentative: boolean("is_tentative").default(false),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+/** M-01: Sanction Order file number running sequence (reset yearly). */
+export const leaveOrderSequence = gapmc.table("leave_order_sequence", {
+  id: text("id").primaryKey(),
+  year: integer("year").notNull(),
+  lastSeq: integer("last_seq").notNull().default(0),
 });
 
 /** US-M01-006: pre-travel tour programme (must be approved before TA/DA bill submission). */
@@ -1533,12 +1616,21 @@ export const paymentVouchers = gapmc.table("payment_vouchers", {
   sourceModule: text("source_module"), // M-07 | M-08 | M-01
   sourceRecordId: text("source_record_id"),
   supportingDocs: jsonb("supporting_docs").$type<string[]>(),
+  /** Works A18: TDS on payment voucher */
+  tdsApplicable: boolean("tds_applicable").default(false),
+  tdsSection: text("tds_section"),
+  tdsRatePercent: doublePrecision("tds_rate_percent"),
+  tdsApplicableAmount: doublePrecision("tds_applicable_amount"),
+  tdsAmount: doublePrecision("tds_amount").default(0),
+  netPayable: doublePrecision("net_payable"),
   status: text("status").notNull(), // Draft | Submitted | Verified | Approved | Paid | Rejected
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   daUser: text("da_user"),
   paidAt: text("paid_at"),
   paymentRef: text("payment_ref"),
+  /** Cash | Cheque | DD | Online (required when marking Paid — A15) */
+  paymentMode: text("payment_mode"),
   createdAt: text("created_at"),
   rejectionReasonCode: text("rejection_reason_code"),
   rejectionRemarks: text("rejection_remarks"),
@@ -1632,6 +1724,22 @@ export const vehicleMaintenance = gapmc.table("vehicle_maintenance", {
 });
 
 // ----- M-08: Construction & Maintenance -----
+/** Shared vendor master (Works + later AMC). */
+export const vendors = gapmc.table("vendors", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  code: text("code"),
+  gstin: text("gstin"),
+  pan: text("pan"),
+  contactName: text("contact_name"),
+  phone: text("phone"),
+  email: text("email"),
+  address: text("address"),
+  status: text("status").notNull().default("Active"), // Active | Inactive
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
 export const works = gapmc.table("works", {
   id: text("id").primaryKey(),
   workNo: text("work_no").unique(),
@@ -1639,19 +1747,31 @@ export const works = gapmc.table("works", {
   workType: text("work_type").notNull(),
   description: text("description"),
   location: text("location"),
+  /** @deprecated Prefer vendorId; kept for legacy rows. */
   contractorName: text("contractor_name"),
   contractorContact: text("contractor_contact"),
+  vendorId: text("vendor_id"),
   estimateAmount: doublePrecision("estimate_amount"),
   tenderValue: doublePrecision("tender_value"),
+  /** WO value excl. GST — base for 10% advance cap. */
+  woAmountExclGst: doublePrecision("wo_amount_excl_gst"),
   workOrderNo: text("work_order_no"),
   workOrderDate: text("work_order_date"),
   startDate: text("start_date"),
   endDate: text("end_date"),
   completionDate: text("completion_date"),
-  status: text("status").notNull(), // Planned | InProgress | Completed | Closed
+  /** Draft | Verified | Approved | Rejected | Completed | Closed */
+  status: text("status").notNull(),
+  scopeText: text("scope_text"),
+  termsConditions: text("terms_conditions"),
+  dlpMonths: integer("dlp_months"),
+  penaltyText: text("penalty_text"),
+  retentionPercent: doublePrecision("retention_percent"),
+  remarks: text("remarks"),
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   daUser: text("da_user"),
+  updatedAt: text("updated_at"),
 });
 
 export const worksBills = gapmc.table("works_bills", {
@@ -1659,11 +1779,85 @@ export const worksBills = gapmc.table("works_bills", {
   workId: text("work_id").notNull(),
   billNo: text("bill_no"),
   billDate: text("bill_date").notNull(),
+  /** Total = taxable + GST (GST-inclusive total). */
   amount: doublePrecision("amount").notNull(),
+  taxableAmount: doublePrecision("taxable_amount"),
+  gstPercent: doublePrecision("gst_percent"),
+  gstAmount: doublePrecision("gst_amount"),
   cumulativePaid: doublePrecision("cumulative_paid").default(0),
   voucherId: text("voucher_id"),
+  /** Draft | Verified | Approved | Rejected | Locked */
   status: text("status").notNull(),
   approvedBy: text("approved_by"),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  lockedAt: text("locked_at"),
+  overbillingOverrideRemark: text("overbilling_override_remark"),
+  remarks: text("remarks"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+/** Mobilization advance — one row per work order. */
+export const worksAdvances = gapmc.table("works_advances", {
+  id: text("id").primaryKey(),
+  workId: text("work_id").notNull().unique(),
+  amount: doublePrecision("amount").notNull(),
+  status: text("status").notNull().default("Draft"), // Draft | Verified | Approved | Rejected
+  remarks: text("remarks"),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const worksAdvanceAdjustments = gapmc.table("works_advance_adjustments", {
+  id: text("id").primaryKey(),
+  advanceId: text("advance_id").notNull(),
+  billId: text("bill_id"),
+  voucherId: text("voucher_id"),
+  amount: doublePrecision("amount").notNull(),
+  remarks: text("remarks"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+/** Security Deposit / Performance Bank Guarantee. */
+export const worksSdPbg = gapmc.table("works_sd_pbg", {
+  id: text("id").primaryKey(),
+  workId: text("work_id").notNull(),
+  instrumentType: text("instrument_type").notNull(), // SD | PBG
+  amount: doublePrecision("amount").notNull(),
+  mode: text("mode").notNull(), // Cash | DD | BG | Other
+  instrumentNo: text("instrument_no"),
+  bankName: text("bank_name"),
+  validFrom: text("valid_from"),
+  validTo: text("valid_to"),
+  otherDetails: text("other_details"),
+  /** Active | ReleaseRequested | Released | Invoked */
+  status: text("status").notNull().default("Active"),
+  releaseStatus: text("release_status"), // Draft | Verified | Approved
+  releaseRemarks: text("release_remarks"),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  voucherId: text("voucher_id"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+/** Multi-bill payment lines linked to an M-06 payment voucher. */
+export const worksPaymentAllocations = gapmc.table("works_payment_allocations", {
+  id: text("id").primaryKey(),
+  workId: text("work_id").notNull(),
+  voucherId: text("voucher_id").notNull(),
+  billId: text("bill_id").notNull(),
+  amount: doublePrecision("amount").notNull(),
+  advanceAdjusted: doublePrecision("advance_adjusted").notNull().default(0),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
 });
 
 /** US-M08-002: milestone/progress entries per work/project. */

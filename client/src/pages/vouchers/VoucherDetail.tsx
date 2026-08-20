@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -60,7 +61,16 @@ interface Voucher {
   status: string;
   paidAt?: string | null;
   paymentRef?: string | null;
+  paymentMode?: string | null;
   createdAt?: string | null;
+  tdsApplicable?: boolean | null;
+  tdsSection?: string | null;
+  tdsRatePercent?: number | null;
+  tdsApplicableAmount?: number | null;
+  tdsAmount?: number | null;
+  netPayable?: number | null;
+  sourceModule?: string | null;
+  sourceRecordId?: string | null;
   rejectionReasonCode?: string | null;
   rejectionRemarks?: string | null;
   workflowRevisionCount?: number | null;
@@ -103,6 +113,9 @@ export default function VoucherDetail() {
   const [rejectRemarks, setRejectRemarks] = useState("");
   const [returnDraftOpen, setReturnDraftOpen] = useState(false);
   const [returnDraftRemarks, setReturnDraftRemarks] = useState("");
+  const [paidOpen, setPaidOpen] = useState(false);
+  const [paymentMode, setPaymentMode] = useState("Online");
+  const [paymentRef, setPaymentRef] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
   const [attachmentPreviewOpen, setAttachmentPreviewOpen] = useState(false);
   const [attachmentPreviewPath, setAttachmentPreviewPath] = useState<string | null>(null);
@@ -128,6 +141,10 @@ export default function VoucherDetail() {
       toast({ title: "Status updated", description: `Voucher set to ${payload.status}.` });
       setRejectOpen(false);
       setRejectRemarks("");
+      if (payload.status === "Paid") {
+        setPaidOpen(false);
+        setPaymentRef("");
+      }
       if (payload.status === "Draft" && "returnRemarks" in payload) {
         setReturnDraftOpen(false);
         setReturnDraftRemarks("");
@@ -246,7 +263,7 @@ export default function VoucherDetail() {
                     </>
                   )}
                   {canApprove && voucher.status === "Approved" && (
-                    <Button size="sm" variant="secondary" onClick={() => statusMutation.mutate({ status: "Paid" })} disabled={statusMutation.isPending}>
+                    <Button size="sm" variant="secondary" onClick={() => setPaidOpen(true)} disabled={statusMutation.isPending}>
                       <Banknote className="h-3.5 w-3.5 mr-1" /> Mark Paid
                     </Button>
                   )}
@@ -257,9 +274,41 @@ export default function VoucherDetail() {
               <div><span className="text-muted-foreground">Yard</span><p className="font-medium">{yardById[voucher.yardId] ?? voucher.yardId}</p></div>
               <div><span className="text-muted-foreground">Type</span><p className="font-medium">{voucher.voucherType}</p></div>
               <div><span className="text-muted-foreground">Payee</span><p className="font-medium">{voucher.payeeName}</p></div>
-              <div><span className="text-muted-foreground">Amount</span><p className="font-medium">{formatInr(voucher.amount)}</p></div>
+              <div><span className="text-muted-foreground">Amount (gross)</span><p className="font-medium">{formatInr(voucher.amount)}</p></div>
+              {voucher.tdsApplicable ? (
+                <>
+                  <div>
+                    <span className="text-muted-foreground">TDS</span>
+                    <p className="font-medium">
+                      {formatInr(voucher.tdsAmount ?? 0)}
+                      {voucher.tdsSection ? ` · Sec ${voucher.tdsSection}` : ""}
+                      {voucher.tdsRatePercent != null ? ` @ ${voucher.tdsRatePercent}%` : ""}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Net payable</span>
+                    <p className="font-medium">{formatInr(voucher.netPayable ?? voucher.amount - Number(voucher.tdsAmount ?? 0))}</p>
+                  </div>
+                </>
+              ) : null}
+              {voucher.sourceModule === "M-08" && voucher.sourceRecordId ? (
+                <div className="md:col-span-2">
+                  <span className="text-muted-foreground">Linked Work Order</span>
+                  <p className="font-medium">
+                    <a href={`/construction/works/${voucher.sourceRecordId}`} className="text-primary underline">
+                      Open work
+                    </a>
+                  </p>
+                </div>
+              ) : null}
               {voucher.payeeAccount && <div><span className="text-muted-foreground">Account</span><p className="font-mono text-sm">{voucher.payeeAccount}</p></div>}
               {voucher.payeeBank && <div><span className="text-muted-foreground">Bank</span><p>{voucher.payeeBank}</p></div>}
+              {voucher.paymentMode && (
+                <div>
+                  <span className="text-muted-foreground">Payment mode</span>
+                  <p>{voucher.paymentMode}</p>
+                </div>
+              )}
               {voucher.paymentRef && <div><span className="text-muted-foreground">Payment ref</span><p>{voucher.paymentRef}</p></div>}
               {voucher.paidAt && (
                 <div>
@@ -474,6 +523,57 @@ export default function VoucherDetail() {
                 }
               >
                 Return to draft
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={paidOpen} onOpenChange={setPaidOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Mark Paid</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label>Payment mode *</Label>
+                <Select value={paymentMode} onValueChange={setPaymentMode}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {["Cash", "Cheque", "DD", "Online"].map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {m}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Payment reference</Label>
+                <Input
+                  value={paymentRef}
+                  onChange={(e) => setPaymentRef(e.target.value)}
+                  placeholder="Cheque/UTR/DD no. (optional)"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setPaidOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={statusMutation.isPending}
+                onClick={() =>
+                  statusMutation.mutate({
+                    status: "Paid",
+                    paymentMode,
+                    paymentRef: paymentRef.trim() || undefined,
+                  })
+                }
+              >
+                Confirm Paid
               </Button>
             </DialogFooter>
           </DialogContent>
