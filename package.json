@@ -54,6 +54,7 @@
     "db:apply-works-m08-wo": "dotenv -e .env -- tsx scripts/apply-works-m08-wo.ts",
     "db:apply-voucher-tds-works": "dotenv -e .env -- tsx scripts/apply-voucher-tds-works.ts",
     "db:apply-voucher-payment-mode": "dotenv -e .env -- tsx scripts/apply-voucher-payment-mode.ts",
+    "db:apply-works-sd-release-docs": "dotenv -e .env -- tsx scripts/apply-works-sd-release-docs.ts",
     "db:seed-leave-notify-uat": "dotenv -e .env -- tsx scripts/seed-leave-notify-uat.ts",
     "go-live:leave-check": "dotenv -e .env -- tsx scripts/go-live-leave-check.ts",
     "sit:leave-workflow": "dotenv -e .env -- tsx scripts/sit-leave-workflow.ts",

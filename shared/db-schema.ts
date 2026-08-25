@@ -1836,16 +1836,32 @@ export const worksSdPbg = gapmc.table("works_sd_pbg", {
   validFrom: text("valid_from"),
   validTo: text("valid_to"),
   otherDetails: text("other_details"),
-  /** Active | ReleaseRequested | Released | Invoked */
+  /** Active | Released | Invoked */
   status: text("status").notNull().default("Active"),
-  releaseStatus: text("release_status"), // Draft | Verified | Approved
+  /** @deprecated Prefer releaseDate + release letter upload after WO completion */
+  releaseStatus: text("release_status"),
   releaseRemarks: text("release_remarks"),
+  releaseDate: text("release_date"),
+  /** Stored file name under works/sd-pbg/{id}/ */
+  releaseLetterFile: text("release_letter_file"),
+  releasedBy: text("released_by"),
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   daUser: text("da_user"),
   voucherId: text("voucher_id"),
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
+});
+
+/** Optional licenses / approvals / other scans attached to a Work Order. */
+export const worksDocuments = gapmc.table("works_documents", {
+  id: text("id").primaryKey(),
+  workId: text("work_id").notNull(),
+  category: text("category").notNull().default("Other"), // License | Approval | Other
+  originalName: text("original_name"),
+  storedName: text("stored_name").notNull(),
+  uploadedBy: text("uploaded_by"),
+  createdAt: text("created_at"),
 });
 
 /** Multi-bill payment lines linked to an M-06 payment voucher. */

@@ -1,8 +1,9 @@
 /**
  * M-08 Works Work-Order redevelopment routes:
- * vendors, WO workflow, GST bills, advance, SD/PBG, payment allocations.
+ * vendors, WO workflow, GST bills, advance, SD/PBG, payment allocations, documents.
  */
-import type { Express } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
+import multer from "multer";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "./db";
@@ -14,10 +15,13 @@ import {
   worksAdvanceAdjustments,
   worksSdPbg,
   worksPaymentAllocations,
+  worksDocuments,
   paymentVouchers,
+  expenditureHeads,
 } from "@shared/db-schema";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
+import { routeParamString } from "./route-params";
 import {
   assertRecordDoDvDaSeparation,
   canCreateWorksDocument,
@@ -34,7 +38,43 @@ import {
   maxMobilizationAdvance,
   woAmountBaseExclGst,
 } from "./works-wo-rules";
+import {
+  contentTypeForWorksAttachment,
+  extFromWorksAttachmentMime,
+  isAllowedWorksAttachmentFileName,
+  readSdReleaseLetterBuffer,
+  readWorksDocBuffer,
+  unlinkWorksDocIfExists,
+  writeSdReleaseLetterBuffer,
+  writeWorksDocBuffer,
+} from "./works-attachment-storage";
 
+const worksUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 10 },
+});
+
+function multerWorksUpload(req: Request, res: Response, next: NextFunction): void {
+  worksUpload.array("files", 10)(req, res, (err: unknown) => {
+    if (err) {
+      const msg = err instanceof Error ? err.message : "Upload failed";
+      return sendApiError(res, 400, "WORK_UPLOAD_FAILED", msg);
+    }
+    next();
+  });
+}
+
+function multerSingleWorksUpload(field: string) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    worksUpload.single(field)(req, res, (err: unknown) => {
+      if (err) {
+        const msg = err instanceof Error ? err.message : "Upload failed";
+        return sendApiError(res, 400, "WORK_UPLOAD_FAILED", msg);
+      }
+      next();
+    });
+  };
+}
 function yardInScope(req: Express.Request, yardId: string): boolean {
   const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
   return !scopedIds || scopedIds.length === 0 || scopedIds.includes(yardId);
@@ -653,6 +693,55 @@ export function registerWorksWoRoutes(app: Express) {
       }
       const amount = Number(body.amount ?? 0);
       if (!(amount > 0)) return sendApiError(res, 400, "SD_AMOUNT_INVALID", "Amount must be greater than zero");
+
+      let voucherId = body.voucherId ? String(body.voucherId).trim() : "";
+      const needsCashDdVoucher = mode === "Cash" || mode === "DD";
+      if (needsCashDdVoucher && voucherId) {
+        const [existingVoucher] = await db.select().from(paymentVouchers).where(eq(paymentVouchers.id, voucherId)).limit(1);
+        if (!existingVoucher) {
+          return sendApiError(res, 400, "VOUCHER_NOT_FOUND", "Linked M-06 voucher not found");
+        }
+      }
+      if (needsCashDdVoucher && !voucherId) {
+        const expenditureHeadId = String(body.expenditureHeadId ?? "").trim();
+        if (!expenditureHeadId) {
+          return sendApiError(
+            res,
+            400,
+            "EXPENDITURE_HEAD_REQUIRED",
+            "Expenditure head is required to create M-06 voucher for Cash/DD SD/PBG",
+          );
+        }
+        const [head] = await db.select().from(expenditureHeads).where(eq(expenditureHeads.id, expenditureHeadId)).limit(1);
+        if (!head) return sendApiError(res, 400, "EXPENDITURE_HEAD_INVALID", "Expenditure head not found");
+        const payeeName = String(body.payeeName ?? loaded.work.contractorName ?? "").trim();
+        if (!payeeName) {
+          return sendApiError(res, 400, "PAYEE_REQUIRED", "Payee / contractor name is required for Cash/DD voucher");
+        }
+        voucherId = nanoid();
+        const voucherTs = now();
+        await db.insert(paymentVouchers).values({
+          id: voucherId,
+          voucherType: "ContractorBill",
+          yardId: loaded.work.yardId,
+          expenditureHeadId,
+          payeeName,
+          amount,
+          description:
+            body.description
+              ? String(body.description)
+              : `${instrumentType} (${mode}) for WO ${loaded.work.workOrderNo ?? loaded.work.id}`,
+          sourceModule: "M-08",
+          sourceRecordId: loaded.work.id,
+          status: "Draft",
+          tdsApplicable: false,
+          tdsAmount: 0,
+          netPayable: amount,
+          doUser: req.user?.id ?? null,
+          createdAt: voucherTs,
+        });
+      }
+
       const id = nanoid();
       const ts = now();
       await db.insert(worksSdPbg).values({
@@ -668,7 +757,7 @@ export function registerWorksWoRoutes(app: Express) {
         otherDetails: body.otherDetails ? String(body.otherDetails) : null,
         status: "Active",
         doUser: req.user?.id ?? null,
-        voucherId: body.voucherId ? String(body.voucherId).trim() : null,
+        voucherId: voucherId || null,
         createdAt: ts,
         updatedAt: ts,
       });
@@ -681,6 +770,95 @@ export function registerWorksWoRoutes(app: Express) {
     }
   });
 
+  /**
+   * Release SD/PBG after WO completion: store release date + scanned release letter.
+   * Replaces the older DO→DV→DA request-release path for new releases.
+   */
+  app.post("/api/ioms/works/sd-pbg/:id/release", multerSingleWorksUpload("file"), async (req, res) => {
+    try {
+      if (!canCreateWorksDocument(req.user)) {
+        return sendApiError(res, 403, "SD_RELEASE_DENIED", "Only DO/Admin can release SD/PBG");
+      }
+      const id = routeParamString(req.params.id);
+      const [existing] = await db.select().from(worksSdPbg).where(eq(worksSdPbg.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "SD_NOT_FOUND", "SD/PBG not found");
+      const loaded = await loadWorkScoped(req, existing.workId);
+      if ("error" in loaded) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      if (!["Completed", "Closed"].includes(loaded.work.status)) {
+        return sendApiError(res, 400, "WORK_NOT_COMPLETED", "SD/PBG can be released only after Work Order is Completed");
+      }
+      if (existing.status === "Released") {
+        return sendApiError(res, 400, "SD_ALREADY_RELEASED", "SD/PBG is already released");
+      }
+      if (!["Active", "ReleaseRequested"].includes(existing.status)) {
+        return sendApiError(res, 400, "SD_NOT_RELEASABLE", "Only Active (or pending-release) SD/PBG can be released");
+      }
+      const releaseDate = String(req.body?.releaseDate ?? "").trim();
+      if (!isYmd(releaseDate)) {
+        return sendApiError(res, 400, "RELEASE_DATE_INVALID", "releaseDate must be YYYY-MM-DD");
+      }
+      const file = req.file as Express.Multer.File | undefined;
+      if (!file?.buffer?.length) {
+        return sendApiError(res, 400, "RELEASE_LETTER_REQUIRED", "Upload scanned release letter (PDF/PNG/JPG)");
+      }
+      const ext = extFromWorksAttachmentMime(file.mimetype);
+      if (!ext) {
+        return sendApiError(res, 400, "RELEASE_LETTER_TYPE", "Release letter must be PDF, PNG, or JPG");
+      }
+      const storedName = `${nanoid(16)}${ext}`;
+      await writeSdReleaseLetterBuffer(id, storedName, file.buffer);
+      const ts = now();
+      await db
+        .update(worksSdPbg)
+        .set({
+          status: "Released",
+          releaseStatus: "Approved",
+          releaseDate,
+          releaseLetterFile: storedName,
+          releasedBy: req.user?.id ?? null,
+          releaseRemarks: req.body?.remarks ? String(req.body.remarks) : existing.releaseRemarks,
+          updatedAt: ts,
+        })
+        .where(eq(worksSdPbg.id, id));
+      const [row] = await db.select().from(worksSdPbg).where(eq(worksSdPbg.id, id));
+      writeAuditLog(req, {
+        module: "Construction",
+        action: "SdPbgRelease",
+        recordId: id,
+        beforeValue: existing,
+        afterValue: row,
+      }).catch(console.error);
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to release SD/PBG");
+    }
+  });
+
+  app.get("/api/ioms/works/sd-pbg/:id/release-letter", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const [existing] = await db.select().from(worksSdPbg).where(eq(worksSdPbg.id, id)).limit(1);
+      if (!existing?.releaseLetterFile) {
+        return sendApiError(res, 404, "RELEASE_LETTER_NOT_FOUND", "Release letter not found");
+      }
+      const loaded = await loadWorkScoped(req, existing.workId);
+      if ("error" in loaded) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      if (!isAllowedWorksAttachmentFileName(existing.releaseLetterFile)) {
+        return sendApiError(res, 400, "RELEASE_LETTER_NAME_INVALID", "Invalid stored file name");
+      }
+      const buf = await readSdReleaseLetterBuffer(id, existing.releaseLetterFile);
+      if (!buf) return sendApiError(res, 404, "RELEASE_LETTER_NOT_FOUND", "Release letter file missing");
+      res.setHeader("Content-Type", contentTypeForWorksAttachment(existing.releaseLetterFile));
+      res.setHeader("Content-Disposition", `inline; filename="${existing.releaseLetterFile}"`);
+      res.send(buf);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read release letter");
+    }
+  });
+
+  /** @deprecated Prefer POST /sd-pbg/:id/release after WO completion */
   app.post("/api/ioms/works/sd-pbg/:id/request-release", async (req, res) => {
     try {
       if (!canCreateWorksDocument(req.user)) {
@@ -713,6 +891,7 @@ export function registerWorksWoRoutes(app: Express) {
     }
   });
 
+  /** @deprecated Prefer POST /sd-pbg/:id/release after WO completion */
   app.put("/api/ioms/works/sd-pbg/:id/release-status", async (req, res) => {
     try {
       const id = req.params.id;
@@ -744,6 +923,127 @@ export function registerWorksWoRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update release status");
+    }
+  });
+
+  // ----- Work Order supporting documents (licenses / approvals / other) -----
+  app.get("/api/ioms/works/:workId/documents", async (req, res) => {
+    try {
+      const workId = routeParamString(req.params.workId);
+      const loaded = await loadWorkScoped(req, workId);
+      if ("error" in loaded) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      const list = await db
+        .select()
+        .from(worksDocuments)
+        .where(eq(worksDocuments.workId, workId))
+        .orderBy(desc(worksDocuments.createdAt));
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch work documents");
+    }
+  });
+
+  app.post("/api/ioms/works/:workId/documents", multerWorksUpload, async (req, res) => {
+    try {
+      if (!canCreateWorksDocument(req.user) && !canEditDraftWorksDocument(req.user)) {
+        return sendApiError(res, 403, "WORK_DOC_UPLOAD_DENIED", "Not allowed to upload work documents");
+      }
+      const workId = routeParamString(req.params.workId);
+      const loaded = await loadWorkScoped(req, workId);
+      if ("error" in loaded) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      const categoryRaw = String(req.body?.category ?? "Other");
+      const category = ["License", "Approval", "Other"].includes(categoryRaw) ? categoryRaw : "Other";
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      if (!files.length) {
+        return sendApiError(res, 400, "WORK_DOC_REQUIRED", "Choose one or more files (field name: files)");
+      }
+      const ts = now();
+      const created: (typeof worksDocuments.$inferSelect)[] = [];
+      for (const file of files) {
+        const ext = extFromWorksAttachmentMime(file.mimetype);
+        if (!ext) continue;
+        const storedName = `${nanoid(16)}${ext}`;
+        await writeWorksDocBuffer(loaded.work.id, storedName, file.buffer);
+        const docId = nanoid();
+        await db.insert(worksDocuments).values({
+          id: docId,
+          workId: loaded.work.id,
+          category,
+          originalName: file.originalname ? String(file.originalname).slice(0, 200) : null,
+          storedName,
+          uploadedBy: req.user?.id ?? null,
+          createdAt: ts,
+        });
+        const [row] = await db.select().from(worksDocuments).where(eq(worksDocuments.id, docId));
+        if (row) created.push(row);
+      }
+      if (!created.length) {
+        return sendApiError(res, 400, "WORK_DOC_TYPE", "Files must be PDF, PNG, or JPG");
+      }
+      writeAuditLog(req, {
+        module: "Construction",
+        action: "WorkDocumentsUpload",
+        recordId: loaded.work.id,
+        afterValue: { ids: created.map((c) => c.id) },
+      }).catch(console.error);
+      res.status(201).json(created);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to upload work documents");
+    }
+  });
+
+  app.get("/api/ioms/works/:workId/documents/:docId/file", async (req, res) => {
+    try {
+      const workId = routeParamString(req.params.workId);
+      const docId = routeParamString(req.params.docId);
+      const loaded = await loadWorkScoped(req, workId);
+      if ("error" in loaded) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      const [doc] = await db.select().from(worksDocuments).where(eq(worksDocuments.id, docId)).limit(1);
+      if (!doc || doc.workId !== loaded.work.id) {
+        return sendApiError(res, 404, "WORK_DOC_NOT_FOUND", "Document not found");
+      }
+      if (!isAllowedWorksAttachmentFileName(doc.storedName)) {
+        return sendApiError(res, 400, "WORK_DOC_NAME_INVALID", "Invalid stored file name");
+      }
+      const buf = await readWorksDocBuffer(loaded.work.id, doc.storedName);
+      if (!buf) return sendApiError(res, 404, "WORK_DOC_NOT_FOUND", "Document file missing");
+      const downloadName = doc.originalName || doc.storedName;
+      res.setHeader("Content-Type", contentTypeForWorksAttachment(doc.storedName));
+      res.setHeader("Content-Disposition", `inline; filename="${downloadName.replace(/"/g, "")}"`);
+      res.send(buf);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to read work document");
+    }
+  });
+
+  app.delete("/api/ioms/works/:workId/documents/:docId", async (req, res) => {
+    try {
+      if (!canCreateWorksDocument(req.user)) {
+        return sendApiError(res, 403, "WORK_DOC_DELETE_DENIED", "Only DO/Admin can delete work documents");
+      }
+      const workId = routeParamString(req.params.workId);
+      const docId = routeParamString(req.params.docId);
+      const loaded = await loadWorkScoped(req, workId);
+      if ("error" in loaded) return sendApiError(res, 404, "WORK_NOT_FOUND", "Work not found");
+      const [doc] = await db.select().from(worksDocuments).where(eq(worksDocuments.id, docId)).limit(1);
+      if (!doc || doc.workId !== loaded.work.id) {
+        return sendApiError(res, 404, "WORK_DOC_NOT_FOUND", "Document not found");
+      }
+      await unlinkWorksDocIfExists(loaded.work.id, doc.storedName);
+      await db.delete(worksDocuments).where(eq(worksDocuments.id, doc.id));
+      writeAuditLog(req, {
+        module: "Construction",
+        action: "WorkDocumentDelete",
+        recordId: doc.id,
+        beforeValue: doc,
+      }).catch(console.error);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete work document");
     }
   });
 

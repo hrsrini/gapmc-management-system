@@ -77,7 +77,18 @@ interface SdPbg {
   mode: string;
   status: string;
   releaseStatus?: string | null;
+  releaseDate?: string | null;
+  releaseLetterFile?: string | null;
   instrumentNo?: string | null;
+  voucherId?: string | null;
+}
+interface WorkDoc {
+  id: string;
+  workId: string;
+  category: string;
+  originalName?: string | null;
+  storedName: string;
+  createdAt?: string | null;
 }
 interface YardRef {
   id: string;
@@ -113,6 +124,13 @@ export default function WorkDetail() {
   const [sdValidFrom, setSdValidFrom] = useState("");
   const [sdValidTo, setSdValidTo] = useState("");
   const [sdVoucherId, setSdVoucherId] = useState("");
+  const [sdExpenditureHeadId, setSdExpenditureHeadId] = useState("");
+  const [releaseOpen, setReleaseOpen] = useState(false);
+  const [releaseSdId, setReleaseSdId] = useState<string | null>(null);
+  const [releaseDate, setReleaseDate] = useState("");
+  const [releaseFile, setReleaseFile] = useState<File | null>(null);
+  const [docCategory, setDocCategory] = useState("License");
+  const [docFiles, setDocFiles] = useState<FileList | null>(null);
   const [payOpen, setPayOpen] = useState(false);
   const [payLines, setPayLines] = useState<Record<string, { selected: boolean; amount: string; advanceAdjusted: string }>>({});
   const [expenditureHeadId, setExpenditureHeadId] = useState("");
@@ -133,6 +151,10 @@ export default function WorkDetail() {
   });
   const { data: sdList = [] } = useQuery<SdPbg[]>({
     queryKey: [`/api/ioms/works/${id}/sd-pbg`],
+    enabled: !!id,
+  });
+  const { data: workDocs = [] } = useQuery<WorkDoc[]>({
+    queryKey: [`/api/ioms/works/${id}/documents`],
     enabled: !!id,
   });
   const { data: allocations = [] } = useQuery<
@@ -286,9 +308,12 @@ export default function WorkDetail() {
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (row: SdPbg) => {
       queryClient.invalidateQueries({ queryKey: [`/api/ioms/works/${id}/sd-pbg`] });
-      toast({ title: "SD/PBG recorded" });
+      toast({
+        title: "SD/PBG recorded",
+        description: row.voucherId ? "Draft M-06 voucher created for Cash/DD — complete DO→DV→DA there." : undefined,
+      });
       setSdOpen(false);
       setSdAmount("");
       setSdInstrumentNo("");
@@ -296,20 +321,22 @@ export default function WorkDetail() {
       setSdValidFrom("");
       setSdValidTo("");
       setSdVoucherId("");
+      setSdExpenditureHeadId("");
+      if (row.voucherId && (row.mode === "Cash" || row.mode === "DD")) {
+        setLocation(`/vouchers/${row.voucherId}`);
+      }
     },
     onError: (e: Error) => toast({ title: "SD/PBG failed", description: e.message, variant: "destructive" }),
   });
 
   const sdReleaseMutation = useMutation({
-    mutationFn: async (vars: { id: string; action: "request" | "status"; status?: string }) => {
-      const url =
-        vars.action === "request"
-          ? `/api/ioms/works/sd-pbg/${vars.id}/request-release`
-          : `/api/ioms/works/sd-pbg/${vars.id}/release-status`;
-      const res = await fetch(url, {
-        method: vars.action === "request" ? "POST" : "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(vars.status ? { status: vars.status } : {}),
+    mutationFn: async (vars: { id: string; releaseDate: string; file: File }) => {
+      const fd = new FormData();
+      fd.append("releaseDate", vars.releaseDate);
+      fd.append("file", vars.file);
+      const res = await fetch(`/api/ioms/works/sd-pbg/${vars.id}/release`, {
+        method: "POST",
+        body: fd,
         credentials: "include",
       });
       if (!res.ok) {
@@ -320,9 +347,56 @@ export default function WorkDetail() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/ioms/works/${id}/sd-pbg`] });
-      toast({ title: "SD/PBG release updated" });
+      toast({ title: "SD/PBG released" });
+      setReleaseOpen(false);
+      setReleaseSdId(null);
+      setReleaseDate("");
+      setReleaseFile(null);
     },
     onError: (e: Error) => toast({ title: "Release failed", description: e.message, variant: "destructive" }),
+  });
+
+  const docUploadMutation = useMutation({
+    mutationFn: async (vars: { category: string; files: FileList }) => {
+      const fd = new FormData();
+      fd.append("category", vars.category);
+      Array.from(vars.files).forEach((f) => fd.append("files", f));
+      const res = await fetch(`/api/ioms/works/${id}/documents`, {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/ioms/works/${id}/documents`] });
+      toast({ title: "Documents uploaded" });
+      setDocFiles(null);
+    },
+    onError: (e: Error) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
+  });
+
+  const docDeleteMutation = useMutation({
+    mutationFn: async (docId: string) => {
+      const res = await fetch(`/api/ioms/works/${id}/documents/${docId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/ioms/works/${id}/documents`] });
+      toast({ title: "Document removed" });
+    },
+    onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
   const payMutation = useMutation({
@@ -438,6 +512,7 @@ export default function WorkDetail() {
   }
 
   const woApproved = ["Approved", "Completed", "Closed"].includes(work.status);
+  const woCompleted = ["Completed", "Closed"].includes(work.status);
 
   return (
     <AppShell breadcrumbs={[{ label: "Construction", href: "/construction" }, { label: work.workOrderNo ?? work.workNo ?? work.id }]}>
@@ -536,6 +611,7 @@ export default function WorkDetail() {
                 <Shield className="h-4 w-4 mr-1" /> SD / PBG ({sdList.length})
               </TabsTrigger>
               <TabsTrigger value="payments">Payments ({allocations.length})</TabsTrigger>
+              <TabsTrigger value="documents">Documents ({workDocs.length})</TabsTrigger>
             </TabsList>
 
             <TabsContent value="bills" className="pt-2 space-y-2">
@@ -751,14 +827,31 @@ export default function WorkDetail() {
                           </>
                         )}
                         {(sdMode === "Cash" || sdMode === "DD") && (
-                          <div>
-                            <Label>Linked M-06 voucher id (optional)</Label>
-                            <Input
-                              value={sdVoucherId}
-                              onChange={(e) => setSdVoucherId(e.target.value)}
-                              placeholder="If Cash/DD already vouchered"
-                            />
-                          </div>
+                          <>
+                            <div>
+                              <Label>Expenditure head (creates Draft M-06 voucher)</Label>
+                              <Select value={sdExpenditureHeadId} onValueChange={setSdExpenditureHeadId}>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select head" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {expenditureHeads.map((h) => (
+                                    <SelectItem key={h.id} value={h.id}>
+                                      {h.code} — {h.description}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <Label>Or link existing voucher id (optional)</Label>
+                              <Input
+                                value={sdVoucherId}
+                                onChange={(e) => setSdVoucherId(e.target.value)}
+                                placeholder="Skip auto-create if already vouchered"
+                              />
+                            </div>
+                          </>
                         )}
                         <DialogFooter>
                           <Button
@@ -772,9 +865,14 @@ export default function WorkDetail() {
                                 validFrom: sdValidFrom || undefined,
                                 validTo: sdValidTo || undefined,
                                 voucherId: sdVoucherId || undefined,
+                                expenditureHeadId: sdExpenditureHeadId || undefined,
                               })
                             }
-                            disabled={sdMutation.isPending || !(Number(sdAmount) > 0)}
+                            disabled={
+                              sdMutation.isPending ||
+                              !(Number(sdAmount) > 0) ||
+                              ((sdMode === "Cash" || sdMode === "DD") && !sdVoucherId && !sdExpenditureHeadId)
+                            }
                           >
                             Save
                           </Button>
@@ -796,36 +894,96 @@ export default function WorkDetail() {
                         </span>
                         <span className="text-muted-foreground"> · {s.mode}</span>
                         {s.instrumentNo ? <span className="text-muted-foreground"> · {s.instrumentNo}</span> : null}
-                        <div className="flex gap-2 mt-1">
+                        <div className="flex flex-wrap gap-2 mt-1">
                           <Badge variant="outline">{s.status}</Badge>
-                          {s.releaseStatus ? <Badge variant="secondary">Release: {s.releaseStatus}</Badge> : null}
+                          {s.releaseDate ? (
+                            <Badge variant="secondary">Released {formatYmdToDisplay(s.releaseDate)}</Badge>
+                          ) : null}
+                          {s.voucherId ? (
+                            <Link href={`/vouchers/${s.voucherId}`} className="text-xs text-primary underline">
+                              Voucher {voucherNoById[s.voucherId] ?? s.voucherId.slice(0, 8)}
+                            </Link>
+                          ) : null}
+                          {s.releaseLetterFile ? (
+                            <a
+                              href={`/api/ioms/works/sd-pbg/${s.id}/release-letter`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-primary underline"
+                            >
+                              Release letter
+                            </a>
+                          ) : null}
                         </div>
                       </div>
                       <div className="flex gap-1">
-                        {s.status === "Active" && canCreate && (
-                          <Button size="sm" variant="outline" onClick={() => sdReleaseMutation.mutate({ id: s.id, action: "request" })}>
-                            Request release
-                          </Button>
-                        )}
-                        {s.status === "ReleaseRequested" && s.releaseStatus === "Draft" && canVerify && (
+                        {["Active", "ReleaseRequested"].includes(s.status) && canCreate && (
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => sdReleaseMutation.mutate({ id: s.id, action: "status", status: "Verified" })}
+                            disabled={!woCompleted}
+                            title={woCompleted ? undefined : "Mark Work Order Completed before releasing SD/PBG"}
+                            onClick={() => {
+                              setReleaseSdId(s.id);
+                              setReleaseDate(new Date().toISOString().slice(0, 10));
+                              setReleaseFile(null);
+                              setReleaseOpen(true);
+                            }}
                           >
-                            Verify release
-                          </Button>
-                        )}
-                        {s.status === "ReleaseRequested" && s.releaseStatus === "Verified" && canApprove && (
-                          <Button size="sm" onClick={() => sdReleaseMutation.mutate({ id: s.id, action: "status", status: "Approved" })}>
-                            Approve release
+                            Release
                           </Button>
                         )}
                       </div>
                     </div>
                   ))
                 )}
+                {!woCompleted && sdList.some((s) => s.status === "Active") ? (
+                  <p className="text-xs text-muted-foreground">
+                    Release is available after the Work Order is marked Completed (upload release date + scanned letter).
+                  </p>
+                ) : null}
               </div>
+
+              <Dialog open={releaseOpen} onOpenChange={setReleaseOpen}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Release SD / PBG</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      After WO completion: enter the release date and upload the scanned release letter (PDF/PNG/JPG).
+                    </p>
+                    <div>
+                      <Label>Release date</Label>
+                      <Input type="date" value={releaseDate} onChange={(e) => setReleaseDate(e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>Scanned release letter</Label>
+                      <Input
+                        type="file"
+                        accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                        onChange={(e) => setReleaseFile(e.target.files?.[0] ?? null)}
+                      />
+                    </div>
+                    <DialogFooter>
+                      <Button
+                        onClick={() => {
+                          if (!releaseSdId || !releaseFile) return;
+                          sdReleaseMutation.mutate({
+                            id: releaseSdId,
+                            releaseDate,
+                            file: releaseFile,
+                          });
+                        }}
+                        disabled={sdReleaseMutation.isPending || !releaseSdId || !releaseDate || !releaseFile}
+                      >
+                        {sdReleaseMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                        Confirm release
+                      </Button>
+                    </DialogFooter>
+                  </div>
+                </DialogContent>
+              </Dialog>
             </TabsContent>
 
             <TabsContent value="payments" className="pt-2 space-y-3">
@@ -984,6 +1142,85 @@ export default function WorkDetail() {
                       <Button variant="outline" size="sm" asChild>
                         <Link href={`/vouchers/${a.voucherId}`}>{voucherNoById[a.voucherId] ?? "Open voucher"}</Link>
                       </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="documents" className="pt-2 space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Optional licenses, approvals, and other scans for this Work Order (PDF/PNG/JPG).
+              </p>
+              {canCreate && (
+                <div className="rounded-md border p-3 space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <Label>Category</Label>
+                      <Select value={docCategory} onValueChange={setDocCategory}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="License">License</SelectItem>
+                          <SelectItem value="Approval">Approval</SelectItem>
+                          <SelectItem value="Other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Files (multi-select)</Label>
+                      <Input
+                        type="file"
+                        multiple
+                        accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                        onChange={(e) => setDocFiles(e.target.files)}
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    disabled={docUploadMutation.isPending || !docFiles?.length}
+                    onClick={() => {
+                      if (!docFiles?.length) return;
+                      docUploadMutation.mutate({ category: docCategory, files: docFiles });
+                    }}
+                  >
+                    {docUploadMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Plus className="h-4 w-4 mr-1" />}
+                    Upload
+                  </Button>
+                </div>
+              )}
+              {workDocs.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No documents uploaded.</p>
+              ) : (
+                <div className="space-y-2">
+                  {workDocs.map((d) => (
+                    <div key={d.id} className="rounded-md border p-3 flex flex-wrap items-center justify-between gap-2 text-sm">
+                      <div>
+                        <Badge variant="outline">{d.category}</Badge>{" "}
+                        <span className="font-medium">{d.originalName ?? d.storedName}</span>
+                        {d.createdAt ? (
+                          <span className="text-muted-foreground"> · {formatYmdToDisplay(d.createdAt.slice(0, 10))}</span>
+                        ) : null}
+                      </div>
+                      <div className="flex gap-1">
+                        <Button variant="outline" size="sm" asChild>
+                          <a href={`/api/ioms/works/${id}/documents/${d.id}/file`} target="_blank" rel="noreferrer">
+                            View
+                          </a>
+                        </Button>
+                        {canCreate && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={docDeleteMutation.isPending}
+                            onClick={() => docDeleteMutation.mutate(d.id)}
+                          >
+                            Remove
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
