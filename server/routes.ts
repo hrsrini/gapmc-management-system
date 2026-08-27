@@ -12,6 +12,7 @@ import { registerHrRoutes } from "./routes-hr";
 import { registerTradersAssetsRoutes } from "./routes-traders-assets";
 import { registerRentIomsRoutes } from "./routes-rent-ioms";
 import { registerMarketIomsRoutes } from "./routes-market-ioms";
+import { registerTraderTransactionReportRoutes } from "./routes-trader-transaction-report";
 import { registerVoucherRoutes } from "./routes-vouchers";
 import { registerFleetRoutes } from "./routes-fleet";
 import { registerConstructionRoutes } from "./routes-construction";
@@ -419,6 +420,7 @@ export async function registerRoutes(
 
   // IOMS M-04: Market Fee & Commodities (commodities, fee rates, farmers, transactions, check post; does not touch gapmc.market_fees)
   registerMarketIomsRoutes(app);
+  registerTraderTransactionReportRoutes(app);
 
   // IOMS M-06: Payment Vouchers
   registerVoucherRoutes(app);

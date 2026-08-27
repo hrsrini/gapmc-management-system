@@ -80,7 +80,7 @@ export default function AdminRentBillingConfig() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).message ?? (err as { error?: string }).error ?? res.statusText);
+        throw new Error((err as { error?: string; message?: string }).message ?? (err as { error?: string }).error ?? res.statusText);
       }
       return res.json();
     },
@@ -103,7 +103,7 @@ export default function AdminRentBillingConfig() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).message ?? (err as { error?: string }).error ?? res.statusText);
+        throw new Error((err as { error?: string; message?: string }).message ?? (err as { error?: string }).error ?? res.statusText);
       }
       return res.json();
     },

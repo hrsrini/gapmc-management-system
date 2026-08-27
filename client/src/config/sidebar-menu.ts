@@ -44,6 +44,7 @@ import {
   BookMarked,
   Ruler,
   Briefcase,
+  Mic,
 } from "lucide-react";
 
 export type SidebarMenuPermission = { module: string; action: "Read" | "Create" | "Update" | "Delete" };
@@ -117,6 +118,9 @@ export const SIDEBAR_MENU_GROUPS: SidebarMenuGroup[] = [
       { title: "Daily prices (M-04)", icon: BarChart3, href: "/market/daily-prices", requirePermission: { module: "M-04", action: "Read" } },
       { title: "Advance ledger (M-04)", icon: Wallet, href: "/market/advance-ledger", requirePermission: { module: "M-04", action: "Read" } },
       { title: "Commodity reports (M-04)", icon: BarChart3, href: "/market/commodity-reports", requirePermission: { module: "M-04", action: "Read" } },
+      { title: "Trader Transaction Report", icon: BarChart3, href: "/market/trader-transaction-report", requirePermission: { module: "M-04", action: "Read" } },
+      { title: "AI calling / voice sessions", icon: Mic, href: "/market/voice-sessions", requirePermission: { module: "M-04", action: "Read" } },
+      { title: "AI calling sample scripts", icon: BookOpen, href: "/market/voice-transcript-script", requirePermission: { module: "M-04", action: "Read" } },
       { title: "Commodities (M-04)", icon: Package, href: "/market/commodities", requirePermission: { module: "M-04", action: "Read" } },
       { title: "Fee rates (M-04)", icon: Percent, href: "/market/fee-rates", requirePermission: { module: "M-04", action: "Read" } },
       { title: "Farmers (M-04)", icon: Users, href: "/market/farmers", requirePermission: { module: "M-04", action: "Read" } },

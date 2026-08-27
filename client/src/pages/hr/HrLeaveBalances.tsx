@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { AlertCircle, CalendarDays, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, CalendarDays, Plus, Trash2, X } from "lucide-react";
 import { Link } from "wouter";
 import {
   Select,
@@ -17,6 +17,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+/** Same codes as Leave Application (IOMS M-01). */
+const ALL_LEAVE_TYPES = ["EL", "HPL", "COMMUTED", "CL", "RH", "SPL_H", "ML", "PL", "EOL", "CCL"] as const;
+const LEAVE_TYPE_LABELS: Record<string, string> = {
+  EL: "Earned Leave",
+  HPL: "Half Pay Leave",
+  COMMUTED: "Commuted Leave",
+  CL: "Casual Leave",
+  RH: "Restricted Holiday",
+  SPL_H: "Special Holiday",
+  ML: "Maternity Leave",
+  PL: "Paternity Leave",
+  EOL: "Extraordinary Leave",
+  CCL: "Child Care Leave",
+};
 
 interface EmployeeRow {
   id: string;
@@ -43,6 +58,34 @@ type EditableRow = {
   setOffExpiryDate: string;
 };
 
+function normalizeLeaveTypeCode(raw: string): string {
+  const t = raw.trim().toUpperCase().replace(/\s+/g, " ");
+  const aliases: Record<string, string> = {
+    "CASUAL LEAVE": "CL",
+    "RESTRICTED HOLIDAY": "RH",
+    "RISTRICTED HOLIDAY": "RH",
+    "SPECIAL HOLIDAY": "SPL_H",
+    SH: "SPL_H",
+    "HALF PAY LEAVE": "HPL",
+    "EARNED LEAVE": "EL",
+    "COMMUTED LEAVE": "COMMUTED",
+    "MATERNITY LEAVE": "ML",
+    "PATERNITY LEAVE": "PL",
+    "EXTRAORDINARY LEAVE": "EOL",
+    "CHILD CARE LEAVE": "CCL",
+  };
+  if (aliases[t]) return aliases[t];
+  if ((ALL_LEAVE_TYPES as readonly string[]).includes(t)) return t;
+  return t;
+}
+
+function toDateInputValue(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const s = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return "";
+}
+
 export default function HrLeaveBalances() {
   const { can } = useAuth();
   const { toast } = useToast();
@@ -59,14 +102,17 @@ export default function HrLeaveBalances() {
   const [rows, setRows] = useState<EditableRow[]>([]);
 
   useEffect(() => {
-    const next: EditableRow[] = balances.map((b) => ({
-      key: b.id,
-      employeeId: b.employeeId,
-      leaveType: b.leaveType,
-      balanceDays: String(b.balanceDays),
-      setOffDays: String(b.setOffDays ?? 0),
-      setOffExpiryDate: b.setOffExpiryDate ?? "",
-    }));
+    const next: EditableRow[] = balances.map((b) => {
+      const code = normalizeLeaveTypeCode(b.leaveType);
+      return {
+        key: b.id,
+        employeeId: b.employeeId,
+        leaveType: (ALL_LEAVE_TYPES as readonly string[]).includes(code) ? code : "EL",
+        balanceDays: String(b.balanceDays),
+        setOffDays: String(b.setOffDays ?? 0),
+        setOffExpiryDate: toDateInputValue(b.setOffExpiryDate),
+      };
+    });
     setRows(next);
   }, [balances]);
 
@@ -103,7 +149,14 @@ export default function HrLeaveBalances() {
     const first = employees[0]?.id ?? "";
     setRows((r) => [
       ...r,
-      { key: `new-${Date.now()}`, employeeId: first, leaveType: "EL", balanceDays: "0", setOffDays: "0", setOffExpiryDate: "" },
+      {
+        key: `new-${Date.now()}`,
+        employeeId: first,
+        leaveType: "CL",
+        balanceDays: "0",
+        setOffDays: "0",
+        setOffExpiryDate: "",
+      },
     ]);
   }
 
@@ -120,14 +173,18 @@ export default function HrLeaveBalances() {
       employeeId: string;
       leaveType: string;
       balanceDays: number;
-      setOffDays?: number;
-      setOffExpiryDate?: string | null;
+      setOffDays: number;
+      setOffExpiryDate: string | null;
     }[] = [];
+    const seen = new Set<string>();
+
     for (const row of rows) {
       const employeeId = row.employeeId.trim();
-      const leaveType = row.leaveType.trim();
+      const leaveType = normalizeLeaveTypeCode(row.leaveType);
       const balanceDays = Number(row.balanceDays);
       const setOffDays = Number(row.setOffDays);
+      const setOffExpiryDate = row.setOffExpiryDate.trim() || null;
+
       if (!employeeId || !leaveType || !Number.isFinite(balanceDays) || balanceDays < 0) {
         toast({
           title: "Invalid row",
@@ -136,16 +193,44 @@ export default function HrLeaveBalances() {
         });
         return;
       }
+      if (!(ALL_LEAVE_TYPES as readonly string[]).includes(leaveType)) {
+        toast({
+          title: "Invalid leave type",
+          description: `Use a standard leave type (e.g. CL, RH, SPL_H). Got: ${row.leaveType}`,
+          variant: "destructive",
+        });
+        return;
+      }
       if (!Number.isFinite(setOffDays) || setOffDays < 0) {
         toast({ title: "Invalid row", description: "Set-off days must be ≥ 0.", variant: "destructive" });
         return;
       }
+      if (setOffExpiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(setOffExpiryDate)) {
+        toast({
+          title: "Invalid set-off expiry",
+          description: "Set-off expiry must be a valid date (or cleared).",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const dupKey = `${employeeId}::${leaveType}`;
+      if (seen.has(dupKey)) {
+        toast({
+          title: "Duplicate leave type",
+          description: "Each employee can have only one opening balance row per leave type.",
+          variant: "destructive",
+        });
+        return;
+      }
+      seen.add(dupKey);
+
       normalized.push({
         employeeId,
         leaveType,
         balanceDays,
         setOffDays,
-        setOffExpiryDate: row.setOffExpiryDate.trim() || null,
+        setOffExpiryDate,
       });
     }
     saveMutation.mutate({ rows: normalized });
@@ -163,7 +248,8 @@ export default function HrLeaveBalances() {
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             Configure go-live opening balance per leave type. When a row exists for an employee and type, approving a
-            leave debits from that balance (EL uses set-off bucket first when valid).
+            leave debits from that balance (EL uses set-off bucket first when valid). Leave types match Leave
+            Application codes (CL, RH, SPL_H, …).
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -208,12 +294,22 @@ export default function HrLeaveBalances() {
                     </div>
                     <div className="md:col-span-2 space-y-1">
                       <Label>Leave type</Label>
-                      <Input
+                      <Select
                         value={row.leaveType}
-                        onChange={(e) => updateRow(row.key, { leaveType: e.target.value })}
-                        placeholder="EL, CL, ML…"
+                        onValueChange={(v) => updateRow(row.key, { leaveType: v })}
                         disabled={!canUpdate}
-                      />
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Leave type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ALL_LEAVE_TYPES.map((t) => (
+                            <SelectItem key={t} value={t}>
+                              {t} — {LEAVE_TYPE_LABELS[t] ?? t}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="md:col-span-2 space-y-1">
                       <Label>Balance (days)</Label>
@@ -239,12 +335,27 @@ export default function HrLeaveBalances() {
                     </div>
                     <div className="md:col-span-2 space-y-1">
                       <Label>Set-off expiry</Label>
-                      <Input
-                        type="date"
-                        value={row.setOffExpiryDate}
-                        onChange={(e) => updateRow(row.key, { setOffExpiryDate: e.target.value })}
-                        disabled={!canUpdate}
-                      />
+                      <div className="flex gap-1">
+                        <Input
+                          type="date"
+                          value={row.setOffExpiryDate}
+                          onChange={(e) => updateRow(row.key, { setOffExpiryDate: e.target.value })}
+                          disabled={!canUpdate}
+                          className="flex-1"
+                        />
+                        {canUpdate && row.setOffExpiryDate ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            title="Clear set-off expiry"
+                            aria-label="Clear set-off expiry"
+                            onClick={() => updateRow(row.key, { setOffExpiryDate: "" })}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        ) : null}
+                      </div>
                     </div>
                     <div className="md:col-span-1 flex gap-1 justify-end">
                       <Button

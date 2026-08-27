@@ -1413,6 +1413,10 @@ export const purchaseTransactions = gapmc.table("purchase_transactions", {
   transactionDate: text("transaction_date").notNull(),
   /** FR-AST-014 phase-1: grace period transaction flag. */
   isGracePeriod: boolean("is_grace_period").default(false),
+  /** Optional capture fields (voice / counter) for report display. */
+  placeOfPurchase: text("place_of_purchase"),
+  ratePerUnit: doublePrecision("rate_per_unit"),
+  farmerNameSnapshot: text("farmer_name_snapshot"),
   status: text("status").notNull(),
   receiptId: text("receipt_id"),
   doUser: text("do_user"),
@@ -1423,6 +1427,36 @@ export const purchaseTransactions = gapmc.table("purchase_transactions", {
   /** M-04 adjusted return: links to an Approved original purchase row. */
   parentTransactionId: text("parent_transaction_id"),
   entryKind: text("entry_kind").notNull().default("Original"), // Original | Adjustment
+});
+
+export type TraderVoiceSessionLine = {
+  seq: number;
+  commodityId: string | null;
+  commodityName: string;
+  quantity: number;
+  unit: string;
+  ratePerUnit: number;
+  farmerName: string;
+  placeOfPurchase: string;
+  totalValue: number;
+  confirmed: boolean;
+};
+
+/** AI / IVR trader transaction recording session (draft lines → submit to purchase_transactions). */
+export const traderVoiceSessions = gapmc.table("trader_voice_sessions", {
+  id: text("id").primaryKey(),
+  traderLicenceId: text("trader_licence_id").notNull(),
+  yardId: text("yard_id").notNull(),
+  /** Open | Submitted | Abandoned */
+  status: text("status").notNull().default("Open"),
+  mobileVerified: boolean("mobile_verified").notNull().default(false),
+  licenceClass: text("licence_class"),
+  linesJson: jsonb("lines_json").$type<TraderVoiceSessionLine[]>().notNull().default([]),
+  totalPurchaseValue: doublePrecision("total_purchase_value").notNull().default(0),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  submittedAt: text("submitted_at"),
 });
 
 /** M-04 unified transaction wizard (cases A–G); multi-commodity counter entry + receipt. */

@@ -93,6 +93,7 @@ import { aadhaarFingerprintHmac, maskAadhaar, readAadhaarRawFromRequestBody } fr
 import { inclusiveCalendarDays } from "./hr-leave-utils";
 import { calculatePrefixSuffix, calculateDebitDays, validateRhDate } from "./hr-leave-prefix-suffix";
 import { debitLeaveBalanceOnApproval, creditLeaveBalanceOnReversal, balanceLeaveTypeFor } from "./hr-leave-balance-debit";
+import { healLeaveBalanceEmployeeIds, resolveEmployeePkForLeaveBalance } from "./hr-leave-balance-resolve";
 import {
   validateLeaveDurationCaps,
   validateCclLifetimeCap,
@@ -1436,6 +1437,8 @@ export function registerHrRoutes(app: Express) {
   app.get("/api/hr/leave-balances", async (req, res) => {
     try {
       if (!requireLeaveRead(req, res)) return;
+      // Heal rows imported with EMP-NNN instead of employees.id (Select needs PK).
+      await healLeaveBalanceEmployeeIds();
       const rows = await db.select().from(employeeLeaveBalances).orderBy(desc(employeeLeaveBalances.updatedAt));
       res.json(rows);
     } catch (e) {
@@ -1493,61 +1496,124 @@ export function registerHrRoutes(app: Express) {
       }
       const body = req.body as { rows?: unknown };
       const rows = Array.isArray(body.rows) ? body.rows : [];
+      const allowedTypes = new Set(["EL", "HPL", "COMMUTED", "CL", "RH", "SPL_H", "ML", "PL", "EOL", "CCL"]);
+      const leaveTypeAliases: Record<string, string> = {
+        "CASUAL LEAVE": "CL",
+        "RESTRICTED HOLIDAY": "RH",
+        "RISTRICTED HOLIDAY": "RH",
+        "SPECIAL HOLIDAY": "SPL_H",
+        SH: "SPL_H",
+        "HALF PAY LEAVE": "HPL",
+        "EARNED LEAVE": "EL",
+        "COMMUTED LEAVE": "COMMUTED",
+        "MATERNITY LEAVE": "ML",
+        "PATERNITY LEAVE": "PL",
+        "EXTRAORDINARY LEAVE": "EOL",
+        "CHILD CARE LEAVE": "CCL",
+      };
+
       const normalized: {
         employeeId: string;
         leaveType: string;
         balanceDays: number;
-        setOffDays?: number;
-        setOffExpiryDate?: string | null;
+        setOffDays: number;
+        setOffExpiryDate: string | null;
       }[] = [];
+      const seen = new Set<string>();
+
       for (const r of rows) {
         if (!r || typeof r !== "object") continue;
         const o = r as Record<string, unknown>;
-        const employeeId = String(o.employeeId ?? "").trim();
-        const leaveType = String(o.leaveType ?? "").trim();
+        const rawEmployeeId = String(o.employeeId ?? "").trim();
+        let leaveType = String(o.leaveType ?? "")
+          .trim()
+          .toUpperCase()
+          .replace(/\s+/g, " ");
+        leaveType = leaveTypeAliases[leaveType] ?? leaveType;
         const balanceDays = Number(o.balanceDays);
-        const setOffDays = o.setOffDays !== undefined ? Number(o.setOffDays) : undefined;
+        const setOffDays = o.setOffDays !== undefined ? Number(o.setOffDays) : 0;
+        const setOffExpiryRaw = o.setOffExpiryDate;
         const setOffExpiryDate =
-          o.setOffExpiryDate !== undefined
-            ? o.setOffExpiryDate === null || String(o.setOffExpiryDate).trim() === ""
-              ? null
-              : String(o.setOffExpiryDate).trim()
-            : undefined;
-        if (!employeeId || !leaveType || !Number.isFinite(balanceDays) || balanceDays < 0) {
+          setOffExpiryRaw === null || setOffExpiryRaw === undefined || String(setOffExpiryRaw).trim() === ""
+            ? null
+            : String(setOffExpiryRaw).trim().slice(0, 10);
+
+        if (!rawEmployeeId || !leaveType || !Number.isFinite(balanceDays) || balanceDays < 0) {
           return sendApiError(res, 400, "HR_LEAVE_BALANCE_ROW_INVALID", "Each row needs employeeId, leaveType, and balanceDays >= 0.");
         }
-        if (setOffDays !== undefined && (!Number.isFinite(setOffDays) || setOffDays < 0)) {
+        if (!allowedTypes.has(leaveType)) {
+          return sendApiError(
+            res,
+            400,
+            "HR_LEAVE_BALANCE_TYPE_INVALID",
+            `leaveType must be one of: ${Array.from(allowedTypes).join(", ")}`,
+          );
+        }
+        if (!Number.isFinite(setOffDays) || setOffDays < 0) {
           return sendApiError(res, 400, "HR_LEAVE_BALANCE_ROW_INVALID", "setOffDays must be >= 0 when provided.");
         }
+        if (setOffExpiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(setOffExpiryDate)) {
+          return sendApiError(res, 400, "HR_LEAVE_BALANCE_EXPIRY_INVALID", "setOffExpiryDate must be YYYY-MM-DD or empty.");
+        }
+
+        const employeeId = await resolveEmployeePkForLeaveBalance(rawEmployeeId);
+        if (!employeeId) {
+          return sendApiError(res, 400, "HR_LEAVE_BALANCE_EMP_NOT_FOUND", `Unknown employeeId ${rawEmployeeId}`);
+        }
+
+        const dupKey = `${employeeId}::${leaveType}`;
+        if (seen.has(dupKey)) {
+          return sendApiError(
+            res,
+            400,
+            "HR_LEAVE_BALANCE_DUPLICATE",
+            `Duplicate opening balance for the same employee and leave type (${leaveType}).`,
+          );
+        }
+        seen.add(dupKey);
+
         normalized.push({ employeeId, leaveType, balanceDays, setOffDays, setOffExpiryDate });
       }
-      for (const r of normalized) {
-        const [emp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, r.employeeId)).limit(1);
-        if (!emp) {
-          return sendApiError(res, 400, "HR_LEAVE_BALANCE_EMP_NOT_FOUND", `Unknown employeeId ${r.employeeId}`);
+
+      // Replace-all: remove rows deleted in the UI, then upsert the submitted set.
+      const existing = await db.select().from(employeeLeaveBalances);
+      const keep = new Set(normalized.map((r) => `${r.employeeId}::${r.leaveType}`));
+      for (const ex of existing) {
+        if (!keep.has(`${ex.employeeId}::${ex.leaveType}`)) {
+          await db.delete(employeeLeaveBalances).where(eq(employeeLeaveBalances.id, ex.id));
         }
-        const [existing] = await db
+      }
+
+      const ts = now();
+      for (const r of normalized) {
+        const [row] = await db
           .select()
           .from(employeeLeaveBalances)
           .where(and(eq(employeeLeaveBalances.employeeId, r.employeeId), eq(employeeLeaveBalances.leaveType, r.leaveType)))
           .limit(1);
-        const patch: Record<string, unknown> = { balanceDays: r.balanceDays, updatedAt: now() };
-        if (r.setOffDays !== undefined) patch.setOffDays = r.setOffDays;
-        if (r.setOffExpiryDate !== undefined) patch.setOffExpiryDate = r.setOffExpiryDate;
-        if (existing) {
-          await db.update(employeeLeaveBalances).set(patch as Record<string, string | number | null>).where(eq(employeeLeaveBalances.id, existing.id));
+        if (row) {
+          await db
+            .update(employeeLeaveBalances)
+            .set({
+              balanceDays: r.balanceDays,
+              setOffDays: r.setOffDays,
+              setOffExpiryDate: r.setOffExpiryDate,
+              updatedAt: ts,
+            })
+            .where(eq(employeeLeaveBalances.id, row.id));
         } else {
           await db.insert(employeeLeaveBalances).values({
             id: nanoid(),
             employeeId: r.employeeId,
             leaveType: r.leaveType,
             balanceDays: r.balanceDays,
-            setOffDays: r.setOffDays ?? 0,
-            setOffExpiryDate: r.setOffExpiryDate ?? null,
-            updatedAt: now(),
+            setOffDays: r.setOffDays,
+            setOffExpiryDate: r.setOffExpiryDate,
+            updatedAt: ts,
           });
         }
       }
+
       const list = await db.select().from(employeeLeaveBalances).orderBy(desc(employeeLeaveBalances.updatedAt));
       writeAuditLog(req, { module: "HR", action: "Update", recordId: "leave_balances", afterValue: { count: normalized.length } }).catch((e) =>
         console.error("Audit log failed:", e),
@@ -3458,15 +3524,39 @@ export function registerHrRoutes(app: Express) {
       if (!Array.isArray(balances) || balances.length === 0) {
         return sendApiError(res, 400, "BALANCE_IMPORT_EMPTY", "balances array is required");
       }
+
+      await healLeaveBalanceEmployeeIds();
+
       const now = new Date().toISOString();
       let upserted = 0;
+      const skipped: { employeeId: string; leaveType: string; reason: string }[] = [];
+
       for (const b of balances) {
-        const employeeId = String(b.employeeId ?? "").trim();
-        const leaveType = String(b.leaveType ?? "").trim();
+        const rawEmployeeId = String(b.employeeId ?? "").trim();
+        const leaveType = String(b.leaveType ?? "")
+          .trim()
+          .toUpperCase();
         const balanceDays = Number(b.balanceDays ?? 0);
         const setOffDays = Number(b.setOffDays ?? 0);
         const setOffExpiryDate = b.setOffExpiryDate ? String(b.setOffExpiryDate).trim() : null;
-        if (!employeeId || !leaveType) continue;
+        if (!rawEmployeeId || !leaveType) {
+          skipped.push({ employeeId: rawEmployeeId || "(empty)", leaveType: leaveType || "(empty)", reason: "missing employeeId or leaveType" });
+          continue;
+        }
+        if (!Number.isFinite(balanceDays) || balanceDays < 0) {
+          skipped.push({ employeeId: rawEmployeeId, leaveType, reason: "balanceDays must be >= 0" });
+          continue;
+        }
+
+        const employeeId = await resolveEmployeePkForLeaveBalance(rawEmployeeId);
+        if (!employeeId) {
+          skipped.push({
+            employeeId: rawEmployeeId,
+            leaveType,
+            reason: "unknown employeeId (use EMP-NNN or internal employee id)",
+          });
+          continue;
+        }
 
         const [existing] = await db
           .select()
@@ -3492,8 +3582,20 @@ export function registerHrRoutes(app: Express) {
         }
         upserted++;
       }
-      writeAuditLog(req, { module: "HR", action: "Create", recordId: `balance-import-${upserted}` }).catch(() => {});
-      res.json({ upserted, cutoverDate: cutoverDate ?? null });
+
+      if (upserted === 0 && skipped.length > 0) {
+        return sendApiError(res, 400, "BALANCE_IMPORT_NO_MATCH", "No rows imported — check employeeId values", {
+          skipped,
+        });
+      }
+
+      writeAuditLog(req, {
+        module: "HR",
+        action: "Create",
+        recordId: `balance-import-${upserted}`,
+        afterValue: { upserted, skippedCount: skipped.length, cutoverDate: cutoverDate ?? null },
+      }).catch(() => {});
+      res.json({ upserted, skipped, cutoverDate: cutoverDate ?? null });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to import leave balances");

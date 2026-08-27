@@ -90,6 +90,9 @@ import MarketCollectionReports from "@/pages/market/MarketCollectionReports";
 import MarketDailyPrices from "@/pages/market/MarketDailyPrices";
 import MarketAdvanceLedger from "@/pages/market/MarketAdvanceLedger";
 import MarketCommodityReports from "@/pages/market/MarketCommodityReports";
+import TraderTransactionReport from "@/pages/market/TraderTransactionReport";
+import TraderVoiceSessions from "@/pages/market/TraderVoiceSessions";
+import TraderVoiceTranscriptScript from "@/pages/market/TraderVoiceTranscriptScript";
 import CheckPostInward from "@/pages/checkpost/CheckPostInward";
 import CheckPostOutward from "@/pages/checkpost/CheckPostOutward";
 import ExitPermitsList from "@/pages/checkpost/ExitPermitsList";
@@ -252,6 +255,15 @@ function Router() {
       </Route>
       <Route path="/market/commodity-reports">
         <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketCommodityReports /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/market/trader-transaction-report">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><TraderTransactionReport /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/market/voice-sessions">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><TraderVoiceSessions /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/market/voice-transcript-script">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><TraderVoiceTranscriptScript /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/market/transactions/new">
         <ProtectedRoute><RequirePermission module="M-04" action="Create"><MarketTransactionWizard /></RequirePermission></ProtectedRoute>

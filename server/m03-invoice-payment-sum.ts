@@ -30,7 +30,6 @@ export async function sumPaidByInvoiceIdsViaAllocations(
   for (const r of rows) {
     const st = String(r.status ?? "");
     if (st !== "Paid" && st !== "Reconciled") continue;
-    if (st === "Reversed") continue;
     if (!depositStatusAllowsLedgerPosting(r.depositStatus)) continue;
     const id = String(r.invoiceId ?? "");
     if (!id) continue;
@@ -62,7 +61,6 @@ export async function sumAllPaidForInvoiceIds(
     if (opts?.excludeReceiptId && r.id === opts.excludeReceiptId) continue;
     const st = String(r.status ?? "");
     if (st !== "Paid" && st !== "Reconciled") continue;
-    if (st === "Reversed") continue;
     if (!depositStatusAllowsLedgerPosting(r.depositStatus)) continue;
     const id = String(r.sourceRecordId ?? "");
     const principal = m03ReceiptPrincipalTowardInvoice(r);

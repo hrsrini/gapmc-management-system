@@ -119,7 +119,8 @@ export function getSupabaseAdmin(): SupabaseClient {
   cached = createClient(requireSupabaseUrl(), requireSupabaseServiceRoleKey(), {
     auth: { persistSession: false, autoRefreshToken: false },
     /** Node 20 has no native WebSocket; realtime-js still constructs on createClient. */
-    realtime: { transport: ws },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ws transport typing vs realtime-js WebSocketLikeConstructor
+    realtime: { transport: ws as any },
   });
   return cached;
 }

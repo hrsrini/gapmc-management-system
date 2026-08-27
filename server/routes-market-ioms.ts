@@ -2589,13 +2589,19 @@ export function registerMarketIomsRoutes(app: Express) {
       }
       const lines = linesRaw
         .map((x) => x as Record<string, unknown>)
-        .map((o) => ({
-          commodityId: String(o.commodityId ?? "").trim(),
-          openingQty: Number(o.openingQty ?? 0) || 0,
-          purchaseQty: Number(o.purchaseQty ?? 0) || 0,
-          purchaseValueInr: Number(o.purchaseValueInr ?? 0) || 0,
-          salesQty: Number(o.salesQty ?? 0) || 0,
-        }))
+        .map((o) => {
+          const openingQty = Number(o.openingQty ?? 0) || 0;
+          const purchaseQty = Number(o.purchaseQty ?? 0) || 0;
+          const salesQty = Number(o.salesQty ?? 0) || 0;
+          return {
+            commodityId: String(o.commodityId ?? "").trim(),
+            openingQty,
+            purchaseQty,
+            purchaseValueInr: Number(o.purchaseValueInr ?? 0) || 0,
+            salesQty,
+            closingQty: openingQty + purchaseQty - salesQty,
+          };
+        })
         .filter((l) => l.commodityId);
 
       // If submitting, always recompute purchase totals from server preview to prevent tampering.
