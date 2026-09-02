@@ -145,10 +145,11 @@ export default function BugDetail() {
     return employees
       .filter((e) => e.userId && e.status === "Active")
       .map((e) => {
-        const name = [e.firstName, e.middleName, e.surname].filter(Boolean).join(" ");
-        const tag = e.empId ?? e.id;
+        const no = (e.empId ?? e.id).trim();
+        const name = [e.firstName, e.middleName, e.surname].filter(Boolean).join(" ").trim();
+        const label = name ? `${no} - ${name}` : no;
         const email = e.workEmail ? ` · ${e.workEmail}` : "";
-        return { id: e.userId!, label: `${name} (${tag})${email}` };
+        return { id: e.userId!, label: `${label}${email}` };
       });
   }, [employees]);
 

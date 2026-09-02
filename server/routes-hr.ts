@@ -607,9 +607,12 @@ export function registerHrRoutes(app: Express) {
       }
 
       const whereClause = conditions.length ? and(...conditions) : undefined;
+      const orderBy = pattern
+        ? [asc(employees.empId), asc(employees.surname), asc(employees.firstName)]
+        : [desc(employees.createdAt)];
       const base = whereClause
-        ? db.select().from(employees).where(whereClause).orderBy(desc(employees.createdAt))
-        : db.select().from(employees).orderBy(desc(employees.createdAt));
+        ? db.select().from(employees).where(whereClause).orderBy(...orderBy)
+        : db.select().from(employees).orderBy(...orderBy);
 
       const limit = limitRaw > 0 ? Math.min(Math.max(limitRaw, 1), 100) : undefined;
       let list = limit ? await base.limit(limit) : await base;

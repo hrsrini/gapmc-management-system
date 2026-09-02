@@ -36,9 +36,9 @@ type SelectContextValue = {
   placeholder?: string
   setPlaceholder: (placeholder?: string) => void
   items: SelectItemData[]
-  setItems: (items: SelectItemData[]) => void
+  registerItems: (items: SelectItemData[], groups: SelectGroupData[]) => void
   groups: SelectGroupData[]
-  setGroups: (groups: SelectGroupData[]) => void
+  selectedLabel: React.ReactNode | null
 }
 
 const SelectContext = React.createContext<SelectContextValue | null>(null)
@@ -53,35 +53,50 @@ function extractSearchText(node: React.ReactNode): string {
   if (node == null || typeof node === "boolean") return ""
   if (typeof node === "string" || typeof node === "number") return String(node)
   if (Array.isArray(node)) return node.map(extractSearchText).join(" ")
-  if (React.isValidElement(node)) return extractSearchText(node.props.children)
+  if (React.isValidElement(node)) {
+    const props = node.props as { children?: React.ReactNode }
+    return extractSearchText(props.children)
+  }
   return ""
 }
 
-function parseSelectContentChildren(children: React.ReactNode): { items: SelectItemData[]; groups: SelectGroupData[] } {
+function getDisplayName(type: unknown): string | undefined {
+  if (typeof type === "function" || (typeof type === "object" && type !== null)) {
+    return (type as { displayName?: string; name?: string }).displayName
+      ?? (type as { name?: string }).name
+  }
+  return undefined
+}
+
+function parseSelectContentChildren(children: React.ReactNode): {
+  items: SelectItemData[]
+  groups: SelectGroupData[]
+} {
   const items: SelectItemData[] = []
   const groups: SelectGroupData[] = []
 
   React.Children.forEach(children, (child) => {
     if (!React.isValidElement(child)) return
-    const childType = child.type as { displayName?: string }
+    const name = getDisplayName(child.type)
 
-    if (childType.displayName === "SelectGroup") {
+    if (name === "SelectGroup") {
       const groupItems: SelectItemData[] = []
       let groupLabel: React.ReactNode | undefined
-      React.Children.forEach(child.props.children, (groupChild) => {
+      const groupChildren = (child.props as { children?: React.ReactNode }).children
+      React.Children.forEach(groupChildren, (groupChild) => {
         if (!React.isValidElement(groupChild)) return
-        const groupChildType = groupChild.type as { displayName?: string }
+        const groupChildName = getDisplayName(groupChild.type)
         const groupProps = groupChild.props as {
           children?: React.ReactNode
           value?: string
           disabled?: boolean
         }
-        if (groupChildType.displayName === "SelectLabel") {
+        if (groupChildName === "SelectLabel") {
           groupLabel = groupProps.children
-        } else if (groupChildType.displayName === "SelectItem") {
+        } else if (groupChildName === "SelectItem") {
           const label = groupProps.children
           groupItems.push({
-            value: String(groupProps.value),
+            value: String(groupProps.value ?? ""),
             label,
             disabled: groupProps.disabled,
             searchText: extractSearchText(label),
@@ -93,7 +108,7 @@ function parseSelectContentChildren(children: React.ReactNode): { items: SelectI
       return
     }
 
-    if (childType.displayName === "SelectItem") {
+    if (name === "SelectItem") {
       const itemProps = child.props as {
         children?: React.ReactNode
         value?: string
@@ -101,7 +116,7 @@ function parseSelectContentChildren(children: React.ReactNode): { items: SelectI
       }
       const label = itemProps.children
       items.push({
-        value: String(itemProps.value),
+        value: String(itemProps.value ?? ""),
         label,
         disabled: itemProps.disabled,
         searchText: extractSearchText(label),
@@ -110,6 +125,10 @@ function parseSelectContentChildren(children: React.ReactNode): { items: SelectI
   })
 
   return { items, groups }
+}
+
+function itemsSignature(items: SelectItemData[]): string {
+  return items.map((i) => `${i.value}\0${i.searchText}\0${i.disabled ? 1 : 0}`).join("\n")
 }
 
 type SelectProps = {
@@ -138,6 +157,7 @@ const Select = ({
   const [placeholder, setPlaceholder] = React.useState<string | undefined>()
   const [items, setItems] = React.useState<SelectItemData[]>([])
   const [groups, setGroups] = React.useState<SelectGroupData[]>([])
+  const [selectedLabel, setSelectedLabel] = React.useState<React.ReactNode | null>(null)
 
   const isControlled = value !== undefined
   const currentValue = isControlled ? value : internalValue
@@ -151,13 +171,39 @@ const Select = ({
     [onOpenChange, openProp],
   )
 
+  const registerItems = React.useCallback((nextItems: SelectItemData[], nextGroups: SelectGroupData[]) => {
+    setItems((prev) => (itemsSignature(prev) === itemsSignature(nextItems) ? prev : nextItems))
+    setGroups((prev) => {
+      if (prev.length !== nextGroups.length) return nextGroups
+      const same = prev.every((g, i) => {
+        const n = nextGroups[i]
+        return (
+          extractSearchText(g.label) === extractSearchText(n.label) &&
+          itemsSignature(g.items) === itemsSignature(n.items)
+        )
+      })
+      return same ? prev : nextGroups
+    })
+  }, [])
+
+  React.useEffect(() => {
+    if (!currentValue) {
+      setSelectedLabel(null)
+      return
+    }
+    const match = items.find((item) => item.value === currentValue)
+    if (match) setSelectedLabel(match.label)
+  }, [currentValue, items])
+
   const handleValueChange = React.useCallback(
     (next: string) => {
+      const match = items.find((item) => item.value === next)
+      if (match) setSelectedLabel(match.label)
       if (!isControlled) setInternalValue(next)
       onValueChange?.(next)
       setOpen(false)
     },
-    [isControlled, onValueChange, setOpen],
+    [isControlled, items, onValueChange, setOpen],
   )
 
   const ctx = React.useMemo<SelectContextValue>(
@@ -170,11 +216,22 @@ const Select = ({
       placeholder,
       setPlaceholder,
       items,
-      setItems,
+      registerItems,
       groups,
-      setGroups,
+      selectedLabel,
     }),
-    [currentValue, handleValueChange, open, setOpen, disabled, placeholder, items, groups],
+    [
+      currentValue,
+      handleValueChange,
+      open,
+      setOpen,
+      disabled,
+      placeholder,
+      items,
+      registerItems,
+      groups,
+      selectedLabel,
+    ],
   )
 
   return (
@@ -202,9 +259,10 @@ const SelectTrigger = React.forwardRef<
   HTMLButtonElement,
   React.ButtonHTMLAttributes<HTMLButtonElement>
 >(({ className, children, ...props }, ref) => {
-  const { value, open, disabled, placeholder, items } = useSelectContext("SelectTrigger")
+  const { value, open, disabled, placeholder, items, selectedLabel } = useSelectContext("SelectTrigger")
   const selected = items.find((item) => item.value === value)
-  const display = selected?.label ?? (value ? value : null)
+  const display = selected?.label ?? selectedLabel ?? null
+  const showPlaceholder = !display
 
   return (
     <PopoverTrigger asChild>
@@ -216,7 +274,7 @@ const SelectTrigger = React.forwardRef<
         disabled={disabled}
         className={cn(
           "flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
-          !display && "text-muted-foreground",
+          showPlaceholder && "text-muted-foreground",
           className,
         )}
         {...props}
@@ -250,17 +308,17 @@ const SelectContent = React.forwardRef<HTMLDivElement, SelectContentProps>(
     },
     ref,
   ) => {
-    const { value, onValueChange, open, setItems, setGroups, items, groups } = useSelectContext("SelectContent")
+    const { value, onValueChange, open, registerItems, items, groups } = useSelectContext("SelectContent")
 
     React.useLayoutEffect(() => {
       const parsed = parseSelectContentChildren(children)
-      setItems(parsed.items)
-      setGroups(parsed.groups)
-    }, [children, setItems, setGroups])
+      registerItems(parsed.items, parsed.groups)
+    }, [children, registerItems])
 
     if (!open) return null
 
     const hasGroups = groups.length > 0
+    const listItems = hasGroups ? null : items
 
     return (
       <PopoverContent
@@ -275,14 +333,14 @@ const SelectContent = React.forwardRef<HTMLDivElement, SelectContentProps>(
         {...props}
       >
         <Command shouldFilter={searchable}>
-          {searchable ? <CommandInput placeholder={searchPlaceholder} autoFocus /> : null}
+          {searchable ? <CommandInput placeholder={searchPlaceholder} /> : null}
           <CommandList>
             <CommandEmpty>No results found.</CommandEmpty>
             {hasGroups
               ? groups.map((group, index) => (
                   <React.Fragment key={index}>
                     {index > 0 ? <CommandSeparator /> : null}
-                    <CommandGroup heading={group.label ? String(group.label) : undefined}>
+                    <CommandGroup heading={group.label ? extractSearchText(group.label) || undefined : undefined}>
                       {group.items.map((item) => (
                         <SelectCommandItem
                           key={item.value}
@@ -294,7 +352,7 @@ const SelectContent = React.forwardRef<HTMLDivElement, SelectContentProps>(
                     </CommandGroup>
                   </React.Fragment>
                 ))
-              : items.map((item) => (
+              : listItems?.map((item) => (
                   <SelectCommandItem
                     key={item.value}
                     item={item}
@@ -321,11 +379,11 @@ function SelectCommandItem({
 }) {
   return (
     <CommandItem
-      value={`${item.value} ${item.searchText}`}
+      value={`${item.searchText} ${item.value}`}
       disabled={item.disabled}
       onSelect={() => onSelect?.(item.value)}
     >
-      <Check className={cn("h-4 w-4", selected ? "opacity-100" : "opacity-0")} />
+      <Check className={cn("mr-2 h-4 w-4 shrink-0", selected ? "opacity-100" : "opacity-0")} />
       <span className="truncate">{item.label}</span>
     </CommandItem>
   )

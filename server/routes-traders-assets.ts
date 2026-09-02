@@ -1769,7 +1769,6 @@ export function registerTradersAssetsRoutes(app: Express) {
         return res.json({ total, page, pageSize, rows });
       }
 
-      const base = db.select().from(traderLicences).orderBy(desc(traderLicences.createdAt));
       const id = String(req.query.id ?? "").trim();
       const q = String(req.query.q ?? "").trim();
       const limitRaw = parseInt(String(req.query.limit ?? "0"), 10);
@@ -1793,15 +1792,10 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
       const wc = searchConditions.length ? and(...searchConditions) : undefined;
       const limited = limitRaw > 0 ? Math.min(Math.max(limitRaw, 1), 100) : undefined;
-      let list = wc
-        ? limited
-          ? await base.where(wc).limit(limited)
-          : await base.where(wc)
-        : limited
-          ? await base.limit(limited)
-          : conditions.length > 0
-            ? await base.where(and(...conditions))
-            : await base;
+      const filtered = wc
+        ? db.select().from(traderLicences).where(wc).orderBy(desc(traderLicences.createdAt))
+        : db.select().from(traderLicences).orderBy(desc(traderLicences.createdAt));
+      let list = limited ? await filtered.limit(limited) : await filtered;
       if (id && !list.some((row) => row.id === id)) {
         const [extra] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
         if (extra) list = [extra, ...list];

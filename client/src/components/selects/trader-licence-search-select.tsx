@@ -74,18 +74,20 @@ export function TraderLicenceSearchSelect({
         { credentials: "include" },
       )
       if (!res.ok) return []
-      const rows = (await res.json()) as TraderLicenceSelectFields[]
-      return rows.filter((row) => row.id !== excludeId).map(toOption)
+      const body = await res.json()
+      const rows = (Array.isArray(body) ? body : Array.isArray(body?.rows) ? body.rows : []) as TraderLicenceSelectFields[]
+      return rows.filter((row) => row?.id && row.id !== excludeId).map(toOption)
     },
     [yardId, status, licenceTypesParam, lmLinked, lmActive, allYards, excludeId],
   )
 
   const resolveOption = React.useCallback(async (value: string): Promise<AsyncSearchSelectOption | null> => {
-    const res = await fetch(buildLicencesUrl({ id: value, limit: "1" }), { credentials: "include" })
+    const res = await fetch(`/api/ioms/traders/licences/${encodeURIComponent(value)}`, {
+      credentials: "include",
+    })
     if (!res.ok) return null
-    const rows = (await res.json()) as TraderLicenceSelectFields[]
-    const row = rows.find((r) => r.id === value) ?? rows[0]
-    return row ? toOption(row) : null
+    const row = (await res.json()) as TraderLicenceSelectFields
+    return row?.id ? toOption(row) : null
   }, [])
 
   return (

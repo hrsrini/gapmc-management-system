@@ -60,8 +60,9 @@ export function EmployeeSearchSelect({
         { credentials: "include" },
       )
       if (!res.ok) return []
-      const rows = (await res.json()) as EmployeeSelectFields[]
-      return rows.filter((row) => row.id !== excludeId).map(toOption)
+      const body = await res.json()
+      const rows = (Array.isArray(body) ? body : []) as EmployeeSelectFields[]
+      return rows.filter((row) => row?.id && row.id !== excludeId).map(toOption)
     },
     [yardId, includeApp, excludeId],
   )
@@ -69,9 +70,10 @@ export function EmployeeSearchSelect({
   const resolveOption = React.useCallback(async (value: string): Promise<AsyncSearchSelectOption | null> => {
     const res = await fetch(buildEmployeesUrl({ id: value, limit: "1" }), { credentials: "include" })
     if (!res.ok) return null
-    const rows = (await res.json()) as EmployeeSelectFields[]
+    const body = await res.json()
+    const rows = (Array.isArray(body) ? body : []) as EmployeeSelectFields[]
     const row = rows.find((r) => r.id === value) ?? rows[0]
-    return row ? toOption(row) : null
+    return row?.id ? toOption(row) : null
   }, [])
 
   return (

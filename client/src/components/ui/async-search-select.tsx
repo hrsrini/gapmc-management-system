@@ -74,7 +74,9 @@ export function AsyncSearchSelect({
   const debouncedQuery = useDebouncedValue(query, debounceMs)
   const requestIdRef = React.useRef(0)
   const onSearchRef = React.useRef(onSearch)
+  const resolveOptionRef = React.useRef(resolveOption)
   onSearchRef.current = onSearch
+  resolveOptionRef.current = resolveOption
 
   React.useEffect(() => {
     if (!value) {
@@ -86,35 +88,46 @@ export function AsyncSearchSelect({
       setSelectedLabel(cached.label)
       return
     }
-    if (!resolveOption) return
+    if (!resolveOptionRef.current) return
     let cancelled = false
-    void resolveOption(value).then((resolved) => {
-      if (!cancelled && resolved) setSelectedLabel(resolved.label)
-    })
+    void resolveOptionRef
+      .current(value)
+      .then((resolved) => {
+        if (!cancelled && resolved) setSelectedLabel(resolved.label)
+      })
+      .catch(() => {
+        /* keep prior label */
+      })
     return () => {
       cancelled = true
     }
-  }, [value, options, resolveOption])
+  }, [value, options])
 
-  const runSearch = React.useCallback((searchQuery: string) => {
-    const trimmed = searchQuery.trim()
-    if (minSearchLength > 0 && trimmed.length < minSearchLength) {
-      setOptions([])
-      setLoading(false)
-      return
-    }
-    const requestId = ++requestIdRef.current
-    setLoading(true)
-    void onSearchRef.current(trimmed).then((results) => {
-      if (requestId !== requestIdRef.current) return
-      setOptions(results)
-      setLoading(false)
-      if (value) {
-        const match = results.find((opt) => opt.value === value)
-        if (match) setSelectedLabel(match.label)
+  const runSearch = React.useCallback(
+    (searchQuery: string) => {
+      const trimmed = searchQuery.trim()
+      if (minSearchLength > 0 && trimmed.length < minSearchLength) {
+        setOptions([])
+        setLoading(false)
+        return
       }
-    })
-  }, [minSearchLength, value])
+      const requestId = ++requestIdRef.current
+      setLoading(true)
+      void onSearchRef
+        .current(trimmed)
+        .then((results) => {
+          if (requestId !== requestIdRef.current) return
+          setOptions(Array.isArray(results) ? results : [])
+          setLoading(false)
+        })
+        .catch(() => {
+          if (requestId !== requestIdRef.current) return
+          setOptions([])
+          setLoading(false)
+        })
+    },
+    [minSearchLength],
+  )
 
   React.useEffect(() => {
     if (!open) return
@@ -125,13 +138,10 @@ export function AsyncSearchSelect({
     (next: boolean) => {
       setOpen(next)
       if (next) runSearch(query.trim())
+      else setQuery("")
     },
     [query, runSearch],
   )
-
-  React.useEffect(() => {
-    if (!open) setQuery("")
-  }, [open])
 
   const handleSelect = (next: string) => {
     if (next === "__clear__") {
@@ -147,6 +157,7 @@ export function AsyncSearchSelect({
   }
 
   const showMinLengthHint = minSearchLength > 0 && query.trim().length < minSearchLength
+  const display = selectedLabel ?? (value ? value : null)
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
@@ -159,23 +170,18 @@ export function AsyncSearchSelect({
           disabled={disabled}
           className={cn(
             "flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
-            !selectedLabel && !value && "text-muted-foreground",
+            !display && "text-muted-foreground",
             triggerClassName,
             className,
           )}
         >
-          <span className="truncate text-left">{selectedLabel ?? (value || placeholder)}</span>
-          <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+          <span className="truncate text-left">{display ?? placeholder}</span>
+          <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
         <Command shouldFilter={false}>
-          <CommandInput
-            placeholder={searchPlaceholder}
-            value={query}
-            onValueChange={setQuery}
-            autoFocus
-          />
+          <CommandInput placeholder={searchPlaceholder} value={query} onValueChange={setQuery} />
           <CommandList>
             {loading ? (
               <div className="flex items-center gap-2 px-3 py-4 text-sm text-muted-foreground">
@@ -196,8 +202,14 @@ export function AsyncSearchSelect({
                   </CommandItem>
                 ) : null}
                 {options.map((opt) => (
-                  <CommandItem key={opt.value} value={opt.value} onSelect={handleSelect}>
-                    <Check className={cn("h-4 w-4 shrink-0", value === opt.value ? "opacity-100" : "opacity-0")} />
+                  <CommandItem
+                    key={opt.value}
+                    value={`${opt.label} ${opt.keywords ?? ""} ${opt.value}`}
+                    onSelect={() => handleSelect(opt.value)}
+                  >
+                    <Check
+                      className={cn("mr-2 h-4 w-4 shrink-0", value === opt.value ? "opacity-100" : "opacity-0")}
+                    />
                     <span className="truncate">{opt.label}</span>
                   </CommandItem>
                 ))}
