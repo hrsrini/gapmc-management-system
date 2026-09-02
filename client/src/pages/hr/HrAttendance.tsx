@@ -7,14 +7,8 @@ import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmployeeSearchSelect, formatEmployeeSelectLabel } from "@/components/selects/employee-search-select";
 import { Clock, AlertCircle } from "lucide-react";
 
 interface Attendance {
@@ -50,7 +44,7 @@ export default function HrAttendance() {
   const { data: list = [], isLoading, isError } = useQuery<Attendance[]>({ queryKey: [url] });
   const { data: employees = [] } = useQuery<Employee[]>({ queryKey: ["/api/hr/employees"] });
   const employeeLabelById = Object.fromEntries(
-    employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
+    employees.map((e) => [e.id, formatEmployeeSelectLabel(e)]),
   );
 
   const sourceRows = useMemo((): Record<string, unknown>[] => {
@@ -91,19 +85,14 @@ export default function HrAttendance() {
           <div className="flex flex-wrap gap-4 pt-2">
             <div className="space-y-1">
               <Label>Employee</Label>
-              <Select value={employeeId} onValueChange={setEmployeeId}>
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder="All" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  {employees.map((e) => (
-                    <SelectItem key={e.id} value={e.id}>
-                      {e.empId ?? e.id} — {e.firstName} {e.surname}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <EmployeeSearchSelect
+                className="w-[200px]"
+                value={employeeId === "all" ? "" : employeeId}
+                onValueChange={(v) => setEmployeeId(v || "all")}
+                allowClear
+                clearLabel="All employees"
+                placeholder="All employees"
+              />
             </div>
             <div className="space-y-1">
               <Label>Date</Label>

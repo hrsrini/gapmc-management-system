@@ -32,6 +32,7 @@ import { formatApiDateOrDateTime, formatYearMonthToDisplay, formatYmdToDisplay }
 import { MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import type { AssetAllotmentRow, EntityAllotmentRow } from "./rent-allotments-ui";
 import { formatInr } from "@/lib/formatInr";
+import { formatTraderLicenceSelectLabel } from "@shared/select-display-labels";
 import { CounterPaymentDialog } from "@/components/payments/CounterPaymentDialog";
 import {
   entityIdFromRentInvoice,
@@ -160,7 +161,7 @@ export default function IomsRentInvoiceDetail() {
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
   const assetById = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
   const licenceById = Object.fromEntries(
-    licences.map((l) => [l.id, l.licenceNo ? `${l.licenceNo}${l.firmName ? ` — ${l.firmName}` : ""}` : (l.firmName ?? l.id)]),
+    licences.map((l) => [l.id, formatTraderLicenceSelectLabel(l)]),
   );
 
   const allotmentReferenceNo = useMemo(() => {

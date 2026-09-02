@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,20 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TraderLicenceSearchSelect } from "@/components/selects/trader-licence-search-select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { Banknote, AlertCircle, ExternalLink } from "lucide-react";
 import { Link } from "wouter";
 import { formatInr } from "@/lib/formatInr";
-
-interface TraderLicenceRef {
-  id: string;
-  licenceNo?: string | null;
-  firmName?: string | null;
-  yardId: string;
-  status?: string | null;
-}
 
 interface Statement {
   traderLicenceId: string;
@@ -41,16 +33,6 @@ export default function MarketFeeStatement() {
 
   const [traderLicenceId, setTraderLicenceId] = useState("");
   const [toPeriod, setToPeriod] = useState(monthDefault());
-
-  const { data: licences = [], isLoading: licLoading } = useQuery<TraderLicenceRef[]>({
-    queryKey: ["/api/ioms/traders/licences"],
-  });
-
-  const licenceLabelById = useMemo(() => {
-    return Object.fromEntries(
-      licences.map((l) => [l.id, l.licenceNo ? `${l.licenceNo}${l.firmName ? ` — ${l.firmName}` : ""}` : (l.firmName ?? l.id)]),
-    );
-  }, [licences]);
 
   const stmtEnabled = Boolean(traderLicenceId && /^\d{4}-\d{2}$/.test(toPeriod));
   const { data: statement, isLoading, isError, error } = useQuery<Statement>({
@@ -104,31 +86,20 @@ export default function MarketFeeStatement() {
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
-            {licLoading ? (
-              <Skeleton className="h-16 w-full" />
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                <div className="space-y-1 md:col-span-2">
-                  <Label>Trader licence</Label>
-                  <Select value={traderLicenceId} onValueChange={setTraderLicenceId}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select trader licence" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {licences.map((l) => (
-                        <SelectItem key={l.id} value={l.id}>
-                          {licenceLabelById[l.id] ?? l.id}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <Label>Up to month (YYYY-MM)</Label>
-                  <Input value={toPeriod} onChange={(e) => setToPeriod(e.target.value)} placeholder="2026-04" />
-                </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+              <div className="space-y-1 md:col-span-2">
+                <Label>Trader licence</Label>
+                <TraderLicenceSearchSelect
+                  value={traderLicenceId}
+                  onValueChange={setTraderLicenceId}
+                  placeholder="Select trader licence"
+                />
               </div>
-            )}
+              <div className="space-y-1">
+                <Label>Up to month (YYYY-MM)</Label>
+                <Input value={toPeriod} onChange={(e) => setToPeriod(e.target.value)} placeholder="2026-04" />
+              </div>
+            </div>
 
             {!stmtEnabled ? (
               <p className="text-sm text-muted-foreground">Select a trader and month to view statement.</p>

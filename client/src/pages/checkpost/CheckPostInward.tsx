@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TraderLicenceSearchSelect } from "@/components/selects/trader-licence-search-select";
+import { formatTraderLicenceSelectLabel } from "@shared/select-display-labels";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -91,17 +93,18 @@ export default function CheckPostInward() {
   const checkPostById = useMemo(() => new Map(checkposts.map((c) => [c.id, c])), [checkposts]);
   const commodityIds = useMemo(() => new Set(commodities.map((c) => c.id)), [commodities]);
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
-  const licenceIds = useMemo(() => new Set(licences.map((l) => l.id)), [licences]);
-  const licenceById = useMemo(() => new Map(licences.map((l) => [l.id, l])), [licences]);
+  const licenceLabelById = useMemo(
+    () => new Map(licences.map((l) => [l.id, formatTraderLicenceSelectLabel(l)])),
+    [licences],
+  );
   const inwardCreateError = useMemo(() => {
     if (!checkPostId.trim()) return "Check post ID is required.";
     if (!entryDate.trim()) return "Entry date is required.";
     if (!checkPostIds.has(checkPostId.trim())) return "Check post ID is invalid or out of scope.";
-    if (traderLicenceId.trim() && !licenceIds.has(traderLicenceId.trim())) return "Trader licence ID is invalid.";
     const charges = totalCharges === "" ? null : Number(totalCharges);
     if (charges != null && (Number.isNaN(charges) || charges < 0)) return "Total charges must be a non-negative number.";
     return null;
-  }, [checkPostId, entryDate, totalCharges, checkPostIds, traderLicenceId, licenceIds]);
+  }, [checkPostId, entryDate, totalCharges, checkPostIds]);
   const commodityAddError = useMemo(() => {
     if (!selectedInwardId) return "Select an inward entry first.";
     if (!commodityId.trim()) return "Commodity ID is required.";
@@ -252,7 +255,7 @@ export default function CheckPostInward() {
       entryDate: e.entryDate.slice(0, 10),
       vehicleNumber: e.vehicleNumber ?? "—",
       totalCharges: e.totalCharges != null ? e.totalCharges : "—",
-      trader: e.traderLicenceId ? (licenceById.get(e.traderLicenceId)?.firmName ?? e.traderLicenceId) : "—",
+      trader: e.traderLicenceId ? (licenceLabelById.get(e.traderLicenceId) ?? e.traderLicenceId) : "—",
       receipt: e.receiptId ? (
         <a className="text-primary hover:underline text-sm font-mono" href={`/receipts/ioms/${e.receiptId}`}>
           View
@@ -281,7 +284,7 @@ export default function CheckPostInward() {
         </div>
       ),
     }));
-  }, [filteredList, checkPostById, canVerify, statusMutation, openCommodities, licenceById]);
+  }, [filteredList, checkPostById, canVerify, statusMutation, openCommodities, licenceLabelById]);
 
   const commodityLineColumns = useMemo(
     (): ReportTableColumn[] => [
@@ -352,17 +355,13 @@ export default function CheckPostInward() {
                   </div>
                   <div className="space-y-1">
                     <Label>Trader licence (optional)</Label>
-                    <Select value={traderLicenceId || "none"} onValueChange={(v) => setTraderLicenceId(v === "none" ? "" : v)}>
-                      <SelectTrigger><SelectValue placeholder="Select trader (optional)" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">—</SelectItem>
-                        {licences.map((l) => (
-                          <SelectItem key={l.id} value={l.id}>
-                            {`${l.firmName}${l.licenceNo ? ` (${l.licenceNo})` : ""}`.slice(0, 72)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <TraderLicenceSearchSelect
+                      value={traderLicenceId}
+                      onValueChange={setTraderLicenceId}
+                      allowClear
+                      clearLabel="—"
+                      placeholder="Select trader (optional)"
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1">

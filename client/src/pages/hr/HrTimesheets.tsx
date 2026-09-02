@@ -4,14 +4,8 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { EmployeeSearchSelect, formatEmployeeSelectLabel } from "@/components/selects/employee-search-select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { CalendarDays, AlertCircle, CheckCircle, Loader2 } from "lucide-react";
@@ -64,7 +58,7 @@ export default function HrTimesheets() {
   const { data: list = [], isLoading, isError } = useQuery<Timesheet[]>({ queryKey: [url] });
   const { data: employees = [] } = useQuery<Employee[]>({ queryKey: ["/api/hr/employees"] });
   const employeeLabelById = Object.fromEntries(
-    employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
+    employees.map((e) => [e.id, formatEmployeeSelectLabel(e)]),
   );
 
   const validateMutation = useMutation({
@@ -194,19 +188,14 @@ export default function HrTimesheets() {
           <p className="text-sm text-muted-foreground">Fortnightly / monthly timesheet periods; validate workflow.</p>
           <div className="pt-2">
             <Label>Employee</Label>
-            <Select value={employeeId} onValueChange={setEmployeeId}>
-              <SelectTrigger className="w-[220px] mt-1">
-                <SelectValue placeholder="All" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                {employees.map((e) => (
-                  <SelectItem key={e.id} value={e.id}>
-                    {e.empId ?? e.id} — {e.firstName} {e.surname}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <EmployeeSearchSelect
+              className="w-[220px] mt-1"
+              value={employeeId === "all" ? "" : employeeId}
+              onValueChange={(v) => setEmployeeId(v || "all")}
+              allowClear
+              clearLabel="All employees"
+              placeholder="All employees"
+            />
           </div>
         </CardHeader>
         <CardContent>

@@ -205,9 +205,13 @@ function ConfigFieldRow({
 export default function AdminConfig() {
   const { toast } = useToast();
   const logoFileRef = useRef<HTMLInputElement>(null);
+  const leaveSigFileRef = useRef<HTMLInputElement>(null);
   const [logoPreviewNonce, setLogoPreviewNonce] = useState(0);
+  const [leaveSigPreviewNonce, setLeaveSigPreviewNonce] = useState(0);
   const [pendingLogo, setPendingLogo] = useState<File | null>(null);
+  const [pendingLeaveSig, setPendingLeaveSig] = useState<File | null>(null);
   const pendingLogoPreviewUrl = useUploadFilePreview(pendingLogo);
+  const pendingLeaveSigPreviewUrl = useUploadFilePreview(pendingLeaveSig);
   const { data: config, isLoading, isError } = useQuery<Record<string, string>>({
     queryKey: ["/api/admin/config"],
   });
@@ -224,6 +228,33 @@ export default function AdminConfig() {
     queryFn: () => fetchApiGet("/api/admin/branding/receipt-logo/status"),
   });
   const showSavedLogo = Boolean(logoStatus?.hasLogo) && !pendingLogo;
+  const { data: leaveSigStatus, isLoading: leaveSigStatusLoading } = useQuery<{
+    hasSignature: boolean;
+    storage?: { driver: string; bucket?: string; prefix?: string };
+  }>({
+    queryKey: ["/api/admin/branding/leave-order-signature/status"],
+    queryFn: () => fetchApiGet("/api/admin/branding/leave-order-signature/status"),
+  });
+  const showSavedLeaveSig = Boolean(leaveSigStatus?.hasSignature) && !pendingLeaveSig;
+  const {
+    data: savedLeaveSigObjectUrl,
+    isLoading: savedLeaveSigLoading,
+    isError: savedLeaveSigError,
+  } = useQuery({
+    queryKey: ["/api/admin/branding/leave-order-signature/image", leaveSigPreviewNonce],
+    enabled: showSavedLeaveSig,
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/admin/branding/leave-order-signature/image?x=${leaveSigPreviewNonce}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error(await readApiErrorMessage(res));
+      const blob = await res.blob();
+      if (!blob.size) throw new Error("Signature file is empty.");
+      return URL.createObjectURL(blob);
+    },
+    staleTime: 0,
+  });
   const {
     data: savedLogoObjectUrl,
     isLoading: savedLogoLoading,
@@ -248,6 +279,12 @@ export default function AdminConfig() {
       if (savedLogoObjectUrl) URL.revokeObjectURL(savedLogoObjectUrl);
     };
   }, [savedLogoObjectUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (savedLeaveSigObjectUrl) URL.revokeObjectURL(savedLeaveSigObjectUrl);
+    };
+  }, [savedLeaveSigObjectUrl]);
 
   const { data: emailConfig, isLoading: emailConfigLoading } = useQuery<{
     smtp_enabled: string;
@@ -434,6 +471,55 @@ export default function AdminConfig() {
     },
   });
 
+  const uploadLeaveSigMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append("logo", file);
+      const res = await fetch("/api/admin/branding/leave-order-signature", {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      if (!res.ok) throw new Error(await readApiErrorMessage(res));
+      return res.json() as Promise<{ ok: boolean }>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/branding/leave-order-signature/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/branding/leave-order-signature/image"] });
+      setLeaveSigPreviewNonce((n) => n + 1);
+      setPendingLeaveSig(null);
+      if (leaveSigFileRef.current) leaveSigFileRef.current.value = "";
+      toast({
+        title: "Signature saved",
+        description: "Leave Sanction Order PDFs will print this image above the signatory name.",
+      });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Upload failed", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const deleteLeaveSigMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/admin/branding/leave-order-signature", {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await readApiErrorMessage(res));
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/branding/leave-order-signature/status"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/branding/leave-order-signature/image"] });
+      setLeaveSigPreviewNonce((n) => n + 1);
+      setPendingLeaveSig(null);
+      toast({ title: "Signature removed", description: "Sanction orders will show name/designation only." });
+    },
+    onError: (e: Error) => {
+      toast({ title: "Remove failed", description: e.message, variant: "destructive" });
+    },
+  });
+
   const handleSave = () => {
     updateMutation.mutate(values);
   };
@@ -487,6 +573,117 @@ export default function AdminConfig() {
                 <ConfigFieldRow key={key} keyName={key} label={label} values={values} setValues={setValues} />
               ))}
               <HoSectionEmailsEditor values={values} setValues={setValues} />
+              <div className="space-y-3 rounded-md border p-4">
+                <div>
+                  <p className="text-sm font-medium flex items-center gap-2">
+                    <ImageIcon className="h-4 w-4" />
+                    Secretary signature (Leave Sanction Order)
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Upload a PNG or JPEG scan of the Secretary&apos;s signature (max 2 MB). It is printed on approved
+                    Leave Sanction Order PDFs above the signatory name until digital signature is implemented. Set
+                    signatory name and designation in the fields above.
+                  </p>
+                </div>
+                <input
+                  ref={leaveSigFileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg"
+                  className="sr-only"
+                  aria-hidden
+                  tabIndex={-1}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null;
+                    e.target.value = "";
+                    if (f && f.size > 2 * 1024 * 1024) {
+                      toast({
+                        title: "File too large",
+                        description: "Signature image must be 2 MB or smaller.",
+                        variant: "destructive",
+                      });
+                      return;
+                    }
+                    setPendingLeaveSig(f);
+                  }}
+                />
+                {leaveSigStatusLoading ? (
+                  <Skeleton className="h-24 w-full max-w-md" />
+                ) : (
+                  <div className="flex flex-col sm:flex-row gap-4 items-start">
+                    {pendingLeaveSigPreviewUrl ? (
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Selected (not saved yet)</p>
+                        <img
+                          src={pendingLeaveSigPreviewUrl}
+                          alt="Selected signature preview"
+                          className="max-h-20 max-w-[180px] object-contain border rounded-md bg-muted/30 p-2"
+                        />
+                      </div>
+                    ) : leaveSigStatus?.hasSignature ? (
+                      savedLeaveSigLoading ? (
+                        <Skeleton className="h-20 w-[180px]" />
+                      ) : savedLeaveSigError || !savedLeaveSigObjectUrl ? (
+                        <p className="text-sm text-destructive max-w-xs">
+                          Could not load signature preview. Remove and re-upload.
+                        </p>
+                      ) : (
+                        <img
+                          src={savedLeaveSigObjectUrl}
+                          alt="Current secretary signature"
+                          className="max-h-20 max-w-[180px] object-contain border rounded-md bg-muted/30 p-2"
+                        />
+                      )
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No signature uploaded yet.</p>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant={leaveSigStatus?.hasSignature ? "outline" : "default"}
+                        size="sm"
+                        onClick={() => leaveSigFileRef.current?.click()}
+                        disabled={uploadLeaveSigMutation.isPending}
+                      >
+                        <Upload className="h-4 w-4 mr-1" />
+                        {leaveSigStatus?.hasSignature ? "Choose replacement" : "Choose signature"}
+                      </Button>
+                      {pendingLeaveSig ? (
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={uploadLeaveSigMutation.isPending}
+                            onClick={() => uploadLeaveSigMutation.mutate(pendingLeaveSig)}
+                          >
+                            Save signature
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={uploadLeaveSigMutation.isPending}
+                            onClick={() => setPendingLeaveSig(null)}
+                          >
+                            Clear selection
+                          </Button>
+                        </>
+                      ) : null}
+                      {leaveSigStatus?.hasSignature ? (
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => deleteLeaveSigMutation.mutate()}
+                          disabled={deleteLeaveSigMutation.isPending}
+                        >
+                          <Trash2 className="h-4 w-4 mr-1" />
+                          Remove signature
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </div>
               <p className="text-sm font-medium pt-4">General system config</p>
               {GENERAL_CONFIG_FIELDS.map(({ key, label }) => (
                 <ConfigFieldRow key={key} keyName={key} label={label} values={values} setValues={setValues} />

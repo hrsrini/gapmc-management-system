@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TraderLicenceSearchSelect } from "@/components/selects/trader-licence-search-select";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
@@ -56,11 +57,6 @@ export default function MarketAdvanceLedger() {
   const [depositAmount, setDepositAmount] = useState("");
   const [paymentMode, setPaymentMode] = useState("Cash");
   const [refundAmount, setRefundAmount] = useState("");
-
-  const { data: licences = [] } = useQuery<Array<{ id: string; firmName: string; licenceNo?: string | null }>>({
-    queryKey: ["/api/ioms/traders/licences"],
-    enabled: canRead,
-  });
 
   const url = useMemo(() => {
     if (!traderLicenceId.trim()) return null;
@@ -166,17 +162,11 @@ export default function MarketAdvanceLedger() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
             <div className="space-y-1 md:col-span-2">
               <Label>Trader licence</Label>
-              <Select value={traderLicenceId || "none"} onValueChange={(v) => setTraderLicenceId(v === "none" ? "" : v)}>
-                <SelectTrigger><SelectValue placeholder="Select trader" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Select…</SelectItem>
-                  {licences.map((l) => (
-                    <SelectItem key={l.id} value={l.id}>
-                      {`${l.firmName}${l.licenceNo ? ` (${l.licenceNo})` : ""}`.slice(0, 72)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <TraderLicenceSearchSelect
+                value={traderLicenceId}
+                onValueChange={setTraderLicenceId}
+                placeholder="Select trader"
+              />
             </div>
             <div className="space-y-1">
               <Label>Balance</Label>

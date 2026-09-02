@@ -27,6 +27,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { ShieldAlert, AlertCircle, Plus, Loader2 } from "lucide-react";
+import { TraderLicenceSearchSelect, formatTraderLicenceSelectLabel } from "@/components/selects/trader-licence-search-select";
 
 interface BlockingLogEntry {
   id: string;
@@ -56,7 +57,7 @@ export default function TraderBlockingLog() {
   const canCreate = can("M-02", "Create");
   const actionedBy = user?.name ?? user?.email ?? "Current User";
 
-  const listUrl = traderLicenceIdFilter
+  const listUrl = traderLicenceIdFilter && traderLicenceIdFilter !== "all"
     ? `/api/ioms/traders/blocking-log?traderLicenceId=${encodeURIComponent(traderLicenceIdFilter)}`
     : "/api/ioms/traders/blocking-log";
 
@@ -70,7 +71,7 @@ export default function TraderBlockingLog() {
   });
   const { data: licences = [] } = useQuery<Licence[]>({ queryKey: ["/api/ioms/traders/licences"] });
   const licenceLabelById = Object.fromEntries(
-    licences.map((l) => [l.id, `${l.licenceNo ?? l.id} — ${l.firmName}`]),
+    licences.map((l) => [l.id, formatTraderLicenceSelectLabel(l)]),
   );
 
   const createMutation = useMutation({
@@ -157,17 +158,14 @@ export default function TraderBlockingLog() {
             <p className="text-sm text-muted-foreground mt-1">Trader licence block / unblock history.</p>
           </div>
           <div className="flex items-center gap-2">
-            <Select value={traderLicenceIdFilter} onValueChange={setTraderLicenceIdFilter}>
-              <SelectTrigger className="w-[220px]">
-                <SelectValue placeholder="All licences" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All licences</SelectItem>
-                {licences.map((l) => (
-                  <SelectItem key={l.id} value={l.id}>{l.licenceNo ?? l.id} — {l.firmName}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <TraderLicenceSearchSelect
+              className="w-[220px]"
+              value={traderLicenceIdFilter === "all" ? "" : traderLicenceIdFilter}
+              onValueChange={(v) => setTraderLicenceIdFilter(v || "all")}
+              allowClear
+              clearLabel="All licences"
+              placeholder="All licences"
+            />
             {canCreate && (
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
@@ -177,14 +175,12 @@ export default function TraderBlockingLog() {
                 <DialogHeader><DialogTitle>Add blocking log entry</DialogTitle></DialogHeader>
                 <form onSubmit={handleAdd} className="space-y-4">
                   <div><Label>Trader licence *</Label>
-                    <Select value={traderLicenceId} onValueChange={setTraderLicenceId} required>
-                      <SelectTrigger><SelectValue placeholder="Select licence" /></SelectTrigger>
-                      <SelectContent>
-                        {licences.map((l) => (
-                          <SelectItem key={l.id} value={l.id}>{l.licenceNo ?? l.id} — {l.firmName}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <TraderLicenceSearchSelect
+                      value={traderLicenceId}
+                      onValueChange={setTraderLicenceId}
+                      required
+                      placeholder="Select licence"
+                    />
                   </div>
                   <div><Label>Action *</Label>
                     <Select value={action} onValueChange={setAction}>

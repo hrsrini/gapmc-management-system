@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatInr } from "@/lib/formatInr";
+import { formatEmployeeSelectLabel } from "@shared/select-display-labels";
 import { Banknote, AlertCircle } from "lucide-react";
 
 interface Advance {
@@ -73,7 +74,7 @@ export default function VouchersAdvances() {
 
   const voucherNoMap = Object.fromEntries(vouchers.map((v) => [v.id, v.voucherNo ?? v.id]));
   const employeeLabelById = Object.fromEntries(
-    employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
+    employees.map((e) => [e.id, formatEmployeeSelectLabel(e)]),
   );
 
   const columns = useMemo(

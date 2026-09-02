@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TraderLicenceSearchSelect, formatTraderLicenceSelectLabel } from "@/components/selects/trader-licence-search-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
@@ -109,7 +110,7 @@ export default function MarketReturns() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [salesByCommodity, setSalesByCommodity] = useState<Record<string, string>>({});
 
-  const { data: licences = [], isLoading: licLoading } = useQuery<TraderLicenceRef[]>({
+  const { data: licences = [] } = useQuery<TraderLicenceRef[]>({
     queryKey: ["/api/ioms/traders/licences"],
   });
   const { data: commodities = [] } = useQuery<CommodityRef[]>({
@@ -126,7 +127,7 @@ export default function MarketReturns() {
 
   const licenceLabelById = useMemo(() => {
     return Object.fromEntries(
-      licences.map((l) => [l.id, l.licenceNo ? `${l.licenceNo}${l.firmName ? ` — ${l.firmName}` : ""}` : (l.firmName ?? l.id)]),
+      licences.map((l) => [l.id, formatTraderLicenceSelectLabel(l)]),
     );
   }, [licences]);
 
@@ -308,30 +309,19 @@ export default function MarketReturns() {
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
-            {licLoading ? (
-              <Skeleton className="h-20 w-full" />
-            ) : licences.length === 0 ? (
-              <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                No trader licences available in your scope.
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+              <div className="space-y-1 md:col-span-2">
+                <Label>Trader licence</Label>
+                <TraderLicenceSearchSelect
+                  value={traderLicenceId}
+                  onValueChange={(v) => {
+                    setTraderLicenceId(v);
+                    setStep(1);
+                    setSalesByCommodity({});
+                  }}
+                  placeholder="Select trader licence"
+                />
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                <div className="space-y-1 md:col-span-2">
-                  <Label>Trader licence</Label>
-                  <Select value={traderLicenceId} onValueChange={(v) => { setTraderLicenceId(v); setStep(1); setSalesByCommodity({}); }}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select trader licence" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {licences.map((l) => (
-                        <SelectItem key={l.id} value={l.id}>
-                          {licenceLabelById[l.id] ?? l.id}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
                 <div className="space-y-1">
                   <Label>Period (YYYY-MM)</Label>
                   <Input value={period} onChange={(e) => { setPeriod(e.target.value); setStep(1); }} placeholder="2026-04" />
@@ -377,7 +367,6 @@ export default function MarketReturns() {
                   </Button>
                 </div>
               </div>
-            )}
           </CardContent>
         </Card>
 

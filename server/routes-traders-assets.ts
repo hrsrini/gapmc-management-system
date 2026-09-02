@@ -1770,7 +1770,42 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
 
       const base = db.select().from(traderLicences).orderBy(desc(traderLicences.createdAt));
-      const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
+      const id = String(req.query.id ?? "").trim();
+      const q = String(req.query.q ?? "").trim();
+      const limitRaw = parseInt(String(req.query.limit ?? "0"), 10);
+      const pattern = reportSearchPattern(q);
+      const searchConditions = [...conditions];
+      if (id) searchConditions.push(eq(traderLicences.id, id));
+      if (pattern && !id) {
+        searchConditions.push(
+          or(
+            ilike(traderLicences.licenceNo, pattern),
+            ilike(traderLicences.firmName, pattern),
+            ilike(traderLicences.mobile, pattern),
+            ilike(traderLicences.id, pattern),
+            ilike(traderLicences.email, pattern),
+            ilike(traderLicences.contactName, pattern),
+            ilike(traderLicences.provisionalLicenceNo, pattern),
+            ilike(traderLicences.applicationSerial, pattern),
+            ilike(traderLicences.entityPublicCode, pattern),
+          )!,
+        );
+      }
+      const wc = searchConditions.length ? and(...searchConditions) : undefined;
+      const limited = limitRaw > 0 ? Math.min(Math.max(limitRaw, 1), 100) : undefined;
+      let list = wc
+        ? limited
+          ? await base.where(wc).limit(limited)
+          : await base.where(wc)
+        : limited
+          ? await base.limit(limited)
+          : conditions.length > 0
+            ? await base.where(and(...conditions))
+            : await base;
+      if (id && !list.some((row) => row.id === id)) {
+        const [extra] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
+        if (extra) list = [extra, ...list];
+      }
       res.json(list);
     } catch (e) {
       console.error(e);

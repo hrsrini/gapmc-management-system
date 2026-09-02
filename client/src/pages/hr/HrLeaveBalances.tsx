@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { EmployeeSearchSelect } from "@/components/selects/employee-search-select";
 
 /** Same codes as Leave Application (IOMS M-01). */
 const ALL_LEAVE_TYPES = ["EL", "HPL", "COMMUTED", "CL", "RH", "SPL_H", "ML", "PL", "EOL", "CCL"] as const;
@@ -32,13 +33,6 @@ const LEAVE_TYPE_LABELS: Record<string, string> = {
   EOL: "Extraordinary Leave",
   CCL: "Child Care Leave",
 };
-
-interface EmployeeRow {
-  id: string;
-  empId?: string | null;
-  firstName: string;
-  surname: string;
-}
 
 interface BalanceRow {
   id: string;
@@ -92,9 +86,6 @@ export default function HrLeaveBalances() {
   const queryClient = useQueryClient();
   const canUpdate = can("M-01", "Update");
 
-  const { data: employees = [], isLoading: empLoading } = useQuery<EmployeeRow[]>({
-    queryKey: ["/api/hr/employees"],
-  });
   const { data: balances = [], isLoading: balLoading } = useQuery<BalanceRow[]>({
     queryKey: ["/api/hr/leave-balances"],
   });
@@ -146,12 +137,11 @@ export default function HrLeaveBalances() {
   });
 
   function addRow() {
-    const first = employees[0]?.id ?? "";
     setRows((r) => [
       ...r,
       {
         key: `new-${Date.now()}`,
-        employeeId: first,
+        employeeId: "",
         leaveType: "CL",
         balanceDays: "0",
         setOffDays: "0",
@@ -236,7 +226,7 @@ export default function HrLeaveBalances() {
     saveMutation.mutate({ rows: normalized });
   }
 
-  const loading = empLoading || balLoading;
+  const loading = balLoading;
 
   return (
     <AppShell breadcrumbs={[{ label: "HR", href: "/hr/employees" }, { label: "Leave opening balances" }]}>
@@ -266,8 +256,6 @@ export default function HrLeaveBalances() {
           )}
           {loading ? (
             <Skeleton className="h-48 w-full" />
-          ) : employees.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No employees found.</p>
           ) : (
             <>
               <div className="space-y-3">
@@ -275,22 +263,12 @@ export default function HrLeaveBalances() {
                   <div key={row.key} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end border-b pb-3">
                     <div className="md:col-span-3 space-y-1">
                       <Label>Employee</Label>
-                      <Select
+                      <EmployeeSearchSelect
                         value={row.employeeId}
                         onValueChange={(v) => updateRow(row.key, { employeeId: v })}
                         disabled={!canUpdate}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Employee" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {employees.map((e) => (
-                            <SelectItem key={e.id} value={e.id}>
-                              {(e.empId ?? e.id) + " — " + e.firstName + " " + e.surname}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                        placeholder="Employee"
+                      />
                     </div>
                     <div className="md:col-span-2 space-y-1">
                       <Label>Leave type</Label>

@@ -27,7 +27,13 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Calendar, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal, Plus, Download, Loader2, FileText, Pencil } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
+import {
+  employeeHonorific,
+  formatLeaveCopyToLine,
+  formatLeaveOrderDateDisplay,
+} from "@shared/hr-leave-display";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import { EmployeeSearchSelect, formatEmployeeSelectLabel } from "@/components/selects/employee-search-select";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { fetchApiGet } from "@/lib/queryClient";
 
@@ -88,6 +94,7 @@ interface Employee {
   locationPosted?: string | null;
   section?: string | null;
   yardId?: string | null;
+  gender?: string | null;
 }
 
 interface LeaveBalanceRow {
@@ -141,7 +148,7 @@ function buildDefaultCopyToRows(emp: Employee | null | undefined): string[] {
   if (!emp) return ["Accounts Section", "Personal File", "Guard File"];
   const name = employeeDisplayName(emp);
   return [
-    `${name} (Employee)`,
+    name,
     emp.section ? `${emp.section}, HO` : (emp.locationPosted ?? emp.yardId ?? "—"),
     "Accounts Section",
     "Personal File",
@@ -150,7 +157,7 @@ function buildDefaultCopyToRows(emp: Employee | null | undefined): string[] {
 }
 
 function resolveCopyToList(leave: LeaveRequest, employee: Employee | null | undefined): { list: string[]; usingDefault: boolean } {
-  const custom = parseCopyToJson(leave.copyToJson);
+  const custom = parseCopyToJson(leave.copyToJson).map(formatLeaveCopyToLine).filter(Boolean);
   if (custom.length > 0) return { list: custom, usingDefault: false };
   return { list: buildDefaultCopyToRows(employee), usingDefault: true };
 }
@@ -210,22 +217,22 @@ function SanctionOrderPreviewPanel({
         </p>
       ) : null}
       <p className="text-muted-foreground">
-        READ: Leave application of Shri/Smt.{" "}
+        READ: Leave application of {employee ? employeeHonorific(employee.gender) : "Shri/Smt."}{" "}
         <span className="text-foreground font-medium">
           {employee ? employeeDisplayName(employee) : employeeLabel}
         </span>
-        {employee?.designation ? `, ${employee.designation}` : ""}, dated {leave.fromDate}.
+        {employee?.designation ? `, ${employee.designation}` : ""}, dated {formatLeaveOrderDateDisplay(leave.fromDate)}.
       </p>
       <p className="text-muted-foreground">
         {leave.isExPostFacto ? "Ex-post facto sanction" : "Sanction"} for{" "}
         {LEAVE_TYPE_LABELS[leave.leaveType] ?? leave.leaveType} —{" "}
-        <span className="text-foreground font-medium">{Number(leave.debitDays ?? 0)} day(s)</span> from {leave.fromDate}{" "}
-        to {leave.toDate}
+        <span className="text-foreground font-medium">{Number(leave.debitDays ?? 0)} day(s)</span> from{" "}
+        {formatLeaveOrderDateDisplay(leave.fromDate)} to {formatLeaveOrderDateDisplay(leave.toDate)}
         {!prefixSuffixNil && Number(leave.prefixDays ?? 0) > 0
-          ? ` with prefix ${Number(leave.prefixDays ?? 0)} day(s) from ${leave.prefixFromDate}`
+          ? ` with prefix ${Number(leave.prefixDays ?? 0)} day(s) from ${formatLeaveOrderDateDisplay(leave.prefixFromDate)}`
           : ""}
         {!prefixSuffixNil && Number(leave.suffixDays ?? 0) > 0
-          ? ` and suffix ${Number(leave.suffixDays ?? 0)} day(s) up to ${leave.suffixToDate}`
+          ? ` and suffix ${Number(leave.suffixDays ?? 0)} day(s) up to ${formatLeaveOrderDateDisplay(leave.suffixToDate)}`
           : ""}
         {prefixSuffixNil ? " (Prefix/Suffix: Nil)" : ""}
         .
@@ -366,7 +373,7 @@ export default function LeaveRequests() {
     enabled: newOpen && !!newFrom && !!newTo,
   });
   const employeeLabelById = Object.fromEntries(
-    employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
+    employees.map((e) => [e.id, formatEmployeeSelectLabel(e)]),
   );
 
   const approveLeave = useMemo(
@@ -991,18 +998,11 @@ export default function LeaveRequests() {
             {roles.includes("ADMIN") && (
               <div className="space-y-1">
                 <Label>Employee</Label>
-                <Select value={newEmployeeId} onValueChange={setNewEmployeeId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select employee" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {employees.map((e) => (
-                      <SelectItem key={e.id} value={e.id}>
-                        {(e.empId ?? e.id) + " — " + e.firstName + " " + e.surname}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <EmployeeSearchSelect
+                  value={newEmployeeId}
+                  onValueChange={setNewEmployeeId}
+                  placeholder="Select employee"
+                />
               </div>
             )}
             <div className="space-y-1">
@@ -1175,7 +1175,7 @@ export default function LeaveRequests() {
                   <SelectItem value="__none__">None</SelectItem>
                   {substitutes.map((s) => (
                     <SelectItem key={s.id} value={s.id}>
-                      {(s.empId ?? s.id) + " — " + s.firstName + " " + s.surname}
+                      {formatEmployeeSelectLabel(s)}
                     </SelectItem>
                   ))}
                 </SelectContent>

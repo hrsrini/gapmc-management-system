@@ -22,6 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { UserCircle, ArrowLeft, User, Lock, Settings, Loader2, AlertCircle, KeyRound } from "lucide-react";
 import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
+import { EmployeeSearchSelect } from "@/components/selects/employee-search-select";
 import {
   isValidEmailFormat,
   isStrictAadhaar12Digits,
@@ -176,7 +177,6 @@ export default function HrEmployeeForm() {
     queryKey: ["/api/hr/designations"],
     enabled: canM01Read,
   });
-  const { data: allEmployees = [] } = useQuery<Employee[]>({ queryKey: ["/api/hr/employees"] });
   const { data: employee, isLoading, isError } = useQuery<Employee>({
     queryKey: ["/api/hr/employees", id],
     enabled: isEdit,
@@ -1037,22 +1037,14 @@ export default function HrEmployeeForm() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
                     <Label>Reporting officer</Label>
-                    <Select
-                      value={reportingOfficerEmployeeId || "__none__"}
-                      onValueChange={(v) => setReportingOfficerEmployeeId(v === "__none__" ? "" : v)}
-                    >
-                      <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">None</SelectItem>
-                        {allEmployees
-                          .filter((e) => !isEdit || e.id !== id)
-                          .map((e) => (
-                            <SelectItem key={e.id} value={e.id}>
-                              {(e.empId ?? e.id) + " — " + e.firstName + " " + e.surname}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
+                    <EmployeeSearchSelect
+                      value={reportingOfficerEmployeeId}
+                      onValueChange={setReportingOfficerEmployeeId}
+                      excludeId={isEdit ? id : undefined}
+                      allowClear
+                      clearLabel="None"
+                      placeholder="None"
+                    />
                   </div>
                   <div><Label>Service Book No.</Label><Input value={serviceBookNo} onChange={(e) => setServiceBookNo(e.target.value)} placeholder="e.g. 386" /></div>
                   <div>

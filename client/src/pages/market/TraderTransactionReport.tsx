@@ -22,6 +22,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { formatInr } from "@/lib/formatInr";
 import { fetchApiGet } from "@/lib/queryClient";
+import { formatTraderLicenceSelectLabel } from "@shared/select-display-labels";
 import { AlertCircle, Download, FileBarChart, RefreshCw, Search } from "lucide-react";
 
 interface CommodityRef {
@@ -344,10 +345,10 @@ export default function TraderTransactionReport() {
                           className={`block w-full text-left px-3 py-2 hover:bg-muted ${selectedTraderId === l.id ? "bg-muted" : ""}`}
                           onClick={() => {
                             setSelectedTraderId(l.id);
-                            setTraderQ(`${l.licenceNo ?? l.id} — ${l.firmName}`);
+                            setTraderQ(formatTraderLicenceSelectLabel(l));
                           }}
                         >
-                          {(l.licenceNo ?? l.id) + " — " + l.firmName}
+                          {formatTraderLicenceSelectLabel(l)}
                         </button>
                       ))
                     )}

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TraderLicenceSearchSelect } from "@/components/selects/trader-licence-search-select";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/context/AuthContext";
@@ -200,21 +201,6 @@ export default function MarketTransactionWizard() {
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
 
   const licenceStatusFilter = caseType === "B" ? undefined : "Active";
-  const { data: licences = [] } = useQuery<Array<{ id: string; firmName: string; licenceNo?: string | null }>>({
-    queryKey: ["wizard-licences", entryLocationId, licenceStatusFilter],
-    queryFn: async () => {
-      const u = new URL("/api/ioms/traders/licences", window.location.origin);
-      u.searchParams.set("yardId", entryLocationId);
-      if (licenceStatusFilter) u.searchParams.set("status", licenceStatusFilter);
-      const r = await fetch(u.toString(), { credentials: "include" });
-      if (!r.ok) {
-        const { message } = await readApiErrorEnvelope(r);
-        throw new Error(message);
-      }
-      return r.json();
-    },
-    enabled: Boolean(entryLocationId.trim()),
-  });
 
   const payload = useMemo(
     () =>
@@ -582,16 +568,14 @@ export default function MarketTransactionWizard() {
             {meta.requiresTraderLicence && (
               <div className="space-y-1 sm:col-span-2 border-t pt-4">
                 <Label>Trader licence {caseType === "B" ? "(expired)" : ""}</Label>
-                <Select value={traderLicenceId || undefined} onValueChange={setTraderLicenceId} disabled={!entryLocationId}>
-                  <SelectTrigger><SelectValue placeholder={entryLocationId ? "Select trader" : "Select yard first"} /></SelectTrigger>
-                  <SelectContent>
-                    {licences.map((l) => (
-                      <SelectItem key={l.id} value={l.id}>
-                        {(l.firmName ?? l.id).slice(0, 48)}{l.licenceNo ? ` — ${l.licenceNo}` : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <TraderLicenceSearchSelect
+                  yardId={entryLocationId}
+                  status={licenceStatusFilter}
+                  value={traderLicenceId}
+                  onValueChange={setTraderLicenceId}
+                  disabled={!entryLocationId}
+                  placeholder={entryLocationId ? "Select trader" : "Select yard first"}
+                />
               </div>
             )}
 
@@ -608,14 +592,15 @@ export default function MarketTransactionWizard() {
               <>
                 <div className="space-y-1 sm:col-span-2 border-t pt-4"><Label>Receiver trader (within Goa)</Label></div>
                 <div className="space-y-1 sm:col-span-2">
-                  <Select value={receiverTraderLicenceId || undefined} onValueChange={setReceiverTraderLicenceId} disabled={!entryLocationId}>
-                    <SelectTrigger><SelectValue placeholder="Select receiver" /></SelectTrigger>
-                    <SelectContent>
-                      {licences.filter((l) => l.id !== traderLicenceId).map((l) => (
-                        <SelectItem key={l.id} value={l.id}>{l.firmName}{l.licenceNo ? ` — ${l.licenceNo}` : ""}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <TraderLicenceSearchSelect
+                    yardId={entryLocationId}
+                    status={licenceStatusFilter}
+                    excludeId={traderLicenceId || undefined}
+                    value={receiverTraderLicenceId}
+                    onValueChange={setReceiverTraderLicenceId}
+                    disabled={!entryLocationId}
+                    placeholder="Select receiver"
+                  />
                 </div>
                 <div className="space-y-1 sm:col-span-2">
                   <Label>Market fee paid by</Label>

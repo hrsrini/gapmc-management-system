@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TraderLicenceSearchSelect } from "@/components/selects/trader-licence-search-select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -313,27 +314,6 @@ export default function MarketTransactions() {
     queryKey: ["/api/ioms/commodities"],
   });
   const yardForLicences = yardId.trim();
-  const {
-    data: licences = [],
-    isFetched: licencesFetched,
-    isFetching: licencesFetching,
-    isError: licencesQueryIsError,
-    error: licencesQueryError,
-  } = useQuery<Array<{ id: string; firmName: string; licenceNo?: string | null }>>({
-    queryKey: ["market-m04-active-licences", yardForLicences],
-    queryFn: async () => {
-      const u = new URL("/api/ioms/traders/licences", window.location.origin);
-      u.searchParams.set("yardId", yardForLicences);
-      u.searchParams.set("status", "Active");
-      const r = await fetch(u.toString(), { credentials: "include", headers: { Accept: "application/json" } });
-      if (!r.ok) {
-        const { message } = await readApiErrorEnvelope(r);
-        throw new Error(message);
-      }
-      return r.json() as Promise<Array<{ id: string; firmName: string; licenceNo?: string | null }>>;
-    },
-    enabled: Boolean(yardForLicences),
-  });
   const { data: yards = [] } = useQuery<Array<{ id: string; name: string; code: string }>>({
     queryKey: ["/api/yards"],
   });
@@ -346,7 +326,6 @@ export default function MarketTransactions() {
     const u = c?.unit != null && String(c.unit).trim() !== "" ? String(c.unit).trim() : "Quintal";
     setUnit(u);
   }, [commodityId, commodityById]);
-  const licenceById = useMemo(() => new Map(licences.map((l) => [l.id, l])), [licences]);
 
   const feePreviewParamsReady =
     Boolean(yardId.trim() && commodityId.trim()) && /^\d{4}-\d{2}-\d{2}$/.test(transactionDate.trim());
@@ -390,13 +369,6 @@ export default function MarketTransactions() {
     if (!transactionDate.trim()) return "Transaction date is required.";
     if (!yardById.has(yardId.trim())) return "Yard ID is invalid or out of scope.";
     if (!commodityById.has(commodityId.trim())) return "Commodity ID is invalid.";
-    if (yardForLicences && licencesQueryIsError) {
-      return licencesQueryError instanceof Error ? licencesQueryError.message : "Could not load trader licences.";
-    }
-    if (yardForLicences && licencesFetched && !licencesFetching && licences.length === 0) {
-      return "No Active trader licences for this yard. Approve or activate a licence under Traders → Licences, then try again.";
-    }
-    if (!licenceById.has(traderLicenceId.trim())) return "Trader licence ID is invalid.";
     const q = Number(quantity);
     if (Number.isNaN(q) || q <= 0) return "Quantity must be greater than 0.";
     const dv = Number(declaredValue);
@@ -418,7 +390,6 @@ export default function MarketTransactions() {
     transactionDate,
     yardById,
     commodityById,
-    licenceById,
     quantity,
     declaredValue,
     feePreviewParamsReady,
@@ -427,11 +398,6 @@ export default function MarketTransactions() {
     feePreviewError,
     resolvedFeePercent,
     yardForLicences,
-    licencesFetched,
-    licencesFetching,
-    licences.length,
-    licencesQueryIsError,
-    licencesQueryError,
   ]);
 
   const createMutation = useMutation({
@@ -771,26 +737,16 @@ export default function MarketTransactions() {
                   </div>
                   <div className="space-y-1">
                     <Label>Trader licence</Label>
-                    <Select
-                      value={traderLicenceId || undefined}
+                    <TraderLicenceSearchSelect
+                      yardId={yardForLicences}
+                      status="Active"
+                      value={traderLicenceId}
                       onValueChange={setTraderLicenceId}
                       disabled={!yardForLicences}
-                    >
-                      <SelectTrigger>
-                        <SelectValue
-                          placeholder={
-                            yardForLicences ? "Select trader licence (Active only)" : "Select yard first"
-                          }
-                        />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {licences.map((l) => (
-                          <SelectItem key={l.id} value={l.id}>
-                            {`${l.licenceNo ?? l.id} - ${l.firmName}`.slice(0, 64)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      placeholder={
+                        yardForLicences ? "Select trader licence (Active only)" : "Select yard first"
+                      }
+                    />
                     <p className="text-xs text-muted-foreground">
                       Only licences with status Active for the selected yard are listed. Pending or inactive licences must be
                       activated under Traders → Licences before purchases can be recorded.

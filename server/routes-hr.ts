@@ -5,7 +5,7 @@
  */
 import type { Express, Response, Request } from "express";
 import path from "path";
-import { eq, desc, or, and, gte, lte, isNotNull, asc, sql } from "drizzle-orm";
+import { eq, desc, or, and, gte, lte, isNotNull, asc, sql, ilike } from "drizzle-orm";
 import multer from "multer";
 import { db } from "./db";
 import {
@@ -59,6 +59,7 @@ import {
 } from "./workflow";
 import { validateDaRejection, validateDvReturnToDraft } from "@shared/workflow-rejection";
 import { sendApiError } from "./api-errors";
+import { reportSearchPattern } from "./report-paging";
 import { writeAuditLog } from "./audit";
 import { hasPermission } from "./auth";
 import { getMergedSystemConfig, resolveAadhaarHmacSecret } from "./system-config";
@@ -582,9 +583,42 @@ export function registerHrRoutes(app: Express) {
         });
       }
       const yardId = req.query.yardId as string | undefined;
-      const list = yardId
-        ? await db.select().from(employees).where(eq(employees.yardId, yardId)).orderBy(desc(employees.createdAt))
-        : await db.select().from(employees).orderBy(desc(employees.createdAt));
+      const id = String(req.query.id ?? "").trim();
+      const q = String(req.query.q ?? "").trim();
+      const limitRaw = parseInt(String(req.query.limit ?? "0"), 10);
+      const conditions = [];
+      if (yardId) conditions.push(eq(employees.yardId, yardId));
+      if (id) conditions.push(eq(employees.id, id));
+
+      const pattern = reportSearchPattern(q);
+      if (pattern && !id) {
+        conditions.push(
+          or(
+            ilike(employees.empId, pattern),
+            ilike(employees.firstName, pattern),
+            ilike(employees.middleName, pattern),
+            ilike(employees.surname, pattern),
+            ilike(employees.serviceBookNo, pattern),
+            ilike(employees.mobile, pattern),
+            ilike(employees.id, pattern),
+            sql`concat(${employees.firstName}, ' ', coalesce(${employees.middleName}, ''), ' ', ${employees.surname}) ilike ${pattern}`,
+          )!,
+        );
+      }
+
+      const whereClause = conditions.length ? and(...conditions) : undefined;
+      const base = whereClause
+        ? db.select().from(employees).where(whereClause).orderBy(desc(employees.createdAt))
+        : db.select().from(employees).orderBy(desc(employees.createdAt));
+
+      const limit = limitRaw > 0 ? Math.min(Math.max(limitRaw, 1), 100) : undefined;
+      let list = limit ? await base.limit(limit) : await base;
+
+      if (id && !list.some((row) => row.id === id)) {
+        const [extra] = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
+        if (extra) list = [extra, ...list];
+      }
+
       if (!includeApp) {
         res.json(list);
         return;

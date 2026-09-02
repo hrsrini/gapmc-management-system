@@ -41,6 +41,13 @@ import {
   mimeForReceiptLogoKey,
   writeReceiptLogoUpload,
 } from "./receipt-logo-storage";
+import {
+  clearLeaveOrderSignatureFiles,
+  hasUploadedLeaveOrderSignature,
+  loadActiveLeaveOrderSignature,
+  mimeForLeaveOrderSignatureKey,
+  writeLeaveOrderSignatureUpload,
+} from "./leave-signature-storage";
 import { getConfiguredObjectStorageDriver } from "./object-storage";
 import { HrEmployeeRuleError, normalizeMobile10 } from "./hr-employee-rules";
 import { SMTP_EMAIL_CONFIG_KEYS } from "@shared/smtp-email-config";
@@ -566,6 +573,82 @@ export function registerAdminRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to remove logo"));
+    }
+  });
+
+  // ----- Leave Sanction Order secretary signature (until digital signature is live) -----
+  app.get("/api/admin/branding/leave-order-signature/status", async (_req, res) => {
+    try {
+      const driver = getConfiguredObjectStorageDriver();
+      res.json({
+        hasSignature: await hasUploadedLeaveOrderSignature(),
+        storage: {
+          driver,
+          ...(driver === "supabase"
+            ? { bucket: getSupabaseStorageBucket(), prefix: getSupabaseStoragePrefix() }
+            : {}),
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to read signature status"));
+    }
+  });
+
+  app.get("/api/admin/branding/leave-order-signature/image", async (_req, res) => {
+    try {
+      const loaded = await loadActiveLeaveOrderSignature();
+      if (!loaded) {
+        return sendApiError(res, 404, "ADMIN_LEAVE_SIGNATURE_NOT_FOUND", "No secretary signature uploaded yet.");
+      }
+      res.setHeader("Content-Type", mimeForLeaveOrderSignatureKey(loaded.key));
+      res.setHeader("Cache-Control", "no-store");
+      res.send(loaded.buffer);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to read signature"));
+    }
+  });
+
+  app.post("/api/admin/branding/leave-order-signature", multerReceiptLogo, async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file?.buffer?.length) {
+        return sendApiError(
+          res,
+          400,
+          "ADMIN_LEAVE_SIGNATURE_REQUIRED",
+          "Choose a PNG or JPEG file (field name: logo).",
+        );
+      }
+      await writeLeaveOrderSignatureUpload(file.buffer, file.mimetype);
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "UploadLeaveOrderSignature",
+        recordId: "branding/leave-order-signature",
+        afterValue: { mime: file.mimetype, size: file.size },
+      }).catch((e) => console.error("Audit log failed:", e));
+      res.status(201).json({ ok: true, hasSignature: true });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to save signature"));
+    }
+  });
+
+  app.delete("/api/admin/branding/leave-order-signature", async (req, res) => {
+    try {
+      const hadFile = await hasUploadedLeaveOrderSignature();
+      await clearLeaveOrderSignatureFiles();
+      writeAuditLog(req, {
+        module: "M-10",
+        action: "DeleteLeaveOrderSignature",
+        recordId: "branding/leave-order-signature",
+        beforeValue: { hadFile },
+      }).catch((e) => console.error("Audit log failed:", e));
+      res.json({ ok: true, hasSignature: false });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", describeStorageFailure(e, "Failed to remove signature"));
     }
   });
 

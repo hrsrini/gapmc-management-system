@@ -35,6 +35,7 @@ import {
   AssetAllotmentManageDialog,
   type ManagedAssetAllotment,
 } from "@/components/assets/AssetAllotmentManageDialog";
+import { TraderLicenceSearchSelect, formatTraderLicenceSelectLabel } from "@/components/selects/trader-licence-search-select";
 
 type Allotment = ManagedAssetAllotment;
 interface Asset {
@@ -110,7 +111,7 @@ export default function AssetAllotments() {
   const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
 
   const licenceDisplayById = Object.fromEntries(
-    licences.map((l) => [l.id, `${l.licenceNo ?? l.id} — ${l.firmName}`]),
+    licences.map((l) => [l.id, formatTraderLicenceSelectLabel(l)]),
   );
 
   const sourceRows = useMemo((): Record<string, unknown>[] => {
@@ -261,14 +262,12 @@ export default function AssetAllotments() {
                     </Select>
                   </div>
                   <div><Label>Trader licence *</Label>
-                    <Select value={traderLicenceId} onValueChange={setTraderLicenceId} required>
-                      <SelectTrigger><SelectValue placeholder="Select licence" /></SelectTrigger>
-                      <SelectContent>
-                        {licences.map((l) => (
-                          <SelectItem key={l.id} value={l.id}>{l.licenceNo ?? l.id} — {l.firmName}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <TraderLicenceSearchSelect
+                      value={traderLicenceId}
+                      onValueChange={setTraderLicenceId}
+                      required
+                      placeholder="Select licence"
+                    />
                   </div>
                   <div><Label>Allottee name *</Label><Input value={allotteeName} onChange={(e) => setAllotteeName(e.target.value)} required /></div>
                   <div className="grid grid-cols-2 gap-4">

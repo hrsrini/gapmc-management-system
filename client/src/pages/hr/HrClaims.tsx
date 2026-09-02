@@ -28,6 +28,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Wallet, Plane, Car, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal, Plus } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
+import { EmployeeSearchSelect, formatEmployeeSelectLabel } from "@/components/selects/employee-search-select";
 import { formatInr } from "@/lib/formatInr";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 
@@ -175,7 +176,7 @@ export default function HrClaims() {
   });
   const approvedTours = useMemo(() => tours.filter((t) => t.status === "Approved"), [tours]);
   const employeeLabelById = Object.fromEntries(
-    employees.map((e) => [e.id, `${e.empId ?? e.id} — ${e.firstName} ${e.surname}`]),
+    employees.map((e) => [e.id, formatEmployeeSelectLabel(e)]),
   );
 
   const createTadaMutation = useMutation({
@@ -897,18 +898,11 @@ export default function HrClaims() {
             {roles.includes("ADMIN") && (
               <div className="space-y-1">
                 <Label>Employee</Label>
-                <Select value={tadaNewEmployeeId} onValueChange={setTadaNewEmployeeId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Employee" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {employees.map((e) => (
-                      <SelectItem key={e.id} value={e.id}>
-                        {(e.empId ?? e.id) + " — " + e.firstName + " " + e.surname}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <EmployeeSearchSelect
+                  value={tadaNewEmployeeId}
+                  onValueChange={setTadaNewEmployeeId}
+                  placeholder="Employee"
+                />
               </div>
             )}
             <div className="space-y-1">
@@ -1016,18 +1010,11 @@ export default function HrClaims() {
             {roles.includes("ADMIN") && (
               <div className="space-y-1">
                 <Label>Employee</Label>
-                <Select value={ltcNewEmployeeId} onValueChange={setLtcNewEmployeeId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Employee" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {employees.map((e) => (
-                      <SelectItem key={e.id} value={e.id}>
-                        {(e.empId ?? e.id) + " — " + e.firstName + " " + e.surname}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <EmployeeSearchSelect
+                  value={ltcNewEmployeeId}
+                  onValueChange={setLtcNewEmployeeId}
+                  placeholder="Employee"
+                />
               </div>
             )}
             <div className="space-y-1">

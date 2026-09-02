@@ -3,6 +3,13 @@ import { db } from "./db";
 import { employees, leaveRequests, employeeLeaveBalances, leaveOrderSequence } from "@shared/db-schema";
 import { eq, and } from "drizzle-orm";
 import { getMergedSystemConfig } from "./system-config";
+import { readUploadedLeaveOrderSignatureBuffer } from "./leave-signature-storage";
+import {
+  employeeHonorific,
+  formatLeaveCopyToLine,
+  formatLeaveOrderDate,
+  formatLeaveOrderDateToday,
+} from "./hr-leave-pdf-shared";
 import { nanoid } from "nanoid";
 
 const LEAVE_TYPE_LABELS: Record<string, string> = {
@@ -42,8 +49,12 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   const signatoryName = cfg.leave_order_signatory_name || "Secretary";
   const signatoryDesig = cfg.leave_order_signatory_designation || "Secretary";
 
+  const serviceBookNo = emp.serviceBookNo?.trim();
+  if (!serviceBookNo) {
+    throw new Error("Employee Service Book Number is required to generate a Leave Sanction Order");
+  }
+
   const year = new Date().getFullYear();
-  const serviceBookNo = emp.serviceBookNo || emp.empId || emp.id;
   const fileNo = lr.fileNo?.trim() ? lr.fileNo.trim() : await getNextFileNo(serviceBookNo, year);
 
   if (!lr.fileNo?.trim()) {
@@ -52,69 +63,69 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
 
   const leaveTypeLabel = LEAVE_TYPE_LABELS[lr.leaveType] ?? lr.leaveType;
   const empName = `${emp.firstName} ${emp.middleName ?? ""} ${emp.surname}`.replace(/\s+/g, " ").trim();
+  const honorific = employeeHonorific(emp.gender);
   const debitDays = lr.debitDays != null ? Number(lr.debitDays) : 0;
   const isExPostFacto = lr.isExPostFacto === true;
 
-  // Get balance after debit
   const balLeaveType = lr.leaveType === "COMMUTED" ? "HPL" : lr.leaveType;
-  const [bal] = await db.select().from(employeeLeaveBalances).where(
-    and(eq(employeeLeaveBalances.employeeId, lr.employeeId), eq(employeeLeaveBalances.leaveType, balLeaveType))
-  ).limit(1);
+  const [bal] = await db
+    .select()
+    .from(employeeLeaveBalances)
+    .where(and(eq(employeeLeaveBalances.employeeId, lr.employeeId), eq(employeeLeaveBalances.leaveType, balLeaveType)))
+    .limit(1);
   const balanceAfter = bal ? Number(bal.balanceDays ?? 0) : 0;
 
-  // Parse copy-to list
   let copyToList: string[] = [];
   try {
     if (lr.copyToJson) copyToList = JSON.parse(lr.copyToJson);
-  } catch { /* empty */ }
+  } catch {
+    /* empty */
+  }
   if (!copyToList.length) {
     copyToList = [
-      `${empName} (Employee)`,
-      emp.section ? `${emp.section}, HO` : (emp.locationPosted ?? emp.yardId),
+      empName,
+      emp.section ? `${emp.section}, HO` : (emp.locationPosted ?? emp.yardId ?? ""),
       "Accounts Section",
       "Personal File",
       "Guard File",
     ];
   }
+  copyToList = copyToList.map(formatLeaveCopyToLine).filter(Boolean);
 
-  // Generate PDF
   const doc = new PDFDocument({ size: "A4", margin: 60 });
   const chunks: Buffer[] = [];
   doc.on("data", (chunk: Buffer) => chunks.push(chunk));
 
-  // Header
   doc.fontSize(14).font("Helvetica-Bold").text("OFFICE OF THE GOA AGRICULTURAL PRODUCE &", { align: "center" });
   doc.text("LIVESTOCK MARKETING BOARD", { align: "center" });
   doc.moveDown(0.3);
   doc.fontSize(10).font("Helvetica").text("Panaji, Goa", { align: "center" });
   doc.moveDown(1);
 
-  // File No & Date
   doc.fontSize(10).font("Helvetica");
   doc.text(`No. ${fileNo}`, { continued: true });
-  doc.text(`Date: ${new Date().toLocaleDateString("en-IN")}`, { align: "right" });
+  doc.text(`Date: ${formatLeaveOrderDateToday()}`, { align: "right" });
   doc.moveDown(1);
 
-  // ORDER heading
   doc.fontSize(12).font("Helvetica-Bold").text("ORDER", { align: "center" });
   doc.moveDown(0.5);
 
-  // READ clause
   doc.fontSize(10).font("Helvetica");
-  doc.text(`READ: Leave application of Shri/Smt. ${empName}, ${emp.designation}, dated ${lr.fromDate}.`);
+  doc.text(
+    `READ: Leave application of ${honorific} ${empName}, ${emp.designation}, dated ${formatLeaveOrderDate(lr.fromDate)}.`,
+  );
   doc.moveDown(0.8);
 
-  // Sanction paragraph
   const sanctionPrefix = isExPostFacto ? "Ex-post facto sanction is hereby accorded" : "Sanction is hereby accorded";
-  let sanctionText = `${sanctionPrefix} to Shri/Smt. ${empName}, ${emp.designation}, `;
+  let sanctionText = `${sanctionPrefix} to ${honorific} ${empName}, ${emp.designation}, `;
   sanctionText += `${leaveTypeLabel} for a period of ${debitDays} day(s) `;
-  sanctionText += `from ${lr.fromDate} to ${lr.toDate}`;
+  sanctionText += `from ${formatLeaveOrderDate(lr.fromDate)} to ${formatLeaveOrderDate(lr.toDate)}`;
 
   if (lr.prefixDays && lr.prefixDays > 0 && !lr.prefixSuffixDisallowed) {
-    sanctionText += ` with prefix of ${lr.prefixDays} day(s) from ${lr.prefixFromDate}`;
+    sanctionText += ` with prefix of ${lr.prefixDays} day(s) from ${formatLeaveOrderDate(lr.prefixFromDate)}`;
   }
   if (lr.suffixDays && lr.suffixDays > 0 && !lr.prefixSuffixDisallowed) {
-    sanctionText += ` and suffix of ${lr.suffixDays} day(s) up to ${lr.suffixToDate}`;
+    sanctionText += ` and suffix of ${lr.suffixDays} day(s) up to ${formatLeaveOrderDate(lr.suffixToDate)}`;
   }
   if (lr.prefixSuffixDisallowed) {
     sanctionText += " (Prefix/Suffix: Nil)";
@@ -129,25 +140,31 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     doc.moveDown(0.3);
   }
 
-  // Balance certificate
   doc.moveDown(0.5);
   doc.font("Helvetica-Bold").text("Balance Certificate:");
   doc.font("Helvetica");
   doc.text(`${leaveTypeLabel} balance as on date of this Order: ${balanceAfter} day(s).`);
   doc.moveDown(0.5);
 
-  // Continuance clause
-  doc.text("The employee shall report back to duty on the day following the expiry of leave. " +
-    "If the employee fails to resume duty on the due date, the absence will be treated as per rules.");
+  doc.text(
+    "The employee shall report back to duty on the day following the expiry of leave. " +
+      "If the employee fails to resume duty on the due date, the absence will be treated as per rules.",
+  );
   doc.moveDown(1.5);
 
-  // Signatory
+  const signatureBuffer = await readUploadedLeaveOrderSignatureBuffer();
+  const sigW = 110;
+  const sigH = 44;
+  const rightEdge = doc.page.width - doc.page.margins.right;
+  if (signatureBuffer) {
+    doc.image(signatureBuffer, rightEdge - sigW, doc.y, { fit: [sigW, sigH] });
+    doc.moveDown(3.2);
+  }
   doc.text(`(${signatoryName})`, { align: "right" });
   doc.text(signatoryDesig, { align: "right" });
   doc.text("Goa Agricultural Produce & Livestock Marketing Board", { align: "right" });
   doc.moveDown(1.5);
 
-  // Copy to
   doc.font("Helvetica-Bold").text("Copy to:");
   doc.font("Helvetica");
   copyToList.forEach((item, i) => {
@@ -155,7 +172,6 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   });
   doc.moveDown(0.5);
 
-  // Service book checklist
   doc.font("Helvetica-Bold").text("☐ Entered on Service Book", { align: "left" });
 
   doc.end();
