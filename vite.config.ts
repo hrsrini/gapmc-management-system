@@ -34,12 +34,13 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: (id) => {
-          if (id.includes("node_modules")) {
-            if (id.includes("recharts")) return "recharts";
-            if (id.includes("@radix-ui") || id.includes("radix-ui")) return "radix";
-            if (id.includes("lucide-react")) return "lucide";
-            return "vendor";
-          }
+          if (!id.includes("node_modules")) return;
+          const norm = id.replace(/\\/g, "/");
+          if (norm.includes("recharts")) return "recharts";
+          if (norm.includes("lucide-react")) return "lucide";
+          // Do not split @radix-ui / react into a separate chunk. That caused
+          // circular vendor↔radix chunks and runtime:
+          // Cannot read properties of undefined (reading 'forwardRef').
         },
       },
     },
