@@ -231,6 +231,28 @@ export async function allocateNextEmpId(): Promise<string> {
   return `EMP-${String(next).padStart(3, "0")}`;
 }
 
+/** Allocate next Service Book No. from existing numeric service_book_no values. */
+export async function allocateNextServiceBookNo(): Promise<string> {
+  const rows = await db
+    .select({ serviceBookNo: employees.serviceBookNo })
+    .from(employees)
+    .where(isNotNull(employees.serviceBookNo));
+  let maxN = 0;
+  for (const r of rows) {
+    const raw = String(r.serviceBookNo ?? "").trim();
+    if (!/^\d+$/.test(raw)) continue;
+    maxN = Math.max(maxN, parseInt(raw, 10));
+  }
+  const next = maxN + 1;
+  if (next > 999999) {
+    throw new HrEmployeeRuleError(
+      "HR_EMP_SERVICE_BOOK_EXHAUSTED",
+      "Service Book Number sequence is exhausted; contact administrator.",
+    );
+  }
+  return String(next);
+}
+
 export function isDraftOrSubmitted(status: string): boolean {
   return status === "Draft" || status === "Submitted";
 }

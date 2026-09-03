@@ -33,6 +33,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { LocalSearchSelect } from "@/components/ui/local-search-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { formatInr } from "@/lib/formatInr";
 import {
@@ -172,6 +173,14 @@ export default function EntityDetail() {
     },
   });
   const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
+  const vacantPremiseOptions = useMemo(
+    () =>
+      vacantAssets.map((a) => ({
+        value: a.id,
+        label: [a.assetId, a.assetType || null].filter(Boolean).join(" · "),
+      })),
+    [vacantAssets],
+  );
   const { data: allPremisesAssets = [] } = useQuery<AssetRef[]>({
     queryKey: ["/api/ioms/assets"],
   });
@@ -681,20 +690,15 @@ export default function EntityDetail() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="md:col-span-2 space-y-1">
               <Label>Vacant premises in this yard *</Label>
-              <Select value={assetId || "__pick__"} onValueChange={(v) => setAssetId(v === "__pick__" ? "" : v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select premises" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__pick__">Select…</SelectItem>
-                  {vacantAssets.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.assetId}
-                      {a.assetType ? ` · ${a.assetType}` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <LocalSearchSelect
+                value={assetId}
+                onValueChange={setAssetId}
+                options={vacantPremiseOptions}
+                placeholder="Select premises"
+                searchPlaceholder="Type premises id or type…"
+                emptyMessage="No matching vacant premises."
+                required
+              />
               {selectedVacant?.asset ? (
                 <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-0.5">
                   <div>

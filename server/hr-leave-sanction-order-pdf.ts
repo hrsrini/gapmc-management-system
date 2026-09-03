@@ -10,6 +10,7 @@ import {
   formatLeaveOrderDate,
   formatLeaveOrderDateToday,
 } from "./hr-leave-pdf-shared";
+import { allocateNextServiceBookNo } from "./hr-employee-rules";
 import { nanoid } from "nanoid";
 
 const LEAVE_TYPE_LABELS: Record<string, string> = {
@@ -38,6 +39,17 @@ async function getNextFileNo(serviceBookNo: string, year: number): Promise<strin
   return `GAPLMB/${serviceBookNo}/ADM-${year}/${seq}`;
 }
 
+async function ensureEmployeeServiceBookNo(employeeId: string, current: string | null | undefined): Promise<string> {
+  const existing = current?.trim();
+  if (existing) return existing;
+  const allocated = await allocateNextServiceBookNo();
+  await db
+    .update(employees)
+    .set({ serviceBookNo: allocated, updatedAt: new Date().toISOString() })
+    .where(eq(employees.id, employeeId));
+  return allocated;
+}
+
 export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<{ buffer: Buffer; fileNo: string }> {
   const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveRequestId)).limit(1);
   if (!lr) throw new Error("Leave request not found");
@@ -49,10 +61,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   const signatoryName = cfg.leave_order_signatory_name || "Secretary";
   const signatoryDesig = cfg.leave_order_signatory_designation || "Secretary";
 
-  const serviceBookNo = emp.serviceBookNo?.trim();
-  if (!serviceBookNo) {
-    throw new Error("Employee Service Book Number is required to generate a Leave Sanction Order");
-  }
+  const serviceBookNo = await ensureEmployeeServiceBookNo(emp.id, emp.serviceBookNo);
 
   const year = new Date().getFullYear();
   const fileNo = lr.fileNo?.trim() ? lr.fileNo.trim() : await getNextFileNo(serviceBookNo, year);
@@ -157,8 +166,13 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   const sigH = 44;
   const rightEdge = doc.page.width - doc.page.margins.right;
   if (signatureBuffer) {
-    doc.image(signatureBuffer, rightEdge - sigW, doc.y, { fit: [sigW, sigH] });
-    doc.moveDown(3.2);
+    try {
+      doc.image(signatureBuffer, rightEdge - sigW, doc.y, { fit: [sigW, sigH] });
+      doc.moveDown(3.2);
+    } catch (e) {
+      console.warn("[sanction-order] secretary signature image could not be embedded; continuing without it", e);
+      doc.moveDown(0.5);
+    }
   }
   doc.text(`(${signatoryName})`, { align: "right" });
   doc.text(signatoryDesig, { align: "right" });
@@ -176,7 +190,10 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
 
   doc.end();
 
-  await new Promise<void>((resolve) => doc.on("end", resolve));
+  await new Promise<void>((resolve, reject) => {
+    doc.on("end", () => resolve());
+    doc.on("error", (err) => reject(err));
+  });
   const buffer = Buffer.concat(chunks);
 
   return { buffer, fileNo };

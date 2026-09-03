@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { LocalSearchSelect } from "@/components/ui/local-search-select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
@@ -346,6 +347,20 @@ export default function TraderLicenceDetail() {
     },
   });
   const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const vacantPremiseOptions = useMemo(
+    () =>
+      vacantAssets.map((a) => ({
+        value: a.id,
+        label: [
+          a.assetId,
+          a.yardId && yardById[a.yardId] ? yardById[a.yardId] : null,
+          a.assetType || null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      })),
+    [vacantAssets, yardById],
+  );
   const allotReceivedAtLabel = useMemo(() => {
     const yardId = selectedVacant?.asset?.yardId;
     if (!yardId) return "—";
@@ -1162,21 +1177,15 @@ export default function TraderLicenceDetail() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div className="md:col-span-2 space-y-1">
                   <Label>Vacant premises *</Label>
-                  <Select value={allotAssetId || "__pick__"} onValueChange={(v) => setAllotAssetId(v === "__pick__" ? "" : v)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select premises" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__pick__">Select…</SelectItem>
-                      {vacantAssets.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.assetId}
-                          {a.yardId && yardById[a.yardId] ? ` · ${yardById[a.yardId]}` : ""}
-                          {a.assetType ? ` · ${a.assetType}` : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <LocalSearchSelect
+                    value={allotAssetId}
+                    onValueChange={setAllotAssetId}
+                    options={vacantPremiseOptions}
+                    placeholder="Select premises"
+                    searchPlaceholder="Type premises id, yard, or type…"
+                    emptyMessage="No matching vacant premises."
+                    required
+                  />
                   {vacantAssets.length === 0 ? (
                     <p className="text-xs text-muted-foreground">No vacant premises in your yard scope.</p>
                   ) : null}

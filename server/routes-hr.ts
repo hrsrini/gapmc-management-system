@@ -88,6 +88,7 @@ import {
   normalizeMobile10,
   assertEmployeeUniqueness,
   allocateNextEmpId,
+  allocateNextServiceBookNo,
   parseEmployeeMasterSrs411Fields,
 } from "./hr-employee-rules";
 import { aadhaarFingerprintHmac, maskAadhaar, readAadhaarRawFromRequestBody } from "./aadhaar-fingerprint";
@@ -965,15 +966,23 @@ export function registerHrRoutes(app: Express) {
         throw e;
       }
       let newEmpId: string;
+      let newServiceBookNo: string | null = emp.serviceBookNo?.trim() || null;
       try {
         newEmpId = await allocateNextEmpId();
+        if (!newServiceBookNo) newServiceBookNo = await allocateNextServiceBookNo();
       } catch (e) {
         if (sendHrEmployeeRuleError(res, e)) return;
         throw e;
       }
       await db
         .update(employees)
-        .set({ empId: newEmpId, status: "Active", statusEffectiveDate: localCalendarYmdUtc(), updatedAt: now() })
+        .set({
+          empId: newEmpId,
+          serviceBookNo: newServiceBookNo,
+          status: "Active",
+          statusEffectiveDate: localCalendarYmdUtc(),
+          updatedAt: now(),
+        })
         .where(eq(employees.id, id));
       const [row] = await db.select().from(employees).where(eq(employees.id, id));
       if (row) {
@@ -3308,7 +3317,10 @@ export function registerHrRoutes(app: Express) {
       res.send(buffer);
     } catch (e) {
       console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate sanction order");
+      const msg = e instanceof Error && e.message.trim() ? e.message.trim() : "Failed to generate sanction order";
+      const known =
+        /not found|not approved|Service Book|required/i.test(msg) && !/internal|ECONN|timeout/i.test(msg);
+      sendApiError(res, known ? 400 : 500, known ? "LEAVE_SANCTION_ORDER_FAILED" : "INTERNAL_ERROR", msg);
     }
   });
 

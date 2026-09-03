@@ -36,6 +36,7 @@ import {
   type ManagedAssetAllotment,
 } from "@/components/assets/AssetAllotmentManageDialog";
 import { TraderLicenceSearchSelect, formatTraderLicenceSelectLabel } from "@/components/selects/trader-licence-search-select";
+import { LocalSearchSelect } from "@/components/ui/local-search-select";
 
 type Allotment = ManagedAssetAllotment;
 interface Asset {
@@ -109,6 +110,10 @@ export default function AssetAllotments() {
   });
 
   const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
+  const vacantPremiseOptions = useMemo(
+    () => vacantAssets.map((a) => ({ value: a.id, label: a.assetId })),
+    [vacantAssets],
+  );
 
   const licenceDisplayById = Object.fromEntries(
     licences.map((l) => [l.id, formatTraderLicenceSelectLabel(l)]),
@@ -252,14 +257,15 @@ export default function AssetAllotments() {
                 <DialogHeader><DialogTitle>Add allotment</DialogTitle></DialogHeader>
                 <form onSubmit={handleAdd} className="space-y-4">
                   <div><Label>Asset *</Label>
-                    <Select value={assetId} onValueChange={setAssetId} required>
-                      <SelectTrigger><SelectValue placeholder="Select asset" /></SelectTrigger>
-                      <SelectContent>
-                        {vacantAssets.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>{a.assetId}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <LocalSearchSelect
+                      value={assetId}
+                      onValueChange={setAssetId}
+                      options={vacantPremiseOptions}
+                      placeholder="Select asset"
+                      searchPlaceholder="Type premises id…"
+                      emptyMessage="No matching vacant premises."
+                      required
+                    />
                   </div>
                   <div><Label>Trader licence *</Label>
                     <TraderLicenceSearchSelect
