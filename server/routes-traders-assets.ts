@@ -2863,6 +2863,136 @@ export function registerTradersAssetsRoutes(app: Express) {
     }
   });
 
+  /** Premises Master report (filter + Excel) — columns match Report_format_Premises_Master.xlsx */
+  app.get("/api/ioms/reports/premises-master", async (req, res) => {
+    try {
+      if (!hasPermission(req.user, "M-02", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-02 Read required", { required: "M-02:Read" });
+      }
+      const yardId = String(req.query.yardId ?? "").trim();
+      const premisesType = String(req.query.premisesType ?? "").trim();
+      const premisesStatus = String(req.query.premisesStatus ?? "").trim();
+      const assetIdQ = String(req.query.assetId ?? req.query.q ?? "").trim();
+      const format = String(req.query.format ?? "json").toLowerCase();
+      const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+
+      const conditions = [];
+      if (scopedIds && scopedIds.length > 0) conditions.push(inArray(assets.yardId, scopedIds));
+      if (yardId && yardId !== "all") conditions.push(eq(assets.yardId, yardId));
+      if (premisesType && premisesType !== "all") conditions.push(eq(assets.assetType, premisesType));
+      if (premisesStatus && premisesStatus !== "all") conditions.push(eq(assets.premisesStatus, premisesStatus));
+      if (assetIdQ) {
+        const pattern = `%${assetIdQ.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+        conditions.push(
+          or(
+            ilike(assets.assetId, pattern),
+            ilike(assets.id, pattern),
+            ilike(assets.houseNo, pattern),
+            ilike(assets.fileNumber, pattern),
+            ilike(assets.complexName, pattern),
+          )!,
+        );
+      }
+
+      const base = db.select().from(assets).orderBy(assets.assetId);
+      const list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
+
+      const yardIds = [...new Set(list.map((a) => a.yardId).filter(Boolean))];
+      const yardRows =
+        yardIds.length > 0
+          ? await db.select({ id: yards.id, name: yards.name, code: yards.code }).from(yards).where(inArray(yards.id, yardIds))
+          : [];
+      const yardLabelById = Object.fromEntries(
+        yardRows.map((y) => [y.id, [y.code, y.name].filter(Boolean).join(" — ") || y.id]),
+      );
+
+      const headers = [
+        "Sr. No.",
+        "Premises ID",
+        "Yard",
+        "Premises type",
+        "Premises location",
+        "Premises status",
+        "Property Tax Authority",
+        "House No.",
+        "Area (sq. meters)",
+        "Rent as Per Valuation Report (Rs.)",
+        "Electricity Connection Type",
+        "Contract Account No.",
+        "Water Connection Type",
+        "Consumer ID",
+        "Admin. File Number",
+      ] as const;
+
+      const rows = list.map((a, i) => {
+        const status = String(a.premisesStatus ?? "Vacant");
+        return {
+          srNo: i + 1,
+          premisesId: a.assetId,
+          yard: yardLabelById[a.yardId] ?? a.yardId,
+          premisesType: a.assetType ?? "",
+          premisesLocation: a.premisesLocation ?? "",
+          premisesStatus: status,
+          propertyTaxAuthority: a.propertyTaxAuthority ?? "",
+          houseNo: a.houseNo ?? "",
+          areaSqm: a.area ?? "",
+          rentValuation: a.value != null ? Number(a.value) : "",
+          electricityConnectionType: a.electricityConnectionType ?? "",
+          contractAccountNo: a.contractAccountNo ?? "",
+          waterConnectionType: a.waterConnectionType ?? "",
+          consumerId: a.consumerId ?? "",
+          adminFileNumber: a.fileNumber ?? "",
+        };
+      });
+
+      if (format === "xlsx") {
+        const XLSX = await import("xlsx");
+        const filterYard = yardId && yardId !== "all" ? yardLabelById[yardId] ?? yardId : "All";
+        const aoa: (string | number)[][] = [
+          ["Premises Master Report"],
+          ["Yard", filterYard],
+          ["Premises type", premisesType && premisesType !== "all" ? premisesType : "All"],
+          ["Premises status", premisesStatus && premisesStatus !== "all" ? premisesStatus : "All"],
+          ["Premises ID filter", assetIdQ || "All"],
+          ["Generated at", new Date().toISOString()],
+          [],
+          [...headers],
+          ...rows.map((r) => [
+            r.srNo,
+            r.premisesId,
+            r.yard,
+            r.premisesType,
+            r.premisesLocation,
+            r.premisesStatus,
+            r.propertyTaxAuthority,
+            r.houseNo,
+            r.areaSqm,
+            r.rentValuation,
+            r.electricityConnectionType,
+            r.contractAccountNo,
+            r.waterConnectionType,
+            r.consumerId,
+            r.adminFileNumber,
+          ]),
+        ];
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        XLSX.utils.book_append_sheet(wb, ws, "Premises Master");
+        const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="Premises_Master_Report_${stamp}.xlsx"`);
+        res.send(Buffer.from(buf));
+        return;
+      }
+
+      res.json({ total: rows.length, rows, headers: [...headers] });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate premises master report");
+    }
+  });
+
   app.get("/api/ioms/assets", async (req, res) => {
     try {
       const yardId = req.query.yardId as string | undefined;

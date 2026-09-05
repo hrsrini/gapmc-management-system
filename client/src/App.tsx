@@ -67,6 +67,7 @@ import TraderLicenceForm from "@/pages/traders/TraderLicenceForm";
 import TraderLicenceDetail from "@/pages/traders/TraderLicenceDetail";
 import TraderBlockingLog from "@/pages/traders/TraderBlockingLog";
 import PremisesRegister from "@/pages/assets/PremisesRegister";
+import PremisesMasterReport from "@/pages/assets/PremisesMasterReport";
 import AssetAllotments from "@/pages/assets/AssetAllotments";
 import AssetForm from "@/pages/assets/AssetForm";
 import IomsRentInvoices from "@/pages/rent/IomsRentInvoices";
@@ -577,6 +578,13 @@ function Router() {
       </Route>
       <Route path="/assets/allotments">
         <ProtectedRoute><AssetAllotments /></ProtectedRoute>
+      </Route>
+      <Route path="/assets/premises-master-report">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Read">
+            <PremisesMasterReport />
+          </RequirePermission>
+        </ProtectedRoute>
       </Route>
       <Route path="/assets/vacant">
         <ProtectedRoute>
