@@ -283,6 +283,7 @@ export async function sendTransactionalEmailTo(
   subject: string,
   text: string,
   attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>,
+  cc?: string[],
 ): Promise<void> {
   const recipient = to.trim();
   if (!recipient) {
@@ -297,8 +298,9 @@ export async function sendTransactionalEmailTo(
       );
       return;
     }
-    await sendSmtpMail({ to: recipient, subject, text, attachments });
-    console.log(`[NOTIFY] transactional email sent to ${recipient}: ${subject}`);
+    await sendSmtpMail({ to: recipient, subject, text, attachments, cc });
+    const ccNote = cc?.length ? ` cc=${cc.join(",")}` : "";
+    console.log(`[NOTIFY] transactional email sent to ${recipient}${ccNote}: ${subject}`);
   } catch (e) {
     console.error("[NOTIFY] transactional SMTP failed:", e);
   }

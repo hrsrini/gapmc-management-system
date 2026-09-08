@@ -2,6 +2,7 @@ import PDFDocument from "pdfkit";
 import { db } from "./db";
 import { employees, leaveRequests, employeeLeaveBalances, leaveOrderSequence } from "@shared/db-schema";
 import { eq, and } from "drizzle-orm";
+import { leaveDaysInWords } from "@shared/hr-leave-display";
 import { getMergedSystemConfig } from "./system-config";
 import { readUploadedLeaveOrderSignatureBuffer } from "./leave-signature-storage";
 import {
@@ -125,23 +126,46 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   );
   doc.moveDown(0.8);
 
-  const sanctionPrefix = isExPostFacto ? "Ex-post facto sanction is hereby accorded" : "Sanction is hereby accorded";
-  let sanctionText = `${sanctionPrefix} to ${honorific} ${empName}, ${emp.designation}, `;
-  sanctionText += `${leaveTypeLabel} for a period of ${debitDays} day(s) `;
-  sanctionText += `from ${formatLeaveOrderDate(lr.fromDate)} to ${formatLeaveOrderDate(lr.toDate)}`;
+  const fromDisp = formatLeaveOrderDate(lr.fromDate);
+  const toDisp = formatLeaveOrderDate(lr.toDate);
+  const shortOrderTypes = new Set(["CL", "RH", "SPL_H"]);
 
-  if (lr.prefixDays && lr.prefixDays > 0 && !lr.prefixSuffixDisallowed) {
-    sanctionText += ` with prefix of ${lr.prefixDays} day(s) from ${formatLeaveOrderDate(lr.prefixFromDate)}`;
-  }
-  if (lr.suffixDays && lr.suffixDays > 0 && !lr.prefixSuffixDisallowed) {
-    sanctionText += ` and suffix of ${lr.suffixDays} day(s) up to ${formatLeaveOrderDate(lr.suffixToDate)}`;
-  }
-  if (lr.prefixSuffixDisallowed) {
-    sanctionText += " (Prefix/Suffix: Nil)";
-  }
-  sanctionText += ".";
+  if (shortOrderTypes.has(lr.leaveType)) {
+    const daysWord = leaveDaysInWords(debitDays > 0 ? debitDays : 1);
+    const dayWord = debitDays === 0.5 ? "day" : debitDays === 1 ? "day" : "days";
+    if (lr.leaveType === "CL") {
+      const half =
+        lr.halfDay === "first_half"
+          ? " (first half)"
+          : lr.halfDay === "second_half"
+            ? " (second half)"
+            : "";
+      doc.text(`${daysWord} ${dayWord} Casual leave${half} on ${fromDisp} approved.`);
+    } else if (lr.leaveType === "RH") {
+      const occasion = (lr.reason ?? "").trim() || "________";
+      doc.text(`${daysWord} ${dayWord} R.H. on ${fromDisp} approved i.e. of ${occasion}.`);
+    } else {
+      const duty = lr.dutyDateForSplH ? formatLeaveOrderDate(lr.dutyDateForSplH) : "________";
+      doc.text(`${daysWord} ${dayWord} Special Holiday on ${fromDisp} approved i.e. of ${duty}.`);
+    }
+  } else {
+    const sanctionPrefix = isExPostFacto ? "Ex-post facto sanction is hereby accorded" : "Sanction is hereby accorded";
+    let sanctionText = `${sanctionPrefix} to ${honorific} ${empName}, ${emp.designation}, `;
+    sanctionText += `${leaveTypeLabel} for a period of ${debitDays} day(s) `;
+    sanctionText += `from ${fromDisp} to ${toDisp}`;
 
-  doc.text(sanctionText);
+    if (lr.prefixDays && lr.prefixDays > 0 && !lr.prefixSuffixDisallowed) {
+      sanctionText += ` with prefix of ${lr.prefixDays} day(s) from ${formatLeaveOrderDate(lr.prefixFromDate)}`;
+    }
+    if (lr.suffixDays && lr.suffixDays > 0 && !lr.prefixSuffixDisallowed) {
+      sanctionText += ` and suffix of ${lr.suffixDays} day(s) up to ${formatLeaveOrderDate(lr.suffixToDate)}`;
+    }
+    if (lr.prefixSuffixDisallowed) {
+      sanctionText += " (Prefix/Suffix: Nil)";
+    }
+    sanctionText += ".";
+    doc.text(sanctionText);
+  }
   doc.moveDown(0.5);
 
   if (lr.leaveHq) {

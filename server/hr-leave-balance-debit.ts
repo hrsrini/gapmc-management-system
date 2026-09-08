@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { leaveTypeSkipsBalanceDebit } from "@shared/hr-leave-display";
 import { db } from "./db";
 import { employeeLeaveBalances } from "@shared/db-schema";
 
@@ -11,6 +12,7 @@ export function balanceLeaveTypeFor(leaveType: string): string {
 
 /**
  * Debit leave balance on DA approval. For EL, consumes non-expired set-off days first.
+ * CCL / PL / ML / EOL: no balance debit (balance still shown on sanction order).
  */
 export async function debitLeaveBalanceOnApproval(
   tx: DbExecutor,
@@ -18,6 +20,7 @@ export async function debitLeaveBalanceOnApproval(
 ): Promise<void> {
   const { employeeId, leaveType, debitDays } = params;
   if (debitDays <= 0) return;
+  if (leaveTypeSkipsBalanceDebit(leaveType)) return;
 
   const balLeaveType = balanceLeaveTypeFor(leaveType);
   const [bal] = await tx
@@ -68,6 +71,7 @@ export async function creditLeaveBalanceOnReversal(
 ): Promise<void> {
   const { employeeId, leaveType, creditDays } = params;
   if (creditDays <= 0) return;
+  if (leaveTypeSkipsBalanceDebit(leaveType)) return;
 
   const balLeaveType = balanceLeaveTypeFor(leaveType);
   const [bal] = await tx

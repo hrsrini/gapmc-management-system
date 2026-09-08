@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { leaveTypeSkipsBalanceDebit } from "@shared/hr-leave-display";
 import { db } from "./db";
 import { employeeLeaveBalances, leaveRequests } from "@shared/db-schema";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
@@ -54,6 +55,7 @@ export async function assertSufficientBalanceForApproval(
   debitDays: number,
 ): Promise<void> {
   if (debitDays <= 0) return;
+  if (leaveTypeSkipsBalanceDebit(leaveType)) return;
   const balLeaveType = balanceLeaveTypeFor(leaveType);
   const [bal] = await db
     .select()

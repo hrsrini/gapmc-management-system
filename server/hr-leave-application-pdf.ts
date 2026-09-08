@@ -5,6 +5,7 @@
  */
 import PDFDocument from "pdfkit";
 import { and, desc, eq, ne } from "drizzle-orm";
+import { formatLeaveOrderDateDisplay } from "@shared/hr-leave-display";
 import { db } from "./db";
 import { employees, leaveRequests, employeeLeaveBalances } from "@shared/db-schema";
 
@@ -37,7 +38,11 @@ function payLine(emp: { basicPayInr?: number | null; payLevel?: number | null })
     parts.push(`Rs. ${Number(emp.basicPayInr).toLocaleString("en-IN")}/-`);
   }
   if (emp.payLevel != null) parts.push(`(Pay Matrix Level ${emp.payLevel})`);
-  return parts.length ? parts.join(" ") : "Rs. ___________/- (Pay Matrix)";
+  return parts.length ? parts.join(" ") : "Rs. ___________/- (Pay Matrix Level ___)";
+}
+
+function fmtDate(iso: string | null | undefined): string {
+  return formatLeaveOrderDateDisplay(iso) || "—";
 }
 
 async function lastLeaveSummary(employeeId: string, excludeId: string): Promise<string> {
@@ -57,7 +62,7 @@ async function lastLeaveSummary(employeeId: string, excludeId: string): Promise<
   if (!last) return "N.A.";
   const label = LEAVE_TYPE_LABELS[last.leaveType] ?? last.leaveType;
   const days = last.debitDays != null ? Number(last.debitDays) : "—";
-  return `${label} for ${days} day(s); returned after ${last.toDate}`;
+  return `${days} days of ${label} w.e.f. ${fmtDate(last.fromDate)} to ${fmtDate(last.toDate)}`;
 }
 
 async function balanceHint(employeeId: string, leaveType: string): Promise<string> {
@@ -171,6 +176,9 @@ function renderForm1(
     .stroke();
   doc.moveDown(0.5);
 
+  const fromDisp = fmtDate(ctx.fromDate);
+  const toDisp = fmtDate(ctx.toDate);
+
   form1Row(doc, "1", "Name of Applicant", ctx.empName);
   form1Row(doc, "2", "Post held", ctx.designation);
   form1Row(doc, "3", "Department, Office and Section", ctx.department);
@@ -184,19 +192,20 @@ function renderForm1(
 
   const period =
     ctx.halfDay && ctx.fromDate === ctx.toDate
-      ? `${ctx.leaveTypeLabel} — ${ctx.halfDay === "first_half" ? "first half" : ctx.halfDay === "second_half" ? "second half" : ctx.halfDay} on ${ctx.fromDate} (${ctx.debitDays} day)`
-      : `${ctx.leaveTypeLabel} for ${ctx.debitDays} day(s) from ${ctx.fromDate} to ${ctx.toDate}`;
+      ? `${ctx.leaveTypeLabel} — ${ctx.halfDay === "first_half" ? "first half" : ctx.halfDay === "second_half" ? "second half" : ctx.halfDay} on ${fromDisp} (${ctx.debitDays} day)`
+      : `${ctx.leaveTypeLabel} for ${ctx.debitDays} day(s) from ${fromDisp} to ${toDisp}`;
   form1Row(doc, "6", "Nature and period of leave applied for", period);
 
+  const holidayNote = " (being Saturday and Sunday and holiday)";
   let prefixSuffix = "Prefixed — Nil; Suffixed — Nil";
   if (ctx.prefixDays > 0 || ctx.suffixDays > 0) {
     const pre =
       ctx.prefixDays > 0
-        ? `Prefixed — ${ctx.prefixDays} day(s)${ctx.prefixFromDate ? ` being from ${ctx.prefixFromDate}` : ""}`
+        ? `Prefixed — ${ctx.prefixDays} day(s)${ctx.prefixFromDate ? ` being from ${fmtDate(ctx.prefixFromDate)}` : ""}${holidayNote}`
         : "Prefixed — Nil";
     const suf =
       ctx.suffixDays > 0
-        ? `Suffixed — ${ctx.suffixDays} day(s)${ctx.suffixToDate ? ` being up to ${ctx.suffixToDate}` : ""}`
+        ? `Suffixed — ${ctx.suffixDays} day(s)${ctx.suffixToDate ? ` being up to ${fmtDate(ctx.suffixToDate)}` : ""}${holidayNote}`
         : "Suffixed — Nil";
     prefixSuffix = `${pre}; ${suf}`;
   }
@@ -213,7 +222,7 @@ function renderForm1(
   if (ctx.substituteLabel) form1Row(doc, "11B", "Substitute arrangement", ctx.substituteLabel);
 
   doc.moveDown(0.2);
-  doc.font("Helvetica-Bold").fontSize(9).text("12.  Undertaking");
+  doc.font("Helvetica-Bold").fontSize(9).text("12.");
   doc
     .font("Helvetica")
     .fontSize(8)
@@ -240,11 +249,11 @@ function renderForm1(
   doc.moveDown(0.3);
 
   if (ctx.leaveType === "ML") {
-    doc.font("Helvetica").fontSize(8).text("• Maternity Leave — supporting medical / maternity documents enclosed (mandatory).");
+    doc.font("Helvetica").fontSize(8).text("• Maternity Leave — supporting medical / maternity documents enclosed when leave exceeds 3 days.");
   } else if (ctx.leaveType === "PL") {
-    doc.font("Helvetica").fontSize(8).text("• Paternity Leave — supporting documents enclosed where required.");
+    doc.font("Helvetica").fontSize(8).text("• Paternity Leave — supporting documents enclosed when leave exceeds 3 days.");
   } else if (ctx.leaveType === "COMMUTED") {
-    doc.font("Helvetica").fontSize(8).text("• Commuted Leave — medical certificate / grounds enclosed; HPL debited at 2× days on approval.");
+    doc.font("Helvetica").fontSize(8).text("• Commuted Leave — medical certificate / grounds enclosed when leave exceeds 3 days; HPL debited at 2× days on approval.");
   } else if (ctx.leaveType === "CCL") {
     doc.font("Helvetica").fontSize(8).text("• Child Care Leave — subject to lifetime / annual caps as configured.");
   } else if (ctx.leaveType === "EOL") {
@@ -311,6 +320,9 @@ function renderShortForm(
   if (ctx.leaveType === "RH") title = "Format of Restricted Holiday Leave application";
   if (ctx.leaveType === "SPL_H") title = "Format of Special Holiday Leave application";
 
+  const fromDisp = fmtDate(ctx.fromDate);
+  const toDisp = fmtDate(ctx.toDate);
+
   doc.fontSize(11).font("Helvetica-Bold").text(title, { align: "center" });
   doc.moveDown(0.8);
 
@@ -322,7 +334,7 @@ function renderShortForm(
   doc.moveDown(0.6);
 
   doc.font("Helvetica-Bold").text(
-    `Subject: Application for ${ctx.leaveTypeLabel}${ctx.fromDate === ctx.toDate ? ` on ${ctx.fromDate}` : ` from ${ctx.fromDate} to ${ctx.toDate}`}.`,
+    `Subject: Application for ${ctx.leaveTypeLabel}${ctx.fromDate === ctx.toDate ? ` on ${fromDisp}` : ` from ${fromDisp} to ${toDisp}`}.`,
   );
   doc.moveDown(0.5);
 
@@ -331,24 +343,24 @@ function renderShortForm(
 
   if (ctx.leaveType === "SPL_H" && ctx.dutyDateForSplH) {
     doc.text(
-      `I, ${ctx.empName}, ${ctx.designation}, request that I may kindly be granted Special Holiday on ${ctx.fromDate} in lieu of duty attended on ${ctx.dutyDateForSplH}.`,
+      `I, ${ctx.empName}, ${ctx.designation}, request that I may kindly be granted Special Holiday on ${fromDisp} in lieu of duty attended on ${fmtDate(ctx.dutyDateForSplH)}.`,
       { align: "justify" },
     );
   } else if (ctx.leaveType === "RH") {
     doc.text(
-      `I, ${ctx.empName}, ${ctx.designation}, request permission to avail Restricted Holiday on ${ctx.fromDate}.`,
+      `I, ${ctx.empName}, ${ctx.designation}, request permission to avail Restricted Holiday on ${fromDisp}.`,
       { align: "justify" },
     );
   } else if (ctx.leaveType === "CL" && ctx.halfDay) {
     const half =
       ctx.halfDay === "first_half" ? "first half" : ctx.halfDay === "second_half" ? "second half" : ctx.halfDay;
     doc.text(
-      `I, ${ctx.empName}, ${ctx.designation}, request Casual Leave for the ${half} on ${ctx.fromDate} (${ctx.debitDays} day).`,
+      `I, ${ctx.empName}, ${ctx.designation}, request Casual Leave for the ${half} on ${fromDisp} (${ctx.debitDays} day).`,
       { align: "justify" },
     );
   } else {
     doc.text(
-      `I, ${ctx.empName}, ${ctx.designation}, request ${ctx.leaveTypeLabel} for ${ctx.debitDays} day(s) from ${ctx.fromDate} to ${ctx.toDate}.`,
+      `I, ${ctx.empName}, ${ctx.designation}, request ${ctx.leaveTypeLabel} for ${ctx.debitDays} day(s) from ${fromDisp} to ${toDisp}.`,
       { align: "justify" },
     );
   }

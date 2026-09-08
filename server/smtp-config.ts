@@ -106,6 +106,7 @@ export async function sendSmtpMail(opts: {
   to: string;
   subject: string;
   text: string;
+  cc?: string | string[];
   attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
 }): Promise<void> {
   const settings = await resolveSmtpSettings();
@@ -114,9 +115,13 @@ export async function sendSmtpMail(opts: {
   if (!settings || !transporter || !to) {
     throw new Error("SMTP is not configured or recipient is empty.");
   }
+  const ccList = (Array.isArray(opts.cc) ? opts.cc : opts.cc ? [opts.cc] : [])
+    .map((e) => String(e).trim())
+    .filter((e) => e.includes("@") && e.toLowerCase() !== to.toLowerCase());
   await transporter.sendMail({
     from: settings.from,
     to,
+    ...(ccList.length ? { cc: ccList.join(", ") } : {}),
     subject: opts.subject,
     text: opts.text,
     attachments: opts.attachments?.map((a) => ({

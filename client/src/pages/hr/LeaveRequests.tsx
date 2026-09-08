@@ -31,6 +31,7 @@ import {
   employeeHonorific,
   formatLeaveCopyToLine,
   formatLeaveOrderDateDisplay,
+  leaveSupportingDocRequired,
 } from "@shared/hr-leave-display";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import { EmployeeSearchSelect, formatEmployeeSelectLabel } from "@/components/selects/employee-search-select";
@@ -291,9 +292,9 @@ export default function LeaveRequests() {
   const canVerify = roles.includes("DV") || roles.includes("ADMIN");
   const canApprove = roles.includes("DA") || roles.includes("ADMIN");
   const canSubmitNew = roles.includes("DO") || roles.includes("ADMIN");
-  const canSeeAllLeaves = roles.includes("ADMIN") || roles.includes("DV") || roles.includes("DA");
+  const canSeeAllLeaves = roles.includes("ADMIN");
   const [pendingOnly, setPendingOnly] = useState(false);
-  const [mineOnly, setMineOnly] = useState(!canSeeAllLeaves);
+  const [mineOnly, setMineOnly] = useState(true);
   const [newOpen, setNewOpen] = useState(false);
   const [newEmployeeId, setNewEmployeeId] = useState("");
   const [newLeaveType, setNewLeaveType] = useState("EL");
@@ -928,12 +929,16 @@ export default function LeaveRequests() {
               </div>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-4 pt-2">
+            <div className="flex flex-wrap items-center gap-4 pt-2">
             <div className="flex items-center gap-2">
               <Checkbox
                 id="leave-pending-me"
                 checked={pendingOnly}
-                onCheckedChange={(c) => setPendingOnly(c === true)}
+                onCheckedChange={(c) => {
+                  const on = c === true;
+                  setPendingOnly(on);
+                  if (on) setMineOnly(false);
+                }}
               />
               <Label htmlFor="leave-pending-me" className="text-sm font-normal cursor-pointer">
                 Pending my action (DV/DA queue)
@@ -943,10 +948,15 @@ export default function LeaveRequests() {
               <Checkbox
                 id="leave-mine-only"
                 checked={mineOnly}
-                onCheckedChange={(c) => setMineOnly(c === true)}
+                onCheckedChange={(c) => {
+                  const on = c === true;
+                  setMineOnly(on);
+                  if (on) setPendingOnly(false);
+                }}
+                disabled={!canSeeAllLeaves && !pendingOnly}
               />
               <Label htmlFor="leave-mine-only" className="text-sm font-normal cursor-pointer">
-                My leaves only
+                My leaves only{canSeeAllLeaves ? " (Admin: uncheck to see all)" : ""}
               </Label>
             </div>
           </div>
@@ -1184,7 +1194,7 @@ export default function LeaveRequests() {
             <div className="space-y-1">
               <Label>
                 Supporting document (PDF, 5MB)
-                {["ML", "PL", "COMMUTED", "HPL"].includes(newLeaveType.trim().toUpperCase()) ? " *" : ""}
+                {leaveSupportingDocRequired(newLeaveType, requestedDays) ? " *" : ""}
               </Label>
               <Input
                 type="file"
@@ -1267,9 +1277,11 @@ export default function LeaveRequests() {
                   </div>
                 </div>
               ) : null}
-              {["ML", "PL", "COMMUTED", "HPL"].includes(newLeaveType) && (
-                <p className="text-xs text-destructive">Required for this leave type</p>
-              )}
+              {leaveSupportingDocRequired(newLeaveType, requestedDays) ? (
+                <p className="text-xs text-destructive">Required when leave exceeds 3 days</p>
+              ) : ["ML", "PL", "COMMUTED", "HPL"].includes(newLeaveType.trim().toUpperCase()) ? (
+                <p className="text-xs text-muted-foreground">Required only when leave exceeds 3 calendar days</p>
+              ) : null}
             </div>
             {(roles.includes("ADMIN") || roles.includes("DA")) && (
               <div className="flex items-center gap-2 pt-1">
@@ -1307,10 +1319,11 @@ export default function LeaveRequests() {
                   return;
                 }
                 const lt = newLeaveType.trim().toUpperCase() || "EL";
-                if (["ML", "PL", "COMMUTED", "HPL"].includes(lt) && !newDocUrl.trim()) {
+                const calDays = inclusiveCalendarDays(newFrom, newTo);
+                if (leaveSupportingDocRequired(lt, calDays) && !newDocUrl.trim()) {
                   toast({
                     title: "Supporting document required",
-                    description: "Upload a medical / supporting PDF for this leave type.",
+                    description: "Upload a medical / supporting PDF when leave exceeds 3 days.",
                     variant: "destructive",
                   });
                   return;

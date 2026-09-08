@@ -93,6 +93,7 @@ import {
 } from "./hr-employee-rules";
 import { aadhaarFingerprintHmac, maskAadhaar, readAadhaarRawFromRequestBody } from "./aadhaar-fingerprint";
 import { inclusiveCalendarDays } from "./hr-leave-utils";
+import { leaveSupportingDocRequired, leaveTypeSkipsBalanceDebit } from "@shared/hr-leave-display";
 import { calculatePrefixSuffix, calculateDebitDays, validateRhDate } from "./hr-leave-prefix-suffix";
 import { debitLeaveBalanceOnApproval, creditLeaveBalanceOnReversal, balanceLeaveTypeFor } from "./hr-leave-balance-debit";
 import { healLeaveBalanceEmployeeIds, resolveEmployeePkForLeaveBalance } from "./hr-leave-balance-resolve";
@@ -102,7 +103,6 @@ import {
   assertSufficientBalanceForApproval,
 } from "./hr-leave-validation";
 import { emailSanctionOrderPdf } from "./hr-leave-sanction-email";
-import type { AuthUser } from "./auth";
 import { extFromPdfUpload } from "./upload-pdf-mime";
 import { assertSafeUploadRelativeKey, getUploadBlobStore } from "./object-storage";
 import {
@@ -141,10 +141,6 @@ const OFFICIAL_EMP_ID_RE = /^EMP-\d{3}$/i;
 function hasOfficialEmpId(empId: string | null | undefined): boolean {
   if (empId == null || String(empId).trim() === "") return false;
   return OFFICIAL_EMP_ID_RE.test(String(empId).trim());
-}
-
-function userCanSeeAllLeaveRequests(user: AuthUser | undefined): boolean {
-  return Boolean(user?.roles?.some((r) => ["ADMIN", "DV", "DA"].includes(String(r.tier))));
 }
 
 function requireLeaveRead(req: Request, res: Response): boolean {
@@ -1753,16 +1749,23 @@ export function registerHrRoutes(app: Express) {
       const pendingMyAction =
         req.query.pendingMyAction === "1" || String(req.query.pendingMyAction ?? "").toLowerCase() === "true";
       const mineOnly = req.query.mine === "1" || String(req.query.mine ?? "").toLowerCase() === "true";
+      const isAdmin = Boolean(req.user?.roles?.some((r) => String(r.tier) === "ADMIN"));
       let list = employeeId
         ? await db.select().from(leaveRequests).where(eq(leaveRequests.employeeId, employeeId)).orderBy(desc(leaveRequests.fromDate))
         : await db.select().from(leaveRequests).orderBy(desc(leaveRequests.fromDate));
-      if (mineOnly && req.user?.employeeId) {
-        list = list.filter((row) => row.employeeId === req.user!.employeeId);
-      } else if (!userCanSeeAllLeaveRequests(req.user) && req.user?.employeeId) {
-        list = list.filter((row) => row.employeeId === req.user!.employeeId);
-      }
+
+      // Visibility: default own leaves; pending queue for DV/DA; ADMIN may see all when mine is off.
       if (pendingMyAction) {
         list = list.filter((row) => leaveRequestAwaitingMyAction(req.user, row));
+      } else if (mineOnly || !isAdmin) {
+        const selfId = req.user?.employeeId;
+        if (!selfId) {
+          list = [];
+        } else {
+          list = list.filter((row) => row.employeeId === selfId);
+        }
+      } else if (employeeId && employeeId !== req.user?.employeeId && !isAdmin) {
+        list = [];
       }
       res.json(list);
     } catch (e) {
@@ -1984,11 +1987,17 @@ export function registerHrRoutes(app: Express) {
         return sendApiError(res, 400, "LEAVE_SPLH_DUTY_DATE", "Duty date (in lieu of) is required for Special Holiday.");
       }
 
-      // Supporting doc mandatory for ML, PL, COMMUTED (MC), HPL (MC)
+      // Supporting doc mandatory for ML/PL/COMMUTED/HPL when leave exceeds 3 calendar days
       const supportingDocumentUrl = body.supportingDocumentUrl != null && String(body.supportingDocumentUrl).trim() !== "" ? String(body.supportingDocumentUrl).trim() : null;
-      const docMandatoryTypes = ["ML", "PL", "COMMUTED", "HPL"];
-      if (docMandatoryTypes.includes(leaveType) && !supportingDocumentUrl) {
-        return sendApiError(res, 400, "LEAVE_SUPPORTING_DOC_REQUIRED", "Supporting document is required for this leave type.", { leaveType });
+      const calendarDays = inclusiveCalendarDays(fromDate, toDate);
+      if (leaveSupportingDocRequired(leaveType, calendarDays) && !supportingDocumentUrl) {
+        return sendApiError(
+          res,
+          400,
+          "LEAVE_SUPPORTING_DOC_REQUIRED",
+          "Supporting / medical document is required when leave exceeds 3 days.",
+          { leaveType },
+        );
       }
 
       // Retrospective / ex-post facto entries
@@ -2050,7 +2059,7 @@ export function registerHrRoutes(app: Express) {
       const prefixSuffix = await calculatePrefixSuffix(fromDate, toDate, locationType);
       const debitDays = calculateDebitDays({ leaveType, fromDate, toDate, halfDay });
 
-      if (debitDays > 0 && !["ML", "PL", "EOL"].includes(leaveType)) {
+      if (debitDays > 0 && !leaveTypeSkipsBalanceDebit(leaveType)) {
         try {
           // For revisions, original debit is already taken — check net additional need
           let needCheck = debitDays;
@@ -2316,19 +2325,31 @@ export function registerHrRoutes(app: Express) {
           );
         }
       }
+      // Supporting doc for medical types when leave exceeds 3 days (skip on pure workflow status changes)
       const effectiveLeaveType = String((updates.leaveType as string | undefined) ?? existing.leaveType ?? "").trim();
       const effectiveDocUrl =
         updates.supportingDocumentUrl !== undefined
           ? (updates.supportingDocumentUrl as string | null)
           : (existing.supportingDocumentUrl as string | null);
-      if (["ML", "CCL"].includes(effectiveLeaveType.toUpperCase()) && !effectiveDocUrl) {
-        return sendApiError(
-          res,
-          400,
-          "LEAVE_SUPPORTING_DOC_REQUIRED",
-          "Supporting document is required for this leave type.",
-          { leaveType: effectiveLeaveType },
-        );
+      const contentFieldsTouched =
+        updates.leaveType !== undefined ||
+        updates.fromDate !== undefined ||
+        updates.toDate !== undefined ||
+        updates.supportingDocumentUrl !== undefined ||
+        !statusChange;
+      if (contentFieldsTouched) {
+        const effectiveFrom = String((updates.fromDate as string | undefined) ?? existing.fromDate ?? "").slice(0, 10);
+        const effectiveTo = String((updates.toDate as string | undefined) ?? existing.toDate ?? "").slice(0, 10);
+        const patchCalendarDays = inclusiveCalendarDays(effectiveFrom, effectiveTo);
+        if (leaveSupportingDocRequired(effectiveLeaveType, patchCalendarDays) && !effectiveDocUrl) {
+          return sendApiError(
+            res,
+            400,
+            "LEAVE_SUPPORTING_DOC_REQUIRED",
+            "Supporting / medical document is required when leave exceeds 3 days.",
+            { leaveType: effectiveLeaveType },
+          );
+        }
       }
       try {
         await db.transaction(async (tx) => {
