@@ -7,15 +7,19 @@ import { employees } from "@shared/db-schema";
 import { INDIAN_IFSC_RE, INDIAN_MOBILE_10_RE, isStrictAadhaar12Digits } from "@shared/india-validation";
 import { getPasswordPolicyBrUsr10FirstViolation } from "@shared/password-policy-br-usr-10";
 
-const EMP_ID_RE = /^EMP-(\d{3})$/i;
+/** Official id: EMP-NNN (legacy) or EMP-NNNN (board format, e.g. EMP-0021). */
+const EMP_ID_RE = /^EMP-(\d{3,4})$/i;
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** BR-EMP-01: display / stored format EMP-[NNN] (3 digits, zero-padded). */
+/** BR-EMP-01: display / stored format EMP-[NNNN] (4 digits preferred; 3-digit legacy allowed). */
 export function assertEmpIdFormat(empId: string): void {
   const t = empId.trim().toUpperCase();
   if (!EMP_ID_RE.test(t)) {
-    throw new HrEmployeeRuleError("HR_EMP_EMPID_FORMAT", "Employee ID must match EMP-[NNN] (e.g. EMP-001).");
+    throw new HrEmployeeRuleError(
+      "HR_EMP_EMPID_FORMAT",
+      "Employee ID must match EMP-[NNNN] (e.g. EMP-0021) or legacy EMP-[NNN].",
+    );
   }
 }
 
@@ -216,7 +220,7 @@ export async function assertEmployeeUniqueness(args: {
   }
 }
 
-/** Allocate next EMP-NNN from existing official EMP-### ids only. */
+/** Allocate next EMP-NNNN from existing official EMP-### / EMP-#### ids (numeric max + 1). */
 export async function allocateNextEmpId(): Promise<string> {
   const rows = await db.select({ empId: employees.empId }).from(employees).where(isNotNull(employees.empId));
   let maxN = 0;
@@ -225,10 +229,10 @@ export async function allocateNextEmpId(): Promise<string> {
     if (m) maxN = Math.max(maxN, parseInt(m[1]!, 10));
   }
   const next = maxN + 1;
-  if (next > 999) {
-    throw new HrEmployeeRuleError("HR_EMP_EMPID_EXHAUSTED", "EMP-ID sequence exceeds EMP-999; contact administrator.");
+  if (next > 9999) {
+    throw new HrEmployeeRuleError("HR_EMP_EMPID_EXHAUSTED", "EMP-ID sequence exceeds EMP-9999; contact administrator.");
   }
-  return `EMP-${String(next).padStart(3, "0")}`;
+  return `EMP-${String(next).padStart(4, "0")}`;
 }
 
 /** Allocate next Service Book No. from existing numeric service_book_no values. */

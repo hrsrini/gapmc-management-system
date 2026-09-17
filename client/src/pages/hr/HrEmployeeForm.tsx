@@ -875,10 +875,10 @@ export default function HrEmployeeForm() {
                   </div>
                   {isEdit && (
                     <div className="md:col-span-2">
-                      <Label>Employee ID (EMP-NNN)</Label>
+                      <Label>Employee ID (EMP-NNNN)</Label>
                       <Input value={empId || "— (assigned at DA approval)"} readOnly disabled className="bg-muted/50" />
                       <p className="text-xs text-muted-foreground mt-1">
-                        Official ID is assigned only when a Data Approver approves registration (BR-EMP-06).
+                        Official ID is assigned only when a Data Approver approves registration (BR-EMP-06), e.g. EMP-0110.
                       </p>
                     </div>
                   )}
@@ -1110,7 +1110,7 @@ export default function HrEmployeeForm() {
                   ) : null}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  New employees start as Draft or Submitted; a Data Approver assigns <span className="font-medium">EMP-NNN</span> and activates the record. App login is linked from the <span className="font-medium">App access</span> tab when status is Active.
+                  New employees start as Draft or Submitted; a Data Approver assigns <span className="font-medium">EMP-NNNN</span> and activates the record. App login is linked from the <span className="font-medium">App access</span> tab when status is Active.
                 </p>
               </TabsContent>
               {showAccessTab && (

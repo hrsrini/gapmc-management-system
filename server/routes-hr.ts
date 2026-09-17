@@ -136,7 +136,7 @@ function sendHrEmployeeRuleError(res: Response, e: unknown): boolean {
   return false;
 }
 
-const OFFICIAL_EMP_ID_RE = /^EMP-\d{3}$/i;
+const OFFICIAL_EMP_ID_RE = /^EMP-\d{3,4}$/i;
 
 function hasOfficialEmpId(empId: string | null | undefined): boolean {
   if (empId == null || String(empId).trim() === "") return false;

@@ -72,9 +72,10 @@ export function isKnownEmployeeLifecycleStatus(raw: string | null | undefined): 
   return KNOWN.has(String(raw ?? "").trim());
 }
 
-const OFFICIAL_EMP_ID_RE = /^EMP-\d{3}$/i;
+/** Official id: EMP-NNN (legacy) or EMP-NNNN (board format EMP-0001…). */
+const OFFICIAL_EMP_ID_RE = /^EMP-\d{3,4}$/i;
 
-/** BR-EMP-01 / BR-EMP-06: official assigned id (EMP-NNN). */
+/** BR-EMP-01 / BR-EMP-06: official assigned id (EMP-NNN or EMP-NNNN). */
 export function hasOfficialEmployeeId(empId: string | null | undefined): boolean {
   if (empId == null || String(empId).trim() === "") return false;
   return OFFICIAL_EMP_ID_RE.test(String(empId).trim());
