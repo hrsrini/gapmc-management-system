@@ -32,7 +32,7 @@ import { fetchIomsReceiptsMappedToLegacy, fetchSingleIomsReceiptAsLegacy, isIoms
 import { computeLegacyInvoiceGstFields, computeLegacyRentReceiptGstFields } from "./legacy-rent-gst";
 import { rentInvoiceValidationErrorMessage } from "@shared/rent-invoice-amount-validation";
 import { INDIAN_PAN_RE, normalizePanInput } from "@shared/india-validation";
-import { isPanTakenAcrossActiveMasters } from "./pan-uniqueness";
+import { findPanConflictAcrossActiveMasters, formatPanDuplicateMessage } from "./pan-uniqueness";
 import { 
   insertTraderSchema, 
   insertInvoiceSchema,
@@ -363,7 +363,7 @@ export async function registerRoutes(
         const t = s != null ? String(s).trim() : "";
         return t === "" ? undefined : t;
       };
-      const taken = await isPanTakenAcrossActiveMasters({
+      const conflict = await findPanConflictAcrossActiveMasters({
         panUpper: pan,
         excludeEmployeeId: q("excludeEmployeeId"),
         excludeEntityId: q("excludeEntityId"),
@@ -371,7 +371,18 @@ export async function registerRoutes(
         excludeTraderLicenceId: q("excludeTraderLicenceId"),
         excludeTraderId: q("excludeTraderId"),
       });
-      if (taken) return res.json({ ok: false, message: "PAN is already used by another active record." });
+      if (conflict) {
+        return res.json({
+          ok: false,
+          message: formatPanDuplicateMessage(conflict),
+          conflict: {
+            kind: conflict.kind,
+            id: conflict.id,
+            label: conflict.label,
+            status: conflict.status ?? null,
+          },
+        });
+      }
       return res.json({ ok: true });
     } catch (e) {
       console.error(e);
@@ -490,8 +501,11 @@ export async function registerRoutes(
       if (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm)) {
         return sendApiError(res, 400, "TRADER_PAN_FORMAT", "PAN must match ABCDE1234F.");
       }
-      if (await isPanTakenAcrossActiveMasters({ panUpper: panNorm })) {
-        return sendApiError(res, 400, "TRADER_PAN_DUPLICATE", "PAN is already used by another active record.");
+      const panConflict = await findPanConflictAcrossActiveMasters({ panUpper: panNorm });
+      if (panConflict) {
+        return sendApiError(res, 400, "TRADER_PAN_DUPLICATE", formatPanDuplicateMessage(panConflict), {
+          conflict: panConflict,
+        });
       }
       const trader = await storage.createTrader({ ...validatedData, pan: panNorm });
       await storage.createActivityLog({
@@ -519,8 +533,14 @@ export async function registerRoutes(
         if (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm)) {
           return sendApiError(res, 400, "TRADER_PAN_FORMAT", "PAN must match ABCDE1234F.");
         }
-        if (await isPanTakenAcrossActiveMasters({ panUpper: panNorm, excludeTraderId: req.params.id })) {
-          return sendApiError(res, 400, "TRADER_PAN_DUPLICATE", "PAN is already used by another active record.");
+        const panConflict = await findPanConflictAcrossActiveMasters({
+          panUpper: panNorm,
+          excludeTraderId: req.params.id,
+        });
+        if (panConflict) {
+          return sendApiError(res, 400, "TRADER_PAN_DUPLICATE", formatPanDuplicateMessage(panConflict), {
+            conflict: panConflict,
+          });
         }
         (validatedData as { pan?: string }).pan = panNorm;
       }

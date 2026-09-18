@@ -21,7 +21,7 @@ function appendExcludes(params: URLSearchParams, excludes: PanCheckExcludes | un
 export async function checkPanUniqueness(
   panRaw: string,
   excludes?: PanCheckExcludes,
-): Promise<{ ok: boolean; message?: string }> {
+): Promise<{ ok: boolean; message?: string; conflict?: { kind: string; id: string; label: string; status?: string | null } }> {
   const pan = normalizePanInput(panRaw);
   if (!isValidPanFormat(pan)) return { ok: true };
 
@@ -31,7 +31,12 @@ export async function checkPanUniqueness(
     method: "GET",
     credentials: "include",
   });
-  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; error?: string };
+  const data = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    message?: string;
+    error?: string;
+    conflict?: { kind: string; id: string; label: string; status?: string | null };
+  };
   if (!res.ok) return { ok: false, message: data.error ?? data.message ?? res.statusText };
-  return { ok: Boolean(data.ok), message: data.message };
+  return { ok: Boolean(data.ok), message: data.message, conflict: data.conflict };
 }

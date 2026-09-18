@@ -64,7 +64,7 @@ import {
   normalizeAadhaarMasked,
 } from "./hr-employee-rules";
 import { INDIAN_PAN_RE, normalizePanInput } from "@shared/india-validation";
-import { isPanTakenAcrossActiveMasters } from "./pan-uniqueness";
+import { findPanConflictAcrossActiveMasters, formatPanDuplicateMessage } from "./pan-uniqueness";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
 import {
@@ -409,8 +409,13 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (panNorm && (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm))) {
         return sendApiError(res, 400, "ENTITY_PAN_FORMAT", "PAN must match ABCDE1234F.");
       }
-      if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm }))) {
-        return sendApiError(res, 400, "ENTITY_PAN_DUPLICATE", "PAN is already used by another active record.");
+      if (panNorm) {
+        const panConflict = await findPanConflictAcrossActiveMasters({ panUpper: panNorm });
+        if (panConflict) {
+          return sendApiError(res, 400, "ENTITY_PAN_DUPLICATE", formatPanDuplicateMessage(panConflict), {
+            conflict: panConflict,
+          });
+        }
       }
       if (body.entityCode != null && String(body.entityCode).trim() !== "") {
         return sendApiError(
@@ -480,8 +485,11 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (p.length !== 10 || !INDIAN_PAN_RE.test(p)) {
           return sendApiError(res, 400, "ENTITY_PAN_FORMAT", "PAN must match ABCDE1234F.");
         }
-        if (await isPanTakenAcrossActiveMasters({ panUpper: p, excludeEntityId: id })) {
-          return sendApiError(res, 400, "ENTITY_PAN_DUPLICATE", "PAN is already used by another active record.");
+        const panConflict = await findPanConflictAcrossActiveMasters({ panUpper: p, excludeEntityId: id });
+        if (panConflict) {
+          return sendApiError(res, 400, "ENTITY_PAN_DUPLICATE", formatPanDuplicateMessage(panConflict), {
+            conflict: panConflict,
+          });
         }
       }
       if (body.track !== undefined) {
@@ -1189,8 +1197,13 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (panNorm && (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm))) {
         return sendApiError(res, 400, "ADHOC_PAN_FORMAT", "PAN must match ABCDE1234F.");
       }
-      if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm }))) {
-        return sendApiError(res, 400, "ADHOC_PAN_DUPLICATE", "PAN is already used by another active record.");
+      if (panNorm) {
+        const panConflict = await findPanConflictAcrossActiveMasters({ panUpper: panNorm });
+        if (panConflict) {
+          return sendApiError(res, 400, "ADHOC_PAN_DUPLICATE", formatPanDuplicateMessage(panConflict), {
+            conflict: panConflict,
+          });
+        }
       }
       if (body.entityCode != null && String(body.entityCode).trim() !== "") {
         return sendApiError(
@@ -2189,8 +2202,13 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (panNorm && (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm))) {
         return sendApiError(res, 400, "LICENCE_PAN_FORMAT", "PAN must match ABCDE1234F.");
       }
-      if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm }))) {
-        return sendApiError(res, 400, "LICENCE_PAN_DUPLICATE", "PAN is already used by another active record.");
+      if (panNorm) {
+        const panConflict = await findPanConflictAcrossActiveMasters({ panUpper: panNorm });
+        if (panConflict) {
+          return sendApiError(res, 400, "LICENCE_PAN_DUPLICATE", formatPanDuplicateMessage(panConflict), {
+            conflict: panConflict,
+          });
+        }
       }
       const govtGstRes = await resolveGovtGstExemptCategoryId(body.govtGstExemptCategoryId);
       if (!govtGstRes.ok) {
@@ -2389,8 +2407,16 @@ export function registerTradersAssetsRoutes(app: Express) {
           if (panNorm && (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm))) {
             return sendApiError(res, 400, "LICENCE_PAN_FORMAT", "PAN must match ABCDE1234F.");
           }
-          if (panNorm && (await isPanTakenAcrossActiveMasters({ panUpper: panNorm, excludeTraderLicenceId: id }))) {
-            return sendApiError(res, 400, "LICENCE_PAN_DUPLICATE", "PAN is already used by another active record.");
+          if (panNorm) {
+            const panConflict = await findPanConflictAcrossActiveMasters({
+              panUpper: panNorm,
+              excludeTraderLicenceId: id,
+            });
+            if (panConflict) {
+              return sendApiError(res, 400, "LICENCE_PAN_DUPLICATE", formatPanDuplicateMessage(panConflict), {
+                conflict: panConflict,
+              });
+            }
           }
           updates.pan = panNorm;
         } else updates[k] = body[k] == null ? null : String(body[k]);
