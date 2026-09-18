@@ -3437,6 +3437,9 @@ export function registerTradersAssetsRoutes(app: Express) {
             })
             .where(eq(assetAllotments.id, id));
 
+          // Premises master: Vacant → Allocated when licence allotment becomes Active on DA approval.
+          await syncPremisesStatusFromTenancy(existingAllot.assetId);
+
           const [after] = await db.select().from(assetAllotments).where(eq(assetAllotments.id, id));
           writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existingAllot, afterValue: after }).catch((e) =>
             console.error(e),
