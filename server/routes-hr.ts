@@ -98,6 +98,10 @@ import { calculatePrefixSuffix, calculateDebitDays, validateRhDate } from "./hr-
 import { debitLeaveBalanceOnApproval, creditLeaveBalanceOnReversal, balanceLeaveTypeFor } from "./hr-leave-balance-debit";
 import { healLeaveBalanceEmployeeIds, resolveEmployeePkForLeaveBalance } from "./hr-leave-balance-resolve";
 import {
+  parseLeaveBalanceImportCsv,
+  upsertLeaveBalanceImportRows,
+} from "./hr-leave-balance-import";
+import {
   validateLeaveDurationCaps,
   validateCclLifetimeCap,
   assertSufficientBalanceForApproval,
@@ -3580,8 +3584,143 @@ export function registerHrRoutes(app: Express) {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
-  // LEAVE BALANCE IMPORT (Excel-ready endpoint)
+  // LEAVE BALANCE IMPORT (JSON + CSV)
   // ═══════════════════════════════════════════════════════════════════════
+
+  function csvEscapeCell(cell: string | number | null | undefined): string {
+    const s = cell == null ? "" : String(cell);
+    if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
+  function employeeDisplayName(e: {
+    firstName: string;
+    middleName: string | null;
+    surname: string;
+  }): string {
+    return [e.firstName, e.middleName, e.surname].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  /** Download CSV template: all Active employees with empId + name; leave columns blank to fill. */
+  app.get("/api/hr/leave-balances/import-template.csv", async (req, res) => {
+    try {
+      if (!requireLeaveRead(req, res)) return;
+      const emps = await db
+        .select({
+          empId: employees.empId,
+          id: employees.id,
+          firstName: employees.firstName,
+          middleName: employees.middleName,
+          surname: employees.surname,
+        })
+        .from(employees)
+        .where(eq(employees.status, "Active"))
+        .orderBy(asc(employees.empId), asc(employees.surname), asc(employees.firstName));
+
+      const headers = [
+        "employeeId",
+        "employeeName",
+        "leaveType",
+        "balanceDays",
+        "setOffDays",
+        "setOffExpiryDate",
+      ];
+      const lines = [headers.map(csvEscapeCell).join(",")];
+      for (const e of emps) {
+        const code = (e.empId && String(e.empId).trim()) || e.id;
+        lines.push(
+          [code, employeeDisplayName(e), "", "", "", ""].map(csvEscapeCell).join(","),
+        );
+      }
+
+      const body = "\uFEFF" + lines.join("\r\n");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="leave_opening_balances_template.csv"`,
+      );
+      res.send(body);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to export leave balance CSV template");
+    }
+  });
+
+  const leaveBalanceCsvUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+  });
+
+  function multerLeaveBalanceCsv(req: Request, res: Response, next: () => void): void {
+    leaveBalanceCsvUpload.single("file")(req, res, (err: unknown) => {
+      if (err) {
+        sendApiError(res, 400, "BALANCE_IMPORT_CSV_UPLOAD", "CSV upload failed (max 5 MB)");
+        return;
+      }
+      next();
+    });
+  }
+
+  app.post("/api/hr/leave-balances/import-csv", multerLeaveBalanceCsv, async (req, res) => {
+    try {
+      if (!req.user || !hasPermission(req.user, "M-01", "Update")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-01 Update required to import leave balances", {
+          required: "M-01:Update",
+        });
+      }
+
+      const file = req.file as Express.Multer.File | undefined;
+      const cutoverDate =
+        typeof req.body?.cutoverDate === "string" ? req.body.cutoverDate : null;
+      let csvText = "";
+      if (file?.buffer) {
+        csvText = file.buffer.toString("utf8");
+      } else if (typeof req.body?.csv === "string") {
+        csvText = req.body.csv;
+      }
+      if (!csvText.trim()) {
+        return sendApiError(
+          res,
+          400,
+          "BALANCE_IMPORT_EMPTY",
+          "Upload a CSV file (field name: file) or send { csv: \"...\" }",
+        );
+      }
+
+      const { rows, parseErrors } = parseLeaveBalanceImportCsv(csvText);
+      if (parseErrors.length && rows.length === 0) {
+        return sendApiError(res, 400, "BALANCE_IMPORT_CSV_PARSE", parseErrors.join("; "), {
+          parseErrors,
+        });
+      }
+
+      const { upserted, skipped } = await upsertLeaveBalanceImportRows(rows);
+
+      if (upserted === 0 && (skipped.length > 0 || parseErrors.length > 0)) {
+        return sendApiError(res, 400, "BALANCE_IMPORT_NO_MATCH", "No rows imported — check CSV values", {
+          skipped,
+          parseErrors,
+        });
+      }
+
+      writeAuditLog(req, {
+        module: "HR",
+        action: "Create",
+        recordId: `balance-import-csv-${upserted}`,
+        afterValue: {
+          upserted,
+          skippedCount: skipped.length,
+          parseErrorCount: parseErrors.length,
+          cutoverDate,
+          source: "csv",
+        },
+      }).catch(() => {});
+      res.json({ upserted, skipped, parseErrors, cutoverDate });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to import leave balances from CSV");
+    }
+  });
 
   app.post("/api/hr/leave-balances/import", async (req, res) => {
     try {
@@ -3595,63 +3734,7 @@ export function registerHrRoutes(app: Express) {
         return sendApiError(res, 400, "BALANCE_IMPORT_EMPTY", "balances array is required");
       }
 
-      await healLeaveBalanceEmployeeIds();
-
-      const now = new Date().toISOString();
-      let upserted = 0;
-      const skipped: { employeeId: string; leaveType: string; reason: string }[] = [];
-
-      for (const b of balances) {
-        const rawEmployeeId = String(b.employeeId ?? "").trim();
-        const leaveType = String(b.leaveType ?? "")
-          .trim()
-          .toUpperCase();
-        const balanceDays = Number(b.balanceDays ?? 0);
-        const setOffDays = Number(b.setOffDays ?? 0);
-        const setOffExpiryDate = b.setOffExpiryDate ? String(b.setOffExpiryDate).trim() : null;
-        if (!rawEmployeeId || !leaveType) {
-          skipped.push({ employeeId: rawEmployeeId || "(empty)", leaveType: leaveType || "(empty)", reason: "missing employeeId or leaveType" });
-          continue;
-        }
-        if (!Number.isFinite(balanceDays) || balanceDays < 0) {
-          skipped.push({ employeeId: rawEmployeeId, leaveType, reason: "balanceDays must be >= 0" });
-          continue;
-        }
-
-        const employeeId = await resolveEmployeePkForLeaveBalance(rawEmployeeId);
-        if (!employeeId) {
-          skipped.push({
-            employeeId: rawEmployeeId,
-            leaveType,
-            reason: "unknown employeeId (use EMP-NNN or internal employee id)",
-          });
-          continue;
-        }
-
-        const [existing] = await db
-          .select()
-          .from(employeeLeaveBalances)
-          .where(and(eq(employeeLeaveBalances.employeeId, employeeId), eq(employeeLeaveBalances.leaveType, leaveType)))
-          .limit(1);
-
-        if (existing) {
-          await db
-            .update(employeeLeaveBalances)
-            .set({ balanceDays, setOffDays, setOffExpiryDate, updatedAt: now })
-            .where(eq(employeeLeaveBalances.id, existing.id));
-        } else {
-          await db.insert(employeeLeaveBalances).values({
-            id: nanoid(),
-            employeeId,
-            leaveType,
-            balanceDays,
-            setOffDays,
-            setOffExpiryDate,
-            updatedAt: now,
-          });
-        }
-        upserted++;
-      }
+      const { upserted, skipped } = await upsertLeaveBalanceImportRows(balances);
 
       if (upserted === 0 && skipped.length > 0) {
         return sendApiError(res, 400, "BALANCE_IMPORT_NO_MATCH", "No rows imported — check employeeId values", {
@@ -3663,7 +3746,7 @@ export function registerHrRoutes(app: Express) {
         module: "HR",
         action: "Create",
         recordId: `balance-import-${upserted}`,
-        afterValue: { upserted, skippedCount: skipped.length, cutoverDate: cutoverDate ?? null },
+        afterValue: { upserted, skippedCount: skipped.length, cutoverDate: cutoverDate ?? null, source: "json" },
       }).catch(() => {});
       res.json({ upserted, skipped, cutoverDate: cutoverDate ?? null });
     } catch (e) {
