@@ -7,7 +7,7 @@ import PDFDocument from "pdfkit";
 import { and, desc, eq, ne } from "drizzle-orm";
 import { formatLeaveOrderDateDisplay } from "@shared/hr-leave-display";
 import { db } from "./db";
-import { employees, leaveRequests, employeeLeaveBalances } from "@shared/db-schema";
+import { employees, leaveRequests, employeeLeaveBalances, yards, users } from "@shared/db-schema";
 
 export const LEAVE_TYPE_LABELS: Record<string, string> = {
   EL: "Earned Leave",
@@ -45,6 +45,11 @@ function fmtDate(iso: string | null | undefined): string {
   return formatLeaveOrderDateDisplay(iso) || "—";
 }
 
+function blankOr(value: string | null | undefined, blank = "_______________"): string {
+  const t = String(value ?? "").trim();
+  return t || blank;
+}
+
 async function lastLeaveSummary(employeeId: string, excludeId: string): Promise<string> {
   const rows = await db
     .select()
@@ -61,8 +66,18 @@ async function lastLeaveSummary(employeeId: string, excludeId: string): Promise<
   const last = rows[0];
   if (!last) return "N.A.";
   const label = LEAVE_TYPE_LABELS[last.leaveType] ?? last.leaveType;
-  const days = last.debitDays != null ? Number(last.debitDays) : "—";
-  return `${days} days of ${label} w.e.f. ${fmtDate(last.fromDate)} to ${fmtDate(last.toDate)}`;
+  const daysNum =
+    last.debitDays != null
+      ? Number(last.debitDays)
+      : Math.max(
+          0,
+          Math.round((new Date(last.toDate).getTime() - new Date(last.fromDate).getTime()) / 86400000) + 1,
+        );
+  const singleDay = last.fromDate === last.toDate || daysNum === 1;
+  if (singleDay) {
+    return `1 day ${label} on ${fmtDate(last.fromDate)}`;
+  }
+  return `${daysNum} days of ${label} w.e.f. ${fmtDate(last.fromDate)} to ${fmtDate(last.toDate)}`;
 }
 
 async function balanceHint(employeeId: string, leaveType: string): Promise<string> {
@@ -107,6 +122,20 @@ function form1Row(
   doc.y = startY + rowH + 6;
 }
 
+function form1FullWidth(
+  doc: PDFKit.PDFDocument,
+  text: string,
+  opts?: { bold?: boolean; size?: number; gapAfter?: number },
+): void {
+  const leftX = doc.page.margins.left;
+  const contentW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const startY = doc.y;
+  doc.font(opts?.bold ? "Helvetica-Bold" : "Helvetica").fontSize(opts?.size ?? 9);
+  const h = doc.heightOfString(text, { width: contentW });
+  doc.text(text, leftX, startY, { width: contentW, align: "left" });
+  doc.y = startY + h + (opts?.gapAfter ?? 6);
+}
+
 function drawBoardHeader(doc: PDFKit.PDFDocument): void {
   doc.fontSize(11).font("Helvetica-Bold").text("OFFICE OF THE GOA AGRICULTURAL PRODUCE &", { align: "center" });
   doc.text("LIVESTOCK MARKETING BOARD", { align: "center" });
@@ -134,10 +163,15 @@ function renderForm1(
     reason: string;
     lastLeave: string;
     ltcProposed: boolean;
+    ltcBlockYear: string;
     addressDuringLeave: string;
     leaveHq: string;
     substituteLabel: string;
+    refundUndertakingI: string;
+    refundUndertakingIi: string;
     controllingRemarks: string;
+    controllingOfficerName: string;
+    controllingOfficerDesignation: string;
     status: string;
     isExPostFacto: boolean;
     isRetrospective: boolean;
@@ -166,7 +200,6 @@ function renderForm1(
   }
   doc.moveDown(0.5);
 
-  // Thin rule under title (specimen feel)
   const ruleY = doc.y;
   doc
     .moveTo(doc.page.margins.left, ruleY)
@@ -213,56 +246,58 @@ function renderForm1(
   form1Row(doc, "8", "Ground on which leave is applied for", ctx.reason || ctx.leaveTypeLabel);
   form1Row(doc, "9", "Date of return from last leave and the nature and period of that leave", ctx.lastLeave);
 
+  const blockYear = blankOr(ctx.ltcBlockYear, "_______");
   const ltcText = ctx.ltcProposed
-    ? "I propose to avail myself of leave travel concession for the block year _______ ensuing leave."
-    : "I do not propose to avail myself of leave travel concession for the block year _______ ensuing leave.";
+    ? `I propose to avail myself of leave travel concession for the block year ${blockYear} ensuing leave.`
+    : `I do not propose to avail myself of leave travel concession for the block year ${blockYear} ensuing leave.`;
   form1Row(doc, "10", "Leave Travel Concession", ltcText);
   form1Row(doc, "11", "Address during the leave period", ctx.addressDuringLeave || "—");
   if (ctx.leaveHq) form1Row(doc, "11A", "Leave headquarters / destination", ctx.leaveHq);
   if (ctx.substituteLabel) form1Row(doc, "11B", "Substitute arrangement", ctx.substituteLabel);
 
-  doc.moveDown(0.2);
-  doc.font("Helvetica-Bold").fontSize(9).text("12.");
-  doc
-    .font("Helvetica")
-    .fontSize(8)
-    .text(
-      "In the event of my resignation or Voluntary retirement from service I undertake to refund:",
-      { align: "left" },
-    );
-  doc.moveDown(0.2);
+  // Item 12 — full-width left-aligned (same margin as items 1–11)
+  form1FullWidth(
+    doc,
+    "12.  In the event of my resignation or Voluntary retirement from service I undertake to refund:",
+    { size: 9, gapAfter: 8 },
+  );
   form1Row(
     doc,
     "(i)",
     "The difference between the leave salary drawn during the commuted leave and that admissible during the half pay leave which would not have been admissible had sub-rule (1) of rule 30 not been applied",
-    ctx.leaveType === "COMMUTED" ? "Applicable (see medical / grounds enclosed)" : "N.A.",
+    blankOr(ctx.refundUndertakingI),
     { labelWidth: 320 },
   );
   form1Row(
     doc,
     "(ii)",
     "The leave salary during the leave which would have been admissible had sub-rule (1) of rule 31 not been applied",
-    "N.A.",
+    blankOr(ctx.refundUndertakingIi),
     { labelWidth: 320 },
   );
-  doc.font("Helvetica-Oblique").fontSize(8).text("(Score out whichever be not applicable)");
-  doc.moveDown(0.3);
+  form1FullWidth(doc, "(Score out whichever be not applicable)", { size: 8, gapAfter: 8 });
 
   if (ctx.leaveType === "ML") {
-    doc.font("Helvetica").fontSize(8).text("• Maternity Leave — supporting medical / maternity documents enclosed when leave exceeds 3 days.");
+    form1FullWidth(doc, "• Maternity Leave — supporting medical / maternity documents enclosed when leave exceeds 3 days.", {
+      size: 8,
+    });
   } else if (ctx.leaveType === "PL") {
-    doc.font("Helvetica").fontSize(8).text("• Paternity Leave — supporting documents enclosed when leave exceeds 3 days.");
+    form1FullWidth(doc, "• Paternity Leave — supporting documents enclosed when leave exceeds 3 days.", { size: 8 });
   } else if (ctx.leaveType === "COMMUTED") {
-    doc.font("Helvetica").fontSize(8).text("• Commuted Leave — medical certificate / grounds enclosed when leave exceeds 3 days; HPL debited at 2× days on approval.");
+    form1FullWidth(
+      doc,
+      "• Commuted Leave — medical certificate / grounds enclosed when leave exceeds 3 days; HPL debited at 2× days on approval.",
+      { size: 8 },
+    );
   } else if (ctx.leaveType === "CCL") {
-    doc.font("Helvetica").fontSize(8).text("• Child Care Leave — subject to lifetime / annual caps as configured.");
+    form1FullWidth(doc, "• Child Care Leave — subject to lifetime / annual caps as configured.", { size: 8 });
   } else if (ctx.leaveType === "EOL") {
-    doc.font("Helvetica").fontSize(8).text("• Extraordinary Leave — no balance debit from EL/HPL/CL.");
+    form1FullWidth(doc, "• Extraordinary Leave — no balance debit from EL/HPL/CL.", { size: 8 });
   }
 
   doc.moveDown(1.2);
   doc.font("Helvetica").fontSize(9).text("_______________________________", { align: "right" });
-  doc.text("(SIGNATURE OF APPLICANT WITH DATE)", { align: "right" });
+  doc.text("(SIGNATURE WITH DATE)", { align: "right" });
   doc.text(ctx.empName, { align: "right" });
 
   doc.moveDown(1);
@@ -275,22 +310,24 @@ function renderForm1(
     .stroke();
   doc.moveDown(0.5);
 
-  doc.font("Helvetica-Bold").fontSize(9).text("13.  Remarks and / or recommendations of Controlling Officer.");
-  doc.moveDown(0.3);
-  doc.font("Helvetica").fontSize(9).text(ctx.controllingRemarks || "_______________________________________________________________");
-  doc.moveDown(1.2);
-  doc.text("_______________________________", { align: "right" });
-  doc.text("(SIGNATURE WITH DATE AND DESIGNATION)", { align: "right" });
-
-  doc.moveDown(1);
-  doc
-    .fontSize(7)
-    .fillColor("#555555")
-    .text(
-      `Status: ${ctx.status}${ctx.isRetrospective ? " | Retrospective" : ""} | Print for wet-ink signature. Digital signature not in system scope.`,
-      { align: "center" },
-    );
-  doc.fillColor("#000000");
+  form1FullWidth(doc, "13.  Remarks and / or recommendations of Controlling Officer.", {
+    bold: true,
+    size: 9,
+    gapAfter: 8,
+  });
+  form1FullWidth(
+    doc,
+    ctx.controllingRemarks || "_______________________________________________________________",
+    { size: 9, gapAfter: 12 },
+  );
+  doc.font("Helvetica").fontSize(9).text("_______________________________", { align: "right" });
+  doc.text("(SIGNATURE WITH DATE)", { align: "right" });
+  if (ctx.controllingOfficerName) {
+    doc.text(ctx.controllingOfficerName, { align: "right" });
+  }
+  if (ctx.controllingOfficerDesignation) {
+    doc.text(ctx.controllingOfficerDesignation, { align: "right" });
+  }
 }
 
 function renderShortForm(
@@ -415,12 +452,37 @@ export async function generateLeaveApplicationPdf(
     if (sub) substituteLabel = `${empDisplayName(sub)} (${sub.empId ?? sub.id})`;
   }
 
+  let controllingOfficerName = "";
+  let controllingOfficerDesignation = "";
+  if (lr.dvUser) {
+    const [dv] = await db.select().from(users).where(eq(users.id, lr.dvUser)).limit(1);
+    if (dv) {
+      controllingOfficerName = dv.name;
+      if (dv.employeeId) {
+        const [dvEmp] = await db.select().from(employees).where(eq(employees.id, dv.employeeId)).limit(1);
+        if (dvEmp) controllingOfficerDesignation = dvEmp.designation;
+      }
+    }
+  }
+
   const leaveType = String(lr.leaveType).trim().toUpperCase();
   const leaveTypeLabel = LEAVE_TYPE_LABELS[leaveType] ?? leaveType;
   const empName = empDisplayName(emp);
+  let primaryLocationName: string | null = null;
+  let yardIsHo = false;
+  if (emp.yardId) {
+    const [yard] = await db.select().from(yards).where(eq(yards.id, emp.yardId)).limit(1);
+    if (yard) {
+      primaryLocationName = yard.name ?? yard.code ?? null;
+      const t = String(yard.type ?? "").trim().toUpperCase();
+      const n = String(yard.name ?? "").toLowerCase();
+      yardIsHo = t === "HO" || n.includes("head office");
+    }
+  }
   const department = [
     "The Goa Agricultural Produce & Livestock Marketing Board",
-    emp.section ? emp.section : null,
+    primaryLocationName ? primaryLocationName : null,
+    yardIsHo && emp.section ? emp.section : null,
     emp.locationPosted ? emp.locationPosted : null,
   ]
     .filter(Boolean)
@@ -475,10 +537,15 @@ export async function generateLeaveApplicationPdf(
       reason: lr.reason ?? "",
       lastLeave,
       ltcProposed: lr.ltcProposed === true,
+      ltcBlockYear: lr.ltcBlockYear ?? "",
       addressDuringLeave: lr.addressDuringLeave ?? "",
       leaveHq: lr.leaveHq ?? "",
       substituteLabel,
+      refundUndertakingI: lr.refundUndertakingI ?? "",
+      refundUndertakingIi: lr.refundUndertakingIi ?? "",
       controllingRemarks: lr.controllingOfficerRemarks ?? "",
+      controllingOfficerName,
+      controllingOfficerDesignation,
       status: lr.status,
       isExPostFacto: lr.isExPostFacto === true,
       isRetrospective: lr.isRetrospective === true,

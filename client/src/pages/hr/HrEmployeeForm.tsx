@@ -52,6 +52,7 @@ interface Yard {
   id: string;
   code?: string | null;
   name?: string | null;
+  type?: string | null;
 }
 interface Employee {
   id: string;
@@ -84,6 +85,7 @@ interface Employee {
   section?: string | null;
   locationPosted?: string | null;
   payLevel?: number | null;
+  basicPayInr?: number | null;
   bankAccountNumber?: string | null;
   ifscCode?: string | null;
   category?: string | null;
@@ -106,6 +108,14 @@ const MARITAL_OPTIONS = ["", "Single", "Married", "Widowed", "Divorced"];
 const EMPLOYEE_CATEGORIES = ["General", "SC", "ST", "OBC", "EWS", "PwBD", "Ex-servicemen"];
 const BLOOD_GROUP_OPTIONS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] as const;
 const PAY_LEVELS = Array.from({ length: 18 }, (_, i) => i + 1);
+
+function isHeadOfficeYard(y: { type?: string | null; name?: string | null; code?: string | null } | undefined): boolean {
+  if (!y) return false;
+  if (String(y.type ?? "").trim().toUpperCase() === "HO") return true;
+  const name = String(y.name ?? "").toLowerCase();
+  const code = String(y.code ?? "").toLowerCase();
+  return name.includes("head office") || code === "ho" || code.startsWith("ho-");
+}
 
 export default function HrEmployeeForm() {
   const { id } = useParams<{ id: string }>();
@@ -157,6 +167,7 @@ export default function HrEmployeeForm() {
   const [section, setSection] = useState("");
   const [locationPosted, setLocationPosted] = useState("");
   const [payLevel, setPayLevel] = useState<string>("");
+  const [basicPayInr, setBasicPayInr] = useState("");
   const [bankAccountNumber, setBankAccountNumber] = useState("");
   const [ifscCode, setIfscCode] = useState("");
   const [category, setCategory] = useState("");
@@ -225,6 +236,11 @@ export default function HrEmployeeForm() {
       setSection(employee.section ?? "");
       setLocationPosted(employee.locationPosted ?? "");
       setPayLevel(employee.payLevel != null && !Number.isNaN(Number(employee.payLevel)) ? String(employee.payLevel) : "");
+      setBasicPayInr(
+        employee.basicPayInr != null && Number.isFinite(Number(employee.basicPayInr))
+          ? String(employee.basicPayInr)
+          : "",
+      );
       setBankAccountNumber(employee.bankAccountNumber ?? "");
       setIfscCode(employee.ifscCode ?? "");
       setCategory(employee.category ?? "");
@@ -470,6 +486,9 @@ export default function HrEmployeeForm() {
       }
     }
 
+    const selectedYard = (yards ?? []).find((y) => y.id === yardId);
+    const sectionToSave = isHeadOfficeYard(selectedYard) ? section.trim() || null : null;
+
     const payload: Record<string, unknown> = {
       firstName,
       middleName: middleName || null,
@@ -495,9 +514,15 @@ export default function HrEmployeeForm() {
       emergencyContactMobile: emMobile,
       reportingOfficerEmployeeId: reportingOfficerEmployeeId.trim() || null,
       serviceBookNo: serviceBookNo.trim() || null,
-      section: section.trim() || null,
+      section: sectionToSave,
       locationPosted: locationPosted.trim() || null,
       payLevel: payLevel ? parseInt(payLevel, 10) : null,
+      basicPayInr: (() => {
+        const t = basicPayInr.trim().replace(/,/g, "");
+        if (!t) return null;
+        const n = Number(t);
+        return Number.isFinite(n) && n >= 0 ? n : null;
+      })(),
       bankAccountNumber: bankDigits || null,
       ifscCode: ifscTrim ? ifscTrim.toUpperCase().replace(/\s/g, "") : null,
       category: category.trim() || null,
@@ -812,15 +837,43 @@ export default function HrEmployeeForm() {
                       />
                     </div>
                   </div>
-                  <div><Label>Yard *</Label>
-                    <Select value={yardId} onValueChange={setYardId} required>
-                      <SelectTrigger><SelectValue placeholder="Select yard" /></SelectTrigger>
+                  <div>
+                    <Label>Primary Location Posted *</Label>
+                    <Select
+                      value={yardId}
+                      onValueChange={(v) => {
+                        setYardId(v);
+                        const y = (yards ?? []).find((row) => row.id === v);
+                        if (!isHeadOfficeYard(y)) setSection("");
+                      }}
+                      required
+                    >
+                      <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
                       <SelectContent>
                         {(yards ?? []).map((y) => (
                           <SelectItem key={y.id} value={y.id}>{y.name ?? y.code ?? y.id}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+                  <div>
+                    <Label>Section (HO employees)</Label>
+                    <Select
+                      value={section || "__none__"}
+                      onValueChange={(v) => setSection(v === "__none__" ? "" : v)}
+                      disabled={!isHeadOfficeYard((yards ?? []).find((y) => y.id === yardId))}
+                    >
+                      <SelectTrigger><SelectValue placeholder="N/A" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">N/A</SelectItem>
+                        <SelectItem value="Accounts Section">Accounts Section</SelectItem>
+                        <SelectItem value="Admin Section">Admin Section</SelectItem>
+                        <SelectItem value="Inspection Section">Inspection Section</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {!isHeadOfficeYard((yards ?? []).find((y) => y.id === yardId)) ? (
+                      <p className="text-xs text-muted-foreground mt-1">Enabled only when Primary Location Posted is Head Office.</p>
+                    ) : null}
                   </div>
                   <div><Label>Employee type</Label>
                     <Select value={employeeType} onValueChange={setEmployeeType}>
@@ -837,9 +890,12 @@ export default function HrEmployeeForm() {
                     <Input
                       value={locationPosted}
                       onChange={(e) => setLocationPosted(e.target.value)}
-                      placeholder="Official posting / work location (SRS §4.1.1)"
+                      placeholder="Additional posting / location charges if any"
                       maxLength={200}
                     />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Optional. Enter any additional location or charges beyond Primary Location Posted.
+                    </p>
                   </div>
                   <div>
                     <Label>Pay level</Label>
@@ -855,7 +911,18 @@ export default function HrEmployeeForm() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <p className="text-xs text-muted-foreground mt-1">§4.1.1: level 1–18 (optional).</p>
+                    <p className="text-xs text-muted-foreground mt-1">§4.1.1: level 1–18 (optional). Shown on leave application.</p>
+                  </div>
+                  <div>
+                    <Label>Pay Rs.</Label>
+                    <Input
+                      value={basicPayInr}
+                      onChange={(e) => setBasicPayInr(e.target.value.replace(/[^\d.]/g, ""))}
+                      inputMode="decimal"
+                      placeholder="Basic pay (INR)"
+                      autoComplete="off"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Shown on leave application Form-1; can be updated there if needed.</p>
                   </div>
                   <div>
                     <Label>Category</Label>
@@ -1047,18 +1114,6 @@ export default function HrEmployeeForm() {
                     />
                   </div>
                   <div><Label>Service Book No.</Label><Input value={serviceBookNo} onChange={(e) => setServiceBookNo(e.target.value)} placeholder="e.g. 386" /></div>
-                  <div>
-                    <Label>Section (HO employees)</Label>
-                    <Select value={section || "__none__"} onValueChange={(v) => setSection(v === "__none__" ? "" : v)}>
-                      <SelectTrigger><SelectValue placeholder="N/A" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">N/A</SelectItem>
-                        <SelectItem value="Accounts Section">Accounts Section</SelectItem>
-                        <SelectItem value="Admin Section">Admin Section</SelectItem>
-                        <SelectItem value="Inspection Section">Inspection Section</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
                   <div><Label>Joining date *</Label><Input type="date" value={joiningDate} onChange={(e) => setJoiningDate(e.target.value)} required /></div>
                   <div><Label>Retirement date</Label><Input type="date" value={retirementDate} onChange={(e) => setRetirementDate(e.target.value)} /></div>
                   <div><Label>Status</Label>

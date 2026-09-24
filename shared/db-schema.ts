@@ -735,12 +735,22 @@ export const leaveRequests = gapmc.table("leave_requests", {
   suffixToDate: text("suffix_to_date"),
   /** Actual days debited from balance (may differ from calendar span for half-day, commuted 2×, etc.). */
   debitDays: doublePrecision("debit_days"),
+  /** Portion of debitDays taken from EL set-off bucket (revision reverse). */
+  debitFromSetOffDays: doublePrecision("debit_from_set_off_days"),
+  /** Portion of debitDays taken from main balanceDays (revision reverse). */
+  debitFromBalanceDays: doublePrecision("debit_from_balance_days"),
   /** Substitute employee ID (optional). */
   substituteEmployeeId: text("substitute_employee_id"),
   /** Address during leave (Form-1 field). */
   addressDuringLeave: text("address_during_leave"),
   /** LTC proposed flag (Form-1 field). */
   ltcProposed: boolean("ltc_proposed").default(false),
+  /** Form-1 item 10: LTC block year (user-entered, e.g. 2024-2027). */
+  ltcBlockYear: text("ltc_block_year"),
+  /** Form-1 item 12(i): refund undertaking text (user-entered; blank allowed). */
+  refundUndertakingI: text("refund_undertaking_i"),
+  /** Form-1 item 12(ii): refund undertaking text (user-entered; blank allowed). */
+  refundUndertakingIi: text("refund_undertaking_ii"),
   /** Leave headquarters / destination. */
   leaveHq: text("leave_hq"),
   /** Sanction Order file number (GAPLMB/{SBNo}/ADM-{YYYY}/{seq}). */

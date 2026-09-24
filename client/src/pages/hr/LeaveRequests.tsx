@@ -62,9 +62,14 @@ interface LeaveRequest {
   prefixFromDate?: string | null;
   suffixToDate?: string | null;
   debitDays?: number | null;
+  debitFromSetOffDays?: number | null;
+  debitFromBalanceDays?: number | null;
   substituteEmployeeId?: string | null;
   addressDuringLeave?: string | null;
   ltcProposed?: boolean | null;
+  ltcBlockYear?: string | null;
+  refundUndertakingI?: string | null;
+  refundUndertakingIi?: string | null;
   leaveHq?: string | null;
   fileNo?: string | null;
   orderPdfUrl?: string | null;
@@ -96,6 +101,25 @@ interface Employee {
   section?: string | null;
   yardId?: string | null;
   gender?: string | null;
+  payLevel?: number | null;
+  basicPayInr?: number | null;
+}
+
+interface YardRow {
+  id: string;
+  code?: string | null;
+  name?: string | null;
+  type?: string | null;
+}
+
+const PAY_LEVELS = Array.from({ length: 18 }, (_, i) => i + 1);
+
+function isHeadOfficeYard(y: YardRow | undefined): boolean {
+  if (!y) return false;
+  if (String(y.type ?? "").trim().toUpperCase() === "HO") return true;
+  const name = String(y.name ?? "").toLowerCase();
+  const code = String(y.code ?? "").toLowerCase();
+  return name.includes("head office") || code === "ho" || code.startsWith("ho-");
 }
 
 interface LeaveBalanceRow {
@@ -163,7 +187,12 @@ function resolveCopyToList(leave: LeaveRequest, employee: Employee | null | unde
   return { list: buildDefaultCopyToRows(employee), usingDefault: true };
 }
 
-function leaveBalanceAfterDebit(leave: LeaveRequest, balances: LeaveBalanceRow[], approved: boolean): number | null {
+function leaveBalanceAfterDebit(
+  leave: LeaveRequest,
+  balances: LeaveBalanceRow[],
+  approved: boolean,
+  revisedFromLeave?: LeaveRequest | null,
+): number | null {
   const balLeaveType = leave.leaveType === "COMMUTED" ? "HPL" : leave.leaveType;
   const bal = balances.find(
     (b) =>
@@ -172,20 +201,42 @@ function leaveBalanceAfterDebit(leave: LeaveRequest, balances: LeaveBalanceRow[]
   );
   if (!bal) return null;
   if (approved) return Number(bal.balanceDays ?? 0);
-  const debit = Number(leave.debitDays ?? 0);
-  if (debit <= 0) return Math.max(0, Number(bal.balanceDays ?? 0));
 
-  // Server-side debit logic: EL consumes non-expired set-off days first, then balanceDays.
+  let available = Number(bal.balanceDays ?? 0);
+  const asOf = new Date().toISOString().slice(0, 10);
+  let setOffAvailable = 0;
   if (String(balLeaveType).trim().toUpperCase() === "EL") {
-    const asOf = new Date().toISOString().slice(0, 10);
     const setOffDays = Number(bal.setOffDays ?? 0);
     const setOffExpiry = bal.setOffExpiryDate ? String(bal.setOffExpiryDate).trim() : "";
-    const setOffAvailable = setOffDays > 0 && (!setOffExpiry || setOffExpiry >= asOf) ? setOffDays : 0;
-    const debitFromBalance = Math.max(0, debit - setOffAvailable);
-    return Math.max(0, Number(bal.balanceDays ?? 0) - debitFromBalance);
+    setOffAvailable = setOffDays > 0 && (!setOffExpiry || setOffExpiry >= asOf) ? setOffDays : 0;
   }
 
-  return Math.max(0, Number(bal.balanceDays ?? 0) - debit);
+  // Approving a revision first restores the superseded leave's debit, then applies the new debit.
+  if (revisedFromLeave && revisedFromLeave.status === "Approved") {
+    const origDebit = Number(revisedFromLeave.debitDays ?? 0);
+    if (origDebit > 0) {
+      const fromSetOff =
+        revisedFromLeave.debitFromSetOffDays != null ? Number(revisedFromLeave.debitFromSetOffDays) : null;
+      const fromBalance =
+        revisedFromLeave.debitFromBalanceDays != null ? Number(revisedFromLeave.debitFromBalanceDays) : null;
+      if (fromSetOff != null && fromBalance != null && Math.abs(fromSetOff + fromBalance - origDebit) < 1e-6) {
+        setOffAvailable += fromSetOff;
+        available += fromBalance;
+      } else {
+        available += origDebit;
+      }
+    }
+  }
+
+  const debit = Number(leave.debitDays ?? 0);
+  if (debit <= 0) return Math.max(0, available);
+
+  if (String(balLeaveType).trim().toUpperCase() === "EL") {
+    const debitFromBalance = Math.max(0, debit - setOffAvailable);
+    return Math.max(0, available - debitFromBalance);
+  }
+
+  return Math.max(0, available - debit);
 }
 
 function SanctionOrderPreviewPanel({
@@ -238,7 +289,11 @@ function SanctionOrderPreviewPanel({
         {prefixSuffixNil ? " (Prefix/Suffix: Nil)" : ""}
         .
       </p>
-      {leave.leaveHq ? <p className="text-muted-foreground">Leave headquarters: {leave.leaveHq}</p> : null}
+      {leave.leaveHq ? (
+        <p className="text-muted-foreground">
+          Permission is granted to Leave Headquarters: {leave.leaveHq} to visit {leave.leaveHq}.
+        </p>
+      ) : null}
       <p className="text-muted-foreground">
         Balance certificate: {LEAVE_TYPE_LABELS[leave.leaveType] ?? leave.leaveType} balance{" "}
         {pendingFileNo ? "after debit" : "as on date of this Order"}:{" "}
@@ -306,13 +361,14 @@ export default function LeaveRequests() {
   const [newDocUploading, setNewDocUploading] = useState(false);
   const [newRetrospective, setNewRetrospective] = useState(false);
   const [newHalfDay, setNewHalfDay] = useState("");
-  const [newSubstituteId, setNewSubstituteId] = useState("");
   const [newAddress, setNewAddress] = useState("");
   const [newLtc, setNewLtc] = useState(false);
+  const [newLtcBlockYear, setNewLtcBlockYear] = useState("");
+  const [newRefundI, setNewRefundI] = useState("");
+  const [newRefundIi, setNewRefundIi] = useState("");
   const [newLeaveHq, setNewLeaveHq] = useState("");
   const [newDutyDate, setNewDutyDate] = useState("");
   const [newExPostFacto, setNewExPostFacto] = useState(false);
-  const [newCopyToRows, setNewCopyToRows] = useState<string[]>([""]);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectCode, setRejectCode] = useState<string>(REJECTION_REASON_CODES[0]);
   const [rejectRemarks, setRejectRemarks] = useState("");
@@ -320,9 +376,12 @@ export default function LeaveRequests() {
   const [returnRemarks, setReturnRemarks] = useState("");
   const [verifyLeaveId, setVerifyLeaveId] = useState<string | null>(null);
   const [verifyRemarks, setVerifyRemarks] = useState("");
+  const [verifyCopyToRows, setVerifyCopyToRows] = useState<string[]>([""]);
+  const [verifySubstituteId, setVerifySubstituteId] = useState("");
   const [approveLeaveId, setApproveLeaveId] = useState<string | null>(null);
   const [approvePrefixSuffixNil, setApprovePrefixSuffixNil] = useState(false);
   const [approveCopyToRows, setApproveCopyToRows] = useState<string[]>([]);
+  const [approveSubstituteId, setApproveSubstituteId] = useState("");
   const [previewOrderLeaveId, setPreviewOrderLeaveId] = useState<string | null>(null);
   const [editLeaveId, setEditLeaveId] = useState<string | null>(null);
   const [editLeaveType, setEditLeaveType] = useState("EL");
@@ -335,6 +394,8 @@ export default function LeaveRequests() {
   const [rejoinScanUrl, setRejoinScanUrl] = useState("");
   const [rejoinUploading, setRejoinUploading] = useState(false);
   const [newRevisedFromId, setNewRevisedFromId] = useState("");
+  const [newPayLevel, setNewPayLevel] = useState("");
+  const [newPayRs, setNewPayRs] = useState("");
 
   const listUrl = useMemo(() => {
     const params = new URLSearchParams();
@@ -349,13 +410,12 @@ export default function LeaveRequests() {
   const { data: employees = [] } = useQuery<Employee[]>({
     queryKey: ["/api/hr/employees"],
   });
+  const { data: yards = [] } = useQuery<YardRow[]>({
+    queryKey: ["/api/yards"],
+  });
+  const yardById = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, y])), [yards]);
   const { data: balances = [] } = useQuery<LeaveBalanceRow[]>({
     queryKey: ["/api/hr/leave-balances"],
-  });
-  const { data: substitutes = [] } = useQuery<{ id: string; empId?: string | null; firstName: string; surname: string }[]>({
-    queryKey: ["/api/hr/leaves/available-substitutes", newFrom, newTo],
-    queryFn: () => newFrom && newTo ? fetch(`/api/hr/leaves/available-substitutes?fromDate=${newFrom}&toDate=${newTo}`).then((r) => r.json()) : Promise.resolve([]),
-    enabled: newOpen && !!newFrom && !!newTo,
   });
   const isAdmin = roles.includes("ADMIN");
   const effectiveEmployeeId = isAdmin ? newEmployeeId : user?.employeeId ?? "";
@@ -363,6 +423,27 @@ export default function LeaveRequests() {
     () => employees.find((e) => e.id === effectiveEmployeeId) ?? null,
     [employees, effectiveEmployeeId],
   );
+  const selectedYard = selectedEmployee?.yardId ? yardById[selectedEmployee.yardId] : undefined;
+  const selectedIsHo = isHeadOfficeYard(selectedYard);
+
+  useEffect(() => {
+    if (!selectedEmployee) {
+      setNewPayLevel("");
+      setNewPayRs("");
+      return;
+    }
+    setNewPayLevel(
+      selectedEmployee.payLevel != null && Number.isFinite(Number(selectedEmployee.payLevel))
+        ? String(selectedEmployee.payLevel)
+        : "",
+    );
+    setNewPayRs(
+      selectedEmployee.basicPayInr != null && Number.isFinite(Number(selectedEmployee.basicPayInr))
+        ? String(selectedEmployee.basicPayInr)
+        : "",
+    );
+  }, [selectedEmployee?.id, selectedEmployee?.payLevel, selectedEmployee?.basicPayInr]);
+
   const { data: prefixSuffixPreview } = useQuery<PrefixSuffixPreview | null>({
     queryKey: ["/api/hr/leaves/prefix-suffix-preview", newFrom, newTo, selectedEmployee?.locationPosted ?? ""],
     queryFn: () =>
@@ -377,10 +458,29 @@ export default function LeaveRequests() {
     employees.map((e) => [e.id, formatEmployeeSelectLabel(e)]),
   );
 
+  const verifyLeave = useMemo(
+    () => (verifyLeaveId ? (list ?? []).find((r) => r.id === verifyLeaveId) ?? null : null),
+    [verifyLeaveId, list],
+  );
   const approveLeave = useMemo(
     () => (approveLeaveId ? (list ?? []).find((r) => r.id === approveLeaveId) ?? null : null),
     [approveLeaveId, list],
   );
+  const substituteFrom = verifyLeave?.fromDate ?? approveLeave?.fromDate ?? newFrom;
+  const substituteTo = verifyLeave?.toDate ?? approveLeave?.toDate ?? newTo;
+  const { data: substitutes = [] } = useQuery<{ id: string; empId?: string | null; firstName: string; surname: string }[]>({
+    queryKey: ["/api/hr/leaves/available-substitutes", substituteFrom, substituteTo],
+    queryFn: () =>
+      substituteFrom && substituteTo
+        ? fetch(
+            `/api/hr/leaves/available-substitutes?fromDate=${encodeURIComponent(substituteFrom)}&toDate=${encodeURIComponent(substituteTo)}`,
+          ).then((r) => r.json())
+        : Promise.resolve([]),
+    enabled:
+      !!substituteFrom &&
+      !!substituteTo &&
+      (newOpen || verifyLeaveId != null || approveLeaveId != null),
+  });
   const approveEmployee = useMemo(
     () => (approveLeave ? employees.find((e) => e.id === approveLeave.employeeId) ?? null : null),
     [approveLeave, employees],
@@ -389,10 +489,13 @@ export default function LeaveRequests() {
     const trimmed = approveCopyToRows.map((x) => x.trim()).filter(Boolean);
     return trimmed.length > 0 ? trimmed : buildDefaultCopyToRows(approveEmployee);
   }, [approveCopyToRows, approveEmployee]);
-  const approvePreviewBalanceAfter = useMemo(
-    () => (approveLeave ? leaveBalanceAfterDebit(approveLeave, balances, false) : null),
-    [approveLeave, balances],
-  );
+  const approvePreviewBalanceAfter = useMemo(() => {
+    if (!approveLeave) return null;
+    const revisedFrom = approveLeave.revisedFromLeaveId
+      ? (list ?? []).find((r) => r.id === approveLeave.revisedFromLeaveId) ?? null
+      : null;
+    return leaveBalanceAfterDebit(approveLeave, balances, false, revisedFrom);
+  }, [approveLeave, balances, list]);
   const previewOrderLeave = useMemo(
     () => (previewOrderLeaveId ? (list ?? []).find((r) => r.id === previewOrderLeaveId) ?? null : null),
     [previewOrderLeaveId, list],
@@ -474,23 +577,27 @@ export default function LeaveRequests() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/hr/leaves"] });
       queryClient.invalidateQueries({ predicate: (q) => String(q.queryKey[0] ?? "").startsWith("/api/hr/leaves") });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
       toast({ title: "Leave submitted", description: "Request is Pending for DV verification." });
       setNewOpen(false);
       setNewReason("");
       setNewDocUrl("");
       setNewRetrospective(false);
       setNewHalfDay("");
-      setNewSubstituteId("");
       setNewAddress("");
       setNewLtc(false);
+      setNewLtcBlockYear("");
+      setNewRefundI("");
+      setNewRefundIi("");
       setNewLeaveHq("");
       setNewDutyDate("");
       setNewExPostFacto(false);
-      setNewCopyToRows([""]);
       setNewDocUrl("");
       setNewDocFileName("");
       setNewDocUploading(false);
       setNewRevisedFromId("");
+      setNewPayLevel("");
+      setNewPayRs("");
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
@@ -536,6 +643,7 @@ export default function LeaveRequests() {
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/hr/leaves"] });
       queryClient.invalidateQueries({ predicate: (q) => String(q.queryKey[0] ?? "").startsWith("/api/hr/leaves") });
+      queryClient.invalidateQueries({ queryKey: ["/api/hr/leave-balances"] });
       toast({ title: "Status updated", description: `Leave request set to ${vars.status}.` });
       setRejectId(null);
       setRejectRemarks("");
@@ -543,9 +651,12 @@ export default function LeaveRequests() {
       setReturnRemarks("");
       setVerifyLeaveId(null);
       setVerifyRemarks("");
+      setVerifyCopyToRows([""]);
+      setVerifySubstituteId("");
       setApproveLeaveId(null);
       setApprovePrefixSuffixNil(false);
       setApproveCopyToRows([]);
+      setApproveSubstituteId("");
     },
     onError: (e: Error) => {
       toast({ title: "Update failed", description: e.message, variant: "destructive" });
@@ -747,6 +858,9 @@ export default function LeaveRequests() {
               onClick={() => {
                 setVerifyLeaveId(r.id);
                 setVerifyRemarks(r.controllingOfficerRemarks ?? "");
+                const existing = parseCopyToJson(r.copyToJson);
+                setVerifyCopyToRows(existing.length > 0 ? existing : [""]);
+                setVerifySubstituteId(r.substituteEmployeeId ?? "");
               }}
               disabled={statusMutation.isPending}
             >
@@ -779,6 +893,7 @@ export default function LeaveRequests() {
                   const emp = employees.find((e) => e.id === r.employeeId);
                   const existing = parseCopyToJson(r.copyToJson);
                   setApproveCopyToRows(existing.length > 0 ? existing : buildDefaultCopyToRows(emp));
+                  setApproveSubstituteId(r.substituteEmployeeId ?? "");
                 }}
                 disabled={statusMutation.isPending}
               >
@@ -847,7 +962,13 @@ export default function LeaveRequests() {
                     Ack joining report
                   </Button>
                 )}
-              {canSubmitNew && !r.supersededByLeaveId && (
+              {canSubmitNew &&
+                !r.supersededByLeaveId &&
+                !(list ?? []).some(
+                  (o) =>
+                    o.revisedFromLeaveId === r.id &&
+                    ["Pending", "Verified"].includes(String(o.status)),
+                ) && (
                 <Button
                   size="sm"
                   variant="secondary"
@@ -1015,6 +1136,59 @@ export default function LeaveRequests() {
                 />
               </div>
             )}
+            {selectedEmployee ? (
+              <div className="rounded-md border bg-muted/30 p-3 space-y-3 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Primary Location Posted</p>
+                    <p className="font-medium">
+                      {selectedYard?.name ?? selectedYard?.code ?? selectedEmployee.yardId ?? "—"}
+                    </p>
+                  </div>
+                  {selectedIsHo ? (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Section (HO)</p>
+                      <p className="font-medium">{selectedEmployee.section?.trim() || "—"}</p>
+                    </div>
+                  ) : null}
+                  {selectedEmployee.locationPosted?.trim() ? (
+                    <div className={selectedIsHo ? "sm:col-span-2" : undefined}>
+                      <p className="text-xs text-muted-foreground">Additional location posted</p>
+                      <p className="font-medium">{selectedEmployee.locationPosted}</p>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label>Pay level</Label>
+                    <Select
+                      value={newPayLevel || "__none__"}
+                      onValueChange={(v) => setNewPayLevel(v === "__none__" ? "" : v)}
+                    >
+                      <SelectTrigger><SelectValue placeholder="1–18" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Not specified</SelectItem>
+                        {PAY_LEVELS.map((n) => (
+                          <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Pay Rs.</Label>
+                    <Input
+                      value={newPayRs}
+                      onChange={(e) => setNewPayRs(e.target.value.replace(/[^\d.]/g, ""))}
+                      inputMode="decimal"
+                      placeholder="Basic pay (INR)"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Pay level / Pay Rs. default from the employee record; update here if needed before submit.
+                </p>
+              </div>
+            ) : null}
             <div className="space-y-1">
               <Label>Leave type</Label>
               <Select value={newLeaveType.trim().toUpperCase() || (leaveTypesForEmployee[0] ?? "EL")} onValueChange={setNewLeaveType}>
@@ -1147,50 +1321,34 @@ export default function LeaveRequests() {
                   <Checkbox checked={newLtc} onCheckedChange={(v) => setNewLtc(Boolean(v))} />
                   <Label>LTC proposed</Label>
                 </div>
+                <div className="space-y-1">
+                  <Label>LTC block year (Form-1 item 10)</Label>
+                  <Input
+                    value={newLtcBlockYear}
+                    onChange={(e) => setNewLtcBlockYear(e.target.value)}
+                    placeholder="e.g. 2024-2027"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Refund undertaking 12(i)</Label>
+                  <Textarea
+                    value={newRefundI}
+                    onChange={(e) => setNewRefundI(e.target.value)}
+                    rows={2}
+                    placeholder="User entry for Form-1 item 12(i) — leave blank if not applicable"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Refund undertaking 12(ii)</Label>
+                  <Textarea
+                    value={newRefundIi}
+                    onChange={(e) => setNewRefundIi(e.target.value)}
+                    rows={2}
+                    placeholder="User entry for Form-1 item 12(ii) — leave blank if not applicable"
+                  />
+                </div>
               </>
             )}
-            <div className="space-y-2">
-              <Label>Copy to (optional)</Label>
-              {newCopyToRows.map((value, index) => (
-                <div key={`copy-to-${index}`} className="flex gap-2">
-                  <Input
-                    value={value}
-                    onChange={(e) => {
-                      const next = [...newCopyToRows];
-                      next[index] = e.target.value;
-                      setNewCopyToRows(next);
-                    }}
-                    placeholder={`Copy to recipient ${index + 1}`}
-                  />
-                  {newCopyToRows.length > 1 && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setNewCopyToRows(newCopyToRows.filter((_, i) => i !== index))}
-                    >
-                      Remove
-                    </Button>
-                  )}
-                </div>
-              ))}
-              <Button type="button" variant="outline" size="sm" onClick={() => setNewCopyToRows([...newCopyToRows, ""])}>
-                Add copy-to row
-              </Button>
-            </div>
-            <div className="space-y-1">
-              <Label>Substitute employee (optional)</Label>
-              <Select value={newSubstituteId || "__none__"} onValueChange={(v) => setNewSubstituteId(v === "__none__" ? "" : v)}>
-                <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">None</SelectItem>
-                  {substitutes.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {formatEmployeeSelectLabel(s)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
             <div className="space-y-1">
               <Label>
                 Supporting document (PDF, 5MB)
@@ -1338,13 +1496,18 @@ export default function LeaveRequests() {
                   isRetrospective: roles.includes("ADMIN") ? newRetrospective : false,
                   isExPostFacto: newExPostFacto,
                   halfDay: newHalfDay || null,
-                  substituteEmployeeId: newSubstituteId || null,
+                  substituteEmployeeId: null,
                   addressDuringLeave: newAddress.trim() || null,
                   ltcProposed: newLtc,
+                  ltcBlockYear: newLtcBlockYear.trim() || null,
+                  refundUndertakingI: newRefundI.trim() || null,
+                  refundUndertakingIi: newRefundIi.trim() || null,
                   leaveHq: newLeaveHq.trim() || null,
                   dutyDateForSplH: newDutyDate || null,
-                  copyToJson: JSON.stringify(newCopyToRows.map((x) => x.trim()).filter(Boolean)),
+                  copyToJson: null,
                   revisedFromLeaveId: newRevisedFromId.trim() || null,
+                  payLevel: newPayLevel ? Number(newPayLevel) : null,
+                  basicPayInr: newPayRs.trim() ? Number(newPayRs.trim()) : null,
                 });
               }}
             >
@@ -1456,20 +1619,77 @@ export default function LeaveRequests() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={verifyLeaveId != null} onOpenChange={(o) => !o && setVerifyLeaveId(null)}>
-        <DialogContent className="sm:max-w-md">
+      <Dialog
+        open={verifyLeaveId != null}
+        onOpenChange={(o) => {
+          if (!o) {
+            setVerifyLeaveId(null);
+            setVerifyCopyToRows([""]);
+            setVerifySubstituteId("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Verify leave request</DialogTitle>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="leave-verify-remarks">Controlling officer remarks</Label>
-            <Textarea
-              id="leave-verify-remarks"
-              value={verifyRemarks}
-              onChange={(e) => setVerifyRemarks(e.target.value)}
-              rows={4}
-              placeholder="Optional remarks recorded at DV step"
-            />
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="leave-verify-remarks">Controlling officer remarks</Label>
+              <Textarea
+                id="leave-verify-remarks"
+                value={verifyRemarks}
+                onChange={(e) => setVerifyRemarks(e.target.value)}
+                rows={4}
+                placeholder="Optional remarks recorded at DV step"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Copy to (optional)</Label>
+              <p className="text-xs text-muted-foreground">Set before sanction order. Can be refined again at Approve.</p>
+              {verifyCopyToRows.map((value, index) => (
+                <div key={`verify-copy-to-${index}`} className="flex gap-2">
+                  <Input
+                    value={value}
+                    onChange={(e) => {
+                      const next = [...verifyCopyToRows];
+                      next[index] = e.target.value;
+                      setVerifyCopyToRows(next);
+                    }}
+                    placeholder={`Copy to recipient ${index + 1}`}
+                  />
+                  {verifyCopyToRows.length > 1 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setVerifyCopyToRows(verifyCopyToRows.filter((_, i) => i !== index))}
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </div>
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={() => setVerifyCopyToRows([...verifyCopyToRows, ""])}>
+                Add copy-to row
+              </Button>
+            </div>
+            <div className="space-y-1">
+              <Label>Substitute employee (optional)</Label>
+              <Select
+                value={verifySubstituteId || "__none__"}
+                onValueChange={(v) => setVerifySubstituteId(v === "__none__" ? "" : v)}
+              >
+                <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {substitutes.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {formatEmployeeSelectLabel(s)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setVerifyLeaveId(null)}>
@@ -1480,10 +1700,13 @@ export default function LeaveRequests() {
               disabled={verifyLeaveId == null || statusMutation.isPending}
               onClick={() => {
                 if (!verifyLeaveId) return;
+                const trimmedCopyTo = verifyCopyToRows.map((x) => x.trim()).filter(Boolean);
                 statusMutation.mutate({
                   id: verifyLeaveId,
                   status: "Verified",
                   controllingOfficerRemarks: verifyRemarks.trim() || null,
+                  copyToJson: trimmedCopyTo.length > 0 ? JSON.stringify(trimmedCopyTo) : null,
+                  substituteEmployeeId: verifySubstituteId || null,
                 });
               }}
             >
@@ -1499,6 +1722,7 @@ export default function LeaveRequests() {
           if (!o) {
             setApproveLeaveId(null);
             setApproveCopyToRows([]);
+            setApproveSubstituteId("");
           }
         }}
       >
@@ -1564,6 +1788,23 @@ export default function LeaveRequests() {
               Add copy-to row
             </Button>
           </div>
+          <div className="space-y-1">
+            <Label>Substitute employee (optional)</Label>
+            <Select
+              value={approveSubstituteId || "__none__"}
+              onValueChange={(v) => setApproveSubstituteId(v === "__none__" ? "" : v)}
+            >
+              <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">None</SelectItem>
+                {substitutes.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {formatEmployeeSelectLabel(s)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setApproveLeaveId(null)}>
               Cancel
@@ -1579,6 +1820,7 @@ export default function LeaveRequests() {
                   status: "Approved",
                   prefixSuffixDisallowed: approvePrefixSuffixNil,
                   copyToJson: trimmedCopyTo.length > 0 ? JSON.stringify(trimmedCopyTo) : null,
+                  substituteEmployeeId: approveSubstituteId || null,
                 });
               }}
             >

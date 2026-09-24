@@ -95,7 +95,7 @@ import { aadhaarFingerprintHmac, maskAadhaar, readAadhaarRawFromRequestBody } fr
 import { inclusiveCalendarDays } from "./hr-leave-utils";
 import { leaveSupportingDocRequired, leaveTypeSkipsBalanceDebit } from "@shared/hr-leave-display";
 import { calculatePrefixSuffix, calculateDebitDays, validateRhDate } from "./hr-leave-prefix-suffix";
-import { debitLeaveBalanceOnApproval, creditLeaveBalanceOnReversal, balanceLeaveTypeFor } from "./hr-leave-balance-debit";
+import { debitLeaveBalanceOnApproval, creditLeaveBalanceOnReversal, balanceLeaveTypeFor, assertSufficientBalanceForApprovalTx } from "./hr-leave-balance-debit";
 import { healLeaveBalanceEmployeeIds, resolveEmployeePkForLeaveBalance } from "./hr-leave-balance-resolve";
 import {
   parseLeaveBalanceImportCsv,
@@ -830,6 +830,13 @@ export function registerHrRoutes(app: Express) {
         section: body.section != null ? String(body.section).trim() || null : null,
         locationPosted: srs411.locationPosted,
         payLevel: srs411.payLevel,
+        basicPayInr: (() => {
+          if (body.basicPayInr === undefined || body.basicPayInr === null || String(body.basicPayInr).trim() === "") {
+            return null;
+          }
+          const n = Number(body.basicPayInr);
+          return Number.isFinite(n) && n >= 0 ? n : null;
+        })(),
         bankAccountNumber: srs411.bankAccountNumber,
         ifscCode: srs411.ifscCode,
         category: srs411.category,
@@ -1074,6 +1081,7 @@ export function registerHrRoutes(app: Express) {
         "section",
         "locationPosted",
         "payLevel",
+        "basicPayInr",
         "bankAccountNumber",
         "ifscCode",
         "category",
@@ -1101,6 +1109,15 @@ export function registerHrRoutes(app: Express) {
             updates.payLevel = null;
           } else {
             updates.payLevel = typeof body.payLevel === "number" ? body.payLevel : String(body.payLevel).trim();
+          }
+          continue;
+        }
+        if (key === "basicPayInr") {
+          if (body.basicPayInr === null || (typeof body.basicPayInr === "string" && String(body.basicPayInr).trim() === "")) {
+            updates.basicPayInr = null;
+          } else {
+            const n = Number(body.basicPayInr);
+            updates.basicPayInr = Number.isFinite(n) && n >= 0 ? n : null;
           }
           continue;
         }
@@ -2039,6 +2056,17 @@ export function registerHrRoutes(app: Express) {
         if (orig.supersededByLeaveId) {
           return sendApiError(res, 400, "LEAVE_REVISE_ALREADY_SUPERSEDED", "That leave has already been superseded by a revision.");
         }
+        const openRevision = (
+          await db.select().from(leaveRequests).where(eq(leaveRequests.revisedFromLeaveId, revisedFromLeaveId))
+        ).find((r) => ["Pending", "Verified"].includes(String(r.status)));
+        if (openRevision) {
+          return sendApiError(
+            res,
+            400,
+            "LEAVE_REVISE_IN_FLIGHT",
+            "A revision of this leave is already Pending or Verified. Finish or cancel it before starting another.",
+          );
+        }
         originalApproved = orig;
       }
 
@@ -2094,6 +2122,36 @@ export function registerHrRoutes(app: Express) {
         }
       }
 
+      // Optional pay Level / Pay Rs. refresh from leave application form → employee master (Form-1).
+      if (body.payLevel !== undefined || body.basicPayInr !== undefined) {
+        const payUpdates: { payLevel?: number | null; basicPayInr?: number | null; updatedAt: string } = {
+          updatedAt: now(),
+        };
+        if (body.payLevel !== undefined) {
+          if (body.payLevel === null || String(body.payLevel).trim() === "") {
+            payUpdates.payLevel = null;
+          } else {
+            const pl = Number(body.payLevel);
+            if (!Number.isFinite(pl) || pl < 1 || pl > 18) {
+              return sendApiError(res, 400, "LEAVE_PAY_LEVEL_INVALID", "payLevel must be 1–18 or empty");
+            }
+            payUpdates.payLevel = Math.round(pl);
+          }
+        }
+        if (body.basicPayInr !== undefined) {
+          if (body.basicPayInr === null || String(body.basicPayInr).trim() === "") {
+            payUpdates.basicPayInr = null;
+          } else {
+            const pay = Number(body.basicPayInr);
+            if (!Number.isFinite(pay) || pay < 0) {
+              return sendApiError(res, 400, "LEAVE_PAY_RS_INVALID", "basicPayInr / Pay Rs. must be a number ≥ 0");
+            }
+            payUpdates.basicPayInr = pay;
+          }
+        }
+        await db.update(employees).set(payUpdates).where(eq(employees.id, employeeId));
+      }
+
       const id = nanoid();
       await db.insert(leaveRequests).values({
         id,
@@ -2115,6 +2173,15 @@ export function registerHrRoutes(app: Express) {
         substituteEmployeeId: body.substituteEmployeeId ? String(body.substituteEmployeeId).trim() : null,
         addressDuringLeave: body.addressDuringLeave ? String(body.addressDuringLeave).trim() : null,
         ltcProposed: body.ltcProposed === true,
+        ltcBlockYear: body.ltcBlockYear != null && String(body.ltcBlockYear).trim() !== "" ? String(body.ltcBlockYear).trim() : null,
+        refundUndertakingI:
+          body.refundUndertakingI != null && String(body.refundUndertakingI).trim() !== ""
+            ? String(body.refundUndertakingI).trim()
+            : null,
+        refundUndertakingIi:
+          body.refundUndertakingIi != null && String(body.refundUndertakingIi).trim() !== ""
+            ? String(body.refundUndertakingIi).trim()
+            : null,
         leaveHq: body.leaveHq ? String(body.leaveHq).trim() : null,
         dutyDateForSplH: body.dutyDateForSplH ? String(body.dutyDateForSplH).trim() : null,
         copyToJson: body.copyToJson ? String(body.copyToJson) : null,
@@ -2269,11 +2336,11 @@ export function registerHrRoutes(app: Express) {
           updates[k] = body[k] === null || body[k] === "" ? null : String(body[k]);
         }
       });
-      if (!statusChange && body.copyToJson !== undefined) {
+      if (body.copyToJson !== undefined) {
         updates.copyToJson =
           body.copyToJson === null || body.copyToJson === "" ? null : String(body.copyToJson);
       }
-      ["halfDay", "substituteEmployeeId", "addressDuringLeave", "leaveHq", "dutyDateForSplH"].forEach((k) => {
+      ["halfDay", "substituteEmployeeId", "addressDuringLeave", "leaveHq", "dutyDateForSplH", "ltcBlockYear", "refundUndertakingI", "refundUndertakingIi"].forEach((k) => {
         if (body[k] !== undefined) {
           updates[k] = body[k] === null || body[k] === "" ? null : String(body[k]);
         }
@@ -2386,6 +2453,8 @@ export function registerHrRoutes(app: Express) {
                   employeeId: orig.employeeId,
                   leaveType: orig.leaveType,
                   creditDays: origDebit,
+                  fromSetOff: orig.debitFromSetOffDays != null ? Number(orig.debitFromSetOffDays) : null,
+                  fromBalance: orig.debitFromBalanceDays != null ? Number(orig.debitFromBalanceDays) : null,
                 });
               }
               await tx
@@ -2396,15 +2465,20 @@ export function registerHrRoutes(app: Express) {
 
             if (debitDays > 0) {
               try {
-                await assertSufficientBalanceForApproval(existing.employeeId, existing.leaveType, debitDays);
-                await debitLeaveBalanceOnApproval(tx, {
+                await assertSufficientBalanceForApprovalTx(tx, existing.employeeId, existing.leaveType, debitDays);
+                const split = await debitLeaveBalanceOnApproval(tx, {
                   employeeId: existing.employeeId,
                   leaveType: existing.leaveType,
                   debitDays,
                 });
+                updates.debitFromSetOffDays = split.fromSetOff;
+                updates.debitFromBalanceDays = split.fromBalance;
               } catch {
                 throw new Error("LEAVE_INSUFFICIENT_BALANCE");
               }
+            } else {
+              updates.debitFromSetOffDays = 0;
+              updates.debitFromBalanceDays = 0;
             }
 
             // Handle DA override of prefix/suffix

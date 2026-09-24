@@ -169,7 +169,8 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   doc.moveDown(0.5);
 
   if (lr.leaveHq) {
-    doc.text(`Leave Headquarters: ${lr.leaveHq}`);
+    const hq = String(lr.leaveHq).trim();
+    doc.text(`Permission is granted to Leave Headquarters: ${hq} to visit ${hq}.`);
     doc.moveDown(0.3);
   }
 
