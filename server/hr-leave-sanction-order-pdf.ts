@@ -1,12 +1,17 @@
 import PDFDocument from "pdfkit";
+import fs from "node:fs";
 import { db } from "./db";
-import { employees, leaveRequests, employeeLeaveBalances, leaveOrderSequence } from "@shared/db-schema";
+import { employees, leaveRequests, employeeLeaveBalances, leaveOrderSequence, yards } from "@shared/db-schema";
 import { eq, and } from "drizzle-orm";
-import { leaveDaysInWords } from "@shared/hr-leave-display";
+import {
+  buildSanctionContinuationBalanceParagraph,
+  buildSanctionGrantParagraph,
+  buildSanctionReadLine,
+  leaveDaysInWords,
+} from "@shared/hr-leave-display";
 import { getMergedSystemConfig } from "./system-config";
 import { readUploadedLeaveOrderSignatureBuffer } from "./leave-signature-storage";
 import {
-  employeeHonorific,
   formatLeaveCopyToLine,
   formatLeaveOrderDate,
   formatLeaveOrderDateToday,
@@ -26,6 +31,29 @@ const LEAVE_TYPE_LABELS: Record<string, string> = {
   EOL: "Extraordinary Leave",
   CCL: "Child Care Leave",
 };
+
+const FONT_REGULAR = "SanctionBody";
+const FONT_BOLD = "SanctionBody-Bold";
+
+function resolveSanctionFonts(): { regular: string; bold: string } | null {
+  const pairs: Array<[string, string]> = [
+    ["C:\\Windows\\Fonts\\calibri.ttf", "C:\\Windows\\Fonts\\calibrib.ttf"],
+    ["/usr/share/fonts/truetype/msttcorefonts/Calibri.ttf", "/usr/share/fonts/truetype/msttcorefonts/CalibriBold.ttf"],
+    ["/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf", "/usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf"],
+  ];
+  for (const [regular, bold] of pairs) {
+    if (fs.existsSync(regular) && fs.existsSync(bold)) return { regular, bold };
+  }
+  return null;
+}
+
+function isHeadOfficeYard(y: { type?: string | null; name?: string | null; code?: string | null } | undefined): boolean {
+  if (!y) return false;
+  if (String(y.type ?? "").trim().toUpperCase() === "HO") return true;
+  const name = String(y.name ?? "").toLowerCase();
+  const code = String(y.code ?? "").toLowerCase();
+  return name.includes("head office") || code === "ho" || code.startsWith("ho-");
+}
 
 async function getNextFileNo(serviceBookNo: string, year: number): Promise<string> {
   const [seqRow] = await db.select().from(leaveOrderSequence).where(eq(leaveOrderSequence.year, year)).limit(1);
@@ -60,7 +88,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
 
   const cfg = await getMergedSystemConfig();
   const signatoryName = cfg.leave_order_signatory_name || "Secretary";
-  const signatoryDesig = cfg.leave_order_signatory_designation || "Secretary";
+  const signatoryDesig = (cfg.leave_order_signatory_designation || "Secretary").toUpperCase();
 
   const serviceBookNo = await ensureEmployeeServiceBookNo(emp.id, emp.serviceBookNo);
 
@@ -73,9 +101,21 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
 
   const leaveTypeLabel = LEAVE_TYPE_LABELS[lr.leaveType] ?? lr.leaveType;
   const empName = `${emp.firstName} ${emp.middleName ?? ""} ${emp.surname}`.replace(/\s+/g, " ").trim();
-  const honorific = employeeHonorific(emp.gender);
   const debitDays = lr.debitDays != null ? Number(lr.debitDays) : 0;
   const isExPostFacto = lr.isExPostFacto === true;
+
+  let primaryLocationName: string | null = null;
+  let yardIsHo = false;
+  if (emp.yardId) {
+    const [yard] = await db.select().from(yards).where(eq(yards.id, emp.yardId)).limit(1);
+    if (yard) {
+      primaryLocationName = yard.name ?? yard.code ?? null;
+      yardIsHo = isHeadOfficeYard(yard);
+    }
+  }
+  if (!primaryLocationName && emp.locationPosted?.trim()) {
+    primaryLocationName = emp.locationPosted.trim();
+  }
 
   const balLeaveType = lr.leaveType === "COMMUTED" ? "HPL" : lr.leaveType;
   const [bal] = await db
@@ -94,7 +134,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   if (!copyToList.length) {
     copyToList = [
       empName,
-      emp.section ? `${emp.section}, HO` : (emp.locationPosted ?? emp.yardId ?? ""),
+      yardIsHo && emp.section ? `${emp.section}, HO` : (primaryLocationName ?? emp.locationPosted ?? emp.yardId ?? ""),
       "Accounts Section",
       "Personal File",
       "Guard File",
@@ -102,32 +142,60 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   }
   copyToList = copyToList.map(formatLeaveCopyToLine).filter(Boolean);
 
-  const doc = new PDFDocument({ size: "A4", margin: 60 });
+  const doc = new PDFDocument({ size: "A4", margin: 54 });
   const chunks: Buffer[] = [];
   doc.on("data", (chunk: Buffer) => chunks.push(chunk));
 
-  doc.fontSize(14).font("Helvetica-Bold").text("OFFICE OF THE GOA AGRICULTURAL PRODUCE &", { align: "center" });
-  doc.text("LIVESTOCK MARKETING BOARD", { align: "center" });
-  doc.moveDown(0.3);
-  doc.fontSize(10).font("Helvetica").text("Panaji, Goa", { align: "center" });
-  doc.moveDown(1);
+  const calibri = resolveSanctionFonts();
+  let fontRegular = "Helvetica";
+  let fontBold = "Helvetica-Bold";
+  if (calibri) {
+    try {
+      doc.registerFont(FONT_REGULAR, calibri.regular);
+      doc.registerFont(FONT_BOLD, calibri.bold);
+      fontRegular = FONT_REGULAR;
+      fontBold = FONT_BOLD;
+    } catch (e) {
+      console.warn("[sanction-order] Calibri register failed; using Helvetica", e);
+    }
+  }
 
-  doc.fontSize(10).font("Helvetica");
-  doc.text(`No. ${fileNo}`, { continued: true });
-  doc.text(`Date: ${formatLeaveOrderDateToday()}`, { align: "right" });
-  doc.moveDown(1);
+  const bodySize = 14;
+  const rightW = 280;
+  const rightX = doc.page.width - doc.page.margins.right - rightW;
+  const headerTop = doc.y;
 
-  doc.fontSize(12).font("Helvetica-Bold").text("ORDER", { align: "center" });
-  doc.moveDown(0.5);
-
-  doc.fontSize(10).font("Helvetica");
+  doc.font(fontBold).fontSize(bodySize);
+  doc.text(`NO. ${fileNo}`, rightX, headerTop, { width: rightW, align: "right", lineGap: 2 });
+  doc.font(fontRegular).fontSize(bodySize);
   doc.text(
-    `READ: Leave application of ${honorific} ${empName}, ${emp.designation}, dated ${formatLeaveOrderDate(lr.fromDate)}.`,
+    "OFFICE OF THE GOA AGRICULTURAL\nPRODUCE & LIVESTOCK MARKETING\nBOARD, ARLEM, RAIA, SALCETE-GOA.",
+    rightX,
+    doc.y,
+    { width: rightW, align: "right", lineGap: 2 },
+  );
+  doc.text(`Date: ${formatLeaveOrderDateToday()}`, rightX, doc.y, { width: rightW, align: "right" });
+  doc.moveDown(1.2);
+
+  doc.font(fontBold).fontSize(bodySize).text("ORDER", { align: "center" });
+  doc.moveDown(0.6);
+
+  doc.font(fontRegular).fontSize(bodySize);
+  doc.text(
+    buildSanctionReadLine({
+      gender: emp.gender,
+      empName,
+      designation: emp.designation,
+      primaryLocation: primaryLocationName,
+      section: emp.section,
+      yardIsHo,
+      applicationDated: lr.fromDate,
+    }),
+    { align: "left", lineGap: 2 },
   );
   doc.moveDown(0.8);
 
   const fromDisp = formatLeaveOrderDate(lr.fromDate);
-  const toDisp = formatLeaveOrderDate(lr.toDate);
   const shortOrderTypes = new Set(["CL", "RH", "SPL_H"]);
 
   if (shortOrderTypes.has(lr.leaveType)) {
@@ -140,50 +208,48 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
           : lr.halfDay === "second_half"
             ? " (second half)"
             : "";
-      doc.text(`${daysWord} ${dayWord} Casual leave${half} on ${fromDisp} approved.`);
+      doc.text(`${daysWord} ${dayWord} Casual leave${half} on ${fromDisp} approved.`, { lineGap: 2 });
     } else if (lr.leaveType === "RH") {
       const occasion = (lr.reason ?? "").trim() || "________";
-      doc.text(`${daysWord} ${dayWord} R.H. on ${fromDisp} approved i.e. of ${occasion}.`);
+      doc.text(`${daysWord} ${dayWord} R.H. on ${fromDisp} approved i.e. of ${occasion}.`, { lineGap: 2 });
     } else {
       const duty = lr.dutyDateForSplH ? formatLeaveOrderDate(lr.dutyDateForSplH) : "________";
-      doc.text(`${daysWord} ${dayWord} Special Holiday on ${fromDisp} approved i.e. of ${duty}.`);
+      doc.text(`${daysWord} ${dayWord} Special Holiday on ${fromDisp} approved i.e. of ${duty}.`, { lineGap: 2 });
     }
   } else {
-    const sanctionPrefix = isExPostFacto ? "Ex-post facto sanction is hereby accorded" : "Sanction is hereby accorded";
-    let sanctionText = `${sanctionPrefix} to ${honorific} ${empName}, ${emp.designation}, `;
-    sanctionText += `${leaveTypeLabel} for a period of ${debitDays} day(s) `;
-    sanctionText += `from ${fromDisp} to ${toDisp}`;
-
-    if (lr.prefixDays && lr.prefixDays > 0 && !lr.prefixSuffixDisallowed) {
-      sanctionText += ` with prefix of ${lr.prefixDays} day(s) from ${formatLeaveOrderDate(lr.prefixFromDate)}`;
-    }
-    if (lr.suffixDays && lr.suffixDays > 0 && !lr.prefixSuffixDisallowed) {
-      sanctionText += ` and suffix of ${lr.suffixDays} day(s) up to ${formatLeaveOrderDate(lr.suffixToDate)}`;
-    }
-    if (lr.prefixSuffixDisallowed) {
-      sanctionText += " (Prefix/Suffix: Nil)";
-    }
-    sanctionText += ".";
-    doc.text(sanctionText);
+    doc.text(
+      buildSanctionGrantParagraph({
+        gender: emp.gender,
+        empName,
+        designation: emp.designation,
+        primaryLocation: primaryLocationName,
+        leaveTypeLabel,
+        debitDays,
+        fromDate: lr.fromDate,
+        toDate: lr.toDate,
+        isExPostFacto,
+        leaveHq: lr.leaveHq,
+        prefixDays: lr.prefixDays,
+        suffixDays: lr.suffixDays,
+        prefixFromDate: lr.prefixFromDate,
+        suffixToDate: lr.suffixToDate,
+        prefixSuffixDisallowed: lr.prefixSuffixDisallowed,
+      }),
+      { align: "justify", lineGap: 2 },
+    );
+    doc.moveDown(0.7);
+    doc.text(
+      buildSanctionContinuationBalanceParagraph({
+        gender: emp.gender,
+        empName,
+        designation: emp.designation,
+        leaveTypeLabel,
+        balanceAfter,
+        toDate: lr.toDate,
+      }),
+      { align: "justify", lineGap: 2 },
+    );
   }
-  doc.moveDown(0.5);
-
-  if (lr.leaveHq) {
-    const hq = String(lr.leaveHq).trim();
-    doc.text(`Permission is granted to Leave Headquarters: ${hq} to visit ${hq}.`);
-    doc.moveDown(0.3);
-  }
-
-  doc.moveDown(0.5);
-  doc.font("Helvetica-Bold").text("Balance Certificate:");
-  doc.font("Helvetica");
-  doc.text(`${leaveTypeLabel} balance as on date of this Order: ${balanceAfter} day(s).`);
-  doc.moveDown(0.5);
-
-  doc.text(
-    "The employee shall report back to duty on the day following the expiry of leave. " +
-      "If the employee fails to resume duty on the due date, the absence will be treated as per rules.",
-  );
   doc.moveDown(1.5);
 
   const signatureBuffer = await readUploadedLeaveOrderSignatureBuffer();
@@ -199,19 +265,20 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
       doc.moveDown(0.5);
     }
   }
+  doc.font(fontRegular).fontSize(bodySize);
   doc.text(`(${signatoryName})`, { align: "right" });
-  doc.text(signatoryDesig, { align: "right" });
-  doc.text("Goa Agricultural Produce & Livestock Marketing Board", { align: "right" });
+  doc.font(fontBold).text(signatoryDesig, { align: "right" });
+  doc.font(fontRegular).text("Goa Agricultural Produce & Livestock Marketing Board", { align: "right" });
   doc.moveDown(1.5);
 
-  doc.font("Helvetica-Bold").text("Copy to:");
-  doc.font("Helvetica");
+  doc.font(fontBold).text("Copy to:");
+  doc.font(fontRegular);
   copyToList.forEach((item, i) => {
-    doc.text(`${i + 1}. ${item}`);
+    doc.text(`${i + 1}. ${item}`, { lineGap: 1 });
   });
-  doc.moveDown(0.5);
+  doc.moveDown(0.6);
 
-  doc.font("Helvetica-Bold").text("☐ Entered on Service Book", { align: "left" });
+  doc.font(fontBold).text("☐ & Entered on Service Book", { align: "left" });
 
   doc.end();
 

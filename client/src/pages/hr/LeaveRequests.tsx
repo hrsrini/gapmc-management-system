@@ -28,7 +28,9 @@ import { useToast } from "@/hooks/use-toast";
 import { Calendar, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal, Plus, Download, Loader2, FileText, Pencil } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import {
-  employeeHonorific,
+  buildSanctionContinuationBalanceParagraph,
+  buildSanctionGrantParagraph,
+  buildSanctionReadLine,
   formatLeaveCopyToLine,
   formatLeaveOrderDateDisplay,
   leaveSupportingDocRequired,
@@ -249,6 +251,8 @@ function SanctionOrderPreviewPanel({
   fileNo,
   usingDefaultCopyTo,
   pendingFileNo,
+  primaryLocation,
+  yardIsHo,
 }: {
   leave: LeaveRequest;
   employee: Employee | null;
@@ -259,7 +263,17 @@ function SanctionOrderPreviewPanel({
   fileNo?: string | null;
   usingDefaultCopyTo?: boolean;
   pendingFileNo?: boolean;
+  primaryLocation?: string | null;
+  yardIsHo?: boolean;
 }) {
+  const empName = employee ? employeeDisplayName(employee) : employeeLabel;
+  const leaveTypeLabel = LEAVE_TYPE_LABELS[leave.leaveType] ?? leave.leaveType;
+  const location =
+    primaryLocation?.trim() ||
+    employee?.locationPosted?.trim() ||
+    null;
+  const shortOrderTypes = new Set(["CL", "RH", "SPL_H"]);
+
   return (
     <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-2">
       <div className="font-medium">Sanction order preview</div>
@@ -269,39 +283,58 @@ function SanctionOrderPreviewPanel({
         </p>
       ) : null}
       <p className="text-muted-foreground">
-        READ: Leave application of {employee ? employeeHonorific(employee.gender) : "Shri/Smt."}{" "}
-        <span className="text-foreground font-medium">
-          {employee ? employeeDisplayName(employee) : employeeLabel}
-        </span>
-        {employee?.designation ? `, ${employee.designation}` : ""}, dated {formatLeaveOrderDateDisplay(leave.fromDate)}.
+        {buildSanctionReadLine({
+          gender: employee?.gender,
+          empName,
+          designation: employee?.designation,
+          primaryLocation: location,
+          section: employee?.section,
+          yardIsHo: Boolean(yardIsHo),
+          applicationDated: leave.fromDate,
+        })}
       </p>
-      <p className="text-muted-foreground">
-        {leave.isExPostFacto ? "Ex-post facto sanction" : "Sanction"} for{" "}
-        {LEAVE_TYPE_LABELS[leave.leaveType] ?? leave.leaveType} —{" "}
-        <span className="text-foreground font-medium">{Number(leave.debitDays ?? 0)} day(s)</span> from{" "}
-        {formatLeaveOrderDateDisplay(leave.fromDate)} to {formatLeaveOrderDateDisplay(leave.toDate)}
-        {!prefixSuffixNil && Number(leave.prefixDays ?? 0) > 0
-          ? ` with prefix ${Number(leave.prefixDays ?? 0)} day(s) from ${formatLeaveOrderDateDisplay(leave.prefixFromDate)}`
-          : ""}
-        {!prefixSuffixNil && Number(leave.suffixDays ?? 0) > 0
-          ? ` and suffix ${Number(leave.suffixDays ?? 0)} day(s) up to ${formatLeaveOrderDateDisplay(leave.suffixToDate)}`
-          : ""}
-        {prefixSuffixNil ? " (Prefix/Suffix: Nil)" : ""}
-        .
-      </p>
-      {leave.leaveHq ? (
+      {shortOrderTypes.has(leave.leaveType) ? (
         <p className="text-muted-foreground">
-          Permission is granted to Leave Headquarters: {leave.leaveHq} to visit {leave.leaveHq}.
+          {leave.isExPostFacto ? "Ex-post facto sanction" : "Sanction"} for {leaveTypeLabel} —{" "}
+          <span className="text-foreground font-medium">{Number(leave.debitDays ?? 0)} day(s)</span> on{" "}
+          {formatLeaveOrderDateDisplay(leave.fromDate)}.
         </p>
-      ) : null}
-      <p className="text-muted-foreground">
-        Balance certificate: {LEAVE_TYPE_LABELS[leave.leaveType] ?? leave.leaveType} balance{" "}
-        {pendingFileNo ? "after debit" : "as on date of this Order"}:{" "}
-        <span className="text-foreground font-medium">
-          {balanceAfter != null ? `${balanceAfter} day(s)` : "N/A"}
-        </span>
-        .
-      </p>
+      ) : (
+        <>
+          <p className="text-muted-foreground">
+            {buildSanctionGrantParagraph({
+              gender: employee?.gender,
+              empName,
+              designation: employee?.designation,
+              primaryLocation: location,
+              leaveTypeLabel,
+              debitDays: Number(leave.debitDays ?? 0),
+              fromDate: leave.fromDate,
+              toDate: leave.toDate,
+              isExPostFacto: leave.isExPostFacto,
+              leaveHq: leave.leaveHq,
+              prefixDays: leave.prefixDays,
+              suffixDays: leave.suffixDays,
+              prefixFromDate: leave.prefixFromDate,
+              suffixToDate: leave.suffixToDate,
+              prefixSuffixDisallowed: prefixSuffixNil,
+            })}
+          </p>
+          <p className="text-muted-foreground">
+            {buildSanctionContinuationBalanceParagraph({
+              gender: employee?.gender,
+              empName,
+              designation: employee?.designation,
+              leaveTypeLabel,
+              balanceAfter: balanceAfter ?? 0,
+              toDate: leave.toDate,
+            })}
+            {pendingFileNo || balanceAfter == null ? (
+              <span className="block text-xs mt-1">Balance shown after debit when available.</span>
+            ) : null}
+          </p>
+        </>
+      )}
       <div>
         <div className="font-medium text-foreground">Copy to:</div>
         <ol className="mt-1 list-decimal list-inside text-muted-foreground">
@@ -319,6 +352,7 @@ function SanctionOrderPreviewPanel({
     </div>
   );
 }
+
 
 function calculateClientDebitDays(leaveType: string, fromDate: string, toDate: string, halfDay?: string): number {
   const days = inclusiveCalendarDays(fromDate, toDate);
@@ -1740,6 +1774,14 @@ export default function LeaveRequests() {
               prefixSuffixNil={approvePrefixSuffixNil}
               usingDefaultCopyTo={approveCopyToRows.map((x) => x.trim()).filter(Boolean).length === 0}
               pendingFileNo
+              primaryLocation={
+                approveEmployee?.yardId
+                  ? (yardById[approveEmployee.yardId]?.name ?? yardById[approveEmployee.yardId]?.code ?? null)
+                  : null
+              }
+              yardIsHo={
+                approveEmployee?.yardId ? isHeadOfficeYard(yardById[approveEmployee.yardId]) : false
+              }
             />
           )}
           <div className="flex items-center gap-2">
@@ -1895,6 +1937,18 @@ export default function LeaveRequests() {
               prefixSuffixNil={Boolean(previewOrderLeave.prefixSuffixDisallowed)}
               fileNo={previewOrderLeave.fileNo}
               usingDefaultCopyTo={previewOrderCopyTo.usingDefault}
+              primaryLocation={
+                previewOrderEmployee?.yardId
+                  ? (yardById[previewOrderEmployee.yardId]?.name ??
+                    yardById[previewOrderEmployee.yardId]?.code ??
+                    null)
+                  : null
+              }
+              yardIsHo={
+                previewOrderEmployee?.yardId
+                  ? isHeadOfficeYard(yardById[previewOrderEmployee.yardId])
+                  : false
+              }
             />
           )}
           <DialogFooter>

@@ -3394,18 +3394,6 @@ export function registerHrRoutes(app: Express) {
       }
       const blobKey = sanctionOrderBlobKey(id);
       const store = getUploadBlobStore();
-      try {
-        const cached = await store.get(blobKey);
-        if (cached) {
-          res.setHeader("Content-Type", "application/pdf");
-          const fileLabel = (lr.fileNo ?? id).replace(/\//g, "_");
-          res.setHeader("Content-Disposition", `inline; filename="Sanction_Order_${fileLabel}.pdf"`);
-          res.send(cached);
-          return;
-        }
-      } catch {
-        /* generate fresh */
-      }
       const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
       const { buffer, fileNo } = await generateSanctionOrderPdf(id);
       await store.put(blobKey, buffer, "application/pdf");
