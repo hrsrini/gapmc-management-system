@@ -2,6 +2,7 @@ import PDFDocument from "pdfkit";
 import { db } from "./db";
 import { employees, leaveRequests } from "@shared/db-schema";
 import { eq } from "drizzle-orm";
+import { employeeHonorific } from "@shared/hr-leave-display";
 import { getMergedSystemConfig } from "./system-config";
 
 const LEAVE_TYPE_LABELS: Record<string, string> = {
@@ -58,7 +59,7 @@ export async function generateJoiningReportPdf(leaveRequestId: string): Promise<
   }
 
   doc.text(
-    `I, Shri/Smt. ${empName}, ${emp.designation}, hereby report that I have resumed duty on ${rejoiningDate} after availing ${leaveTypeLabel} from ${lr.fromDate} to ${lr.toDate}.`,
+    `I, ${employeeHonorific(emp.gender)} ${empName}, ${emp.designation}, hereby report that I have resumed duty on ${rejoiningDate} after availing ${leaveTypeLabel} from ${lr.fromDate} to ${lr.toDate}.`,
   );
   doc.moveDown(0.8);
 

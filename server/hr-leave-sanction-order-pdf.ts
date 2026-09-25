@@ -132,13 +132,23 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     /* empty */
   }
   if (!copyToList.length) {
+    const locationLine =
+      yardIsHo && emp.section?.trim()
+        ? `${emp.section.trim()}, HO`
+        : (primaryLocationName ?? emp.locationPosted?.trim() ?? "—");
     copyToList = [
       empName,
-      yardIsHo && emp.section ? `${emp.section}, HO` : (primaryLocationName ?? emp.locationPosted ?? emp.yardId ?? ""),
+      locationLine,
       "Accounts Section",
       "Personal File",
       "Guard File",
     ];
+  } else if (emp.yardId) {
+    // Older saves sometimes stored the raw yard id instead of the location name.
+    const yardLabel = primaryLocationName ?? emp.locationPosted?.trim() ?? null;
+    if (yardLabel) {
+      copyToList = copyToList.map((item) => (item.trim() === emp.yardId ? yardLabel : item));
+    }
   }
   copyToList = copyToList.map(formatLeaveCopyToLine).filter(Boolean);
 
@@ -161,27 +171,80 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   }
 
   const bodySize = 14;
-  const rightW = 280;
-  const rightX = doc.page.width - doc.page.margins.right - rightW;
-  const headerTop = doc.y;
+  const leftX = doc.page.margins.left;
+  const rightEdge = doc.page.width - doc.page.margins.right;
+  const contentWidth = rightEdge - leftX;
+  const headerBlockW = 290;
 
+  /** PDFKit leaves x at the right after width-aligned text — always restore left margin. */
+  const goLeft = () => {
+    doc.x = leftX;
+  };
+
+  const writeLeft = (text: string, opts?: { gap?: number; bold?: boolean }) => {
+    goLeft();
+    doc.font(opts?.bold ? fontBold : fontRegular).fontSize(bodySize);
+    doc.text(text, leftX, doc.y, {
+      width: contentWidth,
+      align: "left",
+      lineGap: 2,
+    });
+    goLeft();
+    if (opts?.gap) doc.moveDown(opts.gap);
+  };
+
+  const writeCenter = (text: string, opts?: { gap?: number; bold?: boolean }) => {
+    goLeft();
+    doc.font(opts?.bold ? fontBold : fontRegular).fontSize(bodySize);
+    doc.text(text, leftX, doc.y, {
+      width: contentWidth,
+      align: "center",
+      lineGap: 2,
+    });
+    goLeft();
+    if (opts?.gap) doc.moveDown(opts.gap);
+  };
+
+  const writeRight = (text: string, opts?: { gap?: number; bold?: boolean }) => {
+    goLeft();
+    doc.font(opts?.bold ? fontBold : fontRegular).fontSize(bodySize);
+    doc.text(text, leftX, doc.y, {
+      width: contentWidth,
+      align: "right",
+      lineGap: 2,
+    });
+    goLeft();
+    if (opts?.gap) doc.moveDown(opts.gap);
+  };
+
+  // Top-right letterhead (file no + office + date)
+  const headerX = rightEdge - headerBlockW;
+  let headerY = doc.y;
   doc.font(fontBold).fontSize(bodySize);
-  doc.text(`NO. ${fileNo}`, rightX, headerTop, { width: rightW, align: "right", lineGap: 2 });
+  doc.text(`NO. ${fileNo}`, headerX, headerY, {
+    width: headerBlockW,
+    align: "right",
+    lineGap: 2,
+  });
+  headerY = doc.y;
   doc.font(fontRegular).fontSize(bodySize);
   doc.text(
     "OFFICE OF THE GOA AGRICULTURAL\nPRODUCE & LIVESTOCK MARKETING\nBOARD, ARLEM, RAIA, SALCETE-GOA.",
-    rightX,
-    doc.y,
-    { width: rightW, align: "right", lineGap: 2 },
+    headerX,
+    headerY,
+    { width: headerBlockW, align: "right", lineGap: 2 },
   );
-  doc.text(`Date: ${formatLeaveOrderDateToday()}`, rightX, doc.y, { width: rightW, align: "right" });
-  doc.moveDown(1.2);
+  headerY = doc.y;
+  doc.text(`Date: ${formatLeaveOrderDateToday()}`, headerX, headerY, {
+    width: headerBlockW,
+    align: "right",
+  });
+  doc.y = doc.y + bodySize * 1.4;
+  goLeft();
 
-  doc.font(fontBold).fontSize(bodySize).text("ORDER", { align: "center" });
-  doc.moveDown(0.6);
+  writeCenter("ORDER", { bold: true, gap: 0.7 });
 
-  doc.font(fontRegular).fontSize(bodySize);
-  doc.text(
+  writeLeft(
     buildSanctionReadLine({
       gender: emp.gender,
       empName,
@@ -191,9 +254,8 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
       yardIsHo,
       applicationDated: lr.fromDate,
     }),
-    { align: "left", lineGap: 2 },
+    { gap: 0.8 },
   );
-  doc.moveDown(0.8);
 
   const fromDisp = formatLeaveOrderDate(lr.fromDate);
   const shortOrderTypes = new Set(["CL", "RH", "SPL_H"]);
@@ -208,16 +270,16 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
           : lr.halfDay === "second_half"
             ? " (second half)"
             : "";
-      doc.text(`${daysWord} ${dayWord} Casual leave${half} on ${fromDisp} approved.`, { lineGap: 2 });
+      writeLeft(`${daysWord} ${dayWord} Casual leave${half} on ${fromDisp} approved.`, { gap: 1.2 });
     } else if (lr.leaveType === "RH") {
       const occasion = (lr.reason ?? "").trim() || "________";
-      doc.text(`${daysWord} ${dayWord} R.H. on ${fromDisp} approved i.e. of ${occasion}.`, { lineGap: 2 });
+      writeLeft(`${daysWord} ${dayWord} R.H. on ${fromDisp} approved i.e. of ${occasion}.`, { gap: 1.2 });
     } else {
       const duty = lr.dutyDateForSplH ? formatLeaveOrderDate(lr.dutyDateForSplH) : "________";
-      doc.text(`${daysWord} ${dayWord} Special Holiday on ${fromDisp} approved i.e. of ${duty}.`, { lineGap: 2 });
+      writeLeft(`${daysWord} ${dayWord} Special Holiday on ${fromDisp} approved i.e. of ${duty}.`, { gap: 1.2 });
     }
   } else {
-    doc.text(
+    writeLeft(
       buildSanctionGrantParagraph({
         gender: emp.gender,
         empName,
@@ -235,10 +297,9 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
         suffixToDate: lr.suffixToDate,
         prefixSuffixDisallowed: lr.prefixSuffixDisallowed,
       }),
-      { align: "justify", lineGap: 2 },
+      { gap: 0.7 },
     );
-    doc.moveDown(0.7);
-    doc.text(
+    writeLeft(
       buildSanctionContinuationBalanceParagraph({
         gender: emp.gender,
         empName,
@@ -247,38 +308,34 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
         balanceAfter,
         toDate: lr.toDate,
       }),
-      { align: "justify", lineGap: 2 },
+      { gap: 1.2 },
     );
   }
-  doc.moveDown(1.5);
 
   const signatureBuffer = await readUploadedLeaveOrderSignatureBuffer();
   const sigW = 110;
   const sigH = 44;
-  const rightEdge = doc.page.width - doc.page.margins.right;
   if (signatureBuffer) {
     try {
       doc.image(signatureBuffer, rightEdge - sigW, doc.y, { fit: [sigW, sigH] });
-      doc.moveDown(3.2);
+      doc.y = doc.y + sigH + 8;
+      goLeft();
     } catch (e) {
       console.warn("[sanction-order] secretary signature image could not be embedded; continuing without it", e);
       doc.moveDown(0.5);
+      goLeft();
     }
   }
-  doc.font(fontRegular).fontSize(bodySize);
-  doc.text(`(${signatoryName})`, { align: "right" });
-  doc.font(fontBold).text(signatoryDesig, { align: "right" });
-  doc.font(fontRegular).text("Goa Agricultural Produce & Livestock Marketing Board", { align: "right" });
-  doc.moveDown(1.5);
+  writeRight(`(${signatoryName})`);
+  writeRight(signatoryDesig, { bold: true });
+  writeRight("Goa Agricultural Produce & Livestock Marketing Board", { gap: 1.2 });
 
-  doc.font(fontBold).text("Copy to:");
-  doc.font(fontRegular);
+  writeLeft("Copy to:", { bold: true });
   copyToList.forEach((item, i) => {
-    doc.text(`${i + 1}. ${item}`, { lineGap: 1 });
+    writeLeft(`${i + 1}. ${item}`);
   });
-  doc.moveDown(0.6);
-
-  doc.font(fontBold).text("☐ & Entered on Service Book", { align: "left" });
+  doc.moveDown(0.5);
+  writeLeft("& Entered on Service Book", { bold: true });
 
   doc.end();
 

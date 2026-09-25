@@ -171,22 +171,48 @@ function parseCopyToJson(json: string | null | undefined): string[] {
   }
 }
 
-function buildDefaultCopyToRows(emp: Employee | null | undefined): string[] {
+function buildDefaultCopyToRows(
+  emp: Employee | null | undefined,
+  primaryLocation?: string | null,
+): string[] {
   if (!emp) return ["Accounts Section", "Personal File", "Guard File"];
   const name = employeeDisplayName(emp);
+  const locationLine = emp.section?.trim()
+    ? `${emp.section.trim()}, HO`
+    : (primaryLocation?.trim() || emp.locationPosted?.trim() || "—");
   return [
     name,
-    emp.section ? `${emp.section}, HO` : (emp.locationPosted ?? emp.yardId ?? "—"),
+    locationLine,
     "Accounts Section",
     "Personal File",
     "Guard File",
   ];
 }
 
-function resolveCopyToList(leave: LeaveRequest, employee: Employee | null | undefined): { list: string[]; usingDefault: boolean } {
+function sanitizeCopyToRows(
+  rows: string[],
+  emp: Employee | null | undefined,
+  primaryLocation?: string | null,
+): string[] {
+  const yardId = emp?.yardId?.trim();
+  const loc = primaryLocation?.trim() || emp?.locationPosted?.trim() || null;
+  if (!yardId || !loc) return rows;
+  return rows.map((item) => (item.trim() === yardId ? loc : item));
+}
+
+function resolveCopyToList(
+  leave: LeaveRequest,
+  employee: Employee | null | undefined,
+  primaryLocation?: string | null,
+): { list: string[]; usingDefault: boolean } {
   const custom = parseCopyToJson(leave.copyToJson).map(formatLeaveCopyToLine).filter(Boolean);
-  if (custom.length > 0) return { list: custom, usingDefault: false };
-  return { list: buildDefaultCopyToRows(employee), usingDefault: true };
+  if (custom.length > 0) {
+    return {
+      list: sanitizeCopyToRows(custom, employee, primaryLocation),
+      usingDefault: false,
+    };
+  }
+  return { list: buildDefaultCopyToRows(employee, primaryLocation), usingDefault: true };
 }
 
 function leaveBalanceAfterDebit(
@@ -521,8 +547,12 @@ export default function LeaveRequests() {
   );
   const approvePreviewCopyTo = useMemo(() => {
     const trimmed = approveCopyToRows.map((x) => x.trim()).filter(Boolean);
-    return trimmed.length > 0 ? trimmed : buildDefaultCopyToRows(approveEmployee);
-  }, [approveCopyToRows, approveEmployee]);
+    const loc = approveEmployee?.yardId
+      ? (yardById[approveEmployee.yardId]?.name ?? yardById[approveEmployee.yardId]?.code ?? null)
+      : null;
+    if (trimmed.length > 0) return sanitizeCopyToRows(trimmed, approveEmployee, loc);
+    return buildDefaultCopyToRows(approveEmployee, loc);
+  }, [approveCopyToRows, approveEmployee, yardById]);
   const approvePreviewBalanceAfter = useMemo(() => {
     if (!approveLeave) return null;
     const revisedFrom = approveLeave.revisedFromLeaveId
@@ -540,8 +570,13 @@ export default function LeaveRequests() {
   );
   const previewOrderCopyTo = useMemo(() => {
     if (!previewOrderLeave) return { list: [] as string[], usingDefault: false };
-    return resolveCopyToList(previewOrderLeave, previewOrderEmployee);
-  }, [previewOrderLeave, previewOrderEmployee]);
+    const loc = previewOrderEmployee?.yardId
+      ? (yardById[previewOrderEmployee.yardId]?.name ??
+        yardById[previewOrderEmployee.yardId]?.code ??
+        null)
+      : null;
+    return resolveCopyToList(previewOrderLeave, previewOrderEmployee, loc);
+  }, [previewOrderLeave, previewOrderEmployee, yardById]);
   const previewOrderBalanceAfter = useMemo(
     () => (previewOrderLeave ? leaveBalanceAfterDebit(previewOrderLeave, balances, true) : null),
     [previewOrderLeave, balances],
@@ -926,7 +961,16 @@ export default function LeaveRequests() {
                   setApprovePrefixSuffixNil(Boolean(r.prefixSuffixDisallowed));
                   const emp = employees.find((e) => e.id === r.employeeId);
                   const existing = parseCopyToJson(r.copyToJson);
-                  setApproveCopyToRows(existing.length > 0 ? existing : buildDefaultCopyToRows(emp));
+                  const loc = emp?.yardId
+                    ? (yardById[emp.yardId]?.name ?? yardById[emp.yardId]?.code ?? null)
+                    : null;
+                  const rows =
+                    existing.length > 0
+                      ? existing.map((item) =>
+                          emp?.yardId && item.trim() === emp.yardId && loc ? loc : item,
+                        )
+                      : buildDefaultCopyToRows(emp, loc);
+                  setApproveCopyToRows(rows);
                   setApproveSubstituteId(r.substituteEmployeeId ?? "");
                 }}
                 disabled={statusMutation.isPending}

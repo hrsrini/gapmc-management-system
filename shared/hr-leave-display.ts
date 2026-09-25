@@ -46,38 +46,63 @@ export function leaveSupportingDocRequired(
   return calendarDays > 3;
 }
 
-/** Shri / Smt. from employee gender (Male → Shri, Female → Smt.). */
+/** Normalize employee gender for honorifics / pronouns. */
+export function normalizeEmployeeGender(
+  gender: string | null | undefined,
+): "male" | "female" | null {
+  const g = String(gender ?? "").trim().toLowerCase();
+  if (!g) return null;
+  if (g === "male" || g === "m" || g === "man" || g.startsWith("male")) return "male";
+  if (g === "female" || g === "f" || g === "woman" || g.startsWith("female")) return "female";
+  return null;
+}
+
+/** Shri. / Smt. from employee gender (Male → Shri., Female → Smt.). */
 export function employeeHonorific(gender: string | null | undefined): string {
-  const g = String(gender ?? "").trim().toLowerCase();
-  if (g === "male") return "Shri";
+  const g = normalizeEmployeeGender(gender);
+  if (g === "male") return "Shri.";
   if (g === "female") return "Smt.";
-  return "Shri/Smt.";
+  return "Shri./Smt.";
 }
 
-/** Mr. / Mrs. for sanction-order body (board Form layout). */
+/** Mr. / Ms. for sanction-order body from employee gender. */
 export function employeeMrHonorific(gender: string | null | undefined): string {
-  const g = String(gender ?? "").trim().toLowerCase();
+  const g = normalizeEmployeeGender(gender);
   if (g === "male") return "Mr.";
-  if (g === "female") return "Mrs.";
-  return "Mr./Mrs.";
+  if (g === "female") return "Ms.";
+  return "Mr./Ms.";
 }
 
+/** He / She (sentence start). */
 export function employeeSubjectPronoun(gender: string | null | undefined): string {
-  const g = String(gender ?? "").trim().toLowerCase();
+  const g = normalizeEmployeeGender(gender);
   if (g === "male") return "He";
   if (g === "female") return "She";
   return "He/She";
 }
 
+/** he / she (mid-sentence). */
 export function employeeSubjectPronounLower(gender: string | null | undefined): string {
-  return employeeSubjectPronoun(gender).toLowerCase();
+  const g = normalizeEmployeeGender(gender);
+  if (g === "male") return "he";
+  if (g === "female") return "she";
+  return "he/she";
 }
 
+/** his / her (possessive). */
 export function employeePossessivePronoun(gender: string | null | undefined): string {
-  const g = String(gender ?? "").trim().toLowerCase();
+  const g = normalizeEmployeeGender(gender);
   if (g === "male") return "his";
   if (g === "female") return "her";
   return "his/her";
+}
+
+/** him / her (object). */
+export function employeeObjectPronoun(gender: string | null | undefined): string {
+  const g = normalizeEmployeeGender(gender);
+  if (g === "male") return "him";
+  if (g === "female") return "her";
+  return "him/her";
 }
 
 /** Debit days on orders: whole days zero-padded (02), halves as-is (0.5). */
