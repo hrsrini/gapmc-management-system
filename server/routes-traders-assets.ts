@@ -111,6 +111,7 @@ import {
   resolvePreReceiptPrintFields,
   resolvePreReceiptRentForBillingMonth,
 } from "./pre-receipt-issue";
+import { formatAllotmentLicenceOrEntityId } from "@shared/unified-entity-display";
 import {
   contentTypeForAssetAllotmentAgreement,
   extFromAssetAllotmentAgreementMime,
@@ -3016,6 +3017,262 @@ export function registerTradersAssetsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate premises master report");
+    }
+  });
+
+  /** Premises Allotment report (Shop Allotments) — trader + entity allotments, filter + Excel. */
+  app.get("/api/ioms/reports/premises-allotment", async (req, res) => {
+    try {
+      if (!hasPermission(req.user, "M-02", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-02 Read required", { required: "M-02:Read" });
+      }
+      const yardId = String(req.query.yardId ?? "").trim();
+      const premisesType = String(req.query.premisesType ?? "").trim();
+      const premisesStatus = String(req.query.premisesStatus ?? "").trim();
+      const assetIdQ = String(req.query.assetId ?? req.query.q ?? "").trim();
+      const format = String(req.query.format ?? "json").toLowerCase();
+      const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+
+      const assetConditions = [];
+      if (scopedIds && scopedIds.length > 0) assetConditions.push(inArray(assets.yardId, scopedIds));
+      if (yardId && yardId !== "all") assetConditions.push(eq(assets.yardId, yardId));
+      if (premisesType && premisesType !== "all") assetConditions.push(eq(assets.assetType, premisesType));
+      if (premisesStatus && premisesStatus !== "all") assetConditions.push(eq(assets.premisesStatus, premisesStatus));
+      if (assetIdQ) {
+        const pattern = `%${assetIdQ.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+        assetConditions.push(
+          or(
+            ilike(assets.assetId, pattern),
+            ilike(assets.id, pattern),
+            ilike(assets.houseNo, pattern),
+            ilike(assets.fileNumber, pattern),
+          )!,
+        );
+      }
+
+      const assetBase = db.select().from(assets).orderBy(assets.assetId);
+      const assetList =
+        assetConditions.length > 0 ? await assetBase.where(and(...assetConditions)) : await assetBase;
+      const assetById = new Map(assetList.map((a) => [a.id, a]));
+      const allowedAssetIds = new Set(assetList.map((a) => a.id));
+
+      const [traderRows, entityRows] = await Promise.all([
+        db.select().from(assetAllotments).orderBy(desc(assetAllotments.fromDate)),
+        db.select().from(entityAllotments).orderBy(desc(entityAllotments.fromDate)),
+      ]);
+
+      const traderFiltered = traderRows.filter((r) => allowedAssetIds.has(r.assetId));
+      const entityFiltered = entityRows.filter((r) => allowedAssetIds.has(r.assetId));
+
+      const licenceIds = [...new Set(traderFiltered.map((r) => r.traderLicenceId).filter(Boolean))];
+      const entityIds = [...new Set(entityFiltered.map((r) => r.entityId).filter(Boolean))];
+
+      const [licenceList, entityList, adHocList, yardRows] = await Promise.all([
+        licenceIds.length
+          ? db
+              .select({
+                id: traderLicences.id,
+                licenceNo: traderLicences.licenceNo,
+                provisionalLicenceNo: traderLicences.provisionalLicenceNo,
+                entityPublicCode: traderLicences.entityPublicCode,
+                lmLicenseClass: traderLicences.lmLicenseClass,
+                firmName: traderLicences.firmName,
+              })
+              .from(traderLicences)
+              .where(inArray(traderLicences.id, licenceIds))
+          : Promise.resolve([]),
+        entityIds.length
+          ? db
+              .select({
+                id: entities.id,
+                entityCode: entities.entityCode,
+                name: entities.name,
+                subType: entities.subType,
+              })
+              .from(entities)
+              .where(inArray(entities.id, entityIds))
+          : Promise.resolve([]),
+        entityIds.length
+          ? db
+              .select({
+                id: adHocEntities.id,
+                entityCode: adHocEntities.entityCode,
+                name: adHocEntities.name,
+              })
+              .from(adHocEntities)
+              .where(inArray(adHocEntities.id, entityIds))
+          : Promise.resolve([]),
+        db.select({ id: yards.id, name: yards.name, code: yards.code }).from(yards),
+      ]);
+
+      const licenceById = Object.fromEntries(licenceList.map((l) => [l.id, l]));
+      const entityById = Object.fromEntries(entityList.map((e) => [e.id, e]));
+      const adHocById = Object.fromEntries(adHocList.map((e) => [e.id, e]));
+      const yardLabelById = Object.fromEntries(
+        yardRows.map((y) => [y.id, [y.code, y.name].filter(Boolean).join(" — ") || y.id]),
+      );
+
+      type ReportRow = {
+        id: string;
+        source: "trader" | "entity";
+        traderLicenceId?: string | null;
+        assetPk: string;
+        srNo: number;
+        premisesId: string;
+        yard: string;
+        allotteeName: string;
+        licenceOrEntityId: string;
+        agreementFrom: string;
+        agreementTo: string;
+        rentRs: number | "";
+        securityDepositRs: number | "";
+        allotmentDate: string;
+        renewalCount: number;
+        approval: string;
+        tenancy: string;
+        premisesRefNo?: string | null;
+        rentRevisionMode?: string | null;
+        agreementDocFile?: string | null;
+      };
+
+      const combined: Omit<ReportRow, "srNo">[] = [];
+
+      for (const a of traderFiltered) {
+        const asset = assetById.get(a.assetId);
+        if (!asset) continue;
+        const lic = licenceById[a.traderLicenceId];
+        const licenceNo =
+          lic?.licenceNo?.trim() ||
+          lic?.provisionalLicenceNo?.trim() ||
+          lic?.entityPublicCode?.trim() ||
+          "";
+        combined.push({
+          id: a.id,
+          source: "trader",
+          traderLicenceId: a.traderLicenceId,
+          assetPk: asset.id,
+          premisesId: asset.assetId,
+          yard: yardLabelById[asset.yardId] ?? asset.yardId,
+          allotteeName: a.allotteeName,
+          licenceOrEntityId: formatAllotmentLicenceOrEntityId({
+            source: "trader",
+            licenceNo,
+            lmLicenseClass: lic?.lmLicenseClass,
+          }),
+          agreementFrom: a.fromDate?.slice(0, 10) ?? "",
+          agreementTo: a.toDate?.slice(0, 10) ?? "",
+          rentRs: a.monthlyRent != null ? Number(a.monthlyRent) : "",
+          securityDepositRs: a.securityDeposit != null ? Number(a.securityDeposit) : "",
+          allotmentDate: (a.allotmentDate ?? "").slice(0, 10),
+          renewalCount: Number(a.consecutiveRenewalCount ?? 0),
+          approval: String(a.approvalStatus ?? "Draft"),
+          tenancy: String(a.status ?? ""),
+          premisesRefNo: a.premisesRefNo,
+          rentRevisionMode: a.rentRevisionMode,
+          agreementDocFile: a.agreementDocFile,
+        });
+      }
+
+      for (const a of entityFiltered) {
+        const asset = assetById.get(a.assetId);
+        if (!asset) continue;
+        const ent = entityById[a.entityId];
+        const adhoc = adHocById[a.entityId];
+        const entityCode = ent?.entityCode?.trim() || adhoc?.entityCode?.trim() || "";
+        const subType = ent?.subType?.trim() || (adhoc ? "Ad hoc" : "");
+        combined.push({
+          id: a.id,
+          source: "entity",
+          assetPk: asset.id,
+          premisesId: asset.assetId,
+          yard: yardLabelById[asset.yardId] ?? asset.yardId,
+          allotteeName: a.allotteeName,
+          licenceOrEntityId: formatAllotmentLicenceOrEntityId({
+            source: "entity",
+            entityCode,
+            entitySubType: subType,
+          }),
+          agreementFrom: a.fromDate?.slice(0, 10) ?? "",
+          agreementTo: a.toDate?.slice(0, 10) ?? "",
+          rentRs: a.monthlyRent != null ? Number(a.monthlyRent) : "",
+          securityDepositRs: a.securityDeposit != null ? Number(a.securityDeposit) : "",
+          allotmentDate: (a.allotmentDate ?? "").slice(0, 10),
+          renewalCount: Number(a.consecutiveRenewalCount ?? 0),
+          approval: String(a.approvalStatus ?? "Draft"),
+          tenancy: String(a.status ?? ""),
+          premisesRefNo: a.premisesRefNo,
+          rentRevisionMode: a.rentRevisionMode,
+          agreementDocFile: a.agreementDocFile,
+        });
+      }
+
+      combined.sort((x, y) => {
+        const d = String(y.agreementFrom).localeCompare(String(x.agreementFrom));
+        if (d !== 0) return d;
+        return String(x.premisesId).localeCompare(String(y.premisesId));
+      });
+
+      const rows: ReportRow[] = combined.map((r, i) => ({ ...r, srNo: i + 1 }));
+
+      const headers = [
+        "Sr. No.",
+        "Premises ID",
+        "Yard",
+        "Allottee Name (Trader / Entity)",
+        "License No. / Entity ID",
+        "Agreement From",
+        "Agreement To Date",
+        "Rent (Rs.)",
+        "Security Deposit (Rs.)",
+        "Allotment Date",
+        "Renewal Count",
+        "Approval",
+        "Tenancy",
+      ] as const;
+
+      if (format === "xlsx") {
+        const XLSX = await import("xlsx");
+        const filterYard = yardId && yardId !== "all" ? yardLabelById[yardId] ?? yardId : "All";
+        const aoa: (string | number)[][] = [
+          ["Premises Allotment Report"],
+          ["Yard", filterYard],
+          ["Premises type", premisesType && premisesType !== "all" ? premisesType : "All"],
+          ["Premises status", premisesStatus && premisesStatus !== "all" ? premisesStatus : "All"],
+          ["Premises ID filter", assetIdQ || "All"],
+          ["Generated at", new Date().toISOString()],
+          [],
+          [...headers],
+          ...rows.map((r) => [
+            r.srNo,
+            r.premisesId,
+            r.yard,
+            r.allotteeName,
+            r.licenceOrEntityId,
+            r.agreementFrom,
+            r.agreementTo,
+            r.rentRs,
+            r.securityDepositRs,
+            r.allotmentDate || "",
+            r.renewalCount,
+            r.approval,
+            r.tenancy,
+          ]),
+        ];
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        XLSX.utils.book_append_sheet(wb, ws, "Premises Allotment");
+        const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="Premises_Allotment_Report_${stamp}.xlsx"`);
+        res.send(Buffer.from(buf));
+        return;
+      }
+
+      res.json({ total: rows.length, rows, headers: [...headers] });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate premises allotment report");
     }
   });
 

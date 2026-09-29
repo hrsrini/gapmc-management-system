@@ -8,6 +8,7 @@ import { and, desc, eq, ne } from "drizzle-orm";
 import { formatLeaveOrderDateDisplay } from "@shared/hr-leave-display";
 import { db } from "./db";
 import { employees, leaveRequests, employeeLeaveBalances, yards, users } from "@shared/db-schema";
+import { resolveLeaveApplicationDateFromAudit } from "./hr-leave-pdf-shared";
 
 export const LEAVE_TYPE_LABELS: Record<string, string> = {
   EL: "Earned Leave",
@@ -139,8 +140,6 @@ function form1FullWidth(
 function drawBoardHeader(doc: PDFKit.PDFDocument): void {
   doc.fontSize(11).font("Helvetica-Bold").text("OFFICE OF THE GOA AGRICULTURAL PRODUCE &", { align: "center" });
   doc.text("LIVESTOCK MARKETING BOARD", { align: "center" });
-  doc.moveDown(0.15);
-  doc.fontSize(9).font("Helvetica").text("Panaji, Goa", { align: "center" });
   doc.moveDown(0.6);
 }
 
@@ -177,6 +176,7 @@ function renderForm1(
     isRetrospective: boolean;
     revisedFromLeaveId: string | null;
     halfDay: string | null;
+    applicationDate: string;
   },
 ): void {
   drawBoardHeader(doc);
@@ -271,7 +271,7 @@ function renderForm1(
   form1Row(
     doc,
     "(ii)",
-    "The leave salary during the leave which would have been admissible had sub-rule (1) of rule 31 not been applied",
+    "The leave salary during the leave which would not have been admissible had sub-rule (1) of rule 31 not been applied",
     blankOr(ctx.refundUndertakingIi),
     { labelWidth: 320 },
   );
@@ -299,6 +299,7 @@ function renderForm1(
   doc.font("Helvetica").fontSize(9).text("_______________________________", { align: "right" });
   doc.text("(SIGNATURE WITH DATE)", { align: "right" });
   doc.text(ctx.empName, { align: "right" });
+  doc.text(`Date: ${fmtDate(ctx.applicationDate)}`, { align: "right" });
 
   doc.moveDown(1);
   const ruleY2 = doc.y;
@@ -348,6 +349,7 @@ function renderShortForm(
     status: string;
     addressDuringLeave: string;
     leaveHq: string;
+    applicationDate: string;
   },
 ): void {
   drawBoardHeader(doc);
@@ -427,7 +429,7 @@ function renderShortForm(
   doc.text(`(${ctx.empName})`);
   doc.text(ctx.designation);
   doc.moveDown(0.3);
-  doc.fontSize(8).fillColor("#555555").text(`Date: _______________`, { align: "left" });
+  doc.fontSize(8).fillColor("#555555").text(`Date: ${fmtDate(ctx.applicationDate)}`, { align: "left" });
   doc.moveDown(1);
   doc
     .fontSize(7)
@@ -483,7 +485,6 @@ export async function generateLeaveApplicationPdf(
     "The Goa Agricultural Produce & Livestock Marketing Board",
     primaryLocationName ? primaryLocationName : null,
     yardIsHo && emp.section ? emp.section : null,
-    emp.locationPosted ? emp.locationPosted : null,
   ]
     .filter(Boolean)
     .join(", ");
@@ -500,6 +501,17 @@ export async function generateLeaveApplicationPdf(
   doc.on("data", (chunk: Buffer) => chunks.push(chunk));
 
   const layout: "form1" | "short" = SHORT_FORM_TYPES.has(leaveType) ? "short" : "form1";
+  let applicationDate =
+    /^\d{4}-\d{2}-\d{2}/.test(String(lr.appliedAt ?? "").trim())
+      ? String(lr.appliedAt).trim().slice(0, 10)
+      : "";
+  if (!applicationDate) {
+    applicationDate = (await resolveLeaveApplicationDateFromAudit(leaveRequestId)) || "";
+    if (applicationDate) {
+      await db.update(leaveRequests).set({ appliedAt: applicationDate }).where(eq(leaveRequests.id, leaveRequestId));
+    }
+  }
+  if (!applicationDate) applicationDate = lr.fromDate;
 
   if (layout === "short") {
     renderShortForm(doc, {
@@ -518,6 +530,7 @@ export async function generateLeaveApplicationPdf(
       status: lr.status,
       addressDuringLeave: lr.addressDuringLeave ?? "",
       leaveHq: lr.leaveHq ?? "",
+      applicationDate,
     });
   } else {
     renderForm1(doc, {
@@ -551,6 +564,7 @@ export async function generateLeaveApplicationPdf(
       isRetrospective: lr.isRetrospective === true,
       revisedFromLeaveId: lr.revisedFromLeaveId ?? null,
       halfDay: lr.halfDay ?? null,
+      applicationDate,
     });
   }
 

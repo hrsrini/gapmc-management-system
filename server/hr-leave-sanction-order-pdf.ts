@@ -4,9 +4,13 @@ import { db } from "./db";
 import { employees, leaveRequests, employeeLeaveBalances, leaveOrderSequence, yards } from "@shared/db-schema";
 import { eq, and } from "drizzle-orm";
 import {
-  buildSanctionContinuationBalanceParagraph,
+  buildDefaultSanctionCopyTo,
+  buildSanctionBalanceCertificateParagraph,
+  buildSanctionContinuationParagraph,
   buildSanctionGrantParagraph,
   buildSanctionReadLine,
+  employeeMrHonorific,
+  employeePossessivePronoun,
   leaveDaysInWords,
 } from "@shared/hr-leave-display";
 import { getMergedSystemConfig } from "./system-config";
@@ -15,6 +19,8 @@ import {
   formatLeaveCopyToLine,
   formatLeaveOrderDate,
   formatLeaveOrderDateToday,
+  resolveLeaveApplicationDateFromAudit,
+  resolveLeaveOrderDateFromAudit,
 } from "./hr-leave-pdf-shared";
 import { allocateNextServiceBookNo } from "./hr-employee-rules";
 import { nanoid } from "nanoid";
@@ -104,6 +110,31 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   const debitDays = lr.debitDays != null ? Number(lr.debitDays) : 0;
   const isExPostFacto = lr.isExPostFacto === true;
 
+  // Fixed order date = DA approval day (persist if missing so re-download stays stable).
+  // Prefer stored order_date; else audit Approved transition; never invent "today" for historical orders.
+  let orderDateYmd = String(lr.orderDate ?? "").trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDateYmd)) {
+    orderDateYmd = (await resolveLeaveOrderDateFromAudit(leaveRequestId)) || "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDateYmd) && (lr.status === "Approved" || lr.status === "Superseded")) {
+      // Last resort only when no audit trail exists (imported / pre-audit data).
+      orderDateYmd = new Date().toISOString().slice(0, 10);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(orderDateYmd)) {
+      await db.update(leaveRequests).set({ orderDate: orderDateYmd }).where(eq(leaveRequests.id, leaveRequestId));
+    }
+  }
+  const orderDateDisplay = orderDateYmd
+    ? formatLeaveOrderDate(orderDateYmd)
+    : formatLeaveOrderDateToday();
+
+  let applicationDated = String(lr.appliedAt ?? "").trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(applicationDated)) {
+    applicationDated = (await resolveLeaveApplicationDateFromAudit(leaveRequestId)) || "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(applicationDated)) {
+      await db.update(leaveRequests).set({ appliedAt: applicationDated }).where(eq(leaveRequests.id, leaveRequestId));
+    }
+  }
+
   let primaryLocationName: string | null = null;
   let yardIsHo = false;
   if (emp.yardId) {
@@ -115,6 +146,14 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   }
   if (!primaryLocationName && emp.locationPosted?.trim()) {
     primaryLocationName = emp.locationPosted.trim();
+  }
+
+  let substituteName: string | null = null;
+  if (lr.substituteEmployeeId) {
+    const [sub] = await db.select().from(employees).where(eq(employees.id, lr.substituteEmployeeId)).limit(1);
+    if (sub) {
+      substituteName = `${sub.firstName} ${sub.middleName ?? ""} ${sub.surname}`.replace(/\s+/g, " ").trim();
+    }
   }
 
   const balLeaveType = lr.leaveType === "COMMUTED" ? "HPL" : lr.leaveType;
@@ -132,25 +171,57 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     /* empty */
   }
   if (!copyToList.length) {
-    const locationLine =
-      yardIsHo && emp.section?.trim()
-        ? `${emp.section.trim()}, HO`
-        : (primaryLocationName ?? emp.locationPosted?.trim() ?? "—");
-    copyToList = [
+    copyToList = buildDefaultSanctionCopyTo({
+      gender: emp.gender,
+      maritalStatus: emp.maritalStatus,
       empName,
-      locationLine,
-      "Accounts Section",
-      "Personal File",
-      "Guard File",
-    ];
+      section: emp.section,
+      primaryLocation: primaryLocationName,
+      yardIsHo,
+      substituteName,
+    });
   } else if (emp.yardId) {
-    // Older saves sometimes stored the raw yard id instead of the location name.
     const yardLabel = primaryLocationName ?? emp.locationPosted?.trim() ?? null;
     if (yardLabel) {
       copyToList = copyToList.map((item) => (item.trim() === emp.yardId ? yardLabel : item));
     }
   }
-  copyToList = copyToList.map(formatLeaveCopyToLine).filter(Boolean);
+  copyToList = copyToList
+    .map(formatLeaveCopyToLine)
+    .filter(Boolean)
+    .filter((item) => {
+      const t = item.trim().toLowerCase();
+      if (t === empName.toLowerCase()) return false;
+      if (t === "guard file") return false;
+      if (t.includes("entered on service book")) return false;
+      return true;
+    });
+
+  // Clauses 2–3 are conditional when a substitute is selected (even if custom copy-to was saved).
+  if (substituteName) {
+    const hasSubName = copyToList.some((item) => item.trim().toLowerCase() === substituteName.toLowerCase());
+    const hasDuty = copyToList.some((item) => /will do the duties of/i.test(item));
+    if (!hasSubName || !hasDuty) {
+      const mr = employeeMrHonorific(emp.gender, emp.maritalStatus);
+      const poss = employeePossessivePronoun(emp.gender);
+      const inject: string[] = [];
+      if (!hasSubName) inject.push(substituteName);
+      if (!hasDuty) {
+        inject.push(`${substituteName}, will do the duties of ${mr} ${empName} during ${poss} leave period`);
+      }
+      if (copyToList.length === 0) {
+        copyToList = inject;
+      } else {
+        copyToList = [copyToList[0]!, ...inject, ...copyToList.slice(1)];
+      }
+    }
+  }
+
+  // Always end with Accounts Section + Personal File when missing from a custom list.
+  const hasAccounts = copyToList.some((item) => /^accounts section\b/i.test(item.trim()));
+  const hasPersonal = copyToList.some((item) => /^personal file\b/i.test(item.trim()));
+  if (!hasAccounts) copyToList.push("Accounts Section");
+  if (!hasPersonal) copyToList.push("Personal File");
 
   const doc = new PDFDocument({ size: "A4", margin: 54 });
   const chunks: Buffer[] = [];
@@ -235,7 +306,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     { width: headerBlockW, align: "right", lineGap: 2 },
   );
   headerY = doc.y;
-  doc.text(`Date: ${formatLeaveOrderDateToday()}`, headerX, headerY, {
+  doc.text(`Date: ${orderDateDisplay}`, headerX, headerY, {
     width: headerBlockW,
     align: "right",
   });
@@ -247,12 +318,13 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   writeLeft(
     buildSanctionReadLine({
       gender: emp.gender,
+      maritalStatus: emp.maritalStatus,
       empName,
       designation: emp.designation,
       primaryLocation: primaryLocationName,
       section: emp.section,
       yardIsHo,
-      applicationDated: lr.fromDate,
+      applicationDated: applicationDated || "________",
     }),
     { gap: 0.8 },
   );
@@ -282,6 +354,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     writeLeft(
       buildSanctionGrantParagraph({
         gender: emp.gender,
+        maritalStatus: emp.maritalStatus,
         empName,
         designation: emp.designation,
         primaryLocation: primaryLocationName,
@@ -300,10 +373,16 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
       { gap: 0.7 },
     );
     writeLeft(
-      buildSanctionContinuationBalanceParagraph({
+      buildSanctionContinuationParagraph({
         gender: emp.gender,
+        maritalStatus: emp.maritalStatus,
         empName,
         designation: emp.designation,
+      }),
+      { gap: 0.7 },
+    );
+    writeLeft(
+      buildSanctionBalanceCertificateParagraph({
         leaveTypeLabel,
         balanceAfter,
         toDate: lr.toDate,
@@ -334,8 +413,6 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   copyToList.forEach((item, i) => {
     writeLeft(`${i + 1}. ${item}`);
   });
-  doc.moveDown(0.5);
-  writeLeft("& Entered on Service Book", { bold: true });
 
   doc.end();
 

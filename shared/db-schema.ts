@@ -787,6 +787,10 @@ export const leaveRequests = gapmc.table("leave_requests", {
   revisedFromLeaveId: text("revised_from_leave_id"),
   /** Set on original leave when a revised leave is approved (points to revision id). */
   supersededByLeaveId: text("superseded_by_leave_id"),
+  /** YYYY-MM-DD leave application date (user-entered; used on Form-1 and sanction READ). */
+  appliedAt: text("applied_at"),
+  /** YYYY-MM-DD sanction order date fixed at DA approval (stable on re-download). */
+  orderDate: text("order_date"),
 });
 
 /** M-01: per-employee leave-type balance (opening set at go-live; debited on DA approval when row exists). */

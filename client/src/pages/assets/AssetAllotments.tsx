@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Badge } from "@/components/ui/badge";
@@ -15,355 +15,384 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter,
-} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
-import { KeyRound, AlertCircle, Plus, Loader2, Pencil } from "lucide-react";
-import { localCalendarYmd, RENT_REVISION_MODES } from "@shared/premises-allocation";
-import { invalidateAssetAllotmentQueries } from "@/lib/invalidate-asset-allotments";
-import { invalidatePremisesRegisterQueries } from "@/lib/premisesRegisterCache";
+import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
+import { LocalSearchSelect } from "@/components/ui/local-search-select";
 import { formatInr } from "@/lib/formatInr";
+import { PREMISES_TYPE_VALUES } from "@shared/premises-master";
+import { PREMISES_STATUS_VALUES, premisesStatusLabel } from "@shared/premises-allocation";
 import {
   AssetAllotmentManageDialog,
   type ManagedAssetAllotment,
 } from "@/components/assets/AssetAllotmentManageDialog";
-import { TraderLicenceSearchSelect, formatTraderLicenceSelectLabel } from "@/components/selects/trader-licence-search-select";
-import { LocalSearchSelect } from "@/components/ui/local-search-select";
+import { AlertCircle, Download, FileSpreadsheet, KeyRound, Pencil, RefreshCcw, Search } from "lucide-react";
 
-type Allotment = ManagedAssetAllotment;
-interface Asset {
+type PremisesAllotmentRow = {
   id: string;
-  assetId: string;
-  yardId: string;
-  assetType: string;
-}
-interface VacantAssetRow {
-  asset: Asset;
-}
-interface Licence {
-  id: string;
-  licenceNo?: string | null;
-  firmName: string;
-  yardId: string;
-}
+  source: "trader" | "entity";
+  traderLicenceId?: string | null;
+  assetPk: string;
+  srNo: number;
+  premisesId: string;
+  yard: string;
+  allotteeName: string;
+  licenceOrEntityId: string;
+  agreementFrom: string;
+  agreementTo: string;
+  rentRs: number | "";
+  securityDepositRs: number | "";
+  allotmentDate: string;
+  renewalCount: number;
+  approval: string;
+  tenancy: string;
+  premisesRefNo?: string | null;
+  rentRevisionMode?: string | null;
+  agreementDocFile?: string | null;
+};
+
+type PremisesAllotmentResponse = {
+  total: number;
+  rows: PremisesAllotmentRow[];
+  headers: string[];
+};
 
 const columns: ReportTableColumn[] = [
-  { key: "assetDisplay", header: "Asset" },
-  { key: "allotteeName", header: "Allottee" },
-  { key: "licenceDisplay", header: "Licence" },
-  { key: "fromDate", header: "From" },
-  { key: "toDate", header: "To" },
-  { key: "_approval", header: "Approval", sortField: "approvalStatus" },
-  { key: "_status", header: "Tenancy", sortField: "status" },
-  { key: "securityDeposit", header: "Security deposit", sortField: "securityDepositNum" },
+  { key: "srNo", header: "Sr. No." },
+  { key: "premisesId", header: "Premises ID" },
+  { key: "yard", header: "Yard" },
+  { key: "allotteeName", header: "Allottee Name (Trader / Entity)" },
+  { key: "licenceOrEntityId", header: "License No. / Entity ID" },
+  { key: "agreementFrom", header: "Agreement From" },
+  { key: "agreementTo", header: "Agreement To Date" },
+  { key: "rentDisplay", header: "Rent (Rs.)", sortField: "rentSort" },
+  { key: "depositDisplay", header: "Security Deposit (Rs.)", sortField: "depositSort" },
+  { key: "allotmentDate", header: "Allotment Date" },
+  { key: "renewalCount", header: "Renewal Count" },
+  { key: "_approval", header: "Approval", sortField: "approval" },
+  { key: "_tenancy", header: "Tenancy", sortField: "tenancy" },
   { key: "_actions", header: "" },
 ];
 
+function buildQuery(params: {
+  yardId: string;
+  premisesType: string;
+  premisesStatus: string;
+  assetId: string;
+  format?: "json" | "xlsx";
+}): string {
+  const sp = new URLSearchParams();
+  if (params.yardId && params.yardId !== "all") sp.set("yardId", params.yardId);
+  if (params.premisesType && params.premisesType !== "all") sp.set("premisesType", params.premisesType);
+  if (params.premisesStatus && params.premisesStatus !== "all") sp.set("premisesStatus", params.premisesStatus);
+  if (params.assetId.trim()) sp.set("assetId", params.assetId.trim());
+  if (params.format) sp.set("format", params.format);
+  const qs = sp.toString();
+  return qs ? `/api/ioms/reports/premises-allotment?${qs}` : "/api/ioms/reports/premises-allotment";
+}
+
 export default function AssetAllotments() {
-  const [assetIdFilter, setAssetIdFilter] = useState("all");
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [assetId, setAssetId] = useState("");
-  const [traderLicenceId, setTraderLicenceId] = useState("");
-  const [allotteeName, setAllotteeName] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [status, setStatus] = useState("Pending");
-  const [securityDeposit, setSecurityDeposit] = useState("");
-  const [monthlyRent, setMonthlyRent] = useState("");
-  const [rentRevisionMode, setRentRevisionMode] = useState<string>("StandardConsecutiveRenewal");
-
-  const [manageRow, setManageRow] = useState<Allotment | null>(null);
-
-  const queryClient = useQueryClient();
   const { toast } = useToast();
   const { can } = useAuth();
-  const canCreate = can("M-02", "Create");
   const canUpdate = can("M-02", "Update");
+  const { data: yardsRaw = [] } = useScopedActiveYards();
+  const yards = useMemo(() => filterYardTypeLocations(yardsRaw), [yardsRaw]);
 
-  const listUrl = assetIdFilter && assetIdFilter !== "all"
-    ? `/api/ioms/asset-allotments?assetId=${encodeURIComponent(assetIdFilter)}`
-    : "/api/ioms/asset-allotments";
+  const [yardId, setYardId] = useState("all");
+  const [premisesType, setPremisesType] = useState("all");
+  const [premisesStatus, setPremisesStatus] = useState("all");
+  const [assetId, setAssetId] = useState("");
+  const [applied, setApplied] = useState({
+    yardId: "all",
+    premisesType: "all",
+    premisesStatus: "all",
+    assetId: "",
+  });
+  const [exporting, setExporting] = useState(false);
+  const [manageRow, setManageRow] = useState<ManagedAssetAllotment | null>(null);
 
-  const { data: allotments = [], isLoading, isError } = useQuery<Allotment[]>({
-    queryKey: [listUrl],
+  const yardOptions = useMemo(
+    () => [
+      { value: "all", label: "All yards" },
+      ...yards.map((y) => ({
+        value: y.id,
+        label: [y.code, y.name].filter(Boolean).join(" — ") || y.id,
+      })),
+    ],
+    [yards],
+  );
+
+  const reportUrl = useMemo(() => buildQuery({ ...applied, format: "json" }), [applied]);
+
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<PremisesAllotmentResponse>({
+    queryKey: [reportUrl],
     queryFn: async () => {
-      const res = await fetch(listUrl, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch allotments");
-      return res.json();
-    },
-  });
-  const { data: assets = [] } = useQuery<Asset[]>({ queryKey: ["/api/ioms/assets"] });
-  const { data: vacantRows = [] } = useQuery<VacantAssetRow[]>({ queryKey: ["/api/ioms/assets/vacant"] });
-  const { data: licences = [] } = useQuery<Licence[]>({ queryKey: ["/api/ioms/traders/licences"] });
-
-  const assetDisplayMap = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
-  assets.forEach((a) => {
-    assetDisplayMap[a.assetId] = a.assetId;
-  });
-
-  const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
-  const vacantPremiseOptions = useMemo(
-    () => vacantAssets.map((a) => ({ value: a.id, label: a.assetId })),
-    [vacantAssets],
-  );
-
-  const licenceDisplayById = Object.fromEntries(
-    licences.map((l) => [l.id, formatTraderLicenceSelectLabel(l)]),
-  );
-
-  const sourceRows = useMemo((): Record<string, unknown>[] => {
-    return allotments.map((a) => {
-      const appr = String(a.approvalStatus ?? "Draft");
-      return {
-        id: a.id,
-        assetDisplay: assetDisplayMap[a.assetId] ?? a.assetId,
-        allotteeName: a.allotteeName,
-        licenceDisplay: licenceDisplayById[a.traderLicenceId] ?? a.traderLicenceId,
-        fromDate: a.fromDate,
-        toDate: a.toDate,
-        status: a.status,
-        approvalStatus: appr,
-        securityDeposit:
-          a.securityDeposit != null ? `${formatInr(a.securityDeposit)}` : "—",
-        securityDepositNum: a.securityDeposit ?? null,
-        _approval: (
-          <Badge variant={appr === "Approved" ? "default" : appr === "Rejected" ? "destructive" : "secondary"}>
-            {appr}
-          </Badge>
-        ),
-        _status: (
-          <Badge variant={a.status === "Active" ? "default" : "secondary"}>{a.status}</Badge>
-        ),
-        _actions: canUpdate ? (
-          <Button type="button" variant="ghost" size="sm" className="h-8 px-2" onClick={() => setManageRow(a)}>
-            <Pencil className="h-4 w-4" />
-            <span className="sr-only">Manage</span>
-          </Button>
-        ) : null,
-      };
-    });
-  }, [allotments, assetDisplayMap, licenceDisplayById, canUpdate]);
-
-  const createMutation = useMutation({
-    mutationFn: async (body: Record<string, unknown>) => {
-      const res = await fetch("/api/ioms/asset-allotments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        credentials: "include",
-      });
+      const res = await fetch(reportUrl, { credentials: "include" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as { error?: string }).error ?? res.statusText);
       }
       return res.json();
     },
-    onSuccess: () => {
-      invalidateAssetAllotmentQueries(queryClient);
-      invalidatePremisesRegisterQueries(queryClient);
-      toast({ title: "Allotment created" });
-      setDialogOpen(false);
-      setAllotteeName("");
-      setFromDate("");
-      setToDate("");
-      setSecurityDeposit("");
-      setMonthlyRent("");
-      setAssetId("");
-      setTraderLicenceId("");
-      setStatus("Pending");
-    },
-    onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
 
-  const handleAdd = (e: React.FormEvent) => {
-    e.preventDefault();
-    const todayLocal = localCalendarYmd();
-    if (status === "Vacated" && toDate > todayLocal) {
-      toast({
-        title: "Invalid vacated date",
-        description: "Vacated on must be today or an earlier date.",
-        variant: "destructive",
-      });
-      return;
-    }
-    createMutation.mutate({
-      assetId: assetId || undefined,
-      traderLicenceId: traderLicenceId || undefined,
-      allotteeName: allotteeName || undefined,
-      fromDate: fromDate || undefined,
-      toDate: toDate || undefined,
-      status,
-      securityDeposit: securityDeposit ? Number(securityDeposit) : null,
-      monthlyRent: monthlyRent ? Number(monthlyRent) : undefined,
-      rentRevisionMode,
-      approvalStatus: "Draft",
+  const sourceRows = useMemo((): Record<string, unknown>[] => {
+    return (data?.rows ?? []).map((r) => {
+      const appr = String(r.approval ?? "Draft");
+      return {
+        ...r,
+        rentSort: r.rentRs === "" ? null : Number(r.rentRs),
+        depositSort: r.securityDepositRs === "" ? null : Number(r.securityDepositRs),
+        rentDisplay: r.rentRs === "" ? "—" : formatInr(Number(r.rentRs)),
+        depositDisplay: r.securityDepositRs === "" ? "—" : formatInr(Number(r.securityDepositRs)),
+        _approval: (
+          <Badge variant={appr === "Approved" ? "default" : appr === "Rejected" ? "destructive" : "secondary"}>
+            {appr}
+          </Badge>
+        ),
+        _tenancy: (
+          <Badge variant={r.tenancy === "Active" ? "default" : "secondary"}>{r.tenancy || "—"}</Badge>
+        ),
+        _actions:
+          canUpdate && r.source === "trader" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2"
+              onClick={() =>
+                setManageRow({
+                  id: r.id,
+                  assetId: r.assetPk,
+                  traderLicenceId: r.traderLicenceId ?? "",
+                  allotteeName: r.allotteeName,
+                  fromDate: r.agreementFrom,
+                  toDate: r.agreementTo,
+                  status: r.tenancy,
+                  securityDeposit: r.securityDepositRs === "" ? null : Number(r.securityDepositRs),
+                  approvalStatus: r.approval,
+                  monthlyRent: r.rentRs === "" ? null : Number(r.rentRs),
+                  allotmentDate: r.allotmentDate || null,
+                  premisesRefNo: r.premisesRefNo,
+                  rentRevisionMode: r.rentRevisionMode,
+                  agreementDocFile: r.agreementDocFile,
+                })
+              }
+            >
+              <Pencil className="h-4 w-4" />
+              <span className="sr-only">Manage</span>
+            </Button>
+          ) : null,
+      };
+    });
+  }, [data?.rows, canUpdate]);
+
+  const applyFilters = () => {
+    setApplied({
+      yardId,
+      premisesType,
+      premisesStatus,
+      assetId: assetId.trim(),
     });
   };
 
-  if (isError) {
-    return (
-      <AppShell breadcrumbs={[{ label: "Assets", href: "/assets" }, { label: "Allotments" }]}>
-        <Card className="bg-destructive/10 border-destructive/20">
-          <CardContent className="p-6 flex items-center gap-3">
-            <AlertCircle className="h-5 w-5 text-destructive" />
-            <span className="text-destructive">Failed to load allotments.</span>
-          </CardContent>
-        </Card>
-      </AppShell>
-    );
-  }
+  const resetFilters = () => {
+    setYardId("all");
+    setPremisesType("all");
+    setPremisesStatus("all");
+    setAssetId("");
+    setApplied({ yardId: "all", premisesType: "all", premisesStatus: "all", assetId: "" });
+  };
+
+  const exportExcel = async () => {
+    try {
+      setExporting(true);
+      const url = buildQuery({ ...applied, format: "xlsx" });
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      const blob = await res.blob();
+      const stamp = new Date().toISOString().slice(0, 10);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `Premises_Allotment_Report_${stamp}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast({ title: "Excel downloaded", description: "Premises Allotment report exported." });
+    } catch (e) {
+      toast({
+        title: "Export failed",
+        description: e instanceof Error ? e.message : "Could not download Excel",
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  /** Resolve asset PK for manage dialog after report returns public premises ID. */
+  const assetDisplayMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const r of data?.rows ?? []) {
+      m[r.assetPk] = r.premisesId;
+      m[r.premisesId] = r.premisesId;
+    }
+    if (manageRow) {
+      m[manageRow.assetId] = m[manageRow.assetId] ?? manageRow.assetId;
+    }
+    return m;
+  }, [data?.rows, manageRow]);
 
   return (
     <AppShell breadcrumbs={[{ label: "Assets", href: "/assets" }, { label: "Shop Allotments" }]}>
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
-          <div>
+      <div className="space-y-4">
+        <Card>
+          <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <KeyRound className="h-5 w-5" />
-              Shop Allotments (M-02)
+              Premises Allotment Report (M-02)
             </CardTitle>
-            <p className="text-sm text-muted-foreground mt-1">
-              Tenancy status (Pending / Active / Vacated) follows the approval workflow for new lines: open{" "}
-              <strong>Manage</strong>, upload the agreement copy (PDF), then DV verifies and DA approves — Approved sets
-              tenancy to Active. Use Manage to edit draft fields or run approvals.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Select value={assetIdFilter} onValueChange={setAssetIdFilter}>
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="All assets" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All assets</SelectItem>
-                {assets.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>{a.assetId}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {canCreate && (
-            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-              <DialogTrigger asChild>
-                <Button><Plus className="h-4 w-4 mr-1" /> Add allotment</Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader><DialogTitle>Add allotment</DialogTitle></DialogHeader>
-                <form onSubmit={handleAdd} className="space-y-4">
-                  <div><Label>Asset *</Label>
-                    <LocalSearchSelect
-                      value={assetId}
-                      onValueChange={setAssetId}
-                      options={vacantPremiseOptions}
-                      placeholder="Select asset"
-                      searchPlaceholder="Type premises id…"
-                      emptyMessage="No matching vacant premises."
-                      required
-                    />
-                  </div>
-                  <div><Label>Trader licence *</Label>
-                    <TraderLicenceSearchSelect
-                      value={traderLicenceId}
-                      onValueChange={setTraderLicenceId}
-                      required
-                      placeholder="Select licence"
-                    />
-                  </div>
-                  <div><Label>Allottee name *</Label><Input value={allotteeName} onChange={(e) => setAllotteeName(e.target.value)} required /></div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div><Label>From date *</Label><Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} required /></div>
-                    <div>
-                      <Label>To date *</Label>
-                      <Input
-                        type="date"
-                        value={toDate}
-                        onChange={(e) => setToDate(e.target.value)}
-                        max={status === "Vacated" ? localCalendarYmd() : undefined}
-                        required
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <Label>Monthly Rent (Rs.) *</Label>
-                      <Input type="number" step="0.01" value={monthlyRent} onChange={(e) => setMonthlyRent(e.target.value)} required />
-                    </div>
-                    <div>
-                      <Label>Rent revision mode *</Label>
-                      <Select value={rentRevisionMode} onValueChange={setRentRevisionMode}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {RENT_REVISION_MODES.map((m) => (
-                            <SelectItem key={m} value={m}>
-                              {m === "StandardConsecutiveRenewal" ? "Standard" : "PWD Certificate"}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                  <div><Label>Status</Label>
-                    <Select value={status} onValueChange={setStatus}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Pending">Pending</SelectItem>
-                        <SelectItem value="Active">Active (legacy)</SelectItem>
-                        <SelectItem value="Vacated">Vacated</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div><Label>Security deposit</Label><Input type="number" step="0.01" value={securityDeposit} onChange={(e) => setSecurityDeposit(e.target.value)} placeholder="Optional" /></div>
-                  <DialogFooter>
-                    <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-                    <Button type="submit" disabled={createMutation.isPending}>
-                      {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Create
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
-            )}
-          </div>
-        </CardHeader>
+            <CardDescription>
+              Filter trader and entity premises allotments, then export to Excel. Use Manage on a trader row to edit
+              or run the approval workflow.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="space-y-1">
+                <Label>Yard</Label>
+                <LocalSearchSelect
+                  value={yardId}
+                  onValueChange={setYardId}
+                  options={yardOptions}
+                  placeholder="All yards"
+                  searchPlaceholder="Type yard name or code…"
+                  emptyMessage="No matching yards."
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Premises type</Label>
+                <Select value={premisesType} onValueChange={setPremisesType}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All types</SelectItem>
+                    {PREMISES_TYPE_VALUES.map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {t}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Premises status</Label>
+                <Select value={premisesStatus} onValueChange={setPremisesStatus}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    {PREMISES_STATUS_VALUES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {premisesStatusLabel(s)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Premises ID</Label>
+                <Input
+                  value={assetId}
+                  onChange={(e) => setAssetId(e.target.value)}
+                  placeholder="Type Premises ID (partial OK)"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" onClick={applyFilters}>
+                <Search className="h-4 w-4 mr-1" />
+                Generate report
+              </Button>
+              <Button type="button" variant="outline" onClick={resetFilters}>
+                <RefreshCcw className="h-4 w-4 mr-1" />
+                Reset
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={exporting || isLoading}
+                onClick={() => void exportExcel()}
+              >
+                <Download className="h-4 w-4 mr-1" />
+                {exporting ? "Exporting…" : "Export Excel"}
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+                Refresh
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
         <AssetAllotmentManageDialog
           row={manageRow}
           onClose={() => setManageRow(null)}
-          onRowUpdated={setManageRow}
+          onRowUpdated={(fresh) => {
+            setManageRow(fresh);
+            void refetch();
+          }}
           assetDisplayMap={assetDisplayMap}
         />
 
-        <CardContent>
-          {isLoading ? (
-            <Skeleton className="h-64 w-full" />
-          ) : (
-            <ClientDataGrid
-              columns={columns}
-              sourceRows={sourceRows}
-              searchKeys={[
-                "assetDisplay",
-                "allotteeName",
-                "licenceDisplay",
-                "fromDate",
-                "toDate",
-                "status",
-                "approvalStatus",
-              ]}
-              searchPlaceholder="Search allotments…"
-              defaultSortKey="fromDate"
-              defaultSortDir="desc"
-              resetPageDependency={listUrl}
-              emptyMessage="No allotments."
-            />
-          )}
-        </CardContent>
-      </Card>
+        {isError ? (
+          <Card className="bg-destructive/10 border-destructive/20">
+            <CardContent className="p-6 flex items-center gap-3">
+              <AlertCircle className="h-5 w-5 text-destructive" />
+              <span className="text-destructive">Failed to load premises allotment report.</span>
+            </CardContent>
+          </Card>
+        ) : isLoading ? (
+          <Skeleton className="h-64 w-full" />
+        ) : (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <FileSpreadsheet className="h-4 w-4" />
+                Results{data?.total != null ? ` (${data.total})` : ""}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ClientDataGrid
+                columns={columns}
+                sourceRows={sourceRows}
+                searchKeys={[
+                  "premisesId",
+                  "yard",
+                  "allotteeName",
+                  "licenceOrEntityId",
+                  "agreementFrom",
+                  "agreementTo",
+                  "allotmentDate",
+                  "approval",
+                  "tenancy",
+                ]}
+                searchPlaceholder="Search Trader or Entity"
+                defaultSortKey="agreementFrom"
+                defaultSortDir="desc"
+                resetPageDependency={reportUrl}
+                emptyMessage="No allotments match the selected filters."
+              />
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </AppShell>
   );
 }

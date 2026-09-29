@@ -52,6 +52,8 @@
     "db:apply-leave-rejoining-revised": "dotenv -e .env -- tsx scripts/apply-leave-rejoining-revised.ts",
     "db:apply-leave-joining-ack": "dotenv -e .env -- tsx scripts/apply-leave-joining-ack.ts",
     "db:apply-leave-form1-fields": "dotenv -e .env -- tsx scripts/apply-leave-form1-fields.ts",
+    "db:apply-leave-applied-order-dates": "dotenv -e .env -- tsx scripts/apply-leave-applied-order-dates.ts",
+    "db:backfill-leave-applied-order-dates": "dotenv -e .env -- tsx scripts/apply-backfill-leave-applied-order-dates.ts",
     "db:apply-leave-debit-split": "dotenv -e .env -- tsx scripts/apply-leave-debit-split.ts",
     "db:heal-leave-revision-balances": "dotenv -e .env -- tsx scripts/heal-leave-revision-balances.ts",
     "db:heal-leave-revision-balances-commit": "dotenv -e .env -- cross-env COMMIT=1 tsx scripts/heal-leave-revision-balances.ts",

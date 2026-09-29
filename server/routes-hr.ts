@@ -2029,6 +2029,32 @@ export function registerHrRoutes(app: Express) {
         return sendApiError(res, 403, "LEAVE_EXPOSTFACTO_DENIED", "Only DA or Admin can create ex-post facto entries");
       }
 
+      // Leave application date (Form-1 / sanction READ): default today; backdating allowed; future not allowed.
+      const todayYmd = localCalendarYmdUtc();
+      const rawAppDate =
+        body.applicationDate != null && String(body.applicationDate).trim() !== ""
+          ? String(body.applicationDate).trim().slice(0, 10)
+          : body.appliedAt != null && String(body.appliedAt).trim() !== ""
+            ? String(body.appliedAt).trim().slice(0, 10)
+            : todayYmd;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(rawAppDate)) {
+        return sendApiError(
+          res,
+          400,
+          "LEAVE_APPLICATION_DATE_INVALID",
+          "Leave application date must be YYYY-MM-DD.",
+        );
+      }
+      if (rawAppDate > todayYmd) {
+        return sendApiError(
+          res,
+          400,
+          "LEAVE_APPLICATION_DATE_FUTURE",
+          "Leave application date cannot be a future date.",
+        );
+      }
+      const applicationDateYmd = rawAppDate;
+
       // Overlap check (exclude superseded/cancelled/rejected; exclude leave being revised)
       const revisedFromLeaveId =
         body.revisedFromLeaveId != null && String(body.revisedFromLeaveId).trim() !== ""
@@ -2191,6 +2217,8 @@ export function registerHrRoutes(app: Express) {
         doUser: req.user?.id ?? null,
         dvUser: null,
         approvedBy: null,
+        appliedAt: applicationDateYmd,
+        orderDate: null,
         workflowRevisionCount: 0,
         dvReturnRemarks: null,
       });
@@ -2330,6 +2358,9 @@ export function registerHrRoutes(app: Express) {
       if (statusChange && newStatus === "Approved") {
         updates.rejectionReasonCode = null;
         updates.rejectionRemarks = null;
+        if (!String(existing.orderDate ?? "").trim()) {
+          updates.orderDate = new Date().toISOString().slice(0, 10);
+        }
       }
       ["leaveType", "fromDate", "toDate", "reason", "supportingDocumentUrl"].forEach((k) => {
         if (body[k] !== undefined) {

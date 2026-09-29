@@ -49,6 +49,32 @@ export function formatEntityMasterLabel(
   return n || "—";
 }
 
+/**
+ * Premises allotment report: Licence No./Class for traders (e.g. `7757/A`),
+ * or Entity ID with sub-type for entities (e.g. `ENT-2026-00045 [Commercial]`).
+ */
+export function formatAllotmentLicenceOrEntityId(opts: {
+  source: "trader" | "entity";
+  licenceNo?: string | null;
+  lmLicenseClass?: string | null;
+  entityCode?: string | null;
+  entitySubType?: string | null;
+}): string {
+  if (opts.source === "trader") {
+    const no = String(opts.licenceNo ?? "").trim();
+    const cls = String(opts.lmLicenseClass ?? "").trim();
+    if (no && cls) {
+      if (no.includes("/")) return no;
+      return `${no}/${cls}`;
+    }
+    return no || "—";
+  }
+  const code = String(opts.entityCode ?? "").trim();
+  const sub = String(opts.entitySubType ?? "").trim();
+  if (code && sub) return `${code} [${sub}]`;
+  return code || "—";
+}
+
 /** Outstanding dues / dropdown label. */
 export function formatUnifiedEntityOptionLabel(args: {
   kind: UnifiedEntityKindLabel;

@@ -57,19 +57,71 @@ export function normalizeEmployeeGender(
   return null;
 }
 
-/** Shri. / Smt. from employee gender (Male → Shri., Female → Smt.). */
-export function employeeHonorific(gender: string | null | undefined): string {
+/**
+ * Normalize marital status for salutation rules.
+ * Accepts HR form values (Single/Married/Widowed/Divorced) and spreadsheet labels
+ * (Unmarried/Divorcee/Not Specified).
+ */
+export function normalizeMaritalStatus(
+  maritalStatus: string | null | undefined,
+): "married" | "unmarried" | "widowed" | "divorcee" | "not_specified" {
+  const s = String(maritalStatus ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ");
+  if (!s || s === "not specified" || s === "n/a" || s === "na" || s === "none" || s === "unspecified") {
+    return "not_specified";
+  }
+  if (s === "married" || s.startsWith("married")) return "married";
+  if (
+    s === "unmarried" ||
+    s === "single" ||
+    s === "bachelor" ||
+    s === "spinster" ||
+    s.startsWith("unmarried") ||
+    s.startsWith("single")
+  ) {
+    return "unmarried";
+  }
+  if (s === "widowed" || s === "widow" || s === "widower" || s.startsWith("widow")) return "widowed";
+  if (s === "divorcee" || s === "divorced" || s === "divorce" || s.startsWith("divor")) return "divorcee";
+  return "not_specified";
+}
+
+/**
+ * READ-line honorific (Shri. / Smt. / Kum.) from gender + marital status.
+ * Female Married → Smt.; Unmarried → Kum.; otherwise Smt.
+ */
+export function employeeHonorific(
+  gender: string | null | undefined,
+  maritalStatus?: string | null,
+): string {
   const g = normalizeEmployeeGender(gender);
+  const m = normalizeMaritalStatus(maritalStatus);
   if (g === "male") return "Shri.";
-  if (g === "female") return "Smt.";
+  if (g === "female") {
+    if (m === "unmarried") return "Kum.";
+    return "Smt.";
+  }
   return "Shri./Smt.";
 }
 
-/** Mr. / Ms. for sanction-order body from employee gender. */
-export function employeeMrHonorific(gender: string | null | undefined): string {
+/**
+ * Body/paragraph salutation from gender + marital status (sanction-order spreadsheet):
+ * Male → Mr.; Female Married → Mrs.; Unmarried → Miss.; Widowed/Divorcee/Not Specified → Ms.
+ */
+export function employeeMrHonorific(
+  gender: string | null | undefined,
+  maritalStatus?: string | null,
+): string {
   const g = normalizeEmployeeGender(gender);
+  const m = normalizeMaritalStatus(maritalStatus);
   if (g === "male") return "Mr.";
-  if (g === "female") return "Ms.";
+  if (g === "female") {
+    if (m === "married") return "Mrs.";
+    if (m === "unmarried") return "Miss.";
+    return "Ms.";
+  }
   return "Mr./Ms.";
 }
 
@@ -221,6 +273,7 @@ export function formatSanctionBalanceAsOnDate(toDateIso: string | null | undefin
 
 export function buildSanctionReadLine(opts: {
   gender?: string | null;
+  maritalStatus?: string | null;
   empName: string;
   designation?: string | null;
   primaryLocation?: string | null;
@@ -228,7 +281,7 @@ export function buildSanctionReadLine(opts: {
   yardIsHo?: boolean;
   applicationDated: string;
 }): string {
-  const honorific = employeeHonorific(opts.gender);
+  const honorific = employeeHonorific(opts.gender, opts.maritalStatus);
   const bits = [
     `${honorific} ${opts.empName}`.replace(/\s+/g, " ").trim(),
     opts.designation?.trim() || null,
@@ -240,6 +293,7 @@ export function buildSanctionReadLine(opts: {
 
 export function buildSanctionGrantParagraph(opts: {
   gender?: string | null;
+  maritalStatus?: string | null;
   empName: string;
   designation?: string | null;
   primaryLocation?: string | null;
@@ -255,7 +309,7 @@ export function buildSanctionGrantParagraph(opts: {
   suffixToDate?: string | null;
   prefixSuffixDisallowed?: boolean | null;
 }): string {
-  const mr = employeeMrHonorific(opts.gender);
+  const mr = employeeMrHonorific(opts.gender, opts.maritalStatus);
   const desig = opts.designation?.trim() || "";
   const nameDesig = desig ? `${mr} ${opts.empName}, ${desig}` : `${mr} ${opts.empName}`;
   const location = opts.primaryLocation?.trim() || "________";
@@ -281,25 +335,75 @@ export function buildSanctionGrantParagraph(opts: {
   return text;
 }
 
+export function buildSanctionContinuationParagraph(opts: {
+  gender?: string | null;
+  maritalStatus?: string | null;
+  empName: string;
+  designation?: string | null;
+}): string {
+  const mr = employeeMrHonorific(opts.gender, opts.maritalStatus);
+  const desig = opts.designation?.trim() || "";
+  const nameDesig = desig ? `${mr} ${opts.empName}, ${desig}` : `${mr} ${opts.empName}`;
+  return (
+    `${nameDesig}, would have continued in the same post but for ${employeePossessivePronoun(opts.gender)} proceeding on leave. ` +
+    `On expiry of leave, ${nameDesig}, is posted in the same post and station from which ${employeeSubjectPronounLower(opts.gender)} proceeds on leave.`
+  );
+}
+
+export function buildSanctionBalanceCertificateParagraph(opts: {
+  leaveTypeLabel: string;
+  balanceAfter: number;
+  toDate: string;
+}): string {
+  const leaveLower = leaveTypeSanctionLabel(opts.leaveTypeLabel).toLowerCase();
+  const bal = Number.isFinite(opts.balanceAfter) ? opts.balanceAfter : 0;
+  const asOn = formatSanctionBalanceAsOnDate(opts.toDate);
+  return `Certified that the balance ${leaveLower} after sanctioning the above leave is ${bal} days as on ${asOn}.`;
+}
+
+/** @deprecated Prefer buildSanctionContinuationParagraph + buildSanctionBalanceCertificateParagraph. */
 export function buildSanctionContinuationBalanceParagraph(opts: {
   gender?: string | null;
+  maritalStatus?: string | null;
   empName: string;
   designation?: string | null;
   leaveTypeLabel: string;
   balanceAfter: number;
   toDate: string;
 }): string {
-  const mr = employeeMrHonorific(opts.gender);
-  const desig = opts.designation?.trim() || "";
-  const nameDesig = desig ? `${mr} ${opts.empName}, ${desig}` : `${mr} ${opts.empName}`;
-  const leaveLower = leaveTypeSanctionLabel(opts.leaveTypeLabel).toLowerCase();
-  const bal = Number.isFinite(opts.balanceAfter) ? opts.balanceAfter : 0;
-  const asOn = formatSanctionBalanceAsOnDate(opts.toDate);
   return (
-    `${nameDesig}, would have continued in the same post but for ${employeePossessivePronoun(opts.gender)} proceeding on leave. ` +
-    `On expiry of leave, ${nameDesig}, is posted in the same post and station from which ${employeeSubjectPronounLower(opts.gender)} proceeds on leave. ` +
-    `Certified that the balance ${leaveLower} after sanctioning the above leave is ${bal} days as on ${asOn}.`
+    `${buildSanctionContinuationParagraph(opts)} ` +
+    buildSanctionBalanceCertificateParagraph(opts)
   );
+}
+
+/**
+ * Default sanction-order Copy to list (no employee name / Guard File / service-book line).
+ * Items 2–3 (substitute name + duty clause) only when a substitute is selected.
+ */
+export function buildDefaultSanctionCopyTo(opts: {
+  gender?: string | null;
+  maritalStatus?: string | null;
+  empName: string;
+  section?: string | null;
+  primaryLocation?: string | null;
+  yardIsHo?: boolean;
+  substituteName?: string | null;
+}): string[] {
+  const locationLine =
+    opts.yardIsHo && opts.section?.trim()
+      ? `${opts.section.trim()}, HO`
+      : (opts.primaryLocation?.trim() || "—");
+  const rows: string[] = [locationLine];
+  const sub = opts.substituteName?.trim();
+  if (sub) {
+    const mr = employeeMrHonorific(opts.gender, opts.maritalStatus);
+    const poss = employeePossessivePronoun(opts.gender);
+    rows.push(sub);
+    rows.push(`${sub}, will do the duties of ${mr} ${opts.empName} during ${poss} leave period`);
+  }
+  rows.push("Accounts Section", "Personal File");
+  return rows;
 }
 
 /** Copy-to line: omit redundant "(Employee)" suffix. */

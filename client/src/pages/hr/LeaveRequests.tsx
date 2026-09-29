@@ -27,8 +27,11 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { Calendar, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal, Plus, Download, Loader2, FileText, Pencil } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
+import { localCalendarYmd } from "@shared/premises-allocation";
 import {
-  buildSanctionContinuationBalanceParagraph,
+  buildDefaultSanctionCopyTo,
+  buildSanctionBalanceCertificateParagraph,
+  buildSanctionContinuationParagraph,
   buildSanctionGrantParagraph,
   buildSanctionReadLine,
   formatLeaveCopyToLine,
@@ -91,6 +94,10 @@ interface LeaveRequest {
   joiningReportAckAt?: string | null;
   joiningReportAckBy?: string | null;
   joiningReportAckRemarks?: string | null;
+  /** ISO timestamp when leave was submitted — used as READ date on sanction order. */
+  appliedAt?: string | null;
+  /** YYYY-MM-DD fixed at DA approval — sanction order date (stable on re-download). */
+  orderDate?: string | null;
 }
 interface Employee {
   id: string;
@@ -105,6 +112,7 @@ interface Employee {
   gender?: string | null;
   payLevel?: number | null;
   basicPayInr?: number | null;
+  maritalStatus?: string | null;
 }
 
 interface YardRow {
@@ -174,19 +182,18 @@ function parseCopyToJson(json: string | null | undefined): string[] {
 function buildDefaultCopyToRows(
   emp: Employee | null | undefined,
   primaryLocation?: string | null,
+  opts?: { yardIsHo?: boolean; substituteName?: string | null },
 ): string[] {
-  if (!emp) return ["Accounts Section", "Personal File", "Guard File"];
-  const name = employeeDisplayName(emp);
-  const locationLine = emp.section?.trim()
-    ? `${emp.section.trim()}, HO`
-    : (primaryLocation?.trim() || emp.locationPosted?.trim() || "—");
-  return [
-    name,
-    locationLine,
-    "Accounts Section",
-    "Personal File",
-    "Guard File",
-  ];
+  if (!emp) return ["Accounts Section", "Personal File"];
+  return buildDefaultSanctionCopyTo({
+    gender: emp.gender,
+    maritalStatus: emp.maritalStatus,
+    empName: employeeDisplayName(emp),
+    section: emp.section,
+    primaryLocation: primaryLocation ?? emp.locationPosted,
+    yardIsHo: Boolean(opts?.yardIsHo ?? emp.section),
+    substituteName: opts?.substituteName,
+  });
 }
 
 function sanitizeCopyToRows(
@@ -196,14 +203,28 @@ function sanitizeCopyToRows(
 ): string[] {
   const yardId = emp?.yardId?.trim();
   const loc = primaryLocation?.trim() || emp?.locationPosted?.trim() || null;
-  if (!yardId || !loc) return rows;
-  return rows.map((item) => (item.trim() === yardId ? loc : item));
+  const empName = emp ? employeeDisplayName(emp).toLowerCase() : "";
+  return rows
+    .map((item) => {
+      const t = item.trim();
+      if (yardId && loc && t === yardId) return loc;
+      return formatLeaveCopyToLine(t);
+    })
+    .filter(Boolean)
+    .filter((item) => {
+      const t = item.trim().toLowerCase();
+      if (empName && t === empName) return false;
+      if (t === "guard file") return false;
+      if (t.includes("entered on service book")) return false;
+      return true;
+    });
 }
 
 function resolveCopyToList(
   leave: LeaveRequest,
   employee: Employee | null | undefined,
   primaryLocation?: string | null,
+  opts?: { yardIsHo?: boolean; substituteName?: string | null },
 ): { list: string[]; usingDefault: boolean } {
   const custom = parseCopyToJson(leave.copyToJson).map(formatLeaveCopyToLine).filter(Boolean);
   if (custom.length > 0) {
@@ -212,7 +233,10 @@ function resolveCopyToList(
       usingDefault: false,
     };
   }
-  return { list: buildDefaultCopyToRows(employee, primaryLocation), usingDefault: true };
+  return {
+    list: buildDefaultCopyToRows(employee, primaryLocation, opts),
+    usingDefault: true,
+  };
 }
 
 function leaveBalanceAfterDebit(
@@ -299,6 +323,13 @@ function SanctionOrderPreviewPanel({
     employee?.locationPosted?.trim() ||
     null;
   const shortOrderTypes = new Set(["CL", "RH", "SPL_H"]);
+  const applicationDated =
+    (leave.appliedAt && /^\d{4}-\d{2}-\d{2}/.test(leave.appliedAt) ? leave.appliedAt.slice(0, 10) : "") ||
+    "________";
+  const orderDateNote =
+    leave.orderDate && /^\d{4}-\d{2}-\d{2}/.test(leave.orderDate)
+      ? formatLeaveOrderDateDisplay(leave.orderDate)
+      : null;
 
   return (
     <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-2">
@@ -308,15 +339,21 @@ function SanctionOrderPreviewPanel({
           File No. <span className="text-foreground font-medium">{fileNo}</span>
         </p>
       ) : null}
+      {orderDateNote ? (
+        <p className="text-muted-foreground">
+          Order date: <span className="text-foreground font-medium">{orderDateNote}</span>
+        </p>
+      ) : null}
       <p className="text-muted-foreground">
         {buildSanctionReadLine({
           gender: employee?.gender,
+          maritalStatus: employee?.maritalStatus,
           empName,
           designation: employee?.designation,
           primaryLocation: location,
           section: employee?.section,
           yardIsHo: Boolean(yardIsHo),
-          applicationDated: leave.fromDate,
+          applicationDated,
         })}
       </p>
       {shortOrderTypes.has(leave.leaveType) ? (
@@ -330,6 +367,7 @@ function SanctionOrderPreviewPanel({
           <p className="text-muted-foreground">
             {buildSanctionGrantParagraph({
               gender: employee?.gender,
+              maritalStatus: employee?.maritalStatus,
               empName,
               designation: employee?.designation,
               primaryLocation: location,
@@ -347,10 +385,15 @@ function SanctionOrderPreviewPanel({
             })}
           </p>
           <p className="text-muted-foreground">
-            {buildSanctionContinuationBalanceParagraph({
+            {buildSanctionContinuationParagraph({
               gender: employee?.gender,
+              maritalStatus: employee?.maritalStatus,
               empName,
               designation: employee?.designation,
+            })}
+          </p>
+          <p className="text-muted-foreground">
+            {buildSanctionBalanceCertificateParagraph({
               leaveTypeLabel,
               balanceAfter: balanceAfter ?? 0,
               toDate: leave.toDate,
@@ -413,6 +456,7 @@ export default function LeaveRequests() {
   const [newOpen, setNewOpen] = useState(false);
   const [newEmployeeId, setNewEmployeeId] = useState("");
   const [newLeaveType, setNewLeaveType] = useState("EL");
+  const [newApplicationDate, setNewApplicationDate] = useState(() => localCalendarYmd());
   const [newFrom, setNewFrom] = useState("");
   const [newTo, setNewTo] = useState("");
   const [newReason, setNewReason] = useState("");
@@ -550,9 +594,21 @@ export default function LeaveRequests() {
     const loc = approveEmployee?.yardId
       ? (yardById[approveEmployee.yardId]?.name ?? yardById[approveEmployee.yardId]?.code ?? null)
       : null;
+    const yardIsHo = approveEmployee?.yardId
+      ? isHeadOfficeYard(yardById[approveEmployee.yardId])
+      : false;
+    const sub =
+      approveSubstituteId
+        ? substitutes.find((s) => s.id === approveSubstituteId) ??
+          employees.find((e) => e.id === approveSubstituteId) ??
+          null
+        : null;
+    const substituteName = sub
+      ? `${sub.firstName} ${"surname" in sub ? sub.surname : ""}`.replace(/\s+/g, " ").trim()
+      : null;
     if (trimmed.length > 0) return sanitizeCopyToRows(trimmed, approveEmployee, loc);
-    return buildDefaultCopyToRows(approveEmployee, loc);
-  }, [approveCopyToRows, approveEmployee, yardById]);
+    return buildDefaultCopyToRows(approveEmployee, loc, { yardIsHo, substituteName });
+  }, [approveCopyToRows, approveEmployee, approveSubstituteId, yardById, substitutes, employees]);
   const approvePreviewBalanceAfter = useMemo(() => {
     if (!approveLeave) return null;
     const revisedFrom = approveLeave.revisedFromLeaveId
@@ -575,8 +631,18 @@ export default function LeaveRequests() {
         yardById[previewOrderEmployee.yardId]?.code ??
         null)
       : null;
-    return resolveCopyToList(previewOrderLeave, previewOrderEmployee, loc);
-  }, [previewOrderLeave, previewOrderEmployee, yardById]);
+    const yardIsHo = previewOrderEmployee?.yardId
+      ? isHeadOfficeYard(yardById[previewOrderEmployee.yardId])
+      : false;
+    const subEmp = previewOrderLeave.substituteEmployeeId
+      ? employees.find((e) => e.id === previewOrderLeave.substituteEmployeeId) ?? null
+      : null;
+    const substituteName = subEmp ? employeeDisplayName(subEmp) : null;
+    return resolveCopyToList(previewOrderLeave, previewOrderEmployee, loc, {
+      yardIsHo,
+      substituteName,
+    });
+  }, [previewOrderLeave, previewOrderEmployee, yardById, employees]);
   const previewOrderBalanceAfter = useMemo(
     () => (previewOrderLeave ? leaveBalanceAfterDebit(previewOrderLeave, balances, true) : null),
     [previewOrderLeave, balances],
@@ -667,6 +733,7 @@ export default function LeaveRequests() {
       setNewRevisedFromId("");
       setNewPayLevel("");
       setNewPayRs("");
+      setNewApplicationDate(localCalendarYmd());
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
@@ -964,14 +1031,18 @@ export default function LeaveRequests() {
                   const loc = emp?.yardId
                     ? (yardById[emp.yardId]?.name ?? yardById[emp.yardId]?.code ?? null)
                     : null;
+                  const yardIsHo = emp?.yardId ? isHeadOfficeYard(yardById[emp.yardId]) : false;
+                  const subId = r.substituteEmployeeId ?? "";
+                  const subEmp = subId ? employees.find((e) => e.id === subId) ?? null : null;
                   const rows =
                     existing.length > 0
-                      ? existing.map((item) =>
-                          emp?.yardId && item.trim() === emp.yardId && loc ? loc : item,
-                        )
-                      : buildDefaultCopyToRows(emp, loc);
+                      ? sanitizeCopyToRows(existing, emp, loc)
+                      : buildDefaultCopyToRows(emp, loc, {
+                          yardIsHo,
+                          substituteName: subEmp ? employeeDisplayName(subEmp) : null,
+                        });
                   setApproveCopyToRows(rows);
-                  setApproveSubstituteId(r.substituteEmployeeId ?? "");
+                  setApproveSubstituteId(subId);
                 }}
                 disabled={statusMutation.isPending}
               >
@@ -1057,6 +1128,7 @@ export default function LeaveRequests() {
                     setNewTo(r.toDate);
                     setNewReason(r.reason ? `Revision of sanctioned leave: ${r.reason}` : "Revision of sanctioned leave");
                     setNewRevisedFromId(r.id);
+                    setNewApplicationDate(localCalendarYmd());
                     setNewOpen(true);
                   }}
                 >
@@ -1119,6 +1191,7 @@ export default function LeaveRequests() {
                   onClick={() => {
                     setNewEmployeeId(user?.employeeId ?? "");
                     setNewRevisedFromId("");
+                    setNewApplicationDate(localCalendarYmd());
                     setNewOpen(true);
                   }}
                 >
@@ -1268,6 +1341,31 @@ export default function LeaveRequests() {
               </div>
             ) : null}
             <div className="space-y-1">
+              <Label>Leave application date</Label>
+              <Input
+                type="date"
+                value={newApplicationDate}
+                max={localCalendarYmd()}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const today = localCalendarYmd();
+                  if (v && v > today) {
+                    toast({
+                      title: "Future date not allowed",
+                      description: "Leave application date cannot be after today.",
+                      variant: "destructive",
+                    });
+                    setNewApplicationDate(today);
+                    return;
+                  }
+                  setNewApplicationDate(v || today);
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                Defaults to today. Backdating is allowed; a future date is not.
+              </p>
+            </div>
+            <div className="space-y-1">
               <Label>Leave type</Label>
               <Select value={newLeaveType.trim().toUpperCase() || (leaveTypesForEmployee[0] ?? "EL")} onValueChange={setNewLeaveType}>
                 <SelectTrigger>
@@ -1395,9 +1493,33 @@ export default function LeaveRequests() {
                   <Label>Leave headquarters / destination</Label>
                   <Input value={newLeaveHq} onChange={(e) => setNewLeaveHq(e.target.value)} placeholder="Station / City" />
                 </div>
-                <div className="flex items-center gap-2">
-                  <Checkbox checked={newLtc} onCheckedChange={(v) => setNewLtc(Boolean(v))} />
-                  <Label>LTC proposed</Label>
+                <div className="space-y-2">
+                  <Label>LTC proposed?</Label>
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        name="ltc-proposed"
+                        checked={newLtc === true}
+                        onChange={() => setNewLtc(true)}
+                      />
+                      Yes
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        name="ltc-proposed"
+                        checked={newLtc === false}
+                        onChange={() => setNewLtc(false)}
+                      />
+                      No
+                    </label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {newLtc
+                      ? `Form-1 item 10: I propose to avail myself of leave travel concession for the block year ${newLtcBlockYear.trim() || "_______"} ensuing leave.`
+                      : `Form-1 item 10: I do not propose to avail myself of leave travel concession for the block year ${newLtcBlockYear.trim() || "_______"} ensuing leave.`}
+                  </p>
                 </div>
                 <div className="space-y-1">
                   <Label>LTC block year (Form-1 item 10)</Label>
@@ -1407,23 +1529,38 @@ export default function LeaveRequests() {
                     placeholder="e.g. 2024-2027"
                   />
                 </div>
-                <div className="space-y-1">
-                  <Label>Refund undertaking 12(i)</Label>
-                  <Textarea
-                    value={newRefundI}
-                    onChange={(e) => setNewRefundI(e.target.value)}
-                    rows={2}
-                    placeholder="User entry for Form-1 item 12(i) — leave blank if not applicable"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label>Refund undertaking 12(ii)</Label>
-                  <Textarea
-                    value={newRefundIi}
-                    onChange={(e) => setNewRefundIi(e.target.value)}
-                    rows={2}
-                    placeholder="User entry for Form-1 item 12(ii) — leave blank if not applicable"
-                  />
+                <div className="rounded-md border bg-muted/30 p-3 space-y-3">
+                  <p className="text-sm font-medium">
+                    12. In the event of my resignation or Voluntary retirement from service I undertake to refund:
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    (i) The difference between the leave salary drawn during the commuted leave and that admissible
+                    during the half pay leave which would not have been admissible had sub-rule (1) of rule 30 not
+                    been applied
+                  </p>
+                  <div className="space-y-1">
+                    <Label>Refund undertaking 12(i)</Label>
+                    <Textarea
+                      value={newRefundI}
+                      onChange={(e) => setNewRefundI(e.target.value)}
+                      rows={2}
+                      placeholder="User entry for Form-1 item 12(i) — leave blank if not applicable"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    (ii) The leave salary during the leave which would not have been admissible had sub-rule (1) of
+                    rule 31 not been applied
+                  </p>
+                  <div className="space-y-1">
+                    <Label>Refund undertaking 12(ii)</Label>
+                    <Textarea
+                      value={newRefundIi}
+                      onChange={(e) => setNewRefundIi(e.target.value)}
+                      rows={2}
+                      placeholder="User entry for Form-1 item 12(ii) — leave blank if not applicable"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">(Score out whichever be not applicable)</p>
                 </div>
               </>
             )}
@@ -1554,6 +1691,24 @@ export default function LeaveRequests() {
                   toast({ title: "Missing fields", description: "Employee, from and to dates are required.", variant: "destructive" });
                   return;
                 }
+                const today = localCalendarYmd();
+                const applicationDate = (newApplicationDate || today).slice(0, 10);
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(applicationDate)) {
+                  toast({
+                    title: "Invalid application date",
+                    description: "Enter a valid leave application date.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                if (applicationDate > today) {
+                  toast({
+                    title: "Future date not allowed",
+                    description: "Leave application date cannot be after today.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
                 const lt = newLeaveType.trim().toUpperCase() || "EL";
                 const calDays = inclusiveCalendarDays(newFrom, newTo);
                 if (leaveSupportingDocRequired(lt, calDays) && !newDocUrl.trim()) {
@@ -1569,6 +1724,7 @@ export default function LeaveRequests() {
                   leaveType: lt,
                   fromDate: newFrom,
                   toDate: newTo,
+                  applicationDate,
                   reason: newReason.trim() || null,
                   supportingDocumentUrl: newDocUrl.trim() || null,
                   isRetrospective: roles.includes("ADMIN") ? newRetrospective : false,
@@ -1878,7 +2034,27 @@ export default function LeaveRequests() {
             <Label>Substitute employee (optional)</Label>
             <Select
               value={approveSubstituteId || "__none__"}
-              onValueChange={(v) => setApproveSubstituteId(v === "__none__" ? "" : v)}
+              onValueChange={(v) => {
+                const subId = v === "__none__" ? "" : v;
+                setApproveSubstituteId(subId);
+                const emp = approveEmployee;
+                const loc = emp?.yardId
+                  ? (yardById[emp.yardId]?.name ?? yardById[emp.yardId]?.code ?? null)
+                  : null;
+                const yardIsHo = emp?.yardId ? isHeadOfficeYard(yardById[emp.yardId]) : false;
+                const sub =
+                  subId
+                    ? substitutes.find((s) => s.id === subId) ??
+                      employees.find((e) => e.id === subId) ??
+                      null
+                    : null;
+                const substituteName = sub
+                  ? `${sub.firstName} ${"surname" in sub ? sub.surname : ""}`.replace(/\s+/g, " ").trim()
+                  : null;
+                setApproveCopyToRows(
+                  buildDefaultCopyToRows(emp, loc, { yardIsHo, substituteName }),
+                );
+              }}
             >
               <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
               <SelectContent>
