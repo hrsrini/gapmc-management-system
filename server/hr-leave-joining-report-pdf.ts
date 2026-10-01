@@ -59,7 +59,7 @@ export async function generateJoiningReportPdf(leaveRequestId: string): Promise<
   }
 
   doc.text(
-    `I, ${employeeHonorific(emp.gender)} ${empName}, ${emp.designation}, hereby report that I have resumed duty on ${rejoiningDate} after availing ${leaveTypeLabel} from ${lr.fromDate} to ${lr.toDate}.`,
+    `I, ${employeeHonorific(emp.gender, emp.maritalStatus)} ${empName}, ${emp.designation}, hereby report that I have resumed duty on ${rejoiningDate} after availing ${leaveTypeLabel} from ${lr.fromDate} to ${lr.toDate}.`,
   );
   doc.moveDown(0.8);
 

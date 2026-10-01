@@ -9,9 +9,10 @@ import {
   buildSanctionContinuationParagraph,
   buildSanctionGrantParagraph,
   buildSanctionReadLine,
-  employeeMrHonorific,
-  employeePossessivePronoun,
+  classifyLeaveYardKind,
+  applySalutationsToCopyToLines,
   leaveDaysInWords,
+  type LeaveYardKind,
 } from "@shared/hr-leave-display";
 import { getMergedSystemConfig } from "./system-config";
 import { readUploadedLeaveOrderSignatureBuffer } from "./leave-signature-storage";
@@ -137,22 +138,52 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
 
   let primaryLocationName: string | null = null;
   let yardIsHo = false;
+  let applicantYardKind: LeaveYardKind = "unknown";
   if (emp.yardId) {
     const [yard] = await db.select().from(yards).where(eq(yards.id, emp.yardId)).limit(1);
     if (yard) {
       primaryLocationName = yard.name ?? yard.code ?? null;
       yardIsHo = isHeadOfficeYard(yard);
+      applicantYardKind = classifyLeaveYardKind(yard);
     }
   }
   if (!primaryLocationName && emp.locationPosted?.trim()) {
     primaryLocationName = emp.locationPosted.trim();
   }
+  if (applicantYardKind === "unknown" && yardIsHo) applicantYardKind = "ho";
+  if (applicantYardKind === "unknown" && primaryLocationName) applicantYardKind = "yard";
 
   let substituteName: string | null = null;
+  let substituteGender: string | null = null;
+  let substituteMaritalStatus: string | null = null;
+  let substituteSection: string | null = null;
+  let substitutePrimaryLocation: string | null = null;
+  let substituteYardKind: LeaveYardKind | null = null;
   if (lr.substituteEmployeeId) {
     const [sub] = await db.select().from(employees).where(eq(employees.id, lr.substituteEmployeeId)).limit(1);
     if (sub) {
       substituteName = `${sub.firstName} ${sub.middleName ?? ""} ${sub.surname}`.replace(/\s+/g, " ").trim();
+      substituteGender = sub.gender ?? null;
+      substituteMaritalStatus = sub.maritalStatus ?? null;
+      substituteSection = sub.section ?? null;
+      if (sub.yardId) {
+        const [subYard] = await db.select().from(yards).where(eq(yards.id, sub.yardId)).limit(1);
+        if (subYard) {
+          substitutePrimaryLocation = subYard.name ?? subYard.code ?? null;
+          substituteYardKind = classifyLeaveYardKind(subYard);
+        }
+      }
+      if (!substitutePrimaryLocation && sub.locationPosted?.trim()) {
+        substitutePrimaryLocation = sub.locationPosted.trim();
+      }
+      if (!substituteYardKind || substituteYardKind === "unknown") {
+        if (isHeadOfficeYard({ type: null, name: substitutePrimaryLocation, code: null }) || sub.section) {
+          substituteYardKind = sub.section ? "ho" : substituteYardKind;
+        }
+        if ((!substituteYardKind || substituteYardKind === "unknown") && substitutePrimaryLocation) {
+          substituteYardKind = classifyLeaveYardKind({ name: substitutePrimaryLocation });
+        }
+      }
     }
   }
 
@@ -164,6 +195,22 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     .limit(1);
   const balanceAfter = bal ? Number(bal.balanceDays ?? 0) : 0;
 
+  const defaultCopyTo = buildDefaultSanctionCopyTo({
+    gender: emp.gender,
+    maritalStatus: emp.maritalStatus,
+    empName,
+    section: emp.section,
+    primaryLocation: primaryLocationName,
+    yardKind: applicantYardKind,
+    yardIsHo,
+    substituteName,
+    substituteGender,
+    substituteMaritalStatus,
+    substituteSection,
+    substitutePrimaryLocation,
+    substituteYardKind,
+  });
+
   let copyToList: string[] = [];
   try {
     if (lr.copyToJson) copyToList = JSON.parse(lr.copyToJson);
@@ -171,15 +218,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     /* empty */
   }
   if (!copyToList.length) {
-    copyToList = buildDefaultSanctionCopyTo({
-      gender: emp.gender,
-      maritalStatus: emp.maritalStatus,
-      empName,
-      section: emp.section,
-      primaryLocation: primaryLocationName,
-      yardIsHo,
-      substituteName,
-    });
+    copyToList = defaultCopyTo;
   } else if (emp.yardId) {
     const yardLabel = primaryLocationName ?? emp.locationPosted?.trim() ?? null;
     if (yardLabel) {
@@ -197,23 +236,13 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
       return true;
     });
 
-  // Clauses 2–3 are conditional when a substitute is selected (even if custom copy-to was saved).
+  // Ensure substitute duty (+ other-location) lines when a substitute is selected.
   if (substituteName) {
-    const hasSubName = copyToList.some((item) => item.trim().toLowerCase() === substituteName.toLowerCase());
     const hasDuty = copyToList.some((item) => /will do the duties of/i.test(item));
-    if (!hasSubName || !hasDuty) {
-      const mr = employeeMrHonorific(emp.gender, emp.maritalStatus);
-      const poss = employeePossessivePronoun(emp.gender);
-      const inject: string[] = [];
-      if (!hasSubName) inject.push(substituteName);
-      if (!hasDuty) {
-        inject.push(`${substituteName}, will do the duties of ${mr} ${empName} during ${poss} leave period`);
-      }
-      if (copyToList.length === 0) {
-        copyToList = inject;
-      } else {
-        copyToList = [copyToList[0]!, ...inject, ...copyToList.slice(1)];
-      }
+    if (!hasDuty) {
+      const extras = defaultCopyTo.slice(1, -2);
+      if (copyToList.length === 0) copyToList = [...extras];
+      else copyToList = [copyToList[0]!, ...extras, ...copyToList.slice(1)];
     }
   }
 
@@ -222,6 +251,14 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   const hasPersonal = copyToList.some((item) => /^personal file\b/i.test(item.trim()));
   if (!hasAccounts) copyToList.push("Accounts Section");
   if (!hasPersonal) copyToList.push("Personal File");
+
+  // Apply Mr./Mrs./Miss./Ms. to any copy-to line that names the applicant or substitute.
+  copyToList = applySalutationsToCopyToLines(copyToList, [
+    { name: empName, gender: emp.gender, maritalStatus: emp.maritalStatus },
+    ...(substituteName
+      ? [{ name: substituteName, gender: substituteGender, maritalStatus: substituteMaritalStatus }]
+      : []),
+  ]);
 
   const doc = new PDFDocument({ size: "A4", margin: 54 });
   const chunks: Buffer[] = [];
@@ -245,7 +282,6 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   const leftX = doc.page.margins.left;
   const rightEdge = doc.page.width - doc.page.margins.right;
   const contentWidth = rightEdge - leftX;
-  const headerBlockW = 290;
 
   /** PDFKit leaves x at the right after width-aligned text — always restore left margin. */
   const goLeft = () => {
@@ -288,13 +324,14 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     if (opts?.gap) doc.moveDown(opts.gap);
   };
 
-  // Top-right letterhead (file no + office + date)
-  const headerX = rightEdge - headerBlockW;
+  // Letterhead starts at mid-page, each line left-aligned from that x (not flush-right / centered).
+  const headerX = doc.page.width / 2;
+  const headerBlockW = Math.max(120, rightEdge - headerX);
   let headerY = doc.y;
   doc.font(fontBold).fontSize(bodySize);
   doc.text(`NO. ${fileNo}`, headerX, headerY, {
     width: headerBlockW,
-    align: "right",
+    align: "left",
     lineGap: 2,
   });
   headerY = doc.y;
@@ -303,12 +340,12 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     "OFFICE OF THE GOA AGRICULTURAL\nPRODUCE & LIVESTOCK MARKETING\nBOARD, ARLEM, RAIA, SALCETE-GOA.",
     headerX,
     headerY,
-    { width: headerBlockW, align: "right", lineGap: 2 },
+    { width: headerBlockW, align: "left", lineGap: 2 },
   );
   headerY = doc.y;
   doc.text(`Date: ${orderDateDisplay}`, headerX, headerY, {
     width: headerBlockW,
-    align: "right",
+    align: "left",
   });
   doc.y = doc.y + bodySize * 1.4;
   goLeft();

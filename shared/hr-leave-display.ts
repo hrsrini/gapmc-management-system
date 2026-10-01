@@ -89,25 +89,19 @@ export function normalizeMaritalStatus(
 }
 
 /**
- * READ-line honorific (Shri. / Smt. / Kum.) from gender + marital status.
- * Female Married → Smt.; Unmarried → Kum.; otherwise Smt.
+ * Salutation prefix from gender + marital status (mapping table):
+ * Male → Mr.; Female Married → Mrs.; Unmarried → Miss.; Widowed/Divorcee/Not Specified → Ms.
+ * Used on READ line and other honorific spots (replaces Shri./Smt.).
  */
 export function employeeHonorific(
   gender: string | null | undefined,
   maritalStatus?: string | null,
 ): string {
-  const g = normalizeEmployeeGender(gender);
-  const m = normalizeMaritalStatus(maritalStatus);
-  if (g === "male") return "Shri.";
-  if (g === "female") {
-    if (m === "unmarried") return "Kum.";
-    return "Smt.";
-  }
-  return "Shri./Smt.";
+  return employeeMrHonorific(gender, maritalStatus);
 }
 
 /**
- * Body/paragraph salutation from gender + marital status (sanction-order spreadsheet):
+ * Body/paragraph salutation from gender + marital status (same mapping as employeeHonorific):
  * Male → Mr.; Female Married → Mrs.; Unmarried → Miss.; Widowed/Divorcee/Not Specified → Ms.
  */
 export function employeeMrHonorific(
@@ -378,30 +372,121 @@ export function buildSanctionContinuationBalanceParagraph(opts: {
 }
 
 /**
- * Default sanction-order Copy to list (no employee name / Guard File / service-book line).
- * Items 2–3 (substitute name + duty clause) only when a substitute is selected.
+ * Default sanction-order Copy to list (specimen + spreadsheet rules).
+ * 1. Applicant location: Yard / Checkpost In-charge line, or "{Section}, HO"
+ * 2. Substitute duty line (if selected) — substitute salutation + applicant pronouns
+ * 3. Substitute location line only when substitute is from a different yard/section
+ * 4–5. Accounts Section, Personal File
+ * Never includes applicant name, Guard File, or service-book line.
  */
+export type LeaveYardKind = "ho" | "yard" | "checkpost" | "unknown";
+
+export function classifyLeaveYardKind(opts: {
+  type?: string | null;
+  name?: string | null;
+  code?: string | null;
+}): LeaveYardKind {
+  const t = String(opts.type ?? "").trim().toUpperCase().replace(/[\s_-]+/g, "");
+  const name = String(opts.name ?? "").toLowerCase();
+  const code = String(opts.code ?? "").toLowerCase();
+  if (t === "HO" || name.includes("head office") || code === "ho" || code.startsWith("ho-")) return "ho";
+  if (
+    t === "CHECKPOST" ||
+    t === "CP" ||
+    name.includes("checkpost") ||
+    name.includes("check post") ||
+    code.includes("cp")
+  ) {
+    return "checkpost";
+  }
+  if (t === "YARD" || name.includes("yard") || code.includes("yard")) return "yard";
+  if (t) return "yard";
+  return "unknown";
+}
+
+/** Copy-to location line for an employee posting (applicant or substitute). */
+export function buildSanctionCopyLocationLine(opts: {
+  yardKind: LeaveYardKind;
+  section?: string | null;
+  locationName?: string | null;
+  forInformation?: boolean;
+}): string {
+  const loc = opts.locationName?.trim() || "—";
+  const info = opts.forInformation ? " for information" : "";
+  if (opts.yardKind === "ho") {
+    const section = opts.section?.trim();
+    return section ? `${section}, HO${info}` : `Head Office${info}`;
+  }
+  if (opts.yardKind === "checkpost") {
+    return `Market Supervisor / Checkpost In-charge – ${loc}${info}`;
+  }
+  return `Market Supervisor / Yard In-charge – ${loc}${info}`;
+}
+
+function sameSanctionPosting(a: {
+  yardKind: LeaveYardKind;
+  section?: string | null;
+  locationName?: string | null;
+}, b: {
+  yardKind: LeaveYardKind;
+  section?: string | null;
+  locationName?: string | null;
+}): boolean {
+  if (a.yardKind !== b.yardKind) return false;
+  if (a.yardKind === "ho") {
+    return String(a.section ?? "").trim().toLowerCase() === String(b.section ?? "").trim().toLowerCase();
+  }
+  return String(a.locationName ?? "").trim().toLowerCase() === String(b.locationName ?? "").trim().toLowerCase();
+}
+
 export function buildDefaultSanctionCopyTo(opts: {
   gender?: string | null;
   maritalStatus?: string | null;
   empName: string;
   section?: string | null;
   primaryLocation?: string | null;
+  /** Preferred over yardIsHo when provided. */
+  yardKind?: LeaveYardKind | null;
+  /** @deprecated Prefer yardKind. */
   yardIsHo?: boolean;
   substituteName?: string | null;
+  substituteGender?: string | null;
+  substituteMaritalStatus?: string | null;
+  substituteSection?: string | null;
+  substitutePrimaryLocation?: string | null;
+  substituteYardKind?: LeaveYardKind | null;
 }): string[] {
-  const locationLine =
-    opts.yardIsHo && opts.section?.trim()
-      ? `${opts.section.trim()}, HO`
-      : (opts.primaryLocation?.trim() || "—");
-  const rows: string[] = [locationLine];
+  const applicantKind: LeaveYardKind =
+    opts.yardKind ?? (opts.yardIsHo ? "ho" : opts.primaryLocation ? "yard" : "unknown");
+  const applicantPosting = {
+    yardKind: applicantKind,
+    section: opts.section,
+    locationName: opts.primaryLocation,
+  };
+  const rows: string[] = [buildSanctionCopyLocationLine(applicantPosting)];
+
   const sub = opts.substituteName?.trim();
   if (sub) {
-    const mr = employeeMrHonorific(opts.gender, opts.maritalStatus);
+    const subMr = employeeMrHonorific(opts.substituteGender, opts.substituteMaritalStatus);
+    const appMr = employeeMrHonorific(opts.gender, opts.maritalStatus);
     const poss = employeePossessivePronoun(opts.gender);
-    rows.push(sub);
-    rows.push(`${sub}, will do the duties of ${mr} ${opts.empName} during ${poss} leave period`);
+    rows.push(
+      `${subMr} ${sub}, will do the duties of ${appMr} ${opts.empName} during ${poss} leave period`,
+    );
+
+    const subKind = opts.substituteYardKind ?? "unknown";
+    if (subKind !== "unknown") {
+      const subPosting = {
+        yardKind: subKind,
+        section: opts.substituteSection,
+        locationName: opts.substitutePrimaryLocation,
+      };
+      if (!sameSanctionPosting(applicantPosting, subPosting)) {
+        rows.push(buildSanctionCopyLocationLine({ ...subPosting, forInformation: true }));
+      }
+    }
   }
+
   rows.push("Accounts Section", "Personal File");
   return rows;
 }
@@ -409,4 +494,73 @@ export function buildDefaultSanctionCopyTo(opts: {
 /** Copy-to line: omit redundant "(Employee)" suffix. */
 export function formatLeaveCopyToLine(item: string): string {
   return String(item ?? "").replace(/\s*\(Employee\)\s*$/i, "").trim();
+}
+
+const HONORIFIC_PREFIX_RE = /^(Mr\.|Mrs\.|Miss\.|Ms\.|Shri\.|Smt\.|Kum\.)\s+/i;
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** True when a copy-to line refers to this person (full or first+last), ignoring an existing honorific. */
+export function copyToLineRefersToPerson(line: string, fullName: string): boolean {
+  const bare = String(line ?? "").trim().replace(HONORIFIC_PREFIX_RE, "").trim();
+  const n = String(fullName ?? "").trim();
+  if (!bare || !n) return false;
+  const b = bare.toLowerCase();
+  const name = n.toLowerCase();
+  if (b === name || b.startsWith(`${name} `) || b.startsWith(`${name},`)) return true;
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    const firstLast = `${parts[0]} ${parts[parts.length - 1]}`;
+    if (b === firstLast || b.startsWith(`${firstLast} `) || b.startsWith(`${firstLast},`)) return true;
+  }
+  return false;
+}
+
+/**
+ * Ensure any copy-to line that names a known person starts with the mapping-table salutation
+ * (Mr. / Mrs. / Miss. / Ms.). Replaces legacy Shri./Smt. prefixes as well.
+ */
+export function applySalutationsToCopyToLines(
+  lines: string[],
+  people: Array<{ name: string; gender?: string | null; maritalStatus?: string | null }>,
+): string[] {
+  const known = people
+    .map((p) => ({
+      name: String(p.name ?? "").trim(),
+      gender: p.gender,
+      maritalStatus: p.maritalStatus,
+    }))
+    .filter((p) => p.name.length > 0)
+    // Longer names first so "Sujit Jaiprakash Prabhudesai" wins over shorter matches.
+    .sort((a, b) => b.name.length - a.name.length);
+
+  return lines.map((raw) => {
+    const line = formatLeaveCopyToLine(raw);
+    if (!line) return line;
+    for (const p of known) {
+      if (!copyToLineRefersToPerson(line, p.name)) continue;
+      const honorific = employeeMrHonorific(p.gender, p.maritalStatus);
+      const bare = line.replace(HONORIFIC_PREFIX_RE, "").trim();
+      // Prefer the canonical full name when the line uses a shortened form of the same person.
+      const bareLower = bare.toLowerCase();
+      const fullLower = p.name.toLowerCase();
+      let rest = bare;
+      if (bareLower === fullLower || bareLower.startsWith(`${fullLower} `) || bareLower.startsWith(`${fullLower},`)) {
+        rest = bare;
+      } else {
+        const parts = p.name.split(/\s+/).filter(Boolean);
+        if (parts.length >= 2) {
+          const firstLast = `${parts[0]} ${parts[parts.length - 1]}`;
+          const fl = firstLast.toLowerCase();
+          if (bareLower === fl || bareLower.startsWith(`${fl} `) || bareLower.startsWith(`${fl},`)) {
+            rest = bare.replace(new RegExp(`^${escapeRegExp(firstLast)}`, "i"), p.name);
+          }
+        }
+      }
+      return `${honorific} ${rest}`.replace(/\s+/g, " ").trim();
+    }
+    return line;
+  });
 }

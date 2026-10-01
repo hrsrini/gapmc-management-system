@@ -30,13 +30,16 @@ import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/wor
 import { localCalendarYmd } from "@shared/premises-allocation";
 import {
   buildDefaultSanctionCopyTo,
+  classifyLeaveYardKind,
+  formatLeaveCopyToLine,
+  formatLeaveOrderDateDisplay,
+  leaveSupportingDocRequired,
   buildSanctionBalanceCertificateParagraph,
   buildSanctionContinuationParagraph,
   buildSanctionGrantParagraph,
   buildSanctionReadLine,
-  formatLeaveCopyToLine,
-  formatLeaveOrderDateDisplay,
-  leaveSupportingDocRequired,
+  applySalutationsToCopyToLines,
+  type LeaveYardKind,
 } from "@shared/hr-leave-display";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import { EmployeeSearchSelect, formatEmployeeSelectLabel } from "@/components/selects/employee-search-select";
@@ -179,10 +182,26 @@ function parseCopyToJson(json: string | null | undefined): string[] {
   }
 }
 
+function yardKindOf(y: YardRow | undefined): LeaveYardKind {
+  if (!y) return "unknown";
+  return classifyLeaveYardKind(y);
+}
+
 function buildDefaultCopyToRows(
   emp: Employee | null | undefined,
   primaryLocation?: string | null,
-  opts?: { yardIsHo?: boolean; substituteName?: string | null },
+  opts?: {
+    yardKind?: LeaveYardKind;
+    yardIsHo?: boolean;
+    substitute?: {
+      name: string;
+      gender?: string | null;
+      maritalStatus?: string | null;
+      section?: string | null;
+      primaryLocation?: string | null;
+      yardKind?: LeaveYardKind | null;
+    } | null;
+  },
 ): string[] {
   if (!emp) return ["Accounts Section", "Personal File"];
   return buildDefaultSanctionCopyTo({
@@ -191,8 +210,14 @@ function buildDefaultCopyToRows(
     empName: employeeDisplayName(emp),
     section: emp.section,
     primaryLocation: primaryLocation ?? emp.locationPosted,
+    yardKind: opts?.yardKind,
     yardIsHo: Boolean(opts?.yardIsHo ?? emp.section),
-    substituteName: opts?.substituteName,
+    substituteName: opts?.substitute?.name,
+    substituteGender: opts?.substitute?.gender,
+    substituteMaritalStatus: opts?.substitute?.maritalStatus,
+    substituteSection: opts?.substitute?.section,
+    substitutePrimaryLocation: opts?.substitute?.primaryLocation,
+    substituteYardKind: opts?.substitute?.yardKind,
   });
 }
 
@@ -200,11 +225,12 @@ function sanitizeCopyToRows(
   rows: string[],
   emp: Employee | null | undefined,
   primaryLocation?: string | null,
+  people?: Array<{ name: string; gender?: string | null; maritalStatus?: string | null }>,
 ): string[] {
   const yardId = emp?.yardId?.trim();
   const loc = primaryLocation?.trim() || emp?.locationPosted?.trim() || null;
   const empName = emp ? employeeDisplayName(emp).toLowerCase() : "";
-  return rows
+  const cleaned = rows
     .map((item) => {
       const t = item.trim();
       if (yardId && loc && t === yardId) return loc;
@@ -218,24 +244,82 @@ function sanitizeCopyToRows(
       if (t.includes("entered on service book")) return false;
       return true;
     });
+  const folks =
+    people && people.length > 0
+      ? people
+      : emp
+        ? [{ name: employeeDisplayName(emp), gender: emp.gender, maritalStatus: emp.maritalStatus }]
+        : [];
+  return applySalutationsToCopyToLines(cleaned, folks);
 }
 
 function resolveCopyToList(
   leave: LeaveRequest,
   employee: Employee | null | undefined,
   primaryLocation?: string | null,
-  opts?: { yardIsHo?: boolean; substituteName?: string | null },
+  opts?: {
+    yardKind?: LeaveYardKind;
+    yardIsHo?: boolean;
+    substitute?: {
+      name: string;
+      gender?: string | null;
+      maritalStatus?: string | null;
+      section?: string | null;
+      primaryLocation?: string | null;
+      yardKind?: LeaveYardKind | null;
+    } | null;
+  },
 ): { list: string[]; usingDefault: boolean } {
+  const people = [
+    ...(employee
+      ? [{ name: employeeDisplayName(employee), gender: employee.gender, maritalStatus: employee.maritalStatus }]
+      : []),
+    ...(opts?.substitute
+      ? [
+          {
+            name: opts.substitute.name,
+            gender: opts.substitute.gender,
+            maritalStatus: opts.substitute.maritalStatus,
+          },
+        ]
+      : []),
+  ];
   const custom = parseCopyToJson(leave.copyToJson).map(formatLeaveCopyToLine).filter(Boolean);
   if (custom.length > 0) {
     return {
-      list: sanitizeCopyToRows(custom, employee, primaryLocation),
+      list: sanitizeCopyToRows(custom, employee, primaryLocation, people),
       usingDefault: false,
     };
   }
   return {
-    list: buildDefaultCopyToRows(employee, primaryLocation, opts),
+    list: applySalutationsToCopyToLines(
+      buildDefaultCopyToRows(employee, primaryLocation, opts),
+      people,
+    ),
     usingDefault: true,
+  };
+}
+
+function substituteCopyOpts(
+  subEmp: Employee | null | undefined,
+  yardById: Record<string, YardRow>,
+): {
+  name: string;
+  gender?: string | null;
+  maritalStatus?: string | null;
+  section?: string | null;
+  primaryLocation?: string | null;
+  yardKind?: LeaveYardKind | null;
+} | null {
+  if (!subEmp) return null;
+  const y = subEmp.yardId ? yardById[subEmp.yardId] : undefined;
+  return {
+    name: employeeDisplayName(subEmp),
+    gender: subEmp.gender,
+    maritalStatus: subEmp.maritalStatus,
+    section: subEmp.section,
+    primaryLocation: y?.name ?? y?.code ?? subEmp.locationPosted ?? null,
+    yardKind: yardKindOf(y),
   };
 }
 
@@ -591,24 +675,34 @@ export default function LeaveRequests() {
   );
   const approvePreviewCopyTo = useMemo(() => {
     const trimmed = approveCopyToRows.map((x) => x.trim()).filter(Boolean);
-    const loc = approveEmployee?.yardId
-      ? (yardById[approveEmployee.yardId]?.name ?? yardById[approveEmployee.yardId]?.code ?? null)
+    const yard = approveEmployee?.yardId ? yardById[approveEmployee.yardId] : undefined;
+    const loc = yard?.name ?? yard?.code ?? null;
+    const yardKind = yardKindOf(yard);
+    const yardIsHo = isHeadOfficeYard(yard);
+    const subEmp = approveSubstituteId
+      ? employees.find((e) => e.id === approveSubstituteId) ?? null
       : null;
-    const yardIsHo = approveEmployee?.yardId
-      ? isHeadOfficeYard(yardById[approveEmployee.yardId])
-      : false;
-    const sub =
-      approveSubstituteId
-        ? substitutes.find((s) => s.id === approveSubstituteId) ??
-          employees.find((e) => e.id === approveSubstituteId) ??
-          null
-        : null;
-    const substituteName = sub
-      ? `${sub.firstName} ${"surname" in sub ? sub.surname : ""}`.replace(/\s+/g, " ").trim()
-      : null;
-    if (trimmed.length > 0) return sanitizeCopyToRows(trimmed, approveEmployee, loc);
-    return buildDefaultCopyToRows(approveEmployee, loc, { yardIsHo, substituteName });
-  }, [approveCopyToRows, approveEmployee, approveSubstituteId, yardById, substitutes, employees]);
+    const substitute = substituteCopyOpts(subEmp, yardById);
+    const people = [
+      ...(approveEmployee
+        ? [
+            {
+              name: employeeDisplayName(approveEmployee),
+              gender: approveEmployee.gender,
+              maritalStatus: approveEmployee.maritalStatus,
+            },
+          ]
+        : []),
+      ...(substitute
+        ? [{ name: substitute.name, gender: substitute.gender, maritalStatus: substitute.maritalStatus }]
+        : []),
+    ];
+    if (trimmed.length > 0) return sanitizeCopyToRows(trimmed, approveEmployee, loc, people);
+    return applySalutationsToCopyToLines(
+      buildDefaultCopyToRows(approveEmployee, loc, { yardKind, yardIsHo, substitute }),
+      people,
+    );
+  }, [approveCopyToRows, approveEmployee, approveSubstituteId, yardById, employees]);
   const approvePreviewBalanceAfter = useMemo(() => {
     if (!approveLeave) return null;
     const revisedFrom = approveLeave.revisedFromLeaveId
@@ -626,21 +720,17 @@ export default function LeaveRequests() {
   );
   const previewOrderCopyTo = useMemo(() => {
     if (!previewOrderLeave) return { list: [] as string[], usingDefault: false };
-    const loc = previewOrderEmployee?.yardId
-      ? (yardById[previewOrderEmployee.yardId]?.name ??
-        yardById[previewOrderEmployee.yardId]?.code ??
-        null)
-      : null;
-    const yardIsHo = previewOrderEmployee?.yardId
-      ? isHeadOfficeYard(yardById[previewOrderEmployee.yardId])
-      : false;
+    const yard = previewOrderEmployee?.yardId ? yardById[previewOrderEmployee.yardId] : undefined;
+    const loc = yard?.name ?? yard?.code ?? null;
+    const yardKind = yardKindOf(yard);
+    const yardIsHo = isHeadOfficeYard(yard);
     const subEmp = previewOrderLeave.substituteEmployeeId
       ? employees.find((e) => e.id === previewOrderLeave.substituteEmployeeId) ?? null
       : null;
-    const substituteName = subEmp ? employeeDisplayName(subEmp) : null;
     return resolveCopyToList(previewOrderLeave, previewOrderEmployee, loc, {
+      yardKind,
       yardIsHo,
-      substituteName,
+      substitute: substituteCopyOpts(subEmp, yardById),
     });
   }, [previewOrderLeave, previewOrderEmployee, yardById, employees]);
   const previewOrderBalanceAfter = useMemo(
@@ -1028,19 +1118,43 @@ export default function LeaveRequests() {
                   setApprovePrefixSuffixNil(Boolean(r.prefixSuffixDisallowed));
                   const emp = employees.find((e) => e.id === r.employeeId);
                   const existing = parseCopyToJson(r.copyToJson);
-                  const loc = emp?.yardId
-                    ? (yardById[emp.yardId]?.name ?? yardById[emp.yardId]?.code ?? null)
-                    : null;
-                  const yardIsHo = emp?.yardId ? isHeadOfficeYard(yardById[emp.yardId]) : false;
+                  const yard = emp?.yardId ? yardById[emp.yardId] : undefined;
+                  const loc = yard?.name ?? yard?.code ?? null;
+                  const yardKind = yardKindOf(yard);
+                  const yardIsHo = isHeadOfficeYard(yard);
                   const subId = r.substituteEmployeeId ?? "";
                   const subEmp = subId ? employees.find((e) => e.id === subId) ?? null : null;
+                  const people = [
+                    ...(emp
+                      ? [
+                          {
+                            name: employeeDisplayName(emp),
+                            gender: emp.gender,
+                            maritalStatus: emp.maritalStatus,
+                          },
+                        ]
+                      : []),
+                    ...(subEmp
+                      ? [
+                          {
+                            name: employeeDisplayName(subEmp),
+                            gender: subEmp.gender,
+                            maritalStatus: subEmp.maritalStatus,
+                          },
+                        ]
+                      : []),
+                  ];
                   const rows =
                     existing.length > 0
-                      ? sanitizeCopyToRows(existing, emp, loc)
-                      : buildDefaultCopyToRows(emp, loc, {
-                          yardIsHo,
-                          substituteName: subEmp ? employeeDisplayName(subEmp) : null,
-                        });
+                      ? sanitizeCopyToRows(existing, emp, loc, people)
+                      : applySalutationsToCopyToLines(
+                          buildDefaultCopyToRows(emp, loc, {
+                            yardKind,
+                            yardIsHo,
+                            substitute: substituteCopyOpts(subEmp, yardById),
+                          }),
+                          people,
+                        );
                   setApproveCopyToRows(rows);
                   setApproveSubstituteId(subId);
                 }}
@@ -2038,21 +2152,17 @@ export default function LeaveRequests() {
                 const subId = v === "__none__" ? "" : v;
                 setApproveSubstituteId(subId);
                 const emp = approveEmployee;
-                const loc = emp?.yardId
-                  ? (yardById[emp.yardId]?.name ?? yardById[emp.yardId]?.code ?? null)
-                  : null;
-                const yardIsHo = emp?.yardId ? isHeadOfficeYard(yardById[emp.yardId]) : false;
-                const sub =
-                  subId
-                    ? substitutes.find((s) => s.id === subId) ??
-                      employees.find((e) => e.id === subId) ??
-                      null
-                    : null;
-                const substituteName = sub
-                  ? `${sub.firstName} ${"surname" in sub ? sub.surname : ""}`.replace(/\s+/g, " ").trim()
-                  : null;
+                const yard = emp?.yardId ? yardById[emp.yardId] : undefined;
+                const loc = yard?.name ?? yard?.code ?? null;
+                const yardKind = yardKindOf(yard);
+                const yardIsHo = isHeadOfficeYard(yard);
+                const subEmp = subId ? employees.find((e) => e.id === subId) ?? null : null;
                 setApproveCopyToRows(
-                  buildDefaultCopyToRows(emp, loc, { yardIsHo, substituteName }),
+                  buildDefaultCopyToRows(emp, loc, {
+                    yardKind,
+                    yardIsHo,
+                    substitute: substituteCopyOpts(subEmp, yardById),
+                  }),
                 );
               }}
             >

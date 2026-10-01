@@ -3507,7 +3507,17 @@ export function registerHrRoutes(app: Express) {
       if (!fromDate || !toDate) return sendApiError(res, 400, "DATES_REQUIRED", "fromDate and toDate query params required");
 
       const allActive = await db
-        .select({ id: employees.id, empId: employees.empId, firstName: employees.firstName, surname: employees.surname, yardId: employees.yardId, locationPosted: employees.locationPosted, section: employees.section })
+        .select({
+          id: employees.id,
+          empId: employees.empId,
+          firstName: employees.firstName,
+          surname: employees.surname,
+          yardId: employees.yardId,
+          locationPosted: employees.locationPosted,
+          section: employees.section,
+          gender: employees.gender,
+          maritalStatus: employees.maritalStatus,
+        })
         .from(employees)
         .where(eq(employees.status, "Active"));
 
