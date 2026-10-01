@@ -39,6 +39,7 @@ import {
   buildSanctionGrantParagraph,
   buildSanctionReadLine,
   applySalutationsToCopyToLines,
+  employeeMrHonorific,
   type LeaveYardKind,
 } from "@shared/hr-leave-display";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
@@ -488,6 +489,12 @@ function SanctionOrderPreviewPanel({
           </p>
         </>
       )}
+      <div>
+        <div className="font-medium text-foreground">To,</div>
+        <p className="mt-1 text-muted-foreground">
+          {`${employeeMrHonorific(employee?.gender, employee?.maritalStatus)} ${empName}`.replace(/\s+/g, " ").trim()}
+        </p>
+      </div>
       <div>
         <div className="font-medium text-foreground">Copy to:</div>
         <ol className="mt-1 list-decimal list-inside text-muted-foreground">

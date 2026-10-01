@@ -11,6 +11,7 @@ import {
   buildSanctionReadLine,
   classifyLeaveYardKind,
   applySalutationsToCopyToLines,
+  employeeMrHonorific,
   leaveDaysInWords,
   type LeaveYardKind,
 } from "@shared/hr-leave-display";
@@ -260,7 +261,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
       : []),
   ]);
 
-  const doc = new PDFDocument({ size: "A4", margin: 54 });
+  const doc = new PDFDocument({ size: "A4", margin: 42 });
   const chunks: Buffer[] = [];
   doc.on("data", (chunk: Buffer) => chunks.push(chunk));
 
@@ -278,7 +279,9 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     }
   }
 
-  const bodySize = 14;
+  // Compact layout so typical EL orders (To + Copy to) fit on one A4 page.
+  const bodySize = 12;
+  const lineGap = 1;
   const leftX = doc.page.margins.left;
   const rightEdge = doc.page.width - doc.page.margins.right;
   const contentWidth = rightEdge - leftX;
@@ -294,7 +297,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     doc.text(text, leftX, doc.y, {
       width: contentWidth,
       align: "left",
-      lineGap: 2,
+      lineGap,
     });
     goLeft();
     if (opts?.gap) doc.moveDown(opts.gap);
@@ -306,7 +309,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     doc.text(text, leftX, doc.y, {
       width: contentWidth,
       align: "center",
-      lineGap: 2,
+      lineGap,
     });
     goLeft();
     if (opts?.gap) doc.moveDown(opts.gap);
@@ -318,7 +321,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     doc.text(text, leftX, doc.y, {
       width: contentWidth,
       align: "right",
-      lineGap: 2,
+      lineGap,
     });
     goLeft();
     if (opts?.gap) doc.moveDown(opts.gap);
@@ -332,7 +335,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   doc.text(`NO. ${fileNo}`, headerX, headerY, {
     width: headerBlockW,
     align: "left",
-    lineGap: 2,
+    lineGap,
   });
   headerY = doc.y;
   doc.font(fontRegular).fontSize(bodySize);
@@ -340,17 +343,17 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     "OFFICE OF THE GOA AGRICULTURAL\nPRODUCE & LIVESTOCK MARKETING\nBOARD, ARLEM, RAIA, SALCETE-GOA.",
     headerX,
     headerY,
-    { width: headerBlockW, align: "left", lineGap: 2 },
+    { width: headerBlockW, align: "left", lineGap },
   );
   headerY = doc.y;
   doc.text(`Date: ${orderDateDisplay}`, headerX, headerY, {
     width: headerBlockW,
     align: "left",
   });
-  doc.y = doc.y + bodySize * 1.4;
+  doc.y = doc.y + bodySize * 0.55;
   goLeft();
 
-  writeCenter("ORDER", { bold: true, gap: 0.7 });
+  writeCenter("ORDER", { bold: true, gap: 0.35 });
 
   writeLeft(
     buildSanctionReadLine({
@@ -363,7 +366,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
       yardIsHo,
       applicationDated: applicationDated || "________",
     }),
-    { gap: 0.8 },
+    { gap: 0.4 },
   );
 
   const fromDisp = formatLeaveOrderDate(lr.fromDate);
@@ -379,13 +382,13 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
           : lr.halfDay === "second_half"
             ? " (second half)"
             : "";
-      writeLeft(`${daysWord} ${dayWord} Casual leave${half} on ${fromDisp} approved.`, { gap: 1.2 });
+      writeLeft(`${daysWord} ${dayWord} Casual leave${half} on ${fromDisp} approved.`, { gap: 0.55 });
     } else if (lr.leaveType === "RH") {
       const occasion = (lr.reason ?? "").trim() || "________";
-      writeLeft(`${daysWord} ${dayWord} R.H. on ${fromDisp} approved i.e. of ${occasion}.`, { gap: 1.2 });
+      writeLeft(`${daysWord} ${dayWord} R.H. on ${fromDisp} approved i.e. of ${occasion}.`, { gap: 0.55 });
     } else {
       const duty = lr.dutyDateForSplH ? formatLeaveOrderDate(lr.dutyDateForSplH) : "________";
-      writeLeft(`${daysWord} ${dayWord} Special Holiday on ${fromDisp} approved i.e. of ${duty}.`, { gap: 1.2 });
+      writeLeft(`${daysWord} ${dayWord} Special Holiday on ${fromDisp} approved i.e. of ${duty}.`, { gap: 0.55 });
     }
   } else {
     writeLeft(
@@ -407,7 +410,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
         suffixToDate: lr.suffixToDate,
         prefixSuffixDisallowed: lr.prefixSuffixDisallowed,
       }),
-      { gap: 0.7 },
+      { gap: 0.35 },
     );
     writeLeft(
       buildSanctionContinuationParagraph({
@@ -416,7 +419,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
         empName,
         designation: emp.designation,
       }),
-      { gap: 0.7 },
+      { gap: 0.35 },
     );
     writeLeft(
       buildSanctionBalanceCertificateParagraph({
@@ -424,32 +427,43 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
         balanceAfter,
         toDate: lr.toDate,
       }),
-      { gap: 1.2 },
+      { gap: 0.55 },
     );
   }
 
   const signatureBuffer = await readUploadedLeaveOrderSignatureBuffer();
-  const sigW = 110;
-  const sigH = 44;
+  const sigW = 90;
+  const sigH = 34;
   if (signatureBuffer) {
     try {
       doc.image(signatureBuffer, rightEdge - sigW, doc.y, { fit: [sigW, sigH] });
-      doc.y = doc.y + sigH + 8;
+      doc.y = doc.y + sigH + 4;
       goLeft();
     } catch (e) {
       console.warn("[sanction-order] secretary signature image could not be embedded; continuing without it", e);
-      doc.moveDown(0.5);
+      doc.moveDown(0.3);
       goLeft();
     }
   }
   writeRight(`(${signatoryName})`);
   writeRight(signatoryDesig, { bold: true });
-  writeRight("Goa Agricultural Produce & Livestock Marketing Board", { gap: 1.2 });
+  writeRight("Goa Agricultural Produce & Livestock Marketing Board", { gap: 0.45 });
+
+  const toName = `${employeeMrHonorific(emp.gender, emp.maritalStatus)} ${empName}`.replace(/\s+/g, " ").trim();
+  writeLeft("To,", { bold: true });
+  writeLeft(toName, { gap: 0.3 });
 
   writeLeft("Copy to:", { bold: true });
   copyToList.forEach((item, i) => {
     writeLeft(`${i + 1}. ${item}`);
   });
+
+  // If content still overflowed, warn — callers can still download; layout is tuned for one page.
+  if (doc.bufferedPageRange().count > 1) {
+    console.warn(
+      `[sanction-order] leave ${leaveRequestId} spanned ${doc.bufferedPageRange().count} pages after compact layout`,
+    );
+  }
 
   doc.end();
 
