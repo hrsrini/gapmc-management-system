@@ -33,6 +33,10 @@ import {
 import { PanInput } from "@/components/inputs/PanInput";
 import { getPasswordPolicyBrUsr10FirstViolation, passwordPolicyBrUsr10Hint } from "@shared/password-policy-br-usr-10";
 import {
+  parseAdditionalChargeYardIds,
+  serializeAdditionalChargeYardIds,
+} from "@shared/hr-additional-charge-locations";
+import {
   canApproveEmployeeRegistration,
   canonicalizeEmployeeStatus,
   employeeStatusDisplayLabel,
@@ -165,7 +169,7 @@ export default function HrEmployeeForm() {
   const [reportingOfficerEmployeeId, setReportingOfficerEmployeeId] = useState("");
   const [serviceBookNo, setServiceBookNo] = useState("");
   const [section, setSection] = useState("");
-  const [locationPosted, setLocationPosted] = useState("");
+  const [additionalChargeYardIds, setAdditionalChargeYardIds] = useState<string[]>([]);
   const [payLevel, setPayLevel] = useState<string>("");
   const [basicPayInr, setBasicPayInr] = useState("");
   const [bankAccountNumber, setBankAccountNumber] = useState("");
@@ -234,7 +238,9 @@ export default function HrEmployeeForm() {
       setReportingOfficerEmployeeId(employee.reportingOfficerEmployeeId ?? "");
       setServiceBookNo(employee.serviceBookNo ?? "");
       setSection(employee.section ?? "");
-      setLocationPosted(employee.locationPosted ?? "");
+      setAdditionalChargeYardIds(
+        parseAdditionalChargeYardIds(employee.locationPosted ?? "", employee.yardId ?? ""),
+      );
       setPayLevel(employee.payLevel != null && !Number.isNaN(Number(employee.payLevel)) ? String(employee.payLevel) : "");
       setBasicPayInr(
         employee.basicPayInr != null && Number.isFinite(Number(employee.basicPayInr))
@@ -515,7 +521,8 @@ export default function HrEmployeeForm() {
       reportingOfficerEmployeeId: reportingOfficerEmployeeId.trim() || null,
       serviceBookNo: serviceBookNo.trim() || null,
       section: sectionToSave,
-      locationPosted: locationPosted.trim() || null,
+      additionalChargeYardIds: additionalChargeYardIds.filter((id) => id && id !== yardId),
+      locationPosted: serializeAdditionalChargeYardIds(additionalChargeYardIds, yardId),
       payLevel: payLevel ? parseInt(payLevel, 10) : null,
       basicPayInr: (() => {
         const t = basicPayInr.trim().replace(/,/g, "");
@@ -843,6 +850,7 @@ export default function HrEmployeeForm() {
                       value={yardId}
                       onValueChange={(v) => {
                         setYardId(v);
+                        setAdditionalChargeYardIds((prev) => prev.filter((id) => id !== v));
                         const y = (yards ?? []).find((row) => row.id === v);
                         if (!isHeadOfficeYard(y)) setSection("");
                       }}
@@ -886,16 +894,43 @@ export default function HrEmployeeForm() {
                     </Select>
                   </div>
                   <div className="md:col-span-2">
-                    <Label>Location posted</Label>
-                    <Input
-                      value={locationPosted}
-                      onChange={(e) => setLocationPosted(e.target.value)}
-                      placeholder="Additional posting / location charges if any"
-                      maxLength={200}
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Optional. Enter any additional location or charges beyond Primary Location Posted.
+                    <Label>Additional Charge Locations</Label>
+                    <p className="text-xs text-muted-foreground mt-1 mb-2">
+                      Optional. Select one or more locations in addition to Primary Location Posted. The primary
+                      location is excluded from this list.
                     </p>
+                    <div className="max-h-48 overflow-y-auto rounded-md border p-3 space-y-2">
+                      {(yards ?? [])
+                        .filter((y) => y.id !== yardId)
+                        .slice()
+                        .sort((a, b) =>
+                          String(a.name ?? a.code ?? a.id).localeCompare(String(b.name ?? b.code ?? b.id), undefined, {
+                            sensitivity: "base",
+                          }),
+                        )
+                        .map((y) => {
+                          const checked = additionalChargeYardIds.includes(y.id);
+                          const label = y.name ?? y.code ?? y.id;
+                          return (
+                            <label key={y.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(v) => {
+                                  const on = v === true;
+                                  setAdditionalChargeYardIds((prev) => {
+                                    if (on) return prev.includes(y.id) ? prev : [...prev, y.id];
+                                    return prev.filter((id) => id !== y.id);
+                                  });
+                                }}
+                              />
+                              <span>{label}</span>
+                            </label>
+                          );
+                        })}
+                      {(yards ?? []).filter((y) => y.id !== yardId).length === 0 ? (
+                        <p className="text-xs text-muted-foreground">Select a primary location first.</p>
+                      ) : null}
+                    </div>
                   </div>
                   <div>
                     <Label>Pay level</Label>

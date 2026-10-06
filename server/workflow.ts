@@ -407,7 +407,9 @@ export function canTransitionLeaveRequest(
   return { allowed: false };
 }
 
-/** DV queue: Pending; DA queue: Verified (approve/reject). ADMIN sees both. BR-WF-01: not own DO/DV row. */
+/** DV queue: Pending; DA queue: Verified (approve/reject). ADMIN sees both.
+ * BR-WF-01: not own DO/DV row. Reporting-officer data scope is applied by the leave list/update routes.
+ */
 export function leaveRequestAwaitingMyAction(
   user: AuthUser | undefined,
   row: { status: string; doUser?: string | null; dvUser?: string | null },

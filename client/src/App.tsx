@@ -55,6 +55,7 @@ import HrClaims from "@/pages/hr/HrClaims";
 import HrLeaveBalances from "@/pages/hr/HrLeaveBalances";
 import HrLeaveBalanceImport from "@/pages/hr/HrLeaveBalanceImport";
 import HrHolidayCalendar from "@/pages/hr/HrHolidayCalendar";
+import HrEmployeePostingReport from "@/pages/hr/HrEmployeePostingReport";
 import Entities from "@/pages/traders/Entities";
 import EntityDetail from "@/pages/traders/EntityDetail";
 import PreReceipts from "@/pages/traders/PreReceipts";
@@ -528,6 +529,11 @@ function Router() {
             <HrHolidayCalendar />
           </RequirePermission>
         </ProtectedRoute>
+      </Route>
+      <Route path="/hr/employee-posting-report">
+        <AdminRoute>
+          <HrEmployeePostingReport />
+        </AdminRoute>
       </Route>
       <Route path="/hr/claims">
         <ProtectedRoute><HrClaims /></ProtectedRoute>

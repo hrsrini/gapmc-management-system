@@ -25,6 +25,7 @@ import {
   ltcClaims,
   taDaClaims,
   employeeDocuments,
+  yards,
 } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import {
@@ -104,6 +105,7 @@ import {
 import {
   validateLeaveDurationCaps,
   validateCclLifetimeCap,
+  validateLeaveDatesNotPublicHoliday,
   assertSufficientBalanceForApproval,
 } from "./hr-leave-validation";
 import { emailSanctionOrderPdf } from "./hr-leave-sanction-email";
@@ -114,6 +116,61 @@ import {
   countEmployeesUsingDesignation,
   assertDesignationMasterCode,
 } from "./hr-designation-resolve";
+import {
+  loadLeaveReportingEmployeeIndex,
+  resolveLeaveVerifierEmployeeId,
+  resolveLeaveApproverEmployeeId,
+  leaveEmployeeInOfficerScope,
+} from "./hr-leave-reporting-scope";
+import {
+  parseAdditionalChargeYardIds,
+  serializeAdditionalChargeYardIds,
+} from "@shared/hr-additional-charge-locations";
+
+/** Weekly-off / prefix-suffix location type from Primary Location (yard), not additional charges. */
+async function primaryLocationTypeForEmployee(employeeId: string): Promise<string | undefined> {
+  const [emp] = await db
+    .select({ yardId: employees.yardId })
+    .from(employees)
+    .where(eq(employees.id, employeeId))
+    .limit(1);
+  if (!emp?.yardId) return undefined;
+  const [yard] = await db
+    .select({ type: yards.type, name: yards.name, code: yards.code })
+    .from(yards)
+    .where(eq(yards.id, emp.yardId))
+    .limit(1);
+  if (!yard) return undefined;
+  return yard.type ?? yard.name ?? yard.code ?? undefined;
+}
+
+/** Normalize Additional Charge Locations from body (array or locationPosted JSON) excluding primary yard. */
+function resolveAdditionalChargeLocationPosted(
+  body: Record<string, unknown>,
+  primaryYardId: string,
+): string | null {
+  const primary = String(primaryYardId ?? "").trim();
+  if (Array.isArray(body.additionalChargeYardIds)) {
+    return serializeAdditionalChargeYardIds(
+      body.additionalChargeYardIds.map((x) => String(x ?? "").trim()).filter(Boolean),
+      primary,
+    );
+  }
+  if (body.locationPosted == null || String(body.locationPosted).trim() === "") return null;
+  return serializeAdditionalChargeYardIds(
+    parseAdditionalChargeYardIds(String(body.locationPosted), primary),
+    primary,
+  );
+}
+
+/** Update path: only when client sent additionalChargeYardIds or locationPosted. */
+function maybeResolveAdditionalChargeLocationPosted(
+  body: Record<string, unknown>,
+  primaryYardId: string,
+): string | null | undefined {
+  if (body.additionalChargeYardIds === undefined && body.locationPosted === undefined) return undefined;
+  return resolveAdditionalChargeLocationPosted(body, primaryYardId);
+}
 
 const employeeDocUpload = multer({
   storage: multer.memoryStorage(),
@@ -752,8 +809,9 @@ export function registerHrRoutes(app: Express) {
       }
       let srs411: ReturnType<typeof parseEmployeeMasterSrs411Fields>;
       try {
+        const yardIdForCharges = String(body.yardId ?? "");
         srs411 = parseEmployeeMasterSrs411Fields({
-          locationPosted: body.locationPosted as string | null | undefined,
+          locationPosted: resolveAdditionalChargeLocationPosted(body as Record<string, unknown>, yardIdForCharges),
           payLevel: body.payLevel as string | number | null | undefined,
           bankAccountNumber: body.bankAccountNumber as string | null | undefined,
           ifscCode: body.ifscCode as string | null | undefined,
@@ -1104,6 +1162,7 @@ export function registerHrRoutes(app: Express) {
       }
       for (const key of allowed) {
         if (body[key] === undefined) continue;
+        if (key === "locationPosted") continue; // handled via additionalChargeYardIds / normalize below
         if (key === "payLevel") {
           if (body.payLevel === null || (typeof body.payLevel === "string" && String(body.payLevel).trim() === "")) {
             updates.payLevel = null;
@@ -1144,6 +1203,26 @@ export function registerHrRoutes(app: Express) {
         }
         updates[key] = body[key] === null ? null : String(body[key]);
       }
+
+      {
+        const effectiveYardId = String(
+          updates.yardId !== undefined ? updates.yardId : beforeEmp.yardId ?? "",
+        ).trim();
+        const chargeUpdate = maybeResolveAdditionalChargeLocationPosted(
+          body as Record<string, unknown>,
+          effectiveYardId,
+        );
+        if (chargeUpdate !== undefined) {
+          updates.locationPosted = chargeUpdate;
+        } else if (updates.yardId !== undefined) {
+          // Primary location changed: drop it from any existing additional-charge list.
+          updates.locationPosted = serializeAdditionalChargeYardIds(
+            parseAdditionalChargeYardIds(beforeEmp.locationPosted, effectiveYardId),
+            effectiveYardId,
+          );
+        }
+      }
+
       const rawAadhaarForSave = readAadhaarRawFromRequestBody(body as Record<string, unknown>);
       if (rawAadhaarForSave) {
         delete updates.aadhaarToken;
@@ -1510,6 +1589,123 @@ export function registerHrRoutes(app: Express) {
     }
   });
 
+  /** Admin-only: Employee Leave Balance Report (Excel) — all Active employees. */
+  app.get("/api/hr/leave-balances/export.xlsx", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      const isAdmin = Boolean(req.user.roles?.some((r) => String(r.tier) === "ADMIN"));
+      if (!isAdmin) {
+        return sendApiError(res, 403, "AUTH_ADMIN_REQUIRED", "Export to Excel is available only to Admin users.");
+      }
+      await healLeaveBalanceEmployeeIds();
+      const asOn = req.query.asOn != null ? String(req.query.asOn).trim().slice(0, 10) : "";
+      const { buildLeaveBalanceExportAoa } = await import("./hr-leave-balance-export");
+      const { aoa, asOnDisplay } = await buildLeaveBalanceExportAoa(asOn || undefined);
+      const XLSX = await import("xlsx");
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      // Widen Emp ID - Name column a bit for readability.
+      ws["!cols"] = [
+        { wch: 8 },
+        { wch: 36 },
+        { wch: 8 },
+        { wch: 8 },
+        { wch: 8 },
+        { wch: 8 },
+        { wch: 8 },
+        { wch: 8 },
+        { wch: 8 },
+        { wch: 8 },
+        { wch: 8 },
+        { wch: 12 },
+        { wch: 18 },
+      ];
+      XLSX.utils.book_append_sheet(wb, ws, "Leave Balances");
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+      const stamp = asOnDisplay.replace(/\//g, "-");
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="Employee_Leave_Balance_Report_${stamp}.xlsx"`,
+      );
+      writeAuditLog(req, {
+        module: "HR",
+        action: "Export",
+        recordId: "leave_balances_excel",
+        afterValue: { asOn: asOnDisplay },
+      }).catch((e) => console.warn("[audit] leave balance export", e));
+      res.send(Buffer.from(buf));
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to export leave balance Excel report");
+    }
+  });
+
+  /** Admin-only: Employee Posting Report (Primary Location + Additional Charges) — JSON / Excel / PDF. */
+  app.get("/api/hr/reports/employee-posting", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      const isAdmin = Boolean(req.user.roles?.some((r) => String(r.tier) === "ADMIN"));
+      if (!isAdmin) {
+        return sendApiError(res, 403, "AUTH_ADMIN_REQUIRED", "Employee Posting Report is available only to Admin users.");
+      }
+      const format = String(req.query.format ?? "json").trim().toLowerCase();
+      const {
+        buildEmployeePostingReportData,
+        postingReportToAoa,
+        generateEmployeePostingReportPdf,
+      } = await import("./hr-employee-posting-report");
+      const data = await buildEmployeePostingReportData();
+
+      if (format === "xlsx" || format === "excel") {
+        const XLSX = await import("xlsx");
+        const aoa = postingReportToAoa(data);
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws["!cols"] = [{ wch: 10 }, { wch: 48 }, { wch: 36 }];
+        XLSX.utils.book_append_sheet(wb, ws, "Employee Posting");
+        const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+        const stamp = data.updatedOnDisplay.replace(/\./g, "-");
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="Employee_Posting_Report_${stamp}.xlsx"`,
+        );
+        writeAuditLog(req, {
+          module: "HR",
+          action: "Export",
+          recordId: "employee_posting_excel",
+          afterValue: { updatedOn: data.updatedOnDisplay },
+        }).catch((e) => console.warn("[audit] employee posting export", e));
+        res.send(Buffer.from(buf));
+        return;
+      }
+
+      if (format === "pdf") {
+        const buf = await generateEmployeePostingReportPdf(data);
+        const stamp = data.updatedOnDisplay.replace(/\./g, "-");
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="Employee_Posting_Report_${stamp}.pdf"`,
+        );
+        writeAuditLog(req, {
+          module: "HR",
+          action: "Export",
+          recordId: "employee_posting_pdf",
+          afterValue: { updatedOn: data.updatedOnDisplay },
+        }).catch((e) => console.warn("[audit] employee posting pdf", e));
+        res.send(buf);
+        return;
+      }
+
+      res.json(data);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate employee posting report");
+    }
+  });
+
   /** US-M01-005: leave encashment calculator (retirement). */
   app.get("/api/hr/employees/:employeeId/leave-encashment", async (req, res) => {
     try {
@@ -1771,23 +1967,55 @@ export function registerHrRoutes(app: Express) {
         req.query.pendingMyAction === "1" || String(req.query.pendingMyAction ?? "").toLowerCase() === "true";
       const mineOnly = req.query.mine === "1" || String(req.query.mine ?? "").toLowerCase() === "true";
       const isAdmin = Boolean(req.user?.roles?.some((r) => String(r.tier) === "ADMIN"));
+      const isDv = Boolean(req.user?.roles?.some((r) => String(r.tier) === "DV"));
+      const isDa = Boolean(req.user?.roles?.some((r) => String(r.tier) === "DA"));
+      const selfEmployeeId = req.user?.employeeId ? String(req.user.employeeId).trim() : "";
+
       let list = employeeId
         ? await db.select().from(leaveRequests).where(eq(leaveRequests.employeeId, employeeId)).orderBy(desc(leaveRequests.fromDate))
         : await db.select().from(leaveRequests).orderBy(desc(leaveRequests.fromDate));
 
-      // Visibility: default own leaves; pending queue for DV/DA; ADMIN may see all when mine is off.
+      // Role = functional permission; Reporting Officer mapping = whose leave is visible.
+      // Admin may see all when mine is off. DV/DA see reportees / hierarchy scope. Others see own leaves.
       if (pendingMyAction) {
         list = list.filter((row) => leaveRequestAwaitingMyAction(req.user, row));
-      } else if (mineOnly || !isAdmin) {
-        const selfId = req.user?.employeeId;
-        if (!selfId) {
-          list = [];
-        } else {
-          list = list.filter((row) => row.employeeId === selfId);
+        if (!isAdmin) {
+          if (!selfEmployeeId) {
+            list = [];
+          } else {
+            const index = await loadLeaveReportingEmployeeIndex();
+            list = list.filter((row) => {
+              const st = String(row.status);
+              if (st === "Pending" && isDv) {
+                return resolveLeaveVerifierEmployeeId(row.employeeId, index) === selfEmployeeId;
+              }
+              if (st === "Verified" && isDa) {
+                return resolveLeaveApproverEmployeeId(row.employeeId, index) === selfEmployeeId;
+              }
+              return false;
+            });
+          }
         }
-      } else if (employeeId && employeeId !== req.user?.employeeId && !isAdmin) {
-        list = [];
+      } else if (mineOnly) {
+        if (!selfEmployeeId) list = [];
+        else list = list.filter((row) => row.employeeId === selfEmployeeId);
+      } else if (isAdmin) {
+        // full list
+      } else if ((isDv || isDa) && selfEmployeeId) {
+        const index = await loadLeaveReportingEmployeeIndex();
+        list = list.filter((row) => leaveEmployeeInOfficerScope(row.employeeId, selfEmployeeId, index));
+      } else {
+        if (!selfEmployeeId) list = [];
+        else list = list.filter((row) => row.employeeId === selfEmployeeId);
       }
+
+      if (employeeId && employeeId !== selfEmployeeId && !isAdmin) {
+        const index = await loadLeaveReportingEmployeeIndex();
+        const allowed =
+          Boolean(selfEmployeeId) && leaveEmployeeInOfficerScope(employeeId, selfEmployeeId, index);
+        if (!allowed) list = [];
+      }
+
       res.json(list);
     } catch (e) {
       console.error(e);
@@ -1967,6 +2195,11 @@ export function registerHrRoutes(app: Express) {
       if (!fromDate || !toDate) return sendApiError(res, 400, "LEAVE_DATES_REQUIRED", "fromDate and toDate are required");
       if (fromDate > toDate) return sendApiError(res, 400, "LEAVE_DATES_INVALID", "fromDate must be <= toDate");
 
+      const publicHolidayErr = await validateLeaveDatesNotPublicHoliday(fromDate, toDate);
+      if (publicHolidayErr) {
+        return sendApiError(res, 400, "LEAVE_PUBLIC_HOLIDAY", publicHolidayErr);
+      }
+
       const durationErr = await validateLeaveDurationCaps(leaveType, fromDate, toDate);
       if (durationErr) return sendApiError(res, 400, "LEAVE_DURATION_CAP", durationErr);
       if (leaveType === "CCL") {
@@ -2111,9 +2344,8 @@ export function registerHrRoutes(app: Express) {
         return sendApiError(res, 400, "LEAVE_OVERLAP", "Leave dates overlap with an existing leave request (pending/verified/approved).");
       }
 
-      // Get employee for location-based prefix/suffix
-      const [emp] = await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1);
-      const locationType = emp?.locationPosted ?? undefined;
+      // Get employee for location-based prefix/suffix (Primary Location yard type)
+      const locationType = await primaryLocationTypeForEmployee(employeeId);
       const prefixSuffix = await calculatePrefixSuffix(fromDate, toDate, locationType);
       const debitDays = calculateDebitDays({ leaveType, fromDate, toDate, halfDay });
 
@@ -2262,27 +2494,65 @@ export function registerHrRoutes(app: Express) {
           );
         }
         if (existing.status === "Pending" && newStatus === "Verified") {
-          // Enforce reporting-officer routing (BR-LVE-11).
-          const [emp] = await db.select().from(employees).where(eq(employees.id, existing.employeeId)).limit(1);
-          const roId = emp?.reportingOfficerEmployeeId ?? null;
-          if (!roId) {
+          // Enforce reporting-officer routing — role DV alone is not enough.
+          const index = await loadLeaveReportingEmployeeIndex();
+          const expectedVerifierEmpId = resolveLeaveVerifierEmployeeId(existing.employeeId, index);
+          if (!expectedVerifierEmpId) {
             return sendApiError(res, 400, "LEAVE_REPORTING_OFFICER_MISSING", "Employee reporting officer is not set.");
           }
-          const [roEmp] = await db.select().from(employees).where(eq(employees.id, roId)).limit(1);
-          const effectiveRoId =
-            emp?.id && roEmp?.id && emp.id === roEmp.id
-              ? (roEmp.reportingOfficerEmployeeId ?? null)
-              : roId;
-          if (!effectiveRoId) {
-            return sendApiError(res, 400, "LEAVE_REPORTING_CHAIN_MISSING", "Reporting officer's reporting officer is not set.");
-          }
-          const [effectiveRo] = await db.select().from(employees).where(eq(employees.id, effectiveRoId)).limit(1);
-          const expectedDvUserId = effectiveRo?.userId ?? null;
+          const verifier = index.get(expectedVerifierEmpId);
+          const expectedDvUserId = verifier?.userId ?? null;
           if (!expectedDvUserId) {
             return sendApiError(res, 400, "LEAVE_REPORTING_USER_MISSING", "Reporting officer has no linked login user.");
           }
-          if (req.user?.id !== expectedDvUserId && !(req.user?.roles ?? []).some((r: { tier?: string }) => r.tier === "ADMIN")) {
-            return sendApiError(res, 403, "LEAVE_VERIFY_NOT_REPORTING_OFFICER", "Only the employee's reporting officer can verify this leave request.");
+          const isAdminUser = (req.user?.roles ?? []).some((r: { tier?: string }) => r.tier === "ADMIN");
+          if (req.user?.id !== expectedDvUserId && !isAdminUser) {
+            return sendApiError(
+              res,
+              403,
+              "LEAVE_VERIFY_NOT_REPORTING_OFFICER",
+              "Only the employee's reporting officer can verify this leave request.",
+            );
+          }
+        }
+        if (existing.status === "Verified" && (newStatus === "Approved" || newStatus === "Rejected")) {
+          const isAdminUser = (req.user?.roles ?? []).some((r: { tier?: string }) => r.tier === "ADMIN");
+          if (!isAdminUser) {
+            const index = await loadLeaveReportingEmployeeIndex();
+            const expectedApproverEmpId = resolveLeaveApproverEmployeeId(existing.employeeId, index);
+            const myEmpId = req.user?.employeeId ? String(req.user.employeeId).trim() : "";
+            if (!expectedApproverEmpId) {
+              return sendApiError(
+                res,
+                400,
+                "LEAVE_APPROVER_CHAIN_MISSING",
+                "Next approving officer is not set in the reporting hierarchy (Reporting Officer of the verifying officer).",
+              );
+            }
+            if (!myEmpId || myEmpId !== expectedApproverEmpId) {
+              return sendApiError(
+                res,
+                403,
+                "LEAVE_APPROVE_NOT_REPORTING_OFFICER",
+                "Only the next officer in the employee's reporting hierarchy can approve or reject this leave request.",
+              );
+            }
+          }
+        }
+        if (existing.status === "Verified" && newStatus === "Pending") {
+          const isAdminUser = (req.user?.roles ?? []).some((r: { tier?: string }) => r.tier === "ADMIN");
+          if (!isAdminUser) {
+            const index = await loadLeaveReportingEmployeeIndex();
+            const expectedVerifierEmpId = resolveLeaveVerifierEmployeeId(existing.employeeId, index);
+            const myEmpId = req.user?.employeeId ? String(req.user.employeeId).trim() : "";
+            if (!myEmpId || myEmpId !== expectedVerifierEmpId) {
+              return sendApiError(
+                res,
+                403,
+                "LEAVE_RETURN_NOT_REPORTING_OFFICER",
+                "Only the employee's reporting officer can return this leave to Pending.",
+              );
+            }
           }
         }
         const segRec = {
@@ -2393,8 +2663,8 @@ export function registerHrRoutes(app: Express) {
         const datesOrTypeChanged =
           updates.leaveType !== undefined || updates.fromDate !== undefined || updates.toDate !== undefined || updates.halfDay !== undefined;
         if (datesOrTypeChanged) {
-          const [emp] = await db.select().from(employees).where(eq(employees.id, existing.employeeId)).limit(1);
-          const prefixSuffix = await calculatePrefixSuffix(effectiveFromEdit, effectiveToEdit, emp?.locationPosted ?? undefined);
+          const locationType = await primaryLocationTypeForEmployee(existing.employeeId);
+          const prefixSuffix = await calculatePrefixSuffix(effectiveFromEdit, effectiveToEdit, locationType);
           const halfDayVal =
             updates.halfDay !== undefined ? (updates.halfDay as string | null) : (existing.halfDay as string | null);
           updates.prefixDays = prefixSuffix.prefixDays;
@@ -2412,6 +2682,10 @@ export function registerHrRoutes(app: Express) {
         const effectiveTo = String((updates.toDate as string | undefined) ?? existing.toDate ?? "").trim();
         if (!effectiveFrom || !effectiveTo || effectiveFrom > effectiveTo) {
           return sendApiError(res, 400, "LEAVE_DATES_INVALID", "fromDate must be <= toDate");
+        }
+        const publicHolidayErrEdit = await validateLeaveDatesNotPublicHoliday(effectiveFrom, effectiveTo);
+        if (publicHolidayErrEdit) {
+          return sendApiError(res, 400, "LEAVE_PUBLIC_HOLIDAY", publicHolidayErrEdit);
         }
         const existingForEmp = await db.select().from(leaveRequests).where(eq(leaveRequests.employeeId, existing.employeeId));
         const activeExisting = existingForEmp.filter(
@@ -2521,8 +2795,7 @@ export function registerHrRoutes(app: Express) {
               updates.suffixToDate = null;
             } else if (body.prefixSuffixDisallowed === false && existing.prefixSuffixDisallowed === true) {
               // If the admin/DA toggles "Nil" off, restore calculated prefix/suffix based on dates+location.
-              const [emp] = await db.select().from(employees).where(eq(employees.id, existing.employeeId)).limit(1);
-              const locationType = emp?.locationPosted ?? undefined;
+              const locationType = await primaryLocationTypeForEmployee(existing.employeeId);
               const prefixSuffix = await calculatePrefixSuffix(existing.fromDate, existing.toDate, locationType);
               updates.prefixSuffixDisallowed = false;
               updates.prefixDays = prefixSuffix.prefixDays;
@@ -3248,6 +3521,19 @@ export function registerHrRoutes(app: Express) {
       const { id } = req.params;
       const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id)).limit(1);
       if (!lr) return sendApiError(res, 404, "LEAVE_NOT_FOUND", "Leave request not found");
+      const isAdmin = Boolean(req.user?.roles?.some((r) => String(r.tier) === "ADMIN"));
+      const selfEmployeeId = req.user?.employeeId ? String(req.user.employeeId).trim() : "";
+      if (!isAdmin && lr.employeeId !== selfEmployeeId) {
+        const index = await loadLeaveReportingEmployeeIndex();
+        if (!selfEmployeeId || !leaveEmployeeInOfficerScope(lr.employeeId, selfEmployeeId, index)) {
+          return sendApiError(
+            res,
+            403,
+            "LEAVE_ACCESS_DENIED",
+            "You can only access leave applications within your reporting hierarchy.",
+          );
+        }
+      }
       if (["Cancelled"].includes(String(lr.status))) {
         return sendApiError(res, 400, "LEAVE_CANCELLED", "Cannot print application for a cancelled leave.");
       }

@@ -31,6 +31,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatApiDateOrDateTime, formatYmdToDisplay } from "@/lib/dateFormat";
 import { useAuth } from "@/context/AuthContext";
 import { fetchApiGet } from "@/lib/queryClient";
+import { formatAdditionalChargeLabels } from "@shared/hr-additional-charge-locations";
 import {
   UserCircle,
   ArrowLeft,
@@ -566,11 +567,18 @@ export default function HrEmployeeDetail() {
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Designation</span><br />{employee.designation}</div>
-            <div><span className="text-muted-foreground">Yard</span><br />{yardById[employee.yardId] ?? employee.yardId}</div>
+            <div><span className="text-muted-foreground">Primary Location Posted</span><br />{yardById[employee.yardId] ?? employee.yardId}</div>
             <div>
-              <span className="text-muted-foreground">Location posted</span>
+              <span className="text-muted-foreground">Additional Charge Locations</span>
               <br />
-              {employee.locationPosted ?? "—"}
+              {(() => {
+                const labels = formatAdditionalChargeLabels(
+                  employee.locationPosted,
+                  employee.yardId,
+                  Object.fromEntries(yards.map((y) => [y.id, y])),
+                );
+                return labels.length > 0 ? labels.join("; ") : "—";
+              })()}
             </div>
             <div>
               <span className="text-muted-foreground">Pay level</span>

@@ -1,10 +1,36 @@
-import { and, eq } from "drizzle-orm";
-import { leaveTypeSkipsBalanceDebit } from "@shared/hr-leave-display";
+import { and, asc, eq, gte, lte } from "drizzle-orm";
+import { leaveTypeSkipsBalanceDebit, LEAVE_PUBLIC_HOLIDAY_MESSAGE } from "@shared/hr-leave-display";
 import { db } from "./db";
-import { employeeLeaveBalances, leaveRequests } from "@shared/db-schema";
+import { employeeLeaveBalances, hrHolidays, leaveRequests } from "@shared/db-schema";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { inclusiveCalendarDays } from "./hr-leave-utils";
 import { balanceLeaveTypeFor } from "./hr-leave-balance-debit";
+
+export { LEAVE_PUBLIC_HOLIDAY_MESSAGE };
+
+/** Public holidays in Holiday Master that fall within [fromDate, toDate] inclusive (covers consecutive days). */
+export async function findPublicHolidaysInRange(
+  fromDate: string,
+  toDate: string,
+): Promise<Array<{ date: string; name: string }>> {
+  const from = String(fromDate ?? "").trim().slice(0, 10);
+  const to = String(toDate ?? "").trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return [];
+  return db
+    .select({ date: hrHolidays.date, name: hrHolidays.name })
+    .from(hrHolidays)
+    .where(and(eq(hrHolidays.category, "Public"), gte(hrHolidays.date, from), lte(hrHolidays.date, to)))
+    .orderBy(asc(hrHolidays.date));
+}
+
+/** Block leave when any day in the applied period is a Public holiday. */
+export async function validateLeaveDatesNotPublicHoliday(
+  fromDate: string,
+  toDate: string,
+): Promise<string | null> {
+  const hits = await findPublicHolidaysInRange(fromDate, toDate);
+  return hits.length > 0 ? LEAVE_PUBLIC_HOLIDAY_MESSAGE : null;
+}
 
 export async function validateLeaveDurationCaps(leaveType: string, fromDate: string, toDate: string): Promise<string | null> {
   const upper = leaveType.trim().toUpperCase();

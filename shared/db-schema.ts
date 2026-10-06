@@ -612,7 +612,7 @@ export const employees = gapmc.table("employees", {
   serviceBookNo: text("service_book_no"),
   /** Section for HO-posted employees (Accounts / Admin / Inspection). */
   section: text("section"),
-  /** SRS §4.1.1 / SCR-EMP-02: posting location (text; may differ from home yard). */
+  /** JSON array of Additional Charge Location yard IDs (excludes Primary Location Posted / yardId). */
   locationPosted: text("location_posted"),
   /** §4.1.1: pay level 1–18. */
   payLevel: integer("pay_level"),

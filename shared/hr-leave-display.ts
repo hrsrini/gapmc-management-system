@@ -1,5 +1,9 @@
 /** M-01 leave document display (Sanction Order PDF + UI preview). */
 
+/** Exact message when leave From/To overlaps a Holiday Master Public date. */
+export const LEAVE_PUBLIC_HOLIDAY_MESSAGE =
+  "The selected date is a Public Holiday. Leave cannot be applied for this date. Please select another date.";
+
 /** Calendar date on leave orders: DD/MM/YYYY (e.g. 04/09/2026). */
 export function formatLeaveOrderDateDisplay(isoYmd: string | null | undefined): string {
   const raw = String(isoYmd ?? "").trim().slice(0, 10);
@@ -372,13 +376,16 @@ export function buildSanctionContinuationBalanceParagraph(opts: {
 }
 
 /**
- * Default sanction-order Copy to list (specimen + spreadsheet rules).
- * 1. Applicant location: Yard / Checkpost In-charge line, or "{Section}, HO"
+ * Default sanction-order Copy To list (specimen + spreadsheet rules).
+ * 1. Applicant location: Yard / Checkpost In-charge line, or HO section name
  * 2. Substitute duty line (if selected) — substitute salutation + applicant pronouns
  * 3. Substitute location line only when substitute is from a different yard/section
- * 4–5. Accounts Section, Personal File
+ * 4–5. Accounts Section for information, Personal File
  * Never includes applicant name, Guard File, or service-book line.
  */
+
+export const SANCTION_COPY_TO_ACCOUNTS = "Accounts Section for information";
+export const SANCTION_COPY_TO_PERSONAL = "Personal File";
 export type LeaveYardKind = "ho" | "yard" | "checkpost" | "unknown";
 
 export function classifyLeaveYardKind(opts: {
@@ -409,18 +416,17 @@ export function buildSanctionCopyLocationLine(opts: {
   yardKind: LeaveYardKind;
   section?: string | null;
   locationName?: string | null;
-  forInformation?: boolean;
 }): string {
   const loc = opts.locationName?.trim() || "—";
-  const info = opts.forInformation ? " for information" : "";
   if (opts.yardKind === "ho") {
     const section = opts.section?.trim();
-    return section ? `${section}, HO${info}` : `Head Office${info}`;
+    // Specimen: show respective HO section name only (Admin Section / Inspection Section / Accounts Section).
+    return section || "Head Office";
   }
   if (opts.yardKind === "checkpost") {
-    return `Market Supervisor / Checkpost In-charge – ${loc}${info}`;
+    return `Market Supervisor / Checkpost In-charge – ${loc}`;
   }
-  return `Market Supervisor / Yard In-charge – ${loc}${info}`;
+  return `Market Supervisor / Yard In-charge – ${loc}`;
 }
 
 function sameSanctionPosting(a: {
@@ -482,13 +488,28 @@ export function buildDefaultSanctionCopyTo(opts: {
         locationName: opts.substitutePrimaryLocation,
       };
       if (!sameSanctionPosting(applicantPosting, subPosting)) {
-        rows.push(buildSanctionCopyLocationLine({ ...subPosting, forInformation: true }));
+        rows.push(buildSanctionCopyLocationLine(subPosting));
       }
     }
   }
 
-  rows.push("Accounts Section", "Personal File");
+  rows.push(SANCTION_COPY_TO_ACCOUNTS, SANCTION_COPY_TO_PERSONAL);
   return rows;
+}
+
+/** Normalize Accounts / Personal File copy-to trailers to specimen wording. */
+export function ensureSanctionCopyToTrailers(lines: string[]): string[] {
+  const out = lines.map((item) => {
+    const t = item.trim();
+    if (/^accounts section(\s+for information)?\.?$/i.test(t)) return SANCTION_COPY_TO_ACCOUNTS;
+    if (/^personal file\.?$/i.test(t)) return SANCTION_COPY_TO_PERSONAL;
+    return item;
+  });
+  const hasAccounts = out.some((item) => /^accounts section\b/i.test(item.trim()));
+  const hasPersonal = out.some((item) => /^personal file\b/i.test(item.trim()));
+  if (!hasAccounts) out.push(SANCTION_COPY_TO_ACCOUNTS);
+  if (!hasPersonal) out.push(SANCTION_COPY_TO_PERSONAL);
+  return out;
 }
 
 /** Copy-to line: omit redundant "(Employee)" suffix. */

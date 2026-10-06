@@ -11,6 +11,7 @@ import {
   buildSanctionReadLine,
   classifyLeaveYardKind,
   applySalutationsToCopyToLines,
+  ensureSanctionCopyToTrailers,
   employeeMrHonorific,
   leaveDaysInWords,
   type LeaveYardKind,
@@ -247,11 +248,8 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     }
   }
 
-  // Always end with Accounts Section + Personal File when missing from a custom list.
-  const hasAccounts = copyToList.some((item) => /^accounts section\b/i.test(item.trim()));
-  const hasPersonal = copyToList.some((item) => /^personal file\b/i.test(item.trim()));
-  if (!hasAccounts) copyToList.push("Accounts Section");
-  if (!hasPersonal) copyToList.push("Personal File");
+  // Always end with Accounts Section for information + Personal File (specimen wording).
+  copyToList = ensureSanctionCopyToTrailers(copyToList);
 
   // Apply Mr./Mrs./Miss./Ms. to any copy-to line that names the applicant or substitute.
   copyToList = applySalutationsToCopyToLines(copyToList, [
@@ -453,7 +451,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
   writeLeft("To,", { bold: true });
   writeLeft(toName, { gap: 0.3 });
 
-  writeLeft("Copy to:", { bold: true });
+  writeLeft("Copy To,", { bold: true });
   copyToList.forEach((item, i) => {
     writeLeft(`${i + 1}. ${item}`);
   });

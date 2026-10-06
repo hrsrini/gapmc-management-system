@@ -46,6 +46,14 @@ function fmtDate(iso: string | null | undefined): string {
   return formatLeaveOrderDateDisplay(iso) || "—";
 }
 
+/** Inclusive calendar days for Form-1 / short-app period display (not balance debit). */
+function inclusiveCalendarDays(fromDate: string, toDate: string): number {
+  const d0 = Date.parse(`${fromDate.slice(0, 10)}T12:00:00`);
+  const d1 = Date.parse(`${toDate.slice(0, 10)}T12:00:00`);
+  if (!Number.isFinite(d0) || !Number.isFinite(d1) || d1 < d0) return 0;
+  return Math.round((d1 - d0) / 86400000) + 1;
+}
+
 function blankOr(value: string | null | undefined, blank = "_______________"): string {
   const t = String(value ?? "").trim();
   return t || blank;
@@ -67,13 +75,8 @@ async function lastLeaveSummary(employeeId: string, excludeId: string): Promise<
   const last = rows[0];
   if (!last) return "N.A.";
   const label = LEAVE_TYPE_LABELS[last.leaveType] ?? last.leaveType;
-  const daysNum =
-    last.debitDays != null
-      ? Number(last.debitDays)
-      : Math.max(
-          0,
-          Math.round((new Date(last.toDate).getTime() - new Date(last.fromDate).getTime()) / 86400000) + 1,
-        );
+  // Period display uses calendar days (not HPL 2× debit / zero-debit types like PL/EOL).
+  const daysNum = inclusiveCalendarDays(last.fromDate, last.toDate);
   const singleDay = last.fromDate === last.toDate || daysNum === 1;
   if (singleDay) {
     return `1 day ${label} on ${fmtDate(last.fromDate)}`;
@@ -154,6 +157,8 @@ function renderForm1(
     pay: string;
     fromDate: string;
     toDate: string;
+    /** Calendar days of leave applied for (Item 6). Not HPL 2× debit / zero-debit types. */
+    periodDays: number;
     debitDays: number;
     prefixDays: number;
     suffixDays: number;
@@ -225,8 +230,8 @@ function renderForm1(
 
   const period =
     ctx.halfDay && ctx.fromDate === ctx.toDate
-      ? `${ctx.leaveTypeLabel} — ${ctx.halfDay === "first_half" ? "first half" : ctx.halfDay === "second_half" ? "second half" : ctx.halfDay} on ${fromDisp} (${ctx.debitDays} day)`
-      : `${ctx.leaveTypeLabel} for ${ctx.debitDays} day(s) from ${fromDisp} to ${toDisp}`;
+      ? `${ctx.leaveTypeLabel} — ${ctx.halfDay === "first_half" ? "first half" : ctx.halfDay === "second_half" ? "second half" : ctx.halfDay} on ${fromDisp} (${ctx.periodDays} day)`
+      : `${ctx.leaveTypeLabel} for ${ctx.periodDays} day(s) from ${fromDisp} to ${toDisp}`;
   form1Row(doc, "6", "Nature and period of leave applied for", period);
 
   const holidayNote = " (being Saturday and Sunday and holiday)";
@@ -346,7 +351,6 @@ function renderShortForm(
     halfDay: string | null;
     dutyDateForSplH: string | null;
     balanceHint: string;
-    status: string;
     addressDuringLeave: string;
     leaveHq: string;
     applicationDate: string;
@@ -354,13 +358,14 @@ function renderShortForm(
 ): void {
   drawBoardHeader(doc);
 
-  let title = `Format of ${ctx.leaveTypeLabel} application`;
-  if (ctx.leaveType === "CL") title = "Format of Casual Leave application";
-  if (ctx.leaveType === "RH") title = "Format of Restricted Holiday Leave application";
-  if (ctx.leaveType === "SPL_H") title = "Format of Special Holiday Leave application";
+  let title = `${ctx.leaveTypeLabel} application`;
+  if (ctx.leaveType === "CL") title = "Casual Leave application";
+  if (ctx.leaveType === "RH") title = "Restricted Holiday Leave application";
+  if (ctx.leaveType === "SPL_H") title = "Special Holiday Leave application";
 
   const fromDisp = fmtDate(ctx.fromDate);
   const toDisp = fmtDate(ctx.toDate);
+  const singleDay = ctx.fromDate === ctx.toDate;
 
   doc.fontSize(11).font("Helvetica-Bold").text(title, { align: "center" });
   doc.moveDown(0.8);
@@ -373,7 +378,7 @@ function renderShortForm(
   doc.moveDown(0.6);
 
   doc.font("Helvetica-Bold").text(
-    `Subject: Application for ${ctx.leaveTypeLabel}${ctx.fromDate === ctx.toDate ? ` on ${fromDisp}` : ` from ${fromDisp} to ${toDisp}`}.`,
+    `Subject: Application for ${ctx.leaveTypeLabel}${singleDay ? ` on ${fromDisp}` : ` from ${fromDisp} to ${toDisp}`}.`,
   );
   doc.moveDown(0.5);
 
@@ -395,6 +400,16 @@ function renderShortForm(
       ctx.halfDay === "first_half" ? "first half" : ctx.halfDay === "second_half" ? "second half" : ctx.halfDay;
     doc.text(
       `I, ${ctx.empName}, ${ctx.designation}, request Casual Leave for the ${half} on ${fromDisp} (${ctx.debitDays} day).`,
+      { align: "justify" },
+    );
+  } else if (ctx.leaveType === "CL" && singleDay) {
+    doc.text(
+      `I, ${ctx.empName}, ${ctx.designation}, request Casual Leave for 1 day on ${fromDisp}.`,
+      { align: "justify" },
+    );
+  } else if (singleDay) {
+    doc.text(
+      `I, ${ctx.empName}, ${ctx.designation}, request ${ctx.leaveTypeLabel} for 1 day on ${fromDisp}.`,
       { align: "justify" },
     );
   } else {
@@ -430,12 +445,6 @@ function renderShortForm(
   doc.text(ctx.designation);
   doc.moveDown(0.3);
   doc.fontSize(8).fillColor("#555555").text(`Date: ${fmtDate(ctx.applicationDate)}`, { align: "left" });
-  doc.moveDown(1);
-  doc
-    .fontSize(7)
-    .text(`Status: ${ctx.status} | Short application format. Print, sign and submit offline / hard copy as required.`, {
-      align: "center",
-    });
   doc.fillColor("#000000");
 }
 
@@ -491,10 +500,15 @@ export async function generateLeaveApplicationPdf(
 
   const lastLeave = await lastLeaveSummary(lr.employeeId, lr.id);
   const balHint = await balanceHint(lr.employeeId, leaveType);
+  const periodDays = inclusiveCalendarDays(lr.fromDate, lr.toDate);
   const debitDays =
     lr.debitDays != null
       ? Number(lr.debitDays)
-      : Math.max(0, Math.round((new Date(lr.toDate).getTime() - new Date(lr.fromDate).getTime()) / 86400000) + 1);
+      : leaveType === "COMMUTED"
+        ? periodDays * 2
+        : ["ML", "PL", "EOL"].includes(leaveType)
+          ? 0
+          : periodDays;
 
   const doc = new PDFDocument({ size: "A4", margin: 48 });
   const chunks: Buffer[] = [];
@@ -527,7 +541,6 @@ export async function generateLeaveApplicationPdf(
       halfDay: lr.halfDay ?? null,
       dutyDateForSplH: lr.dutyDateForSplH ?? null,
       balanceHint: balHint,
-      status: lr.status,
       addressDuringLeave: lr.addressDuringLeave ?? "",
       leaveHq: lr.leaveHq ?? "",
       applicationDate,
@@ -542,6 +555,7 @@ export async function generateLeaveApplicationPdf(
       pay: payLine(emp),
       fromDate: lr.fromDate,
       toDate: lr.toDate,
+      periodDays,
       debitDays,
       prefixDays: Number(lr.prefixDays ?? 0),
       suffixDays: Number(lr.suffixDays ?? 0),

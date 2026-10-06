@@ -8,8 +8,10 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { AlertCircle, CalendarDays, Plus, Trash2, X } from "lucide-react";
+import { AlertCircle, CalendarDays, Download, Plus, Trash2, X } from "lucide-react";
 import { Link } from "wouter";
+import { localCalendarYmd } from "@shared/premises-allocation";
+import { formatLeaveOrderDateDisplay } from "@shared/hr-leave-display";
 import {
   Select,
   SelectContent,
@@ -81,10 +83,12 @@ function toDateInputValue(raw: string | null | undefined): string {
 }
 
 export default function HrLeaveBalances() {
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canUpdate = can("M-01", "Update");
+  const isAdmin = Boolean(user?.roles?.some((r) => r.tier === "ADMIN"));
+  const [exporting, setExporting] = useState(false);
 
   const { data: balances = [], isLoading: balLoading } = useQuery<BalanceRow[]>({
     queryKey: ["/api/hr/leave-balances"],
@@ -135,6 +139,46 @@ export default function HrLeaveBalances() {
     },
     onError: (e: Error) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
   });
+
+  async function handleExportExcel() {
+    if (!isAdmin) {
+      toast({
+        title: "Admin only",
+        description: "Export to Excel is available only to Admin users.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setExporting(true);
+    try {
+      const asOn = localCalendarYmd();
+      const res = await fetch(`/api/hr/leave-balances/export.xlsx?asOn=${encodeURIComponent(asOn)}`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Employee_Leave_Balance_Report_${formatLeaveOrderDateDisplay(asOn).replace(/\//g, "-")}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast({ title: "Exported", description: "Employee Leave Balance Report downloaded." });
+    } catch (e) {
+      toast({
+        title: "Export failed",
+        description: e instanceof Error ? e.message : "Could not export Excel.",
+        variant: "destructive",
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   function addRow() {
     setRows((r) => [
@@ -243,11 +287,19 @@ export default function HrLeaveBalances() {
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          {canUpdate && (
-            <Button type="button" variant="outline" size="sm" asChild>
-              <Link href="/hr/leave-balances/import">Bulk import JSON</Link>
-            </Button>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {canUpdate && (
+              <Button type="button" variant="outline" size="sm" asChild>
+                <Link href="/hr/leave-balances/import">Bulk import JSON</Link>
+              </Button>
+            )}
+            {isAdmin && (
+              <Button type="button" variant="outline" size="sm" onClick={handleExportExcel} disabled={exporting}>
+                <Download className="h-4 w-4 mr-1" />
+                {exporting ? "Exporting…" : "Export to Excel"}
+              </Button>
+            )}
+          </div>
           {!canUpdate && (
             <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-950 dark:text-amber-100">
               <AlertCircle className="h-4 w-4 shrink-0" />

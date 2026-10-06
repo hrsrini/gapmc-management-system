@@ -39,9 +39,14 @@ import {
   buildSanctionGrantParagraph,
   buildSanctionReadLine,
   applySalutationsToCopyToLines,
+  ensureSanctionCopyToTrailers,
   employeeMrHonorific,
+  SANCTION_COPY_TO_ACCOUNTS,
+  SANCTION_COPY_TO_PERSONAL,
+  LEAVE_PUBLIC_HOLIDAY_MESSAGE,
   type LeaveYardKind,
 } from "@shared/hr-leave-display";
+import { formatAdditionalChargeLabels } from "@shared/hr-additional-charge-locations";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import { EmployeeSearchSelect, formatEmployeeSelectLabel } from "@/components/selects/employee-search-select";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
@@ -204,7 +209,7 @@ function buildDefaultCopyToRows(
     } | null;
   },
 ): string[] {
-  if (!emp) return ["Accounts Section", "Personal File"];
+  if (!emp) return [SANCTION_COPY_TO_ACCOUNTS, SANCTION_COPY_TO_PERSONAL];
   return buildDefaultSanctionCopyTo({
     gender: emp.gender,
     maritalStatus: emp.maritalStatus,
@@ -251,7 +256,7 @@ function sanitizeCopyToRows(
       : emp
         ? [{ name: employeeDisplayName(emp), gender: emp.gender, maritalStatus: emp.maritalStatus }]
         : [];
-  return applySalutationsToCopyToLines(cleaned, folks);
+  return ensureSanctionCopyToTrailers(applySalutationsToCopyToLines(cleaned, folks));
 }
 
 function resolveCopyToList(
@@ -293,9 +298,8 @@ function resolveCopyToList(
     };
   }
   return {
-    list: applySalutationsToCopyToLines(
-      buildDefaultCopyToRows(employee, primaryLocation, opts),
-      people,
+    list: ensureSanctionCopyToTrailers(
+      applySalutationsToCopyToLines(buildDefaultCopyToRows(employee, primaryLocation, opts), people),
     ),
     usingDefault: true,
   };
@@ -496,7 +500,7 @@ function SanctionOrderPreviewPanel({
         </p>
       </div>
       <div>
-        <div className="font-medium text-foreground">Copy to:</div>
+        <div className="font-medium text-foreground">Copy To,</div>
         <ol className="mt-1 list-decimal list-inside text-muted-foreground">
           {copyToList.map((item, i) => (
             <li key={`sanction-copy-preview-${i}`}>{item}</li>
@@ -542,6 +546,7 @@ export default function LeaveRequests() {
   const canApprove = roles.includes("DA") || roles.includes("ADMIN");
   const canSubmitNew = roles.includes("DO") || roles.includes("ADMIN");
   const canSeeAllLeaves = roles.includes("ADMIN");
+  const canSeeTeamLeaves = roles.includes("DV") || roles.includes("DA") || roles.includes("ADMIN");
   const [pendingOnly, setPendingOnly] = useState(false);
   const [mineOnly, setMineOnly] = useState(true);
   const [newOpen, setNewOpen] = useState(false);
@@ -640,11 +645,11 @@ export default function LeaveRequests() {
   }, [selectedEmployee?.id, selectedEmployee?.payLevel, selectedEmployee?.basicPayInr]);
 
   const { data: prefixSuffixPreview } = useQuery<PrefixSuffixPreview | null>({
-    queryKey: ["/api/hr/leaves/prefix-suffix-preview", newFrom, newTo, selectedEmployee?.locationPosted ?? ""],
+    queryKey: ["/api/hr/leaves/prefix-suffix-preview", newFrom, newTo, selectedYard?.type ?? ""],
     queryFn: () =>
       newFrom && newTo
         ? fetchApiGet<PrefixSuffixPreview>(
-            `/api/hr/leaves/prefix-suffix-preview?fromDate=${encodeURIComponent(newFrom)}&toDate=${encodeURIComponent(newTo)}&locationType=${encodeURIComponent(selectedEmployee?.locationPosted ?? "")}`,
+            `/api/hr/leaves/prefix-suffix-preview?fromDate=${encodeURIComponent(newFrom)}&toDate=${encodeURIComponent(newTo)}&locationType=${encodeURIComponent(selectedYard?.type ?? "")}`,
           )
         : Promise.resolve(null),
     enabled: newOpen && !!newFrom && !!newTo,
@@ -705,9 +710,11 @@ export default function LeaveRequests() {
         : []),
     ];
     if (trimmed.length > 0) return sanitizeCopyToRows(trimmed, approveEmployee, loc, people);
-    return applySalutationsToCopyToLines(
-      buildDefaultCopyToRows(approveEmployee, loc, { yardKind, yardIsHo, substitute }),
-      people,
+    return ensureSanctionCopyToTrailers(
+      applySalutationsToCopyToLines(
+        buildDefaultCopyToRows(approveEmployee, loc, { yardKind, yardIsHo, substitute }),
+        people,
+      ),
     );
   }, [approveCopyToRows, approveEmployee, approveSubstituteId, yardById, employees]);
   const approvePreviewBalanceAfter = useMemo(() => {
@@ -758,15 +765,48 @@ export default function LeaveRequests() {
   }, [balances, effectiveEmployeeId, newLeaveType]);
 
   const rhYear = newFrom ? Number(String(newFrom).slice(0, 4)) : new Date().getFullYear();
+  const leaveToYear = newTo ? Number(String(newTo).slice(0, 4)) : rhYear;
   const { data: holidaysForRh = [] } = useQuery<HolidayRow[]>({
     queryKey: ["/api/hr/holidays", rhYear],
     queryFn: () => fetch(`/api/hr/holidays?year=${rhYear}`).then((r) => r.json()),
-    enabled: newOpen && newLeaveType.trim().toUpperCase() === "RH",
+    enabled: newOpen,
+  });
+  const { data: holidaysForToYear = [] } = useQuery<HolidayRow[]>({
+    queryKey: ["/api/hr/holidays", leaveToYear],
+    queryFn: () => fetch(`/api/hr/holidays?year=${leaveToYear}`).then((r) => r.json()),
+    enabled: newOpen && leaveToYear !== rhYear,
   });
   const restrictedHolidayDates = useMemo(
     () => holidaysForRh.filter((h) => h.category === "Restricted").sort((a, b) => a.date.localeCompare(b.date)),
     [holidaysForRh],
   );
+  const publicHolidayConflictDates = useMemo(() => {
+    if (!newFrom || !newTo || newFrom > newTo) return [] as HolidayRow[];
+    const all = leaveToYear === rhYear ? holidaysForRh : [...holidaysForRh, ...holidaysForToYear];
+    return all
+      .filter((h) => h.category === "Public" && h.date >= newFrom && h.date <= newTo)
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [holidaysForRh, holidaysForToYear, leaveToYear, newFrom, newTo, rhYear]);
+
+  const editFromYear = editFrom ? Number(String(editFrom).slice(0, 4)) : new Date().getFullYear();
+  const editToYear = editTo ? Number(String(editTo).slice(0, 4)) : editFromYear;
+  const { data: holidaysEditFrom = [] } = useQuery<HolidayRow[]>({
+    queryKey: ["/api/hr/holidays", editFromYear],
+    queryFn: () => fetch(`/api/hr/holidays?year=${editFromYear}`).then((r) => r.json()),
+    enabled: editLeaveId != null && !!editFrom,
+  });
+  const { data: holidaysEditTo = [] } = useQuery<HolidayRow[]>({
+    queryKey: ["/api/hr/holidays", editToYear],
+    queryFn: () => fetch(`/api/hr/holidays?year=${editToYear}`).then((r) => r.json()),
+    enabled: editLeaveId != null && !!editTo && editToYear !== editFromYear,
+  });
+  const editPublicHolidayConflictDates = useMemo(() => {
+    if (!editFrom || !editTo || editFrom > editTo) return [] as HolidayRow[];
+    const all = editToYear === editFromYear ? holidaysEditFrom : [...holidaysEditFrom, ...holidaysEditTo];
+    return all
+      .filter((h) => h.category === "Public" && h.date >= editFrom && h.date <= editTo)
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [editFrom, editTo, editFromYear, editToYear, holidaysEditFrom, holidaysEditTo]);
 
   const requestedDays = useMemo(() => {
     if (!newFrom || !newTo) return 0;
@@ -1154,13 +1194,15 @@ export default function LeaveRequests() {
                   const rows =
                     existing.length > 0
                       ? sanitizeCopyToRows(existing, emp, loc, people)
-                      : applySalutationsToCopyToLines(
-                          buildDefaultCopyToRows(emp, loc, {
-                            yardKind,
-                            yardIsHo,
-                            substitute: substituteCopyOpts(subEmp, yardById),
-                          }),
-                          people,
+                      : ensureSanctionCopyToTrailers(
+                          applySalutationsToCopyToLines(
+                            buildDefaultCopyToRows(emp, loc, {
+                              yardKind,
+                              yardIsHo,
+                              substitute: substituteCopyOpts(subEmp, yardById),
+                            }),
+                            people,
+                          ),
                         );
                   setApproveCopyToRows(rows);
                   setApproveSubstituteId(subId);
@@ -1287,8 +1329,8 @@ export default function LeaveRequests() {
                 Leave requests (IOMS M-01)
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                Workflow: Pending (DO) → Verified (DV) → Approved or Rejected (DA). DV may return Verified → Pending with
-                remarks.
+                Workflow: Pending (DO) → Verified (Reporting Officer / DV) → Approved or Rejected (next officer / DA).
+                Visibility follows Reporting Officer mapping; DV may return Verified → Pending with remarks.
               </p>
             </div>
             {canSubmitNew && (
@@ -1334,7 +1376,7 @@ export default function LeaveRequests() {
                 }}
               />
               <Label htmlFor="leave-pending-me" className="text-sm font-normal cursor-pointer">
-                Pending my action (DV/DA queue)
+                Pending my action (reporting hierarchy queue)
               </Label>
             </div>
             <div className="flex items-center gap-2">
@@ -1346,13 +1388,22 @@ export default function LeaveRequests() {
                   setMineOnly(on);
                   if (on) setPendingOnly(false);
                 }}
-                disabled={!canSeeAllLeaves && !pendingOnly}
+                disabled={!canSeeTeamLeaves && !pendingOnly}
               />
               <Label htmlFor="leave-mine-only" className="text-sm font-normal cursor-pointer">
-                My leaves only{canSeeAllLeaves ? " (Admin: uncheck to see all)" : ""}
+                My leaves only
+                {canSeeAllLeaves
+                  ? " (Admin: uncheck to see all)"
+                  : canSeeTeamLeaves
+                    ? " (uncheck to see reportees in your hierarchy)"
+                    : ""}
               </Label>
             </div>
           </div>
+          <p className="text-xs text-muted-foreground pt-1">
+            Role grants permission to verify/approve; Reporting Officer mapping controls whose leave you can see.
+            Additional Charge expands coverage only when those employees are mapped to you as Reporting Officer.
+          </p>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -1423,12 +1474,20 @@ export default function LeaveRequests() {
                       <p className="font-medium">{selectedEmployee.section?.trim() || "—"}</p>
                     </div>
                   ) : null}
-                  {selectedEmployee.locationPosted?.trim() ? (
-                    <div className={selectedIsHo ? "sm:col-span-2" : undefined}>
-                      <p className="text-xs text-muted-foreground">Additional location posted</p>
-                      <p className="font-medium">{selectedEmployee.locationPosted}</p>
-                    </div>
-                  ) : null}
+                  {(() => {
+                    const chargeLabels = formatAdditionalChargeLabels(
+                      selectedEmployee.locationPosted,
+                      selectedEmployee.yardId,
+                      yardById,
+                    );
+                    if (chargeLabels.length === 0) return null;
+                    return (
+                      <div className={selectedIsHo ? "sm:col-span-2" : undefined}>
+                        <p className="text-xs text-muted-foreground">Additional Charge Locations</p>
+                        <p className="font-medium">{chargeLabels.join("; ")}</p>
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
@@ -1562,6 +1621,16 @@ export default function LeaveRequests() {
               </div>
             </div>
             )}
+            {publicHolidayConflictDates.length > 0 && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                {LEAVE_PUBLIC_HOLIDAY_MESSAGE}
+                <div className="mt-1 text-xs">
+                  {publicHolidayConflictDates
+                    .map((h) => `${formatLeaveOrderDateDisplay(h.date)} — ${h.name}`)
+                    .join("; ")}
+                </div>
+              </div>
+            )}
             {(requestedDays > 0 || prefixSuffixPreview) && (
               <div className="rounded-md border bg-muted/30 p-3 text-sm">
                 <div className="font-medium">Preview</div>
@@ -1576,8 +1645,8 @@ export default function LeaveRequests() {
                     {prefixSuffixPreview.suffixToDate ? `Suffix to ${prefixSuffixPreview.suffixToDate}` : ""}
                   </div>
                 ) : null}
-                {selectedEmployee?.locationPosted ? (
-                  <div className="mt-1 text-xs text-muted-foreground">Location basis: {selectedEmployee.locationPosted}</div>
+                {selectedYard?.type ? (
+                  <div className="mt-1 text-xs text-muted-foreground">Location basis: {selectedYard.type}</div>
                 ) : null}
               </div>
             )}
@@ -1810,6 +1879,14 @@ export default function LeaveRequests() {
                 const employeeId = roles.includes("ADMIN") ? newEmployeeId : user?.employeeId ?? "";
                 if (!employeeId || !newFrom || !newTo) {
                   toast({ title: "Missing fields", description: "Employee, from and to dates are required.", variant: "destructive" });
+                  return;
+                }
+                if (publicHolidayConflictDates.length > 0) {
+                  toast({
+                    title: "Public Holiday",
+                    description: LEAVE_PUBLIC_HOLIDAY_MESSAGE,
+                    variant: "destructive",
+                  });
                   return;
                 }
                 const today = localCalendarYmd();
@@ -2229,6 +2306,16 @@ export default function LeaveRequests() {
                 <Input type="date" value={editTo} onChange={(e) => setEditTo(e.target.value)} />
               </div>
             </div>
+            {editPublicHolidayConflictDates.length > 0 && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                {LEAVE_PUBLIC_HOLIDAY_MESSAGE}
+                <div className="mt-1 text-xs">
+                  {editPublicHolidayConflictDates
+                    .map((h) => `${formatLeaveOrderDateDisplay(h.date)} — ${h.name}`)
+                    .join("; ")}
+                </div>
+              </div>
+            )}
             <div className="space-y-1">
               <Label>Reason</Label>
               <Textarea value={editReason} onChange={(e) => setEditReason(e.target.value)} rows={3} />
@@ -2243,6 +2330,14 @@ export default function LeaveRequests() {
               disabled={editLeaveId == null || updateMutation.isPending}
               onClick={() => {
                 if (!editLeaveId) return;
+                if (editPublicHolidayConflictDates.length > 0) {
+                  toast({
+                    title: "Public Holiday",
+                    description: LEAVE_PUBLIC_HOLIDAY_MESSAGE,
+                    variant: "destructive",
+                  });
+                  return;
+                }
                 updateMutation.mutate({
                   id: editLeaveId,
                   body: {

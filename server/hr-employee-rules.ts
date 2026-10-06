@@ -322,9 +322,9 @@ export function parseEmployeeMasterSrs411Fields(input: {
   return {
     locationPosted: trimMax(
       input.locationPosted ?? null,
-      200,
+      2000,
       "HR_EMP_LOCATION_POSTED_LENGTH",
-      "Location posted",
+      "Additional charge locations",
     ),
     payLevel: normalizePayLevel(input.payLevel ?? null),
     bankAccountNumber: normalizeBankAccountNumber(input.bankAccountNumber ?? null),

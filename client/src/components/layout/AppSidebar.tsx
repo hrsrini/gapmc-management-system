@@ -61,6 +61,7 @@ export function AppSidebar() {
         items: g.items.filter(
           (item) =>
             (item.href === SIDEBAR_MENU_VISIBILITY_PAGE_HREF || !hiddenHrefs.has(item.href)) &&
+            (!item.adminOnly || isAdmin) &&
             (!item.requirePermission || can(item.requirePermission.module, item.requirePermission.action)),
         ),
       }))

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +39,31 @@ const categoryColor: Record<string, string> = {
   AdHoc: "bg-green-100 text-green-800",
 };
 
+const HOLIDAY_YEAR_END = 2040;
+
+/** Display / form date: DD-MM-YYYY. Storage API remains YYYY-MM-DD. */
+function isoToDdMmYyyy(iso: string | null | undefined): string {
+  const raw = String(iso ?? "").trim().slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return raw;
+}
+
+function ddMmYyyyToIso(display: string | null | undefined): string | null {
+  const raw = String(display ?? "").trim();
+  const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(raw);
+  if (!m) return null;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  if (mm < 1 || mm > 12 || dd < 1 || dd > 31 || yyyy < 1900 || yyyy > HOLIDAY_YEAR_END) return null;
+  const iso = `${String(yyyy).padStart(4, "0")}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+  const check = new Date(`${iso}T12:00:00`);
+  if (Number.isNaN(check.getTime())) return null;
+  if (check.getFullYear() !== yyyy || check.getMonth() + 1 !== mm || check.getDate() !== dd) return null;
+  return iso;
+}
+
 export default function HrHolidayCalendar() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -46,7 +71,7 @@ export default function HrHolidayCalendar() {
   const canWrite = can("M-01", "Create");
 
   const currentYear = new Date().getFullYear();
-  const [selectedYear, setSelectedYear] = useState(currentYear);
+  const [selectedYear, setSelectedYear] = useState(Math.min(Math.max(currentYear, 2025), HOLIDAY_YEAR_END));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editRow, setEditRow] = useState<HolidayRow | null>(null);
   const [formDate, setFormDate] = useState("");
@@ -64,7 +89,10 @@ export default function HrHolidayCalendar() {
       const url = payload.id ? `/api/hr/holidays/${payload.id}` : "/api/hr/holidays";
       const method = payload.id ? "PUT" : "POST";
       const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      if (!res.ok) throw new Error((await res.json()).message ?? "Save failed");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? "Save failed");
+      }
       return res.json();
     },
     onSuccess: () => {
@@ -98,7 +126,7 @@ export default function HrHolidayCalendar() {
 
   const openEdit = useCallback((row: HolidayRow) => {
     setEditRow(row);
-    setFormDate(row.date);
+    setFormDate(isoToDdMmYyyy(row.date));
     setFormName(row.name);
     setFormCategory(row.category);
     setFormTentative(row.isTentative);
@@ -111,14 +139,35 @@ export default function HrHolidayCalendar() {
   }, []);
 
   const handleSave = useCallback(() => {
-    if (!formDate || !formName || !formCategory) {
+    const isoDate = ddMmYyyyToIso(formDate);
+    if (!isoDate) {
+      toast({
+        title: "Invalid date",
+        description: "Enter date as DD-MM-YYYY (e.g. 25-12-2026).",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!formName.trim() || !formCategory) {
       toast({ title: "All fields required", variant: "destructive" });
       return;
     }
-    saveMutation.mutate({ id: editRow?.id, date: formDate, name: formName, category: formCategory, isTentative: formTentative });
+    saveMutation.mutate({
+      id: editRow?.id,
+      date: isoDate,
+      name: formName.trim(),
+      category: formCategory,
+      isTentative: formTentative,
+    });
   }, [formDate, formName, formCategory, formTentative, editRow, saveMutation, toast]);
 
-  const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - 1 + i);
+  const yearOptions = useMemo(() => {
+    const start = Math.min(currentYear - 1, selectedYear, 2025);
+    const end = HOLIDAY_YEAR_END;
+    const years: number[] = [];
+    for (let y = start; y <= end; y++) years.push(y);
+    return years;
+  }, [currentYear, selectedYear]);
 
   return (
     <AppShell>
@@ -134,7 +183,7 @@ export default function HrHolidayCalendar() {
                 <SelectTrigger className="w-28">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="max-h-72">
                   {yearOptions.map((y) => (
                     <SelectItem key={y} value={String(y)}>
                       {y}
@@ -169,7 +218,7 @@ export default function HrHolidayCalendar() {
                   <tbody>
                     {holidays.map((r) => (
                       <tr key={r.id} className="border-t">
-                        <td className="p-2 font-mono">{r.date}</td>
+                        <td className="p-2 font-mono">{isoToDdMmYyyy(r.date)}</td>
                         <td className="p-2">{r.name}</td>
                         <td className="p-2"><Badge className={categoryColor[r.category] ?? ""}>{r.category}</Badge></td>
                         <td className="p-2">{r.isTentative ? <Badge variant="outline">Tentative</Badge> : null}</td>
@@ -177,7 +226,7 @@ export default function HrHolidayCalendar() {
                           <td className="p-2">
                             <div className="flex gap-1">
                               <Button size="icon" variant="ghost" onClick={() => openEdit(r)}><Pencil className="h-4 w-4" /></Button>
-                              <Button size="icon" variant="ghost" className="text-destructive" onClick={() => { if (confirm(`Delete "${r.name}" on ${r.date}?`)) deleteMutation.mutate(r.id); }}><Trash2 className="h-4 w-4" /></Button>
+                              <Button size="icon" variant="ghost" className="text-destructive" onClick={() => { if (confirm(`Delete "${r.name}" on ${isoToDdMmYyyy(r.date)}?`)) deleteMutation.mutate(r.id); }}><Trash2 className="h-4 w-4" /></Button>
                             </div>
                           </td>
                         )}
@@ -212,8 +261,15 @@ export default function HrHolidayCalendar() {
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Date</Label>
-              <Input type="date" value={formDate} onChange={(e) => setFormDate(e.target.value)} />
+              <Label>Date (DD-MM-YYYY)</Label>
+              <Input
+                type="text"
+                inputMode="numeric"
+                placeholder="DD-MM-YYYY"
+                value={formDate}
+                onChange={(e) => setFormDate(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">Example: 25-12-2026</p>
             </div>
             <div>
               <Label>Holiday Name</Label>
