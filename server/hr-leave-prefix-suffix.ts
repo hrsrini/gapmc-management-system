@@ -129,12 +129,6 @@ export function calculateDebitDays(params: {
 }): number {
   const { leaveType, fromDate, toDate, halfDay } = params;
 
-  // ML and PL: no balance debit
-  if (leaveType === "ML" || leaveType === "PL") return 0;
-
-  // EOL: no balance debit (manual record)
-  if (leaveType === "EOL") return 0;
-
   // Half-day CL
   if (leaveType === "CL" && halfDay) return 0.5;
 

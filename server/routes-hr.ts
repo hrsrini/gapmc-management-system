@@ -2730,9 +2730,14 @@ export function registerHrRoutes(app: Express) {
       try {
         await db.transaction(async (tx) => {
           if (statusChange && newStatus === "Approved" && existing.status === "Verified") {
-            const debitDays = existing.debitDays != null
-              ? Number(existing.debitDays)
-              : calculateDebitDays({ leaveType: existing.leaveType, fromDate: existing.fromDate, toDate: existing.toDate, halfDay: existing.halfDay });
+            // Always recompute — legacy PL/ML/EOL rows stored debitDays=0 before calendar debit was enabled.
+            const debitDays = calculateDebitDays({
+              leaveType: existing.leaveType,
+              fromDate: existing.fromDate,
+              toDate: existing.toDate,
+              halfDay: existing.halfDay,
+            });
+            updates.debitDays = debitDays;
 
             // Revised leave: reverse original debit, mark original Superseded, then debit new
             if (existing.revisedFromLeaveId) {
@@ -2744,8 +2749,12 @@ export function registerHrRoutes(app: Express) {
               if (!orig || orig.status !== "Approved") {
                 throw new Error("LEAVE_REVISE_SOURCE_INVALID");
               }
-              const origDebit =
-                orig.debitDays != null
+              // Credit only what was actually debited (skip-list leaves stored 0/0 — do not invent credit).
+              const hasRecordedSplit =
+                orig.debitFromSetOffDays != null || orig.debitFromBalanceDays != null;
+              const origDebit = hasRecordedSplit
+                ? Number(orig.debitFromSetOffDays ?? 0) + Number(orig.debitFromBalanceDays ?? 0)
+                : orig.debitDays != null
                   ? Number(orig.debitDays)
                   : calculateDebitDays({
                       leaveType: orig.leaveType,

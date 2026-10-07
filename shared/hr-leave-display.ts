@@ -1,8 +1,22 @@
 /** M-01 leave document display (Sanction Order PDF + UI preview). */
 
-/** Exact message when leave From/To overlaps a Holiday Master Public date. */
+/** Exact message when the entire leave period is a single Public Holiday day. */
 export const LEAVE_PUBLIC_HOLIDAY_MESSAGE =
   "The selected date is a Public Holiday. Leave cannot be applied for this date. Please select another date.";
+
+/** Informational note when Public Holidays fall inside a multi-day leave period (application still allowed). */
+export const LEAVE_PUBLIC_HOLIDAY_IN_PERIOD_NOTE =
+  "Public Holiday(s) fall within the selected leave period (for reference):";
+
+/** True when From and To are the same calendar day (single-day leave period). */
+export function isSingleDayLeavePeriod(
+  fromDate: string | null | undefined,
+  toDate: string | null | undefined,
+): boolean {
+  const from = String(fromDate ?? "").trim().slice(0, 10);
+  const to = String(toDate ?? "").trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(from) && from === to;
+}
 
 /** Calendar date on leave orders: DD/MM/YYYY (e.g. 04/09/2026). */
 export function formatLeaveOrderDateDisplay(isoYmd: string | null | undefined): string {
@@ -32,8 +46,11 @@ export function leaveDaysInWords(n: number): string {
   return "One";
 }
 
-/** Leave types that show balance on orders but do not debit / enforce balance. */
-export const LEAVE_TYPES_SKIP_BALANCE_DEBIT = ["CCL", "PL", "ML", "EOL"] as const;
+/**
+ * Leave types that show balance on orders but do not debit / enforce balance.
+ * Empty: PL/ML/CCL/EOL now debit their own balance accounts on sanction (same as EL/HPL/CL).
+ */
+export const LEAVE_TYPES_SKIP_BALANCE_DEBIT = [] as const;
 
 export function leaveTypeSkipsBalanceDebit(leaveType: string | null | undefined): boolean {
   const t = String(leaveType ?? "").trim().toUpperCase();

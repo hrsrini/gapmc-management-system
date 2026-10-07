@@ -44,6 +44,8 @@ import {
   SANCTION_COPY_TO_ACCOUNTS,
   SANCTION_COPY_TO_PERSONAL,
   LEAVE_PUBLIC_HOLIDAY_MESSAGE,
+  LEAVE_PUBLIC_HOLIDAY_IN_PERIOD_NOTE,
+  isSingleDayLeavePeriod,
   type LeaveYardKind,
 } from "@shared/hr-leave-display";
 import { formatAdditionalChargeLabels } from "@shared/hr-additional-charge-locations";
@@ -780,13 +782,15 @@ export default function LeaveRequests() {
     () => holidaysForRh.filter((h) => h.category === "Restricted").sort((a, b) => a.date.localeCompare(b.date)),
     [holidaysForRh],
   );
-  const publicHolidayConflictDates = useMemo(() => {
+  const publicHolidaysInPeriod = useMemo(() => {
     if (!newFrom || !newTo || newFrom > newTo) return [] as HolidayRow[];
     const all = leaveToYear === rhYear ? holidaysForRh : [...holidaysForRh, ...holidaysForToYear];
     return all
       .filter((h) => h.category === "Public" && h.date >= newFrom && h.date <= newTo)
       .sort((a, b) => a.date.localeCompare(b.date));
   }, [holidaysForRh, holidaysForToYear, leaveToYear, newFrom, newTo, rhYear]);
+  const blocksSolePublicHoliday =
+    publicHolidaysInPeriod.length > 0 && isSingleDayLeavePeriod(newFrom, newTo);
 
   const editFromYear = editFrom ? Number(String(editFrom).slice(0, 4)) : new Date().getFullYear();
   const editToYear = editTo ? Number(String(editTo).slice(0, 4)) : editFromYear;
@@ -800,13 +804,15 @@ export default function LeaveRequests() {
     queryFn: () => fetch(`/api/hr/holidays?year=${editToYear}`).then((r) => r.json()),
     enabled: editLeaveId != null && !!editTo && editToYear !== editFromYear,
   });
-  const editPublicHolidayConflictDates = useMemo(() => {
+  const editPublicHolidaysInPeriod = useMemo(() => {
     if (!editFrom || !editTo || editFrom > editTo) return [] as HolidayRow[];
     const all = editToYear === editFromYear ? holidaysEditFrom : [...holidaysEditFrom, ...holidaysEditTo];
     return all
       .filter((h) => h.category === "Public" && h.date >= editFrom && h.date <= editTo)
       .sort((a, b) => a.date.localeCompare(b.date));
   }, [editFrom, editTo, editFromYear, editToYear, holidaysEditFrom, holidaysEditTo]);
+  const editBlocksSolePublicHoliday =
+    editPublicHolidaysInPeriod.length > 0 && isSingleDayLeavePeriod(editFrom, editTo);
 
   const requestedDays = useMemo(() => {
     if (!newFrom || !newTo) return 0;
@@ -1016,10 +1022,17 @@ export default function LeaveRequests() {
   }, [showActions, list]);
 
   const sourceRows = useMemo((): Record<string, unknown>[] => {
-    return (list ?? []).map((r) => ({
+    return (list ?? []).map((r) => {
+      const leaveTypeLabel = LEAVE_TYPE_LABELS[String(r.leaveType).trim().toUpperCase()] ?? r.leaveType;
+      const storedDebit = Number(r.debitDays ?? 0);
+      const effectiveDebit =
+        storedDebit > 0
+          ? storedDebit
+          : calculateClientDebitDays(r.leaveType, r.fromDate, r.toDate, r.halfDay ?? undefined);
+      return {
       id: r.id,
       employeeLabel: employeeLabelById[r.employeeId] ?? r.employeeId,
-      leaveType: r.leaveType,
+      leaveType: leaveTypeLabel,
       fromDate: r.fromDate,
       toDate: r.toDate,
       reason: r.reason ?? "",
@@ -1063,9 +1076,9 @@ export default function LeaveRequests() {
               DV return: {r.dvReturnRemarks}
             </span>
           )}
-          {(Number(r.prefixDays ?? 0) > 0 || Number(r.suffixDays ?? 0) > 0 || Number(r.debitDays ?? 0) > 0) && (
+          {(Number(r.prefixDays ?? 0) > 0 || Number(r.suffixDays ?? 0) > 0 || effectiveDebit > 0) && (
             <span className="text-xs text-muted-foreground">
-              Debit {Number(r.debitDays ?? 0)}d
+              Debit {effectiveDebit}d
               {Number(r.prefixDays ?? 0) > 0 ? ` | Prefix ${Number(r.prefixDays ?? 0)}d` : ""}
               {Number(r.suffixDays ?? 0) > 0 ? ` | Suffix ${Number(r.suffixDays ?? 0)}d` : ""}
               {r.prefixSuffixDisallowed ? " | Prefix/Suffix Nil" : ""}
@@ -1302,7 +1315,8 @@ export default function LeaveRequests() {
           )}
         </div>
       ) : null,
-    }));
+    };
+    });
   }, [list, employeeLabelById, employees, showActions, canVerify, canApprove, canCancel, canSubmitNew, roles, statusMutation.isPending, updateMutation.isPending, rejoinMutation.isPending, joiningAckMutation.isPending]);
 
   if (isError) {
@@ -1621,11 +1635,17 @@ export default function LeaveRequests() {
               </div>
             </div>
             )}
-            {publicHolidayConflictDates.length > 0 && (
-              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-                {LEAVE_PUBLIC_HOLIDAY_MESSAGE}
+            {publicHolidaysInPeriod.length > 0 && (
+              <div
+                className={
+                  blocksSolePublicHoliday
+                    ? "rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                    : "rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100"
+                }
+              >
+                {blocksSolePublicHoliday ? LEAVE_PUBLIC_HOLIDAY_MESSAGE : LEAVE_PUBLIC_HOLIDAY_IN_PERIOD_NOTE}
                 <div className="mt-1 text-xs">
-                  {publicHolidayConflictDates
+                  {publicHolidaysInPeriod
                     .map((h) => `${formatLeaveOrderDateDisplay(h.date)} — ${h.name}`)
                     .join("; ")}
                 </div>
@@ -1881,7 +1901,7 @@ export default function LeaveRequests() {
                   toast({ title: "Missing fields", description: "Employee, from and to dates are required.", variant: "destructive" });
                   return;
                 }
-                if (publicHolidayConflictDates.length > 0) {
+                if (blocksSolePublicHoliday) {
                   toast({
                     title: "Public Holiday",
                     description: LEAVE_PUBLIC_HOLIDAY_MESSAGE,
@@ -2306,11 +2326,17 @@ export default function LeaveRequests() {
                 <Input type="date" value={editTo} onChange={(e) => setEditTo(e.target.value)} />
               </div>
             </div>
-            {editPublicHolidayConflictDates.length > 0 && (
-              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-                {LEAVE_PUBLIC_HOLIDAY_MESSAGE}
+            {editPublicHolidaysInPeriod.length > 0 && (
+              <div
+                className={
+                  editBlocksSolePublicHoliday
+                    ? "rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                    : "rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100"
+                }
+              >
+                {editBlocksSolePublicHoliday ? LEAVE_PUBLIC_HOLIDAY_MESSAGE : LEAVE_PUBLIC_HOLIDAY_IN_PERIOD_NOTE}
                 <div className="mt-1 text-xs">
-                  {editPublicHolidayConflictDates
+                  {editPublicHolidaysInPeriod
                     .map((h) => `${formatLeaveOrderDateDisplay(h.date)} — ${h.name}`)
                     .join("; ")}
                 </div>
@@ -2330,7 +2356,7 @@ export default function LeaveRequests() {
               disabled={editLeaveId == null || updateMutation.isPending}
               onClick={() => {
                 if (!editLeaveId) return;
-                if (editPublicHolidayConflictDates.length > 0) {
+                if (editBlocksSolePublicHoliday) {
                   toast({
                     title: "Public Holiday",
                     description: LEAVE_PUBLIC_HOLIDAY_MESSAGE,

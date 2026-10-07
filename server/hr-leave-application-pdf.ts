@@ -297,7 +297,7 @@ function renderForm1(
   } else if (ctx.leaveType === "CCL") {
     form1FullWidth(doc, "• Child Care Leave — subject to lifetime / annual caps as configured.", { size: 8 });
   } else if (ctx.leaveType === "EOL") {
-    form1FullWidth(doc, "• Extraordinary Leave — no balance debit from EL/HPL/CL.", { size: 8 });
+    form1FullWidth(doc, "• Extraordinary Leave — debited from the EOL leave balance on sanction.", { size: 8 });
   }
 
   doc.moveDown(1.2);

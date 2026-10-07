@@ -26,6 +26,8 @@ import {
   resolveLeaveOrderDateFromAudit,
 } from "./hr-leave-pdf-shared";
 import { allocateNextServiceBookNo } from "./hr-employee-rules";
+import { healMissingLeaveDebitIfNeeded } from "./hr-leave-balance-debit";
+import { calculateDebitDays } from "./hr-leave-prefix-suffix";
 import { nanoid } from "nanoid";
 
 const LEAVE_TYPE_LABELS: Record<string, string> = {
@@ -89,7 +91,9 @@ async function ensureEmployeeServiceBookNo(employeeId: string, current: string |
 }
 
 export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<{ buffer: Buffer; fileNo: string }> {
-  const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveRequestId)).limit(1);
+  // Apply any missing PL/ML/CCL/EOL debit before reading balances for the certificate.
+  const healed = await healMissingLeaveDebitIfNeeded(leaveRequestId);
+  const lr = healed ?? (await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveRequestId)).limit(1))[0];
   if (!lr) throw new Error("Leave request not found");
 
   const [emp] = await db.select().from(employees).where(eq(employees.id, lr.employeeId)).limit(1);
@@ -110,7 +114,14 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
 
   const leaveTypeLabel = LEAVE_TYPE_LABELS[lr.leaveType] ?? lr.leaveType;
   const empName = `${emp.firstName} ${emp.middleName ?? ""} ${emp.surname}`.replace(/\s+/g, " ").trim();
-  const debitDays = lr.debitDays != null ? Number(lr.debitDays) : 0;
+  const computedDebit = calculateDebitDays({
+    leaveType: lr.leaveType,
+    fromDate: lr.fromDate,
+    toDate: lr.toDate,
+    halfDay: lr.halfDay,
+  });
+  const storedDebit = lr.debitDays != null ? Number(lr.debitDays) : 0;
+  const debitDays = storedDebit > 0 ? storedDebit : computedDebit;
   const isExPostFacto = lr.isExPostFacto === true;
 
   // Fixed order date = DA approval day (persist if missing so re-download stays stable).

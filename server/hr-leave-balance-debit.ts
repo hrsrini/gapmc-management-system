@@ -5,7 +5,8 @@
 import { and, eq } from "drizzle-orm";
 import { leaveTypeSkipsBalanceDebit } from "@shared/hr-leave-display";
 import { db } from "./db";
-import { employeeLeaveBalances } from "@shared/db-schema";
+import { employeeLeaveBalances, leaveRequests } from "@shared/db-schema";
+import { calculateDebitDays } from "./hr-leave-prefix-suffix";
 
 type DbExecutor = Pick<typeof db, "select" | "update">;
 
@@ -166,4 +167,67 @@ export async function assertSufficientBalanceForApprovalTx(
     if (setOff > 0 && (!expiry || expiry >= asOf)) available += setOff;
   }
   if (available + 1e-9 < debitDays) throw new Error("LEAVE_INSUFFICIENT_BALANCE");
+}
+
+/**
+ * Heal Approved leaves that never debited (legacy PL/ML/CCL/EOL skip) when regenerating
+ * the sanction order, so the balance certificate matches the grant.
+ * Returns the (possibly updated) leave request row.
+ */
+export async function healMissingLeaveDebitIfNeeded(leaveRequestId: string) {
+  const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveRequestId)).limit(1);
+  if (!lr || String(lr.status) !== "Approved") return lr ?? null;
+
+  const computed = calculateDebitDays({
+    leaveType: lr.leaveType,
+    fromDate: lr.fromDate,
+    toDate: lr.toDate,
+    halfDay: lr.halfDay,
+  });
+  if (computed <= 0) return lr;
+
+  const recorded =
+    Number(lr.debitFromSetOffDays ?? 0) + Number(lr.debitFromBalanceDays ?? 0);
+  const needsDebitDaysFix = Number(lr.debitDays ?? 0) !== computed;
+
+  if (recorded + 1e-9 >= computed) {
+    if (!needsDebitDaysFix) return lr;
+    await db
+      .update(leaveRequests)
+      .set({ debitDays: computed })
+      .where(eq(leaveRequests.id, leaveRequestId));
+    const [fixed] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveRequestId)).limit(1);
+    return fixed ?? lr;
+  }
+
+  const missing = computed - recorded;
+  try {
+    await db.transaction(async (tx) => {
+      await assertSufficientBalanceForApprovalTx(tx, lr.employeeId, lr.leaveType, missing);
+      const split = await debitLeaveBalanceOnApproval(tx, {
+        employeeId: lr.employeeId,
+        leaveType: lr.leaveType,
+        debitDays: missing,
+      });
+      await tx
+        .update(leaveRequests)
+        .set({
+          debitDays: computed,
+          debitFromSetOffDays: Number(lr.debitFromSetOffDays ?? 0) + split.fromSetOff,
+          debitFromBalanceDays: Number(lr.debitFromBalanceDays ?? 0) + split.fromBalance,
+        })
+        .where(eq(leaveRequests.id, leaveRequestId));
+    });
+  } catch (e) {
+    console.error(`[leave-debit-heal] leave ${leaveRequestId}:`, e);
+    if (needsDebitDaysFix) {
+      await db
+        .update(leaveRequests)
+        .set({ debitDays: computed })
+        .where(eq(leaveRequests.id, leaveRequestId));
+    }
+  }
+
+  const [refreshed] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveRequestId)).limit(1);
+  return refreshed ?? lr;
 }

@@ -113,7 +113,34 @@ async function main() {
       "2 calendar → 4 HPL",
     ),
   );
-  checks.push(assert(calculateDebitDays({ leaveType: "ML", fromDate: "2026-01-01", toDate: "2026-06-30" }) === 0, "ML no debit", "0"));
+  checks.push(
+    assert(
+      calculateDebitDays({ leaveType: "ML", fromDate: "2026-01-01", toDate: "2026-06-30" }) === 181,
+      "ML calendar debit",
+      "181",
+    ),
+  );
+  checks.push(
+    assert(
+      calculateDebitDays({ leaveType: "PL", fromDate: "2027-01-01", toDate: "2027-01-07" }) === 7,
+      "PL calendar debit",
+      "7",
+    ),
+  );
+  checks.push(
+    assert(
+      calculateDebitDays({ leaveType: "EOL", fromDate: "2027-02-01", toDate: "2027-02-28" }) === 28,
+      "EOL calendar debit",
+      "28",
+    ),
+  );
+  checks.push(
+    assert(
+      calculateDebitDays({ leaveType: "CCL", fromDate: "2027-01-11", toDate: "2027-01-31" }) === 21,
+      "CCL calendar debit",
+      "21",
+    ),
+  );
   checks.push(assert(balanceLeaveTypeFor("COMMUTED") === "HPL", "Commuted→HPL account", "HPL"));
   checks.push(assert(balanceLeaveTypeFor("EL") === "EL", "EL account", "EL"));
 

@@ -1,5 +1,9 @@
 import { and, asc, eq, gte, lte } from "drizzle-orm";
-import { leaveTypeSkipsBalanceDebit, LEAVE_PUBLIC_HOLIDAY_MESSAGE } from "@shared/hr-leave-display";
+import {
+  leaveTypeSkipsBalanceDebit,
+  LEAVE_PUBLIC_HOLIDAY_MESSAGE,
+  isSingleDayLeavePeriod,
+} from "@shared/hr-leave-display";
 import { db } from "./db";
 import { employeeLeaveBalances, hrHolidays, leaveRequests } from "@shared/db-schema";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
@@ -23,11 +27,15 @@ export async function findPublicHolidaysInRange(
     .orderBy(asc(hrHolidays.date));
 }
 
-/** Block leave when any day in the applied period is a Public holiday. */
+/**
+ * Block leave only when the entire period is a single day that is a Public Holiday.
+ * Multi-day periods may include Public Holidays (listed in the UI for reference).
+ */
 export async function validateLeaveDatesNotPublicHoliday(
   fromDate: string,
   toDate: string,
 ): Promise<string | null> {
+  if (!isSingleDayLeavePeriod(fromDate, toDate)) return null;
   const hits = await findPublicHolidaysInRange(fromDate, toDate);
   return hits.length > 0 ? LEAVE_PUBLIC_HOLIDAY_MESSAGE : null;
 }
