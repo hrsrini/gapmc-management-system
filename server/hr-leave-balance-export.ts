@@ -6,6 +6,7 @@ import { asc, eq } from "drizzle-orm";
 import { formatLeaveOrderDateDisplay } from "@shared/hr-leave-display";
 import { db } from "./db";
 import { employeeLeaveBalances, employees } from "@shared/db-schema";
+import { normalizeLeaveBalanceType } from "./hr-leave-balance-resolve";
 
 const EXPORT_LEAVE_COLS = ["CL", "RH", "SPL_H", "HPL", "PL", "ML", "EOL", "CCL", "EL"] as const;
 
@@ -68,17 +69,30 @@ export async function buildLeaveBalanceExportAoa(asOnDate?: string): Promise<{
     Map<string, { balanceDays: number; setOffDays: number; setOffExpiryDate: string | null }>
   >();
   for (const b of bals) {
-    const lt = String(b.leaveType ?? "").trim().toUpperCase();
+    const lt = normalizeLeaveBalanceType(b.leaveType);
+    if (!lt) continue;
     let map = byEmp.get(b.employeeId);
     if (!map) {
       map = new Map();
       byEmp.set(b.employeeId, map);
     }
-    map.set(lt, {
+    const next = {
       balanceDays: Number(b.balanceDays ?? 0),
       setOffDays: Number(b.setOffDays ?? 0),
       setOffExpiryDate: b.setOffExpiryDate ? String(b.setOffExpiryDate).slice(0, 10) : null,
-    });
+    };
+    const prev = map.get(lt);
+    if (!prev) {
+      map.set(lt, next);
+    } else {
+      // Collapse aliases (e.g. C.L + CL) — prefer larger / non-zero values.
+      map.set(lt, {
+        balanceDays: Math.max(prev.balanceDays, next.balanceDays),
+        setOffDays: Math.max(prev.setOffDays, next.setOffDays),
+        setOffExpiryDate:
+          next.setOffDays >= prev.setOffDays ? next.setOffExpiryDate : prev.setOffExpiryDate,
+      });
+    }
   }
 
   const dataRows: (string | number)[][] = emps.map((e, i) => {

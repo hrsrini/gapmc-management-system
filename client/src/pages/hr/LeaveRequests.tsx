@@ -394,6 +394,7 @@ function SanctionOrderPreviewPanel({
   pendingFileNo,
   primaryLocation,
   yardIsHo,
+  isExPostFactoOverride,
 }: {
   leave: LeaveRequest;
   employee: Employee | null;
@@ -406,9 +407,13 @@ function SanctionOrderPreviewPanel({
   pendingFileNo?: boolean;
   primaryLocation?: string | null;
   yardIsHo?: boolean;
+  /** When set (Approve dialog), overrides leave.isExPostFacto for live preview. */
+  isExPostFactoOverride?: boolean | null;
 }) {
   const empName = employee ? employeeDisplayName(employee) : employeeLabel;
   const leaveTypeLabel = LEAVE_TYPE_LABELS[leave.leaveType] ?? leave.leaveType;
+  const isExPostFacto =
+    isExPostFactoOverride != null ? Boolean(isExPostFactoOverride) : Boolean(leave.isExPostFacto);
   const location =
     primaryLocation?.trim() ||
     employee?.locationPosted?.trim() ||
@@ -449,7 +454,7 @@ function SanctionOrderPreviewPanel({
       </p>
       {shortOrderTypes.has(leave.leaveType) ? (
         <p className="text-muted-foreground">
-          {leave.isExPostFacto ? "Ex-post facto sanction" : "Sanction"} for {leaveTypeLabel} —{" "}
+          {isExPostFacto ? "Ex-post facto sanction" : "Sanction"} for {leaveTypeLabel} —{" "}
           <span className="text-foreground font-medium">{Number(leave.debitDays ?? 0)} day(s)</span> on{" "}
           {formatLeaveOrderDateDisplay(leave.fromDate)}.
         </p>
@@ -466,7 +471,7 @@ function SanctionOrderPreviewPanel({
               debitDays: Number(leave.debitDays ?? 0),
               fromDate: leave.fromDate,
               toDate: leave.toDate,
-              isExPostFacto: leave.isExPostFacto,
+              isExPostFacto,
               leaveHq: leave.leaveHq,
               prefixDays: leave.prefixDays,
               suffixDays: leave.suffixDays,
@@ -529,6 +534,45 @@ function calculateClientDebitDays(leaveType: string, fromDate: string, toDate: s
   return days;
 }
 
+function supportingDocNameFromUrl(url: string | null | undefined): string {
+  const u = String(url ?? "").trim();
+  if (!u) return "";
+  try {
+    const key = new URL(u, "http://local").searchParams.get("key");
+    if (key) return key.split("/").pop() || "Supporting document.pdf";
+  } catch {
+    /* ignore */
+  }
+  return "Supporting document.pdf";
+}
+
+async function uploadLeaveSupportingPdf(
+  file: File,
+  leaveType: string,
+): Promise<{ url: string; fileName: string }> {
+  if (file.size > 5 * 1024 * 1024) {
+    throw new Error("Supporting document must be <= 5MB.");
+  }
+  if (file.type && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+    throw new Error("Only PDF documents are allowed.");
+  }
+  const form = new FormData();
+  form.append("file", file);
+  form.append("leaveType", leaveType.trim().toUpperCase() || "EL");
+  const res = await fetch("/api/hr/leaves/supporting-document-upload", {
+    method: "POST",
+    body: form,
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error ?? res.statusText);
+  }
+  const data = (await res.json()) as { url?: string };
+  if (!data.url) throw new Error("Upload succeeded but no URL returned.");
+  return { url: data.url, fileName: file.name };
+}
+
 function inclusiveCalendarDays(fromIso: string, toIso: string): number {
   const [fy, fm, fd] = String(fromIso).slice(0, 10).split("-").map((x) => Number(x));
   const [ty, tm, td] = String(toIso).slice(0, 10).split("-").map((x) => Number(x));
@@ -580,10 +624,18 @@ export default function LeaveRequests() {
   const [verifyRemarks, setVerifyRemarks] = useState("");
   const [verifyCopyToRows, setVerifyCopyToRows] = useState<string[]>([""]);
   const [verifySubstituteId, setVerifySubstituteId] = useState("");
+  const [verifyExPostFacto, setVerifyExPostFacto] = useState(false);
+  const [verifyDocUrl, setVerifyDocUrl] = useState("");
+  const [verifyDocFileName, setVerifyDocFileName] = useState("");
+  const [verifyDocUploading, setVerifyDocUploading] = useState(false);
   const [approveLeaveId, setApproveLeaveId] = useState<string | null>(null);
   const [approvePrefixSuffixNil, setApprovePrefixSuffixNil] = useState(false);
   const [approveCopyToRows, setApproveCopyToRows] = useState<string[]>([]);
   const [approveSubstituteId, setApproveSubstituteId] = useState("");
+  const [approveExPostFacto, setApproveExPostFacto] = useState(false);
+  const [approveDocUrl, setApproveDocUrl] = useState("");
+  const [approveDocFileName, setApproveDocFileName] = useState("");
+  const [approveDocUploading, setApproveDocUploading] = useState(false);
   const [previewOrderLeaveId, setPreviewOrderLeaveId] = useState<string | null>(null);
   const [editLeaveId, setEditLeaveId] = useState<string | null>(null);
   const [editLeaveType, setEditLeaveType] = useState("EL");
@@ -932,10 +984,18 @@ export default function LeaveRequests() {
       setVerifyRemarks("");
       setVerifyCopyToRows([""]);
       setVerifySubstituteId("");
+      setVerifyExPostFacto(false);
+      setVerifyDocUrl("");
+      setVerifyDocFileName("");
+      setVerifyDocUploading(false);
       setApproveLeaveId(null);
       setApprovePrefixSuffixNil(false);
       setApproveCopyToRows([]);
       setApproveSubstituteId("");
+      setApproveExPostFacto(false);
+      setApproveDocUrl("");
+      setApproveDocFileName("");
+      setApproveDocUploading(false);
     },
     onError: (e: Error) => {
       toast({ title: "Update failed", description: e.message, variant: "destructive" });
@@ -1147,6 +1207,10 @@ export default function LeaveRequests() {
                 const existing = parseCopyToJson(r.copyToJson);
                 setVerifyCopyToRows(existing.length > 0 ? existing : [""]);
                 setVerifySubstituteId(r.substituteEmployeeId ?? "");
+                setVerifyExPostFacto(Boolean(r.isExPostFacto));
+                setVerifyDocUrl(r.supportingDocumentUrl ?? "");
+                setVerifyDocFileName(supportingDocNameFromUrl(r.supportingDocumentUrl));
+                setVerifyDocUploading(false);
               }}
               disabled={statusMutation.isPending}
             >
@@ -1176,6 +1240,10 @@ export default function LeaveRequests() {
                 onClick={() => {
                   setApproveLeaveId(r.id);
                   setApprovePrefixSuffixNil(Boolean(r.prefixSuffixDisallowed));
+                  setApproveExPostFacto(Boolean(r.isExPostFacto));
+                  setApproveDocUrl(r.supportingDocumentUrl ?? "");
+                  setApproveDocFileName(supportingDocNameFromUrl(r.supportingDocumentUrl));
+                  setApproveDocUploading(false);
                   const emp = employees.find((e) => e.id === r.employeeId);
                   const existing = parseCopyToJson(r.copyToJson);
                   const yard = emp?.yardId ? yardById[emp.yardId] : undefined;
@@ -1343,8 +1411,9 @@ export default function LeaveRequests() {
                 Leave requests (IOMS M-01)
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                Workflow: Pending (DO) → Verified (Reporting Officer / DV) → Approved or Rejected (next officer / DA).
-                Visibility follows Reporting Officer mapping; DV may return Verified → Pending with remarks.
+                Workflow: Pending (DO) → Verified (immediate Reporting Officer / DV) → Approved or Rejected (next /
+                final approving officer / DA). Visibility follows Reporting Officer mapping — not role or location alone.
+                DV may return Verified → Pending with remarks.
               </p>
             </div>
             {canSubmitNew && (
@@ -1415,8 +1484,9 @@ export default function LeaveRequests() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground pt-1">
-            Role grants permission to verify/approve; Reporting Officer mapping controls whose leave you can see.
-            Additional Charge expands coverage only when those employees are mapped to you as Reporting Officer.
+            Role = what you can do; Reporting Officer mapping = whose leave you can access; the reporting hierarchy =
+            where the application moves upward. Primary posting / Additional Charge do not grant access by themselves —
+            only employees mapped to you as Reporting Officer (across those locations) appear in your queue.
           </p>
         </CardHeader>
         <CardContent>
@@ -1866,12 +1936,10 @@ export default function LeaveRequests() {
                 <p className="text-xs text-muted-foreground">Required only when leave exceeds 3 calendar days</p>
               ) : null}
             </div>
-            {(roles.includes("ADMIN") || roles.includes("DA")) && (
-              <div className="flex items-center gap-2 pt-1">
-                <Checkbox checked={newExPostFacto} onCheckedChange={(v) => setNewExPostFacto(Boolean(v))} />
-                <Label>Ex-post facto (applied after return from leave)</Label>
-              </div>
-            )}
+            <div className="flex items-center gap-2 pt-1">
+              <Checkbox checked={newExPostFacto} onCheckedChange={(v) => setNewExPostFacto(Boolean(v))} />
+              <Label>Ex-post facto (applied after return from leave)</Label>
+            </div>
             {roles.includes("ADMIN") && (
               <div className="flex items-center gap-2 pt-1">
                 <Checkbox checked={newRetrospective} onCheckedChange={(v) => setNewRetrospective(Boolean(v))} />
@@ -2078,6 +2146,10 @@ export default function LeaveRequests() {
             setVerifyLeaveId(null);
             setVerifyCopyToRows([""]);
             setVerifySubstituteId("");
+            setVerifyExPostFacto(false);
+            setVerifyDocUrl("");
+            setVerifyDocFileName("");
+            setVerifyDocUploading(false);
           }
         }}
       >
@@ -2086,6 +2158,71 @@ export default function LeaveRequests() {
             <DialogTitle>Verify leave request</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            <div className="space-y-1">
+              <Label>Supporting document (PDF, 5MB)</Label>
+              <Input
+                type="file"
+                accept="application/pdf,.pdf"
+                disabled={verifyDocUploading}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    setVerifyDocUploading(true);
+                    const uploaded = await uploadLeaveSupportingPdf(file, verifyLeave?.leaveType ?? "EL");
+                    setVerifyDocUrl(uploaded.url);
+                    setVerifyDocFileName(uploaded.fileName);
+                    toast({ title: "Document uploaded", description: uploaded.fileName });
+                  } catch (err) {
+                    toast({
+                      title: "Upload failed",
+                      description: err instanceof Error ? err.message : "Unknown error",
+                      variant: "destructive",
+                    });
+                  } finally {
+                    setVerifyDocUploading(false);
+                    e.target.value = "";
+                  }
+                }}
+              />
+              {verifyDocUploading ? (
+                <div className="text-xs text-muted-foreground flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Uploading…
+                </div>
+              ) : verifyDocUrl ? (
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <div className="min-w-0">
+                    <div className="text-xs text-muted-foreground">Attached</div>
+                    <div className="text-sm truncate" title={verifyDocFileName}>
+                      {verifyDocFileName || "PDF"}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button type="button" size="sm" variant="outline" onClick={() => window.open(verifyDocUrl, "_blank")}>
+                      View
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => {
+                        setVerifyDocUrl("");
+                        setVerifyDocFileName("");
+                      }}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">Optional — attach or correct supporting document before verify.</p>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox checked={verifyExPostFacto} onCheckedChange={(v) => setVerifyExPostFacto(Boolean(v))} />
+              <Label>Ex-post facto (applied after return from leave)</Label>
+            </div>
             <div className="space-y-1">
               <Label htmlFor="leave-verify-remarks">Controlling officer remarks</Label>
               <Textarea
@@ -2159,6 +2296,8 @@ export default function LeaveRequests() {
                   controllingOfficerRemarks: verifyRemarks.trim() || null,
                   copyToJson: trimmedCopyTo.length > 0 ? JSON.stringify(trimmedCopyTo) : null,
                   substituteEmployeeId: verifySubstituteId || null,
+                  isExPostFacto: verifyExPostFacto,
+                  supportingDocumentUrl: verifyDocUrl.trim() || null,
                 });
               }}
             >
@@ -2175,6 +2314,10 @@ export default function LeaveRequests() {
             setApproveLeaveId(null);
             setApproveCopyToRows([]);
             setApproveSubstituteId("");
+            setApproveExPostFacto(false);
+            setApproveDocUrl("");
+            setApproveDocFileName("");
+            setApproveDocUploading(false);
           }
         }}
       >
@@ -2200,6 +2343,7 @@ export default function LeaveRequests() {
               yardIsHo={
                 approveEmployee?.yardId ? isHeadOfficeYard(yardById[approveEmployee.yardId]) : false
               }
+              isExPostFactoOverride={approveExPostFacto}
             />
           )}
           <div className="flex items-center gap-2">
@@ -2281,6 +2425,71 @@ export default function LeaveRequests() {
               </SelectContent>
             </Select>
           </div>
+          <div className="space-y-1">
+            <Label>Supporting document (PDF, 5MB)</Label>
+            <Input
+              type="file"
+              accept="application/pdf,.pdf"
+              disabled={approveDocUploading}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                  setApproveDocUploading(true);
+                  const uploaded = await uploadLeaveSupportingPdf(file, approveLeave?.leaveType ?? "EL");
+                  setApproveDocUrl(uploaded.url);
+                  setApproveDocFileName(uploaded.fileName);
+                  toast({ title: "Document uploaded", description: uploaded.fileName });
+                } catch (err) {
+                  toast({
+                    title: "Upload failed",
+                    description: err instanceof Error ? err.message : "Unknown error",
+                    variant: "destructive",
+                  });
+                } finally {
+                  setApproveDocUploading(false);
+                  e.target.value = "";
+                }
+              }}
+            />
+            {approveDocUploading ? (
+              <div className="text-xs text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Uploading…
+              </div>
+            ) : approveDocUrl ? (
+              <div className="flex items-center justify-between gap-3 pt-1">
+                <div className="min-w-0">
+                  <div className="text-xs text-muted-foreground">Attached</div>
+                  <div className="text-sm truncate" title={approveDocFileName}>
+                    {approveDocFileName || "PDF"}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button type="button" size="sm" variant="outline" onClick={() => window.open(approveDocUrl, "_blank")}>
+                    View
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => {
+                      setApproveDocUrl("");
+                      setApproveDocFileName("");
+                    }}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">Optional — attach or correct before issuing the sanction order.</p>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox checked={approveExPostFacto} onCheckedChange={(v) => setApproveExPostFacto(Boolean(v))} />
+            <Label>Ex-post facto (applied after return from leave)</Label>
+          </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setApproveLeaveId(null)}>
               Cancel
@@ -2297,6 +2506,8 @@ export default function LeaveRequests() {
                   prefixSuffixDisallowed: approvePrefixSuffixNil,
                   copyToJson: trimmedCopyTo.length > 0 ? JSON.stringify(trimmedCopyTo) : null,
                   substituteEmployeeId: approveSubstituteId || null,
+                  isExPostFacto: approveExPostFacto,
+                  supportingDocumentUrl: approveDocUrl.trim() || null,
                 });
               }}
             >

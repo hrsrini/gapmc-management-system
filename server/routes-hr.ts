@@ -94,10 +94,19 @@ import {
 } from "./hr-employee-rules";
 import { aadhaarFingerprintHmac, maskAadhaar, readAadhaarRawFromRequestBody } from "./aadhaar-fingerprint";
 import { inclusiveCalendarDays } from "./hr-leave-utils";
-import { leaveSupportingDocRequired, leaveTypeSkipsBalanceDebit } from "@shared/hr-leave-display";
+import {
+  formatLeaveOrderDateDisplay,
+  leaveSupportingDocRequired,
+  leaveTypeSkipsBalanceDebit,
+} from "@shared/hr-leave-display";
 import { calculatePrefixSuffix, calculateDebitDays, validateRhDate } from "./hr-leave-prefix-suffix";
 import { debitLeaveBalanceOnApproval, creditLeaveBalanceOnReversal, balanceLeaveTypeFor, assertSufficientBalanceForApprovalTx } from "./hr-leave-balance-debit";
-import { healLeaveBalanceEmployeeIds, resolveEmployeePkForLeaveBalance } from "./hr-leave-balance-resolve";
+import {
+  collapseBalancesByCanonicalType,
+  healLeaveBalanceEmployeeIds,
+  healLeaveBalanceTypeAliases,
+  resolveEmployeePkForLeaveBalance,
+} from "./hr-leave-balance-resolve";
 import {
   parseLeaveBalanceImportCsv,
   upsertLeaveBalanceImportRows,
@@ -119,7 +128,9 @@ import {
 import {
   loadLeaveReportingEmployeeIndex,
   resolveLeaveVerifierEmployeeId,
-  resolveLeaveApproverEmployeeId,
+  resolveLeaveApproverEmployeeIdAsync,
+  resolveLeaveApproverEmployeeIdsBatch,
+  resolveLinkedUserIdsForEmployees,
   leaveEmployeeInOfficerScope,
 } from "./hr-leave-reporting-scope";
 import {
@@ -1579,8 +1590,10 @@ export function registerHrRoutes(app: Express) {
   app.get("/api/hr/leave-balances", async (req, res) => {
     try {
       if (!requireLeaveRead(req, res)) return;
-      // Heal rows imported with EMP-NNN instead of employees.id (Select needs PK).
+      // Heal rows imported with EMP-NNN instead of employees.id (Select needs PK),
+      // and merge legacy aliases such as C.L → CL / E.L → EL.
       await healLeaveBalanceEmployeeIds();
+      await healLeaveBalanceTypeAliases();
       const rows = await db.select().from(employeeLeaveBalances).orderBy(desc(employeeLeaveBalances.updatedAt));
       res.json(rows);
     } catch (e) {
@@ -1598,6 +1611,7 @@ export function registerHrRoutes(app: Express) {
         return sendApiError(res, 403, "AUTH_ADMIN_REQUIRED", "Export to Excel is available only to Admin users.");
       }
       await healLeaveBalanceEmployeeIds();
+      await healLeaveBalanceTypeAliases();
       const asOn = req.query.asOn != null ? String(req.query.asOn).trim().slice(0, 10) : "";
       const { buildLeaveBalanceExportAoa } = await import("./hr-leave-balance-export");
       const { aoa, asOnDisplay } = await buildLeaveBalanceExportAoa(asOn || undefined);
@@ -1906,8 +1920,20 @@ export function registerHrRoutes(app: Express) {
 
   app.post("/api/hr/leaves/supporting-document-upload", multerLeaveSupportingDoc, async (req, res) => {
     try {
-      if (!req.user || !canCreateLeaveRequest(req.user)) {
-        return sendApiError(res, 403, "LEAVE_CREATE_DENIED", "Only DO/Admin can upload leave documents");
+      // Applicants (DO) plus verifying/approving officers may attach or correct supporting docs.
+      if (
+        !req.user ||
+        !(
+          canCreateLeaveRequest(req.user) ||
+          (req.user.roles ?? []).some((r) => ["DV", "DA", "ADMIN"].includes(String(r.tier)))
+        )
+      ) {
+        return sendApiError(
+          res,
+          403,
+          "LEAVE_DOC_UPLOAD_DENIED",
+          "Only DO/DV/DA/Admin can upload leave supporting documents",
+        );
       }
 
       const file = req.file as Express.Multer.File | undefined;
@@ -1977,6 +2003,7 @@ export function registerHrRoutes(app: Express) {
 
       // Role = functional permission; Reporting Officer mapping = whose leave is visible.
       // Admin may see all when mine is off. DV/DA see reportees / hierarchy scope. Others see own leaves.
+      // Location / Additional Charge never grants leave access by itself.
       if (pendingMyAction) {
         list = list.filter((row) => leaveRequestAwaitingMyAction(req.user, row));
         if (!isAdmin) {
@@ -1984,13 +2011,19 @@ export function registerHrRoutes(app: Express) {
             list = [];
           } else {
             const index = await loadLeaveReportingEmployeeIndex();
+            const approverByEmp = isDa
+              ? await resolveLeaveApproverEmployeeIdsBatch(
+                  list.map((row) => row.employeeId),
+                  index,
+                )
+              : null;
             list = list.filter((row) => {
               const st = String(row.status);
               if (st === "Pending" && isDv) {
                 return resolveLeaveVerifierEmployeeId(row.employeeId, index) === selfEmployeeId;
               }
               if (st === "Verified" && isDa) {
-                return resolveLeaveApproverEmployeeId(row.employeeId, index) === selfEmployeeId;
+                return (approverByEmp?.get(row.employeeId) ?? null) === selfEmployeeId;
               }
               return false;
             });
@@ -2003,7 +2036,14 @@ export function registerHrRoutes(app: Express) {
         // full list
       } else if ((isDv || isDa) && selfEmployeeId) {
         const index = await loadLeaveReportingEmployeeIndex();
-        list = list.filter((row) => leaveEmployeeInOfficerScope(row.employeeId, selfEmployeeId, index));
+        const approverByEmp = await resolveLeaveApproverEmployeeIdsBatch(
+          [...new Set(list.map((row) => row.employeeId))],
+          index,
+        );
+        list = list.filter((row) => {
+          if (resolveLeaveVerifierEmployeeId(row.employeeId, index) === selfEmployeeId) return true;
+          return (approverByEmp.get(row.employeeId) ?? null) === selfEmployeeId;
+        });
       } else {
         if (!selfEmployeeId) list = [];
         else list = list.filter((row) => row.employeeId === selfEmployeeId);
@@ -2012,7 +2052,9 @@ export function registerHrRoutes(app: Express) {
       if (employeeId && employeeId !== selfEmployeeId && !isAdmin) {
         const index = await loadLeaveReportingEmployeeIndex();
         const allowed =
-          Boolean(selfEmployeeId) && leaveEmployeeInOfficerScope(employeeId, selfEmployeeId, index);
+          Boolean(selfEmployeeId) &&
+          (leaveEmployeeInOfficerScope(employeeId, selfEmployeeId, index) ||
+            (await resolveLeaveApproverEmployeeIdAsync(employeeId, index)) === selfEmployeeId);
         if (!allowed) list = [];
       }
 
@@ -2254,12 +2296,9 @@ export function registerHrRoutes(app: Express) {
         );
       }
 
-      // Retrospective / ex-post facto entries
+      // Retrospective remains Admin-only; ex-post facto may be set by any eligible applicant (DO/Admin).
       if (isRetrospective && !(req.user?.roles ?? []).some((r: { tier?: string }) => r.tier === "ADMIN")) {
         return sendApiError(res, 403, "LEAVE_RETRO_DENIED", "Only Admin can create retrospective entries");
-      }
-      if (isExPostFacto && !(req.user?.roles ?? []).some((r: { tier?: string }) => r.tier === "DA" || r.tier === "ADMIN")) {
-        return sendApiError(res, 403, "LEAVE_EXPOSTFACTO_DENIED", "Only DA or Admin can create ex-post facto entries");
       }
 
       // Leave application date (Form-1 / sanction READ): default today; backdating allowed; future not allowed.
@@ -2500,13 +2539,14 @@ export function registerHrRoutes(app: Express) {
           if (!expectedVerifierEmpId) {
             return sendApiError(res, 400, "LEAVE_REPORTING_OFFICER_MISSING", "Employee reporting officer is not set.");
           }
-          const verifier = index.get(expectedVerifierEmpId);
-          const expectedDvUserId = verifier?.userId ?? null;
-          if (!expectedDvUserId) {
-            return sendApiError(res, 400, "LEAVE_REPORTING_USER_MISSING", "Reporting officer has no linked login user.");
-          }
+          const myEmpId = req.user?.employeeId ? String(req.user.employeeId).trim() : "";
+          const linked = await resolveLinkedUserIdsForEmployees([expectedVerifierEmpId]);
+          const expectedDvUserId = linked.get(expectedVerifierEmpId) ?? null;
           const isAdminUser = (req.user?.roles ?? []).some((r: { tier?: string }) => r.tier === "ADMIN");
-          if (req.user?.id !== expectedDvUserId && !isAdminUser) {
+          const isMappedOfficer =
+            (myEmpId && myEmpId === expectedVerifierEmpId) ||
+            (expectedDvUserId != null && req.user?.id === expectedDvUserId);
+          if (!isMappedOfficer && !isAdminUser) {
             return sendApiError(
               res,
               403,
@@ -2514,19 +2554,27 @@ export function registerHrRoutes(app: Express) {
               "Only the employee's reporting officer can verify this leave request.",
             );
           }
+          if (!expectedDvUserId && !isAdminUser) {
+            return sendApiError(
+              res,
+              400,
+              "LEAVE_REPORTING_USER_MISSING",
+              "Reporting officer has no linked login user.",
+            );
+          }
         }
         if (existing.status === "Verified" && (newStatus === "Approved" || newStatus === "Rejected")) {
           const isAdminUser = (req.user?.roles ?? []).some((r: { tier?: string }) => r.tier === "ADMIN");
           if (!isAdminUser) {
             const index = await loadLeaveReportingEmployeeIndex();
-            const expectedApproverEmpId = resolveLeaveApproverEmployeeId(existing.employeeId, index);
+            const expectedApproverEmpId = await resolveLeaveApproverEmployeeIdAsync(existing.employeeId, index);
             const myEmpId = req.user?.employeeId ? String(req.user.employeeId).trim() : "";
             if (!expectedApproverEmpId) {
               return sendApiError(
                 res,
                 400,
                 "LEAVE_APPROVER_CHAIN_MISSING",
-                "Next approving officer is not set in the reporting hierarchy (Reporting Officer of the verifying officer).",
+                "Final approving authority is not set in the reporting hierarchy (no higher Reporting Officer with Approver role).",
               );
             }
             if (!myEmpId || myEmpId !== expectedApproverEmpId) {
@@ -2534,7 +2582,7 @@ export function registerHrRoutes(app: Express) {
                 res,
                 403,
                 "LEAVE_APPROVE_NOT_REPORTING_OFFICER",
-                "Only the next officer in the employee's reporting hierarchy can approve or reject this leave request.",
+                "Only the next / final approving officer in the employee's reporting hierarchy can approve or reject this leave request.",
               );
             }
           }
@@ -2637,6 +2685,10 @@ export function registerHrRoutes(app: Express) {
           updates[k] = body[k] === null || body[k] === "" ? null : String(body[k]);
         }
       });
+      // Ex-post facto may be corrected at Verify / Approve (and other edits with Update permission).
+      if (body.isExPostFacto !== undefined) {
+        updates.isExPostFacto = body.isExPostFacto === true;
+      }
       if (body.copyToJson !== undefined) {
         updates.copyToJson =
           body.copyToJson === null || body.copyToJson === "" ? null : String(body.copyToJson);
@@ -3744,8 +3796,19 @@ export function registerHrRoutes(app: Express) {
   app.get("/api/hr/leave-balance-statement", async (req, res) => {
     try {
       if (!requireLeaveRead(req, res)) return;
-      const employeeIds = req.query.employeeIds ? String(req.query.employeeIds).split(",") : [];
-      const asOnDate = req.query.asOnDate ? String(req.query.asOnDate) : new Date().toISOString().slice(0, 10);
+      // Heal legacy alias rows (C.L / E.L) so statements are not duplicated.
+      await healLeaveBalanceEmployeeIds();
+      await healLeaveBalanceTypeAliases();
+
+      const employeeIds = req.query.employeeIds
+        ? String(req.query.employeeIds)
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
+      const asOnRaw = req.query.asOnDate ? String(req.query.asOnDate).trim().slice(0, 10) : "";
+      const asOnIso = /^\d{4}-\d{2}-\d{2}$/.test(asOnRaw) ? asOnRaw : new Date().toISOString().slice(0, 10);
+      const asOnDisplay = formatLeaveOrderDateDisplay(asOnIso);
 
       const PDFDocument = (await import("pdfkit")).default;
       const doc = new PDFDocument({ size: "A4", margin: 50 });
@@ -3753,26 +3816,37 @@ export function registerHrRoutes(app: Express) {
       doc.on("data", (chunk: Buffer) => chunks.push(chunk));
 
       doc.fontSize(14).font("Helvetica-Bold").text("LEAVE BALANCE STATEMENT", { align: "center" });
-      doc.fontSize(10).font("Helvetica").text(`As on: ${asOnDate}`, { align: "center" });
+      doc.fontSize(10).font("Helvetica").text(`As on: ${asOnDisplay}`, { align: "center" });
       doc.moveDown(1);
 
-      const empFilter = employeeIds.length > 0
-        ? employeeIds
-        : (await db.select({ id: employees.id }).from(employees).where(eq(employees.status, "Active"))).map((e) => e.id);
+      const empFilter =
+        employeeIds.length > 0
+          ? employeeIds
+          : (await db.select({ id: employees.id }).from(employees).where(eq(employees.status, "Active"))).map(
+              (e) => e.id,
+            );
 
       for (const empId of empFilter) {
         const [emp] = await db.select().from(employees).where(eq(employees.id, empId)).limit(1);
         if (!emp) continue;
         const bals = await db.select().from(employeeLeaveBalances).where(eq(employeeLeaveBalances.employeeId, empId));
         if (!bals.length) continue;
+        const lines = collapseBalancesByCanonicalType(bals);
+        if (!lines.length) continue;
 
-        doc.font("Helvetica-Bold").fontSize(10).text(`${emp.firstName} ${emp.surname} (${emp.empId ?? emp.id}) — ${emp.designation}`);
+        const empName = `${emp.firstName} ${emp.middleName ?? ""} ${emp.surname}`.replace(/\s+/g, " ").trim();
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(10)
+          .text(`${empName} (${emp.empId ?? emp.id}) — ${emp.designation ?? ""}`.trim());
         doc.font("Helvetica").fontSize(9);
-        for (const b of bals) {
-          const balLine = `  ${b.leaveType}: ${Number(b.balanceDays ?? 0)} days`;
-          doc.text(balLine);
-          if (String(b.leaveType).toUpperCase() === "EL" && Number(b.setOffDays ?? 0) > 0) {
-            doc.text(`    Set-off (use before ${b.setOffExpiryDate ?? "expiry"}): ${Number(b.setOffDays ?? 0)} days`);
+        for (const b of lines) {
+          doc.text(`  ${b.leaveType} — ${b.label}: ${b.balanceDays} days`);
+          if (b.leaveType === "EL" && b.setOffDays > 0) {
+            const expiryDisp = b.setOffExpiryDate
+              ? formatLeaveOrderDateDisplay(b.setOffExpiryDate)
+              : "expiry";
+            doc.text(`    Set-off (use before ${expiryDisp}): ${b.setOffDays} days`);
           }
         }
         doc.moveDown(0.5);
@@ -3783,7 +3857,10 @@ export function registerHrRoutes(app: Express) {
       const buffer = Buffer.concat(chunks);
 
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `inline; filename="Leave_Balance_Statement_${asOnDate}.pdf"`);
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="Leave_Balance_Statement_${asOnDisplay.replace(/\//g, "-")}.pdf"`,
+      );
       res.send(buffer);
     } catch (e) {
       console.error(e);

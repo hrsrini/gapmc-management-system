@@ -3,8 +3,82 @@
  * Balance rows must always store the PK so UI selects and leave debit match leave requests.
  */
 import { and, eq, sql } from "drizzle-orm";
+import { nanoid } from "nanoid";
 import { db } from "./db";
 import { employeeLeaveBalances, employees } from "@shared/db-schema";
+
+/** Canonical leave-type codes used on balances / statements / debit. */
+export const CANONICAL_LEAVE_BALANCE_TYPES = [
+  "EL",
+  "HPL",
+  "COMMUTED",
+  "CL",
+  "RH",
+  "SPL_H",
+  "ML",
+  "PL",
+  "EOL",
+  "CCL",
+] as const;
+
+export const LEAVE_BALANCE_TYPE_LABELS: Record<string, string> = {
+  EL: "Earned Leave",
+  HPL: "Half Pay Leave",
+  COMMUTED: "Commuted Leave",
+  CL: "Casual Leave",
+  RH: "Restricted Holiday",
+  SPL_H: "Special Holiday",
+  ML: "Maternity Leave",
+  PL: "Paternity Leave",
+  EOL: "Extraordinary Leave",
+  CCL: "Child Care Leave",
+};
+
+/**
+ * Normalize imported / legacy leave-type labels to canonical codes.
+ * Examples: "C.L" → CL, "E.L" → EL, "Casual Leave" → CL.
+ */
+export function normalizeLeaveBalanceType(raw: string | null | undefined): string {
+  const t = String(raw ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, " ");
+  if (!t) return "";
+
+  const strippedDots = t.replace(/\./g, "");
+  const aliases: Record<string, string> = {
+    "CASUAL LEAVE": "CL",
+    CL: "CL",
+    "C L": "CL",
+    "RESTRICTED HOLIDAY": "RH",
+    "RISTRICTED HOLIDAY": "RH",
+    RH: "RH",
+    "SPECIAL HOLIDAY": "SPL_H",
+    SH: "SPL_H",
+    SPLH: "SPL_H",
+    "SPL H": "SPL_H",
+    "HALF PAY LEAVE": "HPL",
+    HPL: "HPL",
+    "EARNED LEAVE": "EL",
+    EL: "EL",
+    "E L": "EL",
+    "COMMUTED LEAVE": "COMMUTED",
+    COMMUTED: "COMMUTED",
+    "MATERNITY LEAVE": "ML",
+    ML: "ML",
+    "PATERNITY LEAVE": "PL",
+    PL: "PL",
+    "EXTRAORDINARY LEAVE": "EOL",
+    EOL: "EOL",
+    "CHILD CARE LEAVE": "CCL",
+    CCL: "CCL",
+  };
+  if (aliases[t]) return aliases[t];
+  if (aliases[strippedDots]) return aliases[strippedDots];
+  if ((CANONICAL_LEAVE_BALANCE_TYPES as readonly string[]).includes(t)) return t;
+  if ((CANONICAL_LEAVE_BALANCE_TYPES as readonly string[]).includes(strippedDots)) return strippedDots;
+  return t;
+}
 
 export async function resolveEmployeePkForLeaveBalance(raw: string): Promise<string | null> {
   const key = String(raw ?? "").trim();
@@ -71,4 +145,154 @@ export async function healLeaveBalanceEmployeeIds(): Promise<{ healed: number; m
   }
 
   return { healed, merged };
+}
+
+/**
+ * Merge legacy alias leave-type rows (e.g. C.L, E.L) into canonical codes (CL, EL).
+ * When both alias and canonical exist for an employee, keep the canonical row's balances
+ * (unless canonical balance is 0 and alias has a positive balance).
+ */
+export async function healLeaveBalanceTypeAliases(): Promise<{ renamed: number; merged: number }> {
+  const rows = await db.select().from(employeeLeaveBalances);
+  let renamed = 0;
+  let merged = 0;
+  const now = new Date().toISOString();
+
+  for (const row of rows) {
+    const canonical = normalizeLeaveBalanceType(row.leaveType);
+    const raw = String(row.leaveType ?? "").trim();
+    if (!canonical || canonical === raw) continue;
+
+    const [clash] = await db
+      .select()
+      .from(employeeLeaveBalances)
+      .where(
+        and(eq(employeeLeaveBalances.employeeId, row.employeeId), eq(employeeLeaveBalances.leaveType, canonical)),
+      )
+      .limit(1);
+
+    if (clash && clash.id !== row.id) {
+      const clashBal = Number(clash.balanceDays ?? 0);
+      const aliasBal = Number(row.balanceDays ?? 0);
+      const clashSetOff = Number(clash.setOffDays ?? 0);
+      const aliasSetOff = Number(row.setOffDays ?? 0);
+      const preferAliasBalance = clashBal === 0 && aliasBal > 0;
+      const preferAliasSetOff = clashSetOff === 0 && aliasSetOff > 0;
+      await db
+        .update(employeeLeaveBalances)
+        .set({
+          balanceDays: preferAliasBalance ? aliasBal : clashBal,
+          setOffDays: preferAliasSetOff ? aliasSetOff : clashSetOff,
+          setOffExpiryDate:
+            preferAliasSetOff && row.setOffExpiryDate
+              ? row.setOffExpiryDate
+              : clash.setOffExpiryDate ?? row.setOffExpiryDate ?? null,
+          updatedAt: now,
+        })
+        .where(eq(employeeLeaveBalances.id, clash.id));
+      await db.delete(employeeLeaveBalances).where(eq(employeeLeaveBalances.id, row.id));
+      merged++;
+    } else {
+      await db
+        .update(employeeLeaveBalances)
+        .set({ leaveType: canonical, updatedAt: now })
+        .where(eq(employeeLeaveBalances.id, row.id));
+      renamed++;
+    }
+  }
+
+  return { renamed, merged };
+}
+
+/** Statement / export order for leave types. */
+export const LEAVE_BALANCE_STATEMENT_ORDER = [
+  "EL",
+  "HPL",
+  "CL",
+  "RH",
+  "SPL_H",
+  "ML",
+  "PL",
+  "EOL",
+  "CCL",
+  "COMMUTED",
+] as const;
+
+export type NormalizedBalanceLine = {
+  leaveType: string;
+  label: string;
+  balanceDays: number;
+  setOffDays: number;
+  setOffExpiryDate: string | null;
+};
+
+/** Collapse raw balance rows to one line per canonical leave type. */
+export function collapseBalancesByCanonicalType(
+  rows: Array<{
+    leaveType: string;
+    balanceDays?: number | null;
+    setOffDays?: number | null;
+    setOffExpiryDate?: string | null;
+  }>,
+): NormalizedBalanceLine[] {
+  const map = new Map<string, NormalizedBalanceLine>();
+  for (const r of rows) {
+    const code = normalizeLeaveBalanceType(r.leaveType);
+    if (!code) continue;
+    const bal = Number(r.balanceDays ?? 0);
+    const setOff = Number(r.setOffDays ?? 0);
+    const expiry = r.setOffExpiryDate ? String(r.setOffExpiryDate).slice(0, 10) : null;
+    const prev = map.get(code);
+    if (!prev) {
+      map.set(code, {
+        leaveType: code,
+        label: LEAVE_BALANCE_TYPE_LABELS[code] ?? code,
+        balanceDays: bal,
+        setOffDays: setOff,
+        setOffExpiryDate: expiry,
+      });
+      continue;
+    }
+    // Prefer non-zero / larger values when duplicates collapsed in-memory.
+    if (bal > prev.balanceDays) prev.balanceDays = bal;
+    if (setOff > prev.setOffDays) {
+      prev.setOffDays = setOff;
+      prev.setOffExpiryDate = expiry ?? prev.setOffExpiryDate;
+    }
+  }
+
+  const ordered: NormalizedBalanceLine[] = [];
+  for (const code of LEAVE_BALANCE_STATEMENT_ORDER) {
+    const line = map.get(code);
+    if (line) ordered.push(line);
+  }
+  for (const [code, line] of map) {
+    if (!(LEAVE_BALANCE_STATEMENT_ORDER as readonly string[]).includes(code)) ordered.push(line);
+  }
+  return ordered;
+}
+
+/** Ensure a placeholder row exists (used rarely); kept for heal tooling. */
+export async function ensureCanonicalBalanceRow(
+  employeeId: string,
+  leaveType: string,
+  balanceDays = 0,
+): Promise<void> {
+  const code = normalizeLeaveBalanceType(leaveType);
+  if (!code) return;
+  const [existing] = await db
+    .select()
+    .from(employeeLeaveBalances)
+    .where(and(eq(employeeLeaveBalances.employeeId, employeeId), eq(employeeLeaveBalances.leaveType, code)))
+    .limit(1);
+  if (existing) return;
+  await db.insert(employeeLeaveBalances).values({
+    id: nanoid(),
+    employeeId,
+    leaveType: code,
+    balanceDays,
+    setOffDays: 0,
+    setOffExpiryDate: null,
+    updatedAt: new Date().toISOString(),
+  });
 }

@@ -5,7 +5,12 @@ import { and, eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db } from "./db";
 import { employeeLeaveBalances } from "@shared/db-schema";
-import { healLeaveBalanceEmployeeIds, resolveEmployeePkForLeaveBalance } from "./hr-leave-balance-resolve";
+import {
+  healLeaveBalanceEmployeeIds,
+  healLeaveBalanceTypeAliases,
+  normalizeLeaveBalanceType,
+  resolveEmployeePkForLeaveBalance,
+} from "./hr-leave-balance-resolve";
 
 export type LeaveBalanceImportRow = {
   employeeId: string;
@@ -152,6 +157,7 @@ export async function upsertLeaveBalanceImportRows(
   balances: LeaveBalanceImportRow[],
 ): Promise<LeaveBalanceImportResult> {
   await healLeaveBalanceEmployeeIds();
+  await healLeaveBalanceTypeAliases();
 
   const now = new Date().toISOString();
   let upserted = 0;
@@ -159,9 +165,7 @@ export async function upsertLeaveBalanceImportRows(
 
   for (const b of balances) {
     const rawEmployeeId = String(b.employeeId ?? "").trim();
-    const leaveType = String(b.leaveType ?? "")
-      .trim()
-      .toUpperCase();
+    const leaveType = normalizeLeaveBalanceType(b.leaveType);
     const balanceDays = Number(b.balanceDays ?? 0);
     const setOffDays = Number(b.setOffDays ?? 0);
     const setOffExpiryDate = b.setOffExpiryDate ? String(b.setOffExpiryDate).trim() : null;

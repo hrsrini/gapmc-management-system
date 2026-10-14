@@ -56,22 +56,39 @@ type EditableRow = {
 
 function normalizeLeaveTypeCode(raw: string): string {
   const t = raw.trim().toUpperCase().replace(/\s+/g, " ");
+  const stripped = t.replace(/\./g, "");
   const aliases: Record<string, string> = {
     "CASUAL LEAVE": "CL",
+    "C.L": "CL",
+    "C L": "CL",
+    CL: "CL",
     "RESTRICTED HOLIDAY": "RH",
     "RISTRICTED HOLIDAY": "RH",
+    RH: "RH",
     "SPECIAL HOLIDAY": "SPL_H",
     SH: "SPL_H",
+    SPLH: "SPL_H",
     "HALF PAY LEAVE": "HPL",
+    HPL: "HPL",
     "EARNED LEAVE": "EL",
+    "E.L": "EL",
+    "E L": "EL",
+    EL: "EL",
     "COMMUTED LEAVE": "COMMUTED",
+    COMMUTED: "COMMUTED",
     "MATERNITY LEAVE": "ML",
+    ML: "ML",
     "PATERNITY LEAVE": "PL",
+    PL: "PL",
     "EXTRAORDINARY LEAVE": "EOL",
+    EOL: "EOL",
     "CHILD CARE LEAVE": "CCL",
+    CCL: "CCL",
   };
   if (aliases[t]) return aliases[t];
+  if (aliases[stripped]) return aliases[stripped];
   if ((ALL_LEAVE_TYPES as readonly string[]).includes(t)) return t;
+  if ((ALL_LEAVE_TYPES as readonly string[]).includes(stripped)) return stripped;
   return t;
 }
 
