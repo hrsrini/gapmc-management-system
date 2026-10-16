@@ -9,6 +9,7 @@ import {
   buildSanctionContinuationParagraph,
   buildSanctionGrantParagraph,
   buildSanctionReadLine,
+  buildSanctionRevisionHistoryLines,
   classifyLeaveYardKind,
   applySalutationsToCopyToLines,
   ensureSanctionCopyToTrailers,
@@ -364,19 +365,73 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
 
   writeCenter("ORDER", { bold: true, gap: 0.35 });
 
-  writeLeft(
-    buildSanctionReadLine({
-      gender: emp.gender,
-      maritalStatus: emp.maritalStatus,
-      empName,
-      designation: emp.designation,
-      primaryLocation: primaryLocationName,
-      section: emp.section,
-      yardIsHo,
-      applicationDated: applicationDated || "________",
-    }),
-    { gap: 0.4 },
-  );
+  // Curtailment / extension: prior application + original order + revised application READ lines.
+  if (lr.revisedFromLeaveId) {
+    const [orig] = await db
+      .select()
+      .from(leaveRequests)
+      .where(eq(leaveRequests.id, lr.revisedFromLeaveId))
+      .limit(1);
+    if (orig) {
+      let origAppDated = String(orig.appliedAt ?? "").trim().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(origAppDated)) {
+        origAppDated = (await resolveLeaveApplicationDateFromAudit(orig.id)) || orig.fromDate;
+      }
+      let origOrderDated = String(orig.orderDate ?? "").trim().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(origOrderDated)) {
+        origOrderDated = (await resolveLeaveOrderDateFromAudit(orig.id)) || "";
+      }
+      const historyLines = buildSanctionRevisionHistoryLines({
+        gender: emp.gender,
+        maritalStatus: emp.maritalStatus,
+        empName,
+        designation: emp.designation,
+        primaryLocation: primaryLocationName,
+        section: emp.section,
+        yardIsHo,
+        leaveTypeLabel,
+        originalApplicationDated: origAppDated,
+        originalFromDate: orig.fromDate,
+        originalToDate: orig.toDate,
+        originalFileNo: orig.fileNo,
+        originalOrderDate: origOrderDated || null,
+        revisedApplicationDated: applicationDated || lr.fromDate,
+        revisedFromDate: lr.fromDate,
+        revisedToDate: lr.toDate,
+      });
+      for (let i = 0; i < historyLines.length; i++) {
+        writeLeft(historyLines[i]!, { gap: i === historyLines.length - 1 ? 0.4 : 0.15 });
+      }
+    } else {
+      writeLeft(
+        buildSanctionReadLine({
+          gender: emp.gender,
+          maritalStatus: emp.maritalStatus,
+          empName,
+          designation: emp.designation,
+          primaryLocation: primaryLocationName,
+          section: emp.section,
+          yardIsHo,
+          applicationDated: applicationDated || "________",
+        }),
+        { gap: 0.4 },
+      );
+    }
+  } else {
+    writeLeft(
+      buildSanctionReadLine({
+        gender: emp.gender,
+        maritalStatus: emp.maritalStatus,
+        empName,
+        designation: emp.designation,
+        primaryLocation: primaryLocationName,
+        section: emp.section,
+        yardIsHo,
+        applicationDated: applicationDated || "________",
+      }),
+      { gap: 0.4 },
+    );
+  }
 
   const fromDisp = formatLeaveOrderDate(lr.fromDate);
   const shortOrderTypes = new Set(["CL", "RH", "SPL_H"]);
@@ -408,6 +463,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
         designation: emp.designation,
         primaryLocation: primaryLocationName,
         leaveTypeLabel,
+        leaveType: lr.leaveType,
         debitDays,
         fromDate: lr.fromDate,
         toDate: lr.toDate,
@@ -433,6 +489,7 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     writeLeft(
       buildSanctionBalanceCertificateParagraph({
         leaveTypeLabel,
+        leaveType: lr.leaveType,
         balanceAfter,
         toDate: lr.toDate,
       }),

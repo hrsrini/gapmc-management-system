@@ -28,6 +28,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Calendar, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal, Plus, Download, Loader2, FileText, Pencil } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { localCalendarYmd } from "@shared/premises-allocation";
+import { formatYmdToDisplay } from "@/lib/dateFormat";
 import {
   buildDefaultSanctionCopyTo,
   classifyLeaveYardKind,
@@ -38,6 +39,7 @@ import {
   buildSanctionContinuationParagraph,
   buildSanctionGrantParagraph,
   buildSanctionReadLine,
+  buildSanctionRevisionHistoryLines,
   applySalutationsToCopyToLines,
   ensureSanctionCopyToTrailers,
   employeeMrHonorific,
@@ -395,6 +397,7 @@ function SanctionOrderPreviewPanel({
   primaryLocation,
   yardIsHo,
   isExPostFactoOverride,
+  revisedFromLeave,
 }: {
   leave: LeaveRequest;
   employee: Employee | null;
@@ -409,6 +412,8 @@ function SanctionOrderPreviewPanel({
   yardIsHo?: boolean;
   /** When set (Approve dialog), overrides leave.isExPostFacto for live preview. */
   isExPostFactoOverride?: boolean | null;
+  /** Original sanctioned leave when this application is an extension/curtailment revision. */
+  revisedFromLeave?: LeaveRequest | null;
 }) {
   const empName = employee ? employeeDisplayName(employee) : employeeLabel;
   const leaveTypeLabel = LEAVE_TYPE_LABELS[leave.leaveType] ?? leave.leaveType;
@@ -426,6 +431,30 @@ function SanctionOrderPreviewPanel({
     leave.orderDate && /^\d{4}-\d{2}-\d{2}/.test(leave.orderDate)
       ? formatLeaveOrderDateDisplay(leave.orderDate)
       : null;
+  const revisionReadLines =
+    revisedFromLeave != null
+      ? buildSanctionRevisionHistoryLines({
+          gender: employee?.gender,
+          maritalStatus: employee?.maritalStatus,
+          empName,
+          designation: employee?.designation,
+          primaryLocation: location,
+          section: employee?.section,
+          yardIsHo: Boolean(yardIsHo),
+          leaveTypeLabel,
+          originalApplicationDated:
+            revisedFromLeave.appliedAt && /^\d{4}-\d{2}-\d{2}/.test(revisedFromLeave.appliedAt)
+              ? revisedFromLeave.appliedAt.slice(0, 10)
+              : revisedFromLeave.fromDate,
+          originalFromDate: revisedFromLeave.fromDate,
+          originalToDate: revisedFromLeave.toDate,
+          originalFileNo: revisedFromLeave.fileNo,
+          originalOrderDate: revisedFromLeave.orderDate ?? null,
+          revisedApplicationDated: applicationDated === "________" ? leave.fromDate : applicationDated,
+          revisedFromDate: leave.fromDate,
+          revisedToDate: leave.toDate,
+        })
+      : null;
 
   return (
     <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-2">
@@ -440,18 +469,26 @@ function SanctionOrderPreviewPanel({
           Order date: <span className="text-foreground font-medium">{orderDateNote}</span>
         </p>
       ) : null}
-      <p className="text-muted-foreground">
-        {buildSanctionReadLine({
-          gender: employee?.gender,
-          maritalStatus: employee?.maritalStatus,
-          empName,
-          designation: employee?.designation,
-          primaryLocation: location,
-          section: employee?.section,
-          yardIsHo: Boolean(yardIsHo),
-          applicationDated,
-        })}
-      </p>
+      {revisionReadLines ? (
+        <div className="space-y-1 text-muted-foreground">
+          {revisionReadLines.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </div>
+      ) : (
+        <p className="text-muted-foreground">
+          {buildSanctionReadLine({
+            gender: employee?.gender,
+            maritalStatus: employee?.maritalStatus,
+            empName,
+            designation: employee?.designation,
+            primaryLocation: location,
+            section: employee?.section,
+            yardIsHo: Boolean(yardIsHo),
+            applicationDated,
+          })}
+        </p>
+      )}
       {shortOrderTypes.has(leave.leaveType) ? (
         <p className="text-muted-foreground">
           {isExPostFacto ? "Ex-post facto sanction" : "Sanction"} for {leaveTypeLabel} —{" "}
@@ -468,6 +505,7 @@ function SanctionOrderPreviewPanel({
               designation: employee?.designation,
               primaryLocation: location,
               leaveTypeLabel,
+              leaveType: leave.leaveType,
               debitDays: Number(leave.debitDays ?? 0),
               fromDate: leave.fromDate,
               toDate: leave.toDate,
@@ -491,6 +529,7 @@ function SanctionOrderPreviewPanel({
           <p className="text-muted-foreground">
             {buildSanctionBalanceCertificateParagraph({
               leaveTypeLabel,
+              leaveType: leave.leaveType,
               balanceAfter: balanceAfter ?? 0,
               toDate: leave.toDate,
             })}
@@ -1146,7 +1185,7 @@ export default function LeaveRequests() {
           )}
           {r.rejoiningDate ? (
             <span className="text-xs text-muted-foreground">
-              Rejoined: {r.rejoiningDate}
+              Rejoined: {formatYmdToDisplay(r.rejoiningDate)}
               {r.joiningReportAckAt ? " · Joining report acknowledged" : ""}
             </span>
           ) : null}
@@ -2344,6 +2383,11 @@ export default function LeaveRequests() {
                 approveEmployee?.yardId ? isHeadOfficeYard(yardById[approveEmployee.yardId]) : false
               }
               isExPostFactoOverride={approveExPostFacto}
+              revisedFromLeave={
+                approveLeave.revisedFromLeaveId
+                  ? (list ?? []).find((r) => r.id === approveLeave.revisedFromLeaveId) ?? null
+                  : null
+              }
             />
           )}
           <div className="flex items-center gap-2">
@@ -2617,6 +2661,11 @@ export default function LeaveRequests() {
                 previewOrderEmployee?.yardId
                   ? isHeadOfficeYard(yardById[previewOrderEmployee.yardId])
                   : false
+              }
+              revisedFromLeave={
+                previewOrderLeave.revisedFromLeaveId
+                  ? (list ?? []).find((r) => r.id === previewOrderLeave.revisedFromLeaveId) ?? null
+                  : null
               }
             />
           )}

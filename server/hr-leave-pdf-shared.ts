@@ -48,3 +48,21 @@ export async function resolveLeaveOrderDateFromAudit(leaveRequestId: string): Pr
     .limit(1);
   return ymdFromIsoish(row?.createdAt);
 }
+
+/** Verifying officer (DV) date from the first Verified status Update in audit (YYYY-MM-DD), or "". */
+export async function resolveLeaveVerifiedDateFromAudit(leaveRequestId: string): Promise<string> {
+  const [row] = await db
+    .select({ createdAt: auditLog.createdAt })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.module, "HR"),
+        eq(auditLog.action, "Update"),
+        eq(auditLog.recordId, leaveRequestId),
+        sql`COALESCE(${auditLog.afterValue}->>'status', '') = 'Verified'`,
+      ),
+    )
+    .orderBy(asc(auditLog.createdAt))
+    .limit(1);
+  return ymdFromIsoish(row?.createdAt);
+}

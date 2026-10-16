@@ -306,6 +306,120 @@ export function buildSanctionReadLine(opts: {
   return `READ: - Leave application of ${bits.join(", ")}, dated ${formatLeaveOrderDateDisplay(opts.applicationDated)}.`;
 }
 
+/** Curtailment = revised toDate earlier; extension = revised toDate later (or fromDate earlier). */
+export function classifyLeaveRevisionKind(
+  originalFrom: string,
+  originalTo: string,
+  revisedFrom: string,
+  revisedTo: string,
+): "curtailment" | "extension" | "revision" {
+  const oFrom = String(originalFrom).slice(0, 10);
+  const oTo = String(originalTo).slice(0, 10);
+  const rFrom = String(revisedFrom).slice(0, 10);
+  const rTo = String(revisedTo).slice(0, 10);
+  if (rTo < oTo || (rFrom === oFrom && rTo < oTo) || (rFrom > oFrom && rTo <= oTo)) {
+    if (rTo < oTo || rFrom > oFrom) return "curtailment";
+  }
+  if (rTo > oTo || rFrom < oFrom) return "extension";
+  return "revision";
+}
+
+/**
+ * READ references for a revised sanction (extension / curtailment), matching board specimens:
+ * 1) original application + period
+ * 2) original Leave Sanction Order No. + date
+ * 3) revised application + period + "consequent upon extension|curtailment…"
+ */
+export function buildSanctionRevisionHistoryLines(opts: {
+  gender?: string | null;
+  maritalStatus?: string | null;
+  empName: string;
+  designation?: string | null;
+  primaryLocation?: string | null;
+  section?: string | null;
+  yardIsHo?: boolean;
+  leaveTypeLabel: string;
+  originalApplicationDated: string;
+  originalFromDate: string;
+  originalToDate: string;
+  originalFileNo?: string | null;
+  originalOrderDate?: string | null;
+  revisedApplicationDated: string;
+  revisedFromDate: string;
+  revisedToDate: string;
+}): string[] {
+  const honorific = employeeHonorific(opts.gender, opts.maritalStatus);
+  const applicantBits = [
+    `${honorific} ${opts.empName}`.replace(/\s+/g, " ").trim(),
+    opts.designation?.trim() || null,
+    opts.yardIsHo && opts.section?.trim() ? opts.section.trim() : null,
+    opts.primaryLocation?.trim() || null,
+  ].filter(Boolean);
+  const applicant = applicantBits.join(", ");
+  const leaveLabel = leaveTypeSanctionLabel(opts.leaveTypeLabel);
+  const kind = classifyLeaveRevisionKind(
+    opts.originalFromDate,
+    opts.originalToDate,
+    opts.revisedFromDate,
+    opts.revisedToDate,
+  );
+  const consequent =
+    kind === "curtailment"
+      ? "consequent upon curtailment of the originally sanctioned leave"
+      : kind === "extension"
+        ? "consequent upon extension of the originally sanctioned leave"
+        : "consequent upon revision of the originally sanctioned leave";
+
+  const origFrom = formatLeaveOrderDateDisplay(opts.originalFromDate);
+  const origTo = formatLeaveOrderDateDisplay(opts.originalToDate);
+  const revFrom = formatLeaveOrderDateDisplay(opts.revisedFromDate);
+  const revTo = formatLeaveOrderDateDisplay(opts.revisedToDate);
+  const origApp = formatLeaveOrderDateDisplay(opts.originalApplicationDated);
+  const revApp = formatLeaveOrderDateDisplay(opts.revisedApplicationDated);
+
+  const lines: string[] = [
+    `READ: - Leave application of ${applicant}, dated ${origApp} for ${leaveLabel} for the period from ${origFrom} to ${origTo}.`,
+  ];
+  const fileNo = opts.originalFileNo?.trim();
+  const orderDated = opts.originalOrderDate?.trim();
+  if (fileNo) {
+    lines.push(
+      `READ: - Leave Sanction Order No. ${fileNo}${
+        orderDated ? ` dated ${formatLeaveOrderDateDisplay(orderDated)}` : ""
+      }.`,
+    );
+  }
+  lines.push(
+    `READ: - Revised leave application dated ${revApp} for ${leaveLabel} from ${revFrom} to ${revTo} ${consequent}.`,
+  );
+  return lines;
+}
+
+/**
+ * Days printed in the sanction grant line ("grant of XX days … w.e.f.").
+ * Commuted Leave debits HPL at 2× calendar days, but the order states calendar days of leave.
+ */
+export function sanctionGrantDaysForOrder(opts: {
+  leaveType?: string | null;
+  fromDate: string;
+  toDate: string;
+  debitDays: number;
+}): number {
+  const code = String(opts.leaveType ?? "").trim().toUpperCase();
+  if (code === "COMMUTED") {
+    const cal = enumerateIsoDatesInclusive(opts.fromDate, opts.toDate).length;
+    return cal > 0 ? cal : Math.max(1, Math.round(Number(opts.debitDays) / 2) || 1);
+  }
+  return opts.debitDays;
+}
+
+/** Balance type named on the certificate line (Commuted Leave → Half Pay Leave). */
+export function sanctionBalanceTypeLabel(leaveType: string | null | undefined, leaveTypeLabel: string): string {
+  const code = String(leaveType ?? "").trim().toUpperCase();
+  if (code === "COMMUTED") return "Half Pay Leave";
+  return leaveTypeLabel;
+}
+
 export function buildSanctionGrantParagraph(opts: {
   gender?: string | null;
   maritalStatus?: string | null;
@@ -313,6 +427,8 @@ export function buildSanctionGrantParagraph(opts: {
   designation?: string | null;
   primaryLocation?: string | null;
   leaveTypeLabel: string;
+  /** Leave type code (EL, COMMUTED, …) — used so Commuted grant days = calendar, not 2× debit. */
+  leaveType?: string | null;
   debitDays: number;
   fromDate: string;
   toDate: string;
@@ -328,7 +444,13 @@ export function buildSanctionGrantParagraph(opts: {
   const desig = opts.designation?.trim() || "";
   const nameDesig = desig ? `${mr} ${opts.empName}, ${desig}` : `${mr} ${opts.empName}`;
   const location = opts.primaryLocation?.trim() || "________";
-  const days = formatSanctionDebitDays(opts.debitDays);
+  const grantDays = sanctionGrantDaysForOrder({
+    leaveType: opts.leaveType,
+    fromDate: opts.fromDate,
+    toDate: opts.toDate,
+    debitDays: opts.debitDays,
+  });
+  const days = formatSanctionDebitDays(grantDays);
   const leaveLabel = leaveTypeSanctionLabel(opts.leaveTypeLabel);
   const fromDisp = formatLeaveOrderDateDisplay(opts.fromDate);
   const toDisp = formatLeaveOrderDateDisplay(opts.toDate);
@@ -367,10 +489,13 @@ export function buildSanctionContinuationParagraph(opts: {
 
 export function buildSanctionBalanceCertificateParagraph(opts: {
   leaveTypeLabel: string;
+  /** Leave type code — Commuted Leave certificate names Half Pay Leave. */
+  leaveType?: string | null;
   balanceAfter: number;
   toDate: string;
 }): string {
-  const leaveLower = leaveTypeSanctionLabel(opts.leaveTypeLabel).toLowerCase();
+  const balLabel = sanctionBalanceTypeLabel(opts.leaveType, opts.leaveTypeLabel);
+  const leaveLower = leaveTypeSanctionLabel(balLabel).toLowerCase();
   const bal = Number.isFinite(opts.balanceAfter) ? opts.balanceAfter : 0;
   const asOn = formatSanctionBalanceAsOnDate(opts.toDate);
   return `Certified that the balance ${leaveLower} after sanctioning the above leave is ${bal} days as on ${asOn}.`;

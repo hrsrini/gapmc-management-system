@@ -9,8 +9,23 @@ import {
   healLeaveBalanceEmployeeIds,
   healLeaveBalanceTypeAliases,
   normalizeLeaveBalanceType,
+  resolveElSetOffExpiryDate,
   resolveEmployeePkForLeaveBalance,
 } from "./hr-leave-balance-resolve";
+
+/** Accept YYYY-MM-DD, DD-MM-YYYY, or DD/MM/YYYY for set-off expiry on import. */
+function parseImportExpiryDate(raw: string | null | undefined): string | null {
+  const t = String(raw ?? "").trim();
+  if (!t || t.toLowerCase() === "null" || t === "-" || t === "—") return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t.slice(0, 10))) return t.slice(0, 10);
+  const dmy = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/.exec(t);
+  if (dmy) {
+    const dd = dmy[1]!.padStart(2, "0");
+    const mm = dmy[2]!.padStart(2, "0");
+    return `${dmy[3]}-${mm}-${dd}`;
+  }
+  return null;
+}
 
 export type LeaveBalanceImportRow = {
   employeeId: string;
@@ -129,8 +144,7 @@ export function parseLeaveBalanceImportCsv(csvText: string): {
       colIndex.setOffExpiryDate != null
         ? String(cells[colIndex.setOffExpiryDate] ?? "").trim()
         : "";
-    const setOffExpiryDate =
-      !expiryRaw || expiryRaw.toLowerCase() === "null" || expiryRaw === "-" ? null : expiryRaw;
+    const setOffExpiryDate = parseImportExpiryDate(expiryRaw);
 
     if (!Number.isFinite(balanceDays)) {
       parseErrors.push(`Row ${li + 1}: balanceDays must be a number`);
@@ -202,13 +216,16 @@ export async function upsertLeaveBalanceImportRows(
       .where(and(eq(employeeLeaveBalances.employeeId, employeeId), eq(employeeLeaveBalances.leaveType, leaveType)))
       .limit(1);
 
+    const resolvedExpiry =
+      leaveType === "EL" ? resolveElSetOffExpiryDate(setOffDays, setOffExpiryDate) : setOffExpiryDate || null;
+
     if (existing) {
       await db
         .update(employeeLeaveBalances)
         .set({
           balanceDays,
           setOffDays,
-          setOffExpiryDate: setOffExpiryDate || null,
+          setOffExpiryDate: resolvedExpiry,
           updatedAt: now,
         })
         .where(eq(employeeLeaveBalances.id, existing.id));
@@ -219,7 +236,7 @@ export async function upsertLeaveBalanceImportRows(
         leaveType,
         balanceDays,
         setOffDays,
-        setOffExpiryDate: setOffExpiryDate || null,
+        setOffExpiryDate: resolvedExpiry,
         updatedAt: now,
       });
     }

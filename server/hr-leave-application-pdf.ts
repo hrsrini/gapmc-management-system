@@ -4,11 +4,14 @@
  * Short letter: CL / RH / SPL_H
  */
 import PDFDocument from "pdfkit";
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, notInArray } from "drizzle-orm";
 import { formatLeaveOrderDateDisplay } from "@shared/hr-leave-display";
 import { db } from "./db";
 import { employees, leaveRequests, employeeLeaveBalances, yards, users } from "@shared/db-schema";
-import { resolveLeaveApplicationDateFromAudit } from "./hr-leave-pdf-shared";
+import {
+  resolveLeaveApplicationDateFromAudit,
+  resolveLeaveVerifiedDateFromAudit,
+} from "./hr-leave-pdf-shared";
 
 export const LEAVE_TYPE_LABELS: Record<string, string> = {
   EL: "Earned Leave",
@@ -59,20 +62,73 @@ function blankOr(value: string | null | undefined, blank = "_______________"): s
   return t || blank;
 }
 
-async function lastLeaveSummary(employeeId: string, excludeId: string): Promise<string> {
-  const rows = await db
-    .select()
+/**
+ * Form-1 item 9: prior completed leave only.
+ * Excludes this application and its entire revision family (original + revisions),
+ * and ignores leave approved/created on or after this application's submission date.
+ */
+async function lastLeaveSummary(
+  employeeId: string,
+  excludeId: string,
+  opts: { applicationDate?: string | null; revisedFromLeaveId?: string | null },
+): Promise<string> {
+  const allForEmp = await db
+    .select({
+      id: leaveRequests.id,
+      revisedFromLeaveId: leaveRequests.revisedFromLeaveId,
+      supersededByLeaveId: leaveRequests.supersededByLeaveId,
+    })
     .from(leaveRequests)
-    .where(
-      and(
-        eq(leaveRequests.employeeId, employeeId),
-        eq(leaveRequests.status, "Approved"),
-        ne(leaveRequests.id, excludeId),
-      ),
-    )
-    .orderBy(desc(leaveRequests.toDate))
-    .limit(1);
-  const last = rows[0];
+    .where(eq(leaveRequests.employeeId, employeeId));
+
+  const excludeIds = new Set<string>([excludeId]);
+  if (opts.revisedFromLeaveId) excludeIds.add(String(opts.revisedFromLeaveId).trim());
+
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const r of allForEmp) {
+      const id = r.id;
+      const parent = r.revisedFromLeaveId ? String(r.revisedFromLeaveId).trim() : "";
+      const child = r.supersededByLeaveId ? String(r.supersededByLeaveId).trim() : "";
+      if (excludeIds.has(id)) {
+        if (parent && !excludeIds.has(parent)) {
+          excludeIds.add(parent);
+          grew = true;
+        }
+        if (child && !excludeIds.has(child)) {
+          excludeIds.add(child);
+          grew = true;
+        }
+      } else if (parent && excludeIds.has(parent)) {
+        excludeIds.add(id);
+        grew = true;
+      } else if (child && excludeIds.has(child)) {
+        excludeIds.add(id);
+        grew = true;
+      }
+    }
+  }
+
+  const cutoff = String(opts.applicationDate ?? "").trim().slice(0, 10);
+  const excludeList = [...excludeIds];
+  const whereClause =
+    excludeList.length > 0
+      ? and(
+          eq(leaveRequests.employeeId, employeeId),
+          eq(leaveRequests.status, "Approved"),
+          notInArray(leaveRequests.id, excludeList),
+        )
+      : and(eq(leaveRequests.employeeId, employeeId), eq(leaveRequests.status, "Approved"));
+  const rows = await db.select().from(leaveRequests).where(whereClause).orderBy(desc(leaveRequests.toDate));
+
+  const last = rows.find((r) => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(cutoff)) {
+      // Must have ended before this application was submitted (not same-chain / later revisions).
+      return String(r.toDate).slice(0, 10) < cutoff;
+    }
+    return true;
+  });
   if (!last) return "N.A.";
   const label = LEAVE_TYPE_LABELS[last.leaveType] ?? last.leaveType;
   // Period display uses calendar days (not HPL 2× debit / zero-debit types like PL/EOL).
@@ -176,6 +232,8 @@ function renderForm1(
     controllingRemarks: string;
     controllingOfficerName: string;
     controllingOfficerDesignation: string;
+    /** YYYY-MM-DD when DV verified; printed as DD/MM/YYYY under controlling officer signature. */
+    verifyingOfficerDate: string;
     status: string;
     isExPostFacto: boolean;
     isRetrospective: boolean;
@@ -333,6 +391,9 @@ function renderForm1(
   }
   if (ctx.controllingOfficerDesignation) {
     doc.text(ctx.controllingOfficerDesignation, { align: "right" });
+  }
+  if (ctx.verifyingOfficerDate) {
+    doc.text(`Date: ${fmtDate(ctx.verifyingOfficerDate)}`, { align: "right" });
   }
 }
 
@@ -498,7 +559,6 @@ export async function generateLeaveApplicationPdf(
     .filter(Boolean)
     .join(", ");
 
-  const lastLeave = await lastLeaveSummary(lr.employeeId, lr.id);
   const balHint = await balanceHint(lr.employeeId, leaveType);
   const periodDays = inclusiveCalendarDays(lr.fromDate, lr.toDate);
   const debitDays =
@@ -526,6 +586,12 @@ export async function generateLeaveApplicationPdf(
     }
   }
   if (!applicationDate) applicationDate = lr.fromDate;
+
+  const lastLeave = await lastLeaveSummary(lr.employeeId, lr.id, {
+    applicationDate,
+    revisedFromLeaveId: lr.revisedFromLeaveId ?? null,
+  });
+  const verifyingOfficerDate = (await resolveLeaveVerifiedDateFromAudit(leaveRequestId)) || "";
 
   if (layout === "short") {
     renderShortForm(doc, {
@@ -573,6 +639,7 @@ export async function generateLeaveApplicationPdf(
       controllingRemarks: lr.controllingOfficerRemarks ?? "",
       controllingOfficerName,
       controllingOfficerDesignation,
+      verifyingOfficerDate,
       status: lr.status,
       isExPostFacto: lr.isExPostFacto === true,
       isRetrospective: lr.isRetrospective === true,

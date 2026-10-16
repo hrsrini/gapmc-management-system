@@ -5,7 +5,7 @@
  */
 import type { Express, Response, Request } from "express";
 import path from "path";
-import { eq, desc, or, and, gte, lte, isNotNull, asc, sql, ilike } from "drizzle-orm";
+import { eq, desc, or, and, gte, lte, isNotNull, asc, sql, ilike, inArray } from "drizzle-orm";
 import multer from "multer";
 import { db } from "./db";
 import {
@@ -102,9 +102,9 @@ import {
 import { calculatePrefixSuffix, calculateDebitDays, validateRhDate } from "./hr-leave-prefix-suffix";
 import { debitLeaveBalanceOnApproval, creditLeaveBalanceOnReversal, balanceLeaveTypeFor, assertSufficientBalanceForApprovalTx } from "./hr-leave-balance-debit";
 import {
-  collapseBalancesByCanonicalType,
   healLeaveBalanceEmployeeIds,
   healLeaveBalanceTypeAliases,
+  resolveElSetOffExpiryDate,
   resolveEmployeePkForLeaveBalance,
 } from "./hr-leave-balance-resolve";
 import {
@@ -251,6 +251,25 @@ async function notifyLeaveStatusChange(
   });
 }
 
+const LEAVE_SERVICE_BOOK_TYPE_LABELS: Record<string, string> = {
+  EL: "Earned Leave",
+  HPL: "Half Pay Leave",
+  COMMUTED: "Commuted Leave",
+  CL: "Casual Leave",
+  RH: "Restricted Holiday",
+  SPL_H: "Special Holiday",
+  ML: "Maternity Leave",
+  PL: "Paternity Leave",
+  EOL: "Extraordinary Leave",
+  CCL: "Child Care Leave",
+};
+
+function formatServiceBookYmd(iso: string | null | undefined): string {
+  const raw = String(iso ?? "").trim().slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : raw || "—";
+}
+
 async function appendLeaveServiceBookEntry(
   leaveRow: {
     id: string;
@@ -268,11 +287,15 @@ async function appendLeaveServiceBookEntry(
   kind: "leave_sanction" | "leave_rejoining" = "leave_sanction",
 ): Promise<void> {
   const ts = new Date().toISOString();
+  const leaveLabel =
+    LEAVE_SERVICE_BOOK_TYPE_LABELS[String(leaveRow.leaveType).trim().toUpperCase()] ?? leaveRow.leaveType;
   const fileNoText = leaveRow.fileNo?.trim() ? ` (File No: ${leaveRow.fileNo.trim()})` : "";
+  const fromDisp = formatServiceBookYmd(leaveRow.fromDate);
+  const toDisp = formatServiceBookYmd(leaveRow.toDate);
   const text =
     kind === "leave_rejoining"
-      ? `Rejoined duty on ${leaveRow.rejoiningDate ?? "—"} after ${leaveRow.leaveType} leave (${leaveRow.fromDate} to ${leaveRow.toDate})${fileNoText}`
-      : `${leaveRow.leaveType} leave sanction for ${leaveRow.fromDate} to ${leaveRow.toDate}${fileNoText}`;
+      ? `Rejoined duty on ${formatServiceBookYmd(leaveRow.rejoiningDate)} after ${leaveLabel} (${fromDisp} to ${toDisp})${fileNoText}`
+      : `${leaveLabel} leave sanction for ${fromDisp} to ${toDisp}${fileNoText}`;
   await db.insert(serviceBookEntries).values({
     id: nanoid(),
     employeeId: leaveRow.employeeId,
@@ -281,6 +304,7 @@ async function appendLeaveServiceBookEntry(
       type: kind,
       leaveRequestId: leaveRow.id,
       leaveType: leaveRow.leaveType,
+      leaveTypeLabel: leaveLabel,
       fromDate: leaveRow.fromDate,
       toDate: leaveRow.toDate,
       debitDays: leaveRow.debitDays ?? null,
@@ -301,6 +325,51 @@ async function appendLeaveServiceBookEntry(
   });
 }
 
+async function linkSanctionOrderToEmployeeDocuments(
+  employeeId: string,
+  leaveId: string,
+  fileNo: string,
+  buffer: Buffer,
+): Promise<void> {
+  // Stored name must match isAllowedEmployeeDocumentFileName (8–32 chars before ext).
+  const stored = `lsn-${leaveId}.pdf`;
+  if (!isAllowedEmployeeDocumentFileName(stored)) return;
+  await writeEmployeeDocumentBuffer(employeeId, stored, buffer);
+  const blobKey = `employees/${employeeId}/${stored}`;
+  const displayName = `Leave Sanction Order (${fileNo}).pdf`;
+  const ts = new Date().toISOString();
+  const [existing] = await db
+    .select()
+    .from(employeeDocuments)
+    .where(and(eq(employeeDocuments.employeeId, employeeId), eq(employeeDocuments.blobKey, blobKey)))
+    .limit(1);
+  if (existing) {
+    await db
+      .update(employeeDocuments)
+      .set({
+        fileName: displayName,
+        mimeType: "application/pdf",
+        sizeBytes: buffer.length,
+        status: "Approved",
+        createdAt: ts,
+      })
+      .where(eq(employeeDocuments.id, existing.id));
+    return;
+  }
+  await db.insert(employeeDocuments).values({
+    id: nanoid(),
+    employeeId,
+    docType: "Leave Sanction Order",
+    fileName: displayName,
+    mimeType: "application/pdf",
+    sizeBytes: buffer.length,
+    blobKey,
+    status: "Approved",
+    uploadedBy: null,
+    createdAt: ts,
+  });
+}
+
 async function generateAndEmailSanctionOrder(leaveId: string, employeeId: string): Promise<void> {
   try {
     const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
@@ -311,6 +380,9 @@ async function generateAndEmailSanctionOrder(leaveId: string, employeeId: string
     await db.update(leaveRequests).set({ orderPdfUrl: `/api/hr/leaves/${leaveId}/sanction-order`, fileNo }).where(eq(leaveRequests.id, leaveId));
     const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveId)).limit(1);
     if (!lr) return;
+    await linkSanctionOrderToEmployeeDocuments(employeeId, leaveId, fileNo, buffer).catch((e) =>
+      console.error("Link sanction order to employee documents failed:", e),
+    );
     await emailSanctionOrderPdf({
       employeeId,
       leaveRequestId: leaveId,
@@ -1845,7 +1917,15 @@ export function registerHrRoutes(app: Express) {
         }
         seen.add(dupKey);
 
-        normalized.push({ employeeId, leaveType, balanceDays, setOffDays, setOffExpiryDate });
+        const resolvedExpiry =
+          leaveType === "EL" ? resolveElSetOffExpiryDate(setOffDays, setOffExpiryDate) : setOffExpiryDate;
+        normalized.push({
+          employeeId,
+          leaveType,
+          balanceDays,
+          setOffDays,
+          setOffExpiryDate: resolvedExpiry,
+        });
       }
 
       // Replace-all: remove rows deleted in the UI, then upsert the submitted set.
@@ -3470,8 +3550,58 @@ export function registerHrRoutes(app: Express) {
   // ----- Service book entries (read + create; immutable after DA) -----
   app.get("/api/hr/employees/:employeeId/service-book", async (req, res) => {
     try {
-      const list = await db.select().from(serviceBookEntries).where(eq(serviceBookEntries.employeeId, req.params.employeeId)).orderBy(desc(serviceBookEntries.approvedAt));
-      res.json(list);
+      const list = await db
+        .select()
+        .from(serviceBookEntries)
+        .where(eq(serviceBookEntries.employeeId, req.params.employeeId))
+        .orderBy(desc(serviceBookEntries.approvedAt));
+
+      const userIds = [
+        ...new Set(
+          list
+            .flatMap((e) => [e.dvUser, e.approvedBy, e.doUser])
+            .filter((id): id is string => Boolean(id && String(id).trim())),
+        ),
+      ];
+      const userRows =
+        userIds.length === 0
+          ? []
+          : await db
+              .select({ id: users.id, name: users.name, employeeId: users.employeeId })
+              .from(users)
+              .where(inArray(users.id, userIds));
+      const empIds = [...new Set(userRows.map((u) => u.employeeId).filter((id): id is string => Boolean(id)))];
+      const empRows =
+        empIds.length === 0
+          ? []
+          : await db
+              .select({
+                id: employees.id,
+                firstName: employees.firstName,
+                middleName: employees.middleName,
+                surname: employees.surname,
+              })
+              .from(employees)
+              .where(inArray(employees.id, empIds));
+      const empNameById = new Map(
+        empRows.map((e) => [
+          e.id,
+          [e.firstName, e.middleName, e.surname].filter(Boolean).join(" ").replace(/\s+/g, " ").trim(),
+        ]),
+      );
+      const displayByUserId = new Map<string, string>();
+      for (const u of userRows) {
+        const fromEmp = u.employeeId ? empNameById.get(u.employeeId) : "";
+        displayByUserId.set(u.id, (fromEmp && fromEmp.trim()) || u.name || u.id);
+      }
+
+      res.json(
+        list.map((e) => ({
+          ...e,
+          verifiedByName: e.dvUser ? displayByUserId.get(e.dvUser) ?? null : null,
+          approvedByName: e.approvedBy ? displayByUserId.get(e.approvedBy) ?? null : null,
+        })),
+      );
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch service book");
@@ -3776,6 +3906,9 @@ export function registerHrRoutes(app: Express) {
       const { buffer, fileNo } = await generateSanctionOrderPdf(id);
       await store.put(blobKey, buffer, "application/pdf");
       await db.update(leaveRequests).set({ orderPdfUrl: `/api/hr/leaves/${id}/sanction-order` }).where(eq(leaveRequests.id, id));
+      await linkSanctionOrderToEmployeeDocuments(lr.employeeId, id, fileNo, buffer).catch((e) =>
+        console.error("Link sanction order to employee documents failed:", e),
+      );
 
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="Sanction_Order_${fileNo.replace(/\//g, "_")}.pdf"`);
@@ -3796,75 +3929,128 @@ export function registerHrRoutes(app: Express) {
   app.get("/api/hr/leave-balance-statement", async (req, res) => {
     try {
       if (!requireLeaveRead(req, res)) return;
-      // Heal legacy alias rows (C.L / E.L) so statements are not duplicated.
-      await healLeaveBalanceEmployeeIds();
-      await healLeaveBalanceTypeAliases();
-
+      const isAdmin = Boolean(req.user?.roles?.some((r) => String(r.tier) === "ADMIN"));
+      const selfEmployeeId = req.user?.employeeId ? String(req.user.employeeId).trim() : "";
       const employeeIds = req.query.employeeIds
         ? String(req.query.employeeIds)
             .split(",")
             .map((s) => s.trim())
             .filter(Boolean)
         : [];
-      const asOnRaw = req.query.asOnDate ? String(req.query.asOnDate).trim().slice(0, 10) : "";
-      const asOnIso = /^\d{4}-\d{2}-\d{2}$/.test(asOnRaw) ? asOnRaw : new Date().toISOString().slice(0, 10);
-      const asOnDisplay = formatLeaveOrderDateDisplay(asOnIso);
 
-      const PDFDocument = (await import("pdfkit")).default;
-      const doc = new PDFDocument({ size: "A4", margin: 50 });
-      const chunks: Buffer[] = [];
-      doc.on("data", (chunk: Buffer) => chunks.push(chunk));
-
-      doc.fontSize(14).font("Helvetica-Bold").text("LEAVE BALANCE STATEMENT", { align: "center" });
-      doc.fontSize(10).font("Helvetica").text(`As on: ${asOnDisplay}`, { align: "center" });
-      doc.moveDown(1);
-
-      const empFilter =
-        employeeIds.length > 0
-          ? employeeIds
-          : (await db.select({ id: employees.id }).from(employees).where(eq(employees.status, "Active"))).map(
-              (e) => e.id,
-            );
-
-      for (const empId of empFilter) {
-        const [emp] = await db.select().from(employees).where(eq(employees.id, empId)).limit(1);
-        if (!emp) continue;
-        const bals = await db.select().from(employeeLeaveBalances).where(eq(employeeLeaveBalances.employeeId, empId));
-        if (!bals.length) continue;
-        const lines = collapseBalancesByCanonicalType(bals);
-        if (!lines.length) continue;
-
-        const empName = `${emp.firstName} ${emp.middleName ?? ""} ${emp.surname}`.replace(/\s+/g, " ").trim();
-        doc
-          .font("Helvetica-Bold")
-          .fontSize(10)
-          .text(`${empName} (${emp.empId ?? emp.id}) — ${emp.designation ?? ""}`.trim());
-        doc.font("Helvetica").fontSize(9);
-        for (const b of lines) {
-          doc.text(`  ${b.leaveType} — ${b.label}: ${b.balanceDays} days`);
-          if (b.leaveType === "EL" && b.setOffDays > 0) {
-            const expiryDisp = b.setOffExpiryDate
-              ? formatLeaveOrderDateDisplay(b.setOffExpiryDate)
-              : "expiry";
-            doc.text(`    Set-off (use before ${expiryDisp}): ${b.setOffDays} days`);
-          }
+      let targetId = employeeIds[0] ?? "";
+      if (!targetId) {
+        if (!selfEmployeeId) {
+          return sendApiError(res, 400, "EMPLOYEE_REQUIRED", "employeeIds query param is required.");
         }
-        doc.moveDown(0.5);
+        targetId = selfEmployeeId;
+      }
+      if (!isAdmin && targetId !== selfEmployeeId) {
+        return sendApiError(
+          res,
+          403,
+          "LEAVE_STATEMENT_DENIED",
+          "You can only download your own leave balance statement (Admin may download for any employee).",
+        );
       }
 
-      doc.end();
-      await new Promise<void>((resolve) => doc.on("end", resolve));
-      const buffer = Buffer.concat(chunks);
-
+      const { generateLeaveBalanceStatementPdf } = await import("./hr-leave-balance-statement-pdf");
+      const { buffer, fileName } = await generateLeaveBalanceStatementPdf(targetId);
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="Leave_Balance_Statement_${asOnDisplay.replace(/\//g, "-")}.pdf"`,
-      );
+      res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
       res.send(buffer);
     } catch (e) {
       console.error(e);
-      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate balance statement");
+      const msg = e instanceof Error ? e.message : "Failed to generate balance statement";
+      sendApiError(res, msg === "Employee not found" ? 404 : 500, "INTERNAL_ERROR", msg);
+    }
+  });
+
+  /** Organisation Employee Leave Report (sanctioned leave for a date or date range). Admin only. */
+  app.get("/api/hr/reports/employee-leave", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      const isAdmin = Boolean(req.user.roles?.some((r) => String(r.tier) === "ADMIN"));
+      if (!isAdmin) {
+        return sendApiError(res, 403, "AUTH_ADMIN_REQUIRED", "Employee Leave Report is available only to Admin.");
+      }
+
+      const modeRaw = String(req.query.mode ?? "date").trim().toLowerCase();
+      const mode = modeRaw === "range" ? "range" : "date";
+      const format = String(req.query.format ?? "json").trim().toLowerCase();
+      const {
+        buildEmployeeLeaveReport,
+        buildEmployeeLeaveReportAoa,
+        generateEmployeeLeaveReportPdf,
+      } = await import("./hr-employee-leave-report");
+
+      let payload;
+      try {
+        payload = await buildEmployeeLeaveReport({
+          mode,
+          date: req.query.date != null ? String(req.query.date) : undefined,
+          fromDate: req.query.fromDate != null ? String(req.query.fromDate) : undefined,
+          toDate: req.query.toDate != null ? String(req.query.toDate) : undefined,
+        });
+      } catch (err) {
+        return sendApiError(
+          res,
+          400,
+          "LEAVE_REPORT_DATES",
+          err instanceof Error ? err.message : "Invalid date criteria",
+        );
+      }
+
+      if (format === "json") {
+        return res.json(payload);
+      }
+
+      const stamp =
+        mode === "date"
+          ? formatLeaveOrderDateDisplay(payload.fromDate).replace(/\//g, "-")
+          : `${formatLeaveOrderDateDisplay(payload.fromDate).replace(/\//g, "-")}_to_${formatLeaveOrderDateDisplay(payload.toDate).replace(/\//g, "-")}`;
+
+      if (format === "xlsx" || format === "excel") {
+        const XLSX = await import("xlsx");
+        const aoa = buildEmployeeLeaveReportAoa(payload);
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws["!cols"] = [
+          { wch: 8 },
+          { wch: 12 },
+          { wch: 24 },
+          { wch: 22 },
+          { wch: 24 },
+          { wch: 24 },
+          { wch: 24 },
+          { wch: 18 },
+          { wch: 10 },
+          { wch: 28 },
+        ];
+        XLSX.utils.book_append_sheet(wb, ws, "Employee Leave");
+        const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="Employee_Leave_Report_${stamp}.xlsx"`,
+        );
+        return res.send(Buffer.from(buf));
+      }
+
+      if (format === "pdf") {
+        const buffer = await generateEmployeeLeaveReportPdf(payload);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="Employee_Leave_Report_${stamp}.pdf"`,
+        );
+        return res.send(buffer);
+      }
+
+      return sendApiError(res, 400, "FORMAT_INVALID", "format must be json, pdf, or xlsx");
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate employee leave report");
     }
   });
 

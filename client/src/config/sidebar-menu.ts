@@ -204,6 +204,7 @@ export const SIDEBAR_MENU_GROUPS: SidebarMenuGroup[] = [
       { title: "Leave opening balances", icon: CalendarDays, href: "/hr/leave-balances", requirePermission: { module: "M-01", action: "Read" } },
       { title: "Import leave balances", icon: CalendarDays, href: "/hr/leave-balances/import", requirePermission: { module: "M-01", action: "Update" } },
       { title: "Holiday calendar", icon: Calendar, href: "/hr/holiday-calendar", requirePermission: { module: "M-01", action: "Read" } },
+      { title: "Leave reports", icon: FileSpreadsheet, href: "/hr/leave-reports", requirePermission: { module: "M-01", action: "Read" } },
       { title: "Employee Posting Report", icon: MapPin, href: "/hr/employee-posting-report", adminOnly: true },
       { title: "Claims (LTC / TA-DA)", icon: Wallet, href: "/hr/claims", requirePermission: { module: "M-01", action: "Read" } },
     ],

@@ -106,6 +106,9 @@ interface ServiceBookEntry {
   status: string;
   approvedBy?: string | null;
   approvedAt?: string | null;
+  dvUser?: string | null;
+  verifiedByName?: string | null;
+  approvedByName?: string | null;
 }
 interface Contract {
   id: string;
@@ -271,23 +274,62 @@ export default function HrEmployeeDetail() {
   });
 
   const serviceBookRows = useMemo((): Record<string, unknown>[] => {
+    const leaveLabels: Record<string, string> = {
+      EL: "Earned Leave",
+      HPL: "Half Pay Leave",
+      COMMUTED: "Commuted Leave",
+      CL: "Casual Leave",
+      RH: "Restricted Holiday",
+      SPL_H: "Special Holiday",
+      ML: "Maternity Leave",
+      PL: "Paternity Leave",
+      EOL: "Extraordinary Leave",
+      CCL: "Child Care Leave",
+    };
     return serviceBook.map((e) => {
-      const contentText =
-        typeof e.content === "object" && e.content && "text" in e.content
-          ? String((e.content as { text?: string }).text)
-          : "—";
-      const approvedLine = e.approvedAt
-        ? `${formatApiDateOrDateTime(e.approvedAt)}${e.approvedBy ? ` by ${e.approvedBy}` : ""}`
-        : "—";
+      const c = typeof e.content === "object" && e.content ? (e.content as Record<string, unknown>) : null;
+      const leaveTypeCode = c?.leaveType != null ? String(c.leaveType).trim().toUpperCase() : "";
+      const leaveLabel =
+        (c?.leaveTypeLabel != null && String(c.leaveTypeLabel).trim()) ||
+        leaveLabels[leaveTypeCode] ||
+        leaveTypeCode;
+      const fromDisp = c?.fromDate ? formatYmdToDisplay(String(c.fromDate)) : "";
+      const toDisp = c?.toDate ? formatYmdToDisplay(String(c.toDate)) : "";
+      const fileNoText = c?.fileNo != null && String(c.fileNo).trim() ? ` (File No: ${String(c.fileNo).trim()})` : "";
+      let contentText =
+        c && "text" in c && c.text != null ? String(c.text) : "—";
+      if (c && (c.type === "leave_sanction" || c.type === "leave_rejoining") && leaveLabel && fromDisp && toDisp) {
+        contentText =
+          c.type === "leave_rejoining"
+            ? `Rejoined duty on ${formatYmdToDisplay(String(c.rejoiningDate ?? ""))} after ${leaveLabel} (${fromDisp} to ${toDisp})${fileNoText}`
+            : `${leaveLabel} leave sanction for ${fromDisp} to ${toDisp}${fileNoText}`;
+      }
+      const isLeaveEntry =
+        Boolean(c) &&
+        ("leaveRequestId" in (c ?? {}) ||
+          String(c?.type ?? "").startsWith("leave_"));
+      const verifiedName = e.verifiedByName?.trim() || null;
+      const approvedName = e.approvedByName?.trim() || null;
+      const when = e.approvedAt ? formatApiDateOrDateTime(e.approvedAt) : "";
+      let approvedLine = "—";
+      if (isLeaveEntry && (verifiedName || approvedName || when)) {
+        const parts: string[] = [];
+        if (verifiedName) parts.push(`Leave Verified by ${verifiedName}`);
+        if (approvedName) parts.push(`Leave Approved by ${approvedName}`);
+        if (when) parts.push(when);
+        approvedLine = parts.join(", ");
+      } else if (when) {
+        approvedLine = approvedName || e.approvedBy ? `${when} by ${approvedName || e.approvedBy}` : when;
+      }
       return {
         id: e.id,
         section: e.section,
         status: e.status,
         contentText,
         approvedAt: e.approvedAt ?? "",
-        approvedBy: e.approvedBy ?? "",
+        approvedBy: approvedName || e.approvedBy || "",
         _status: <Badge variant="outline">{e.status}</Badge>,
-        _approved: <span className="text-muted-foreground text-xs">{approvedLine}</span>,
+        _approved: <span className="text-muted-foreground text-xs whitespace-normal break-words">{approvedLine}</span>,
         _workflow: (
           <span className="text-muted-foreground text-xs">
             {e.status === "Pending" ? "DV verify → DA approve/reject" : e.status === "Verified" ? "DA approve/reject (or DV return)" : "—"}
@@ -719,6 +761,7 @@ export default function HrEmployeeDetail() {
                   defaultSortKey="section"
                   defaultSortDir="asc"
                   emptyMessage="No service book entries."
+                  layout="fit"
                 />
               )}
             </TabsContent>

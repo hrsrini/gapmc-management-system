@@ -26,11 +26,11 @@ export const LEAVE_BALANCE_TYPE_LABELS: Record<string, string> = {
   HPL: "Half Pay Leave",
   COMMUTED: "Commuted Leave",
   CL: "Casual Leave",
-  RH: "Restricted Holiday",
-  SPL_H: "Special Holiday",
+  RH: "Restricted Holiday Leave",
+  SPL_H: "Special Holiday Leave",
   ML: "Maternity Leave",
   PL: "Paternity Leave",
-  EOL: "Extraordinary Leave",
+  EOL: "Extra Ordinary Leave",
   CCL: "Child Care Leave",
 };
 
@@ -204,18 +204,17 @@ export async function healLeaveBalanceTypeAliases(): Promise<{ renamed: number; 
   return { renamed, merged };
 }
 
-/** Statement / export order for leave types. */
+/** Individual Leave Balance Statement order (matches board specimen PDF). */
 export const LEAVE_BALANCE_STATEMENT_ORDER = [
   "EL",
   "HPL",
+  "PL",
+  "ML",
+  "CCL",
+  "EOL",
   "CL",
   "RH",
   "SPL_H",
-  "ML",
-  "PL",
-  "EOL",
-  "CCL",
-  "COMMUTED",
 ] as const;
 
 export type NormalizedBalanceLine = {
@@ -270,6 +269,84 @@ export function collapseBalancesByCanonicalType(
     if (!(LEAVE_BALANCE_STATEMENT_ORDER as readonly string[]).includes(code)) ordered.push(line);
   }
   return ordered;
+}
+
+/**
+ * Specimen statement lines: always emit the fixed leave-type list (0 when absent).
+ * Omits COMMUTED (not on the individual statement specimen).
+ */
+export function buildLeaveBalanceStatementLines(
+  rows: Array<{
+    leaveType: string;
+    balanceDays?: number | null;
+    setOffDays?: number | null;
+    setOffExpiryDate?: string | null;
+  }>,
+): NormalizedBalanceLine[] {
+  const collapsed = collapseBalancesByCanonicalType(rows);
+  const byCode = new Map(collapsed.map((l) => [l.leaveType, l]));
+  return LEAVE_BALANCE_STATEMENT_ORDER.map((code) => {
+    const existing = byCode.get(code);
+    if (existing) return existing;
+    return {
+      leaveType: code,
+      label: LEAVE_BALANCE_TYPE_LABELS[code] ?? code,
+      balanceDays: 0,
+      setOffDays: 0,
+      setOffExpiryDate: null,
+    };
+  });
+}
+
+/**
+ * Default EL set-off expiry = end of current half-year (matches accrual cron):
+ * Jan–Jun → YYYY-06-30; Jul–Dec → YYYY-12-31.
+ */
+export function defaultElSetOffExpiryDate(asOfYmd = new Date().toISOString().slice(0, 10)): string {
+  const raw = String(asOfYmd).trim().slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  const y = m ? m[1]! : String(new Date().getFullYear());
+  const month = m ? Number(m[2]) : new Date().getMonth() + 1;
+  return month <= 6 ? `${y}-06-30` : `${y}-12-31`;
+}
+
+/** When set-off days exist but expiry was never stored (manual/import), fill the half-year end. */
+export function resolveElSetOffExpiryDate(
+  setOffDays: number,
+  setOffExpiryDate: string | null | undefined,
+  asOfYmd?: string,
+): string | null {
+  if (!(Number(setOffDays) > 0)) return null;
+  const raw = setOffExpiryDate != null ? String(setOffExpiryDate).trim().slice(0, 10) : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  return defaultElSetOffExpiryDate(asOfYmd);
+}
+
+/** Persist missing EL set-off expiry dates (rows with set_off_days > 0 and null expiry). */
+export async function healMissingElSetOffExpiryDates(employeeId?: string): Promise<number> {
+  const asOf = new Date().toISOString().slice(0, 10);
+  const defaultExpiry = defaultElSetOffExpiryDate(asOf);
+  const rows = employeeId
+    ? await db
+        .select()
+        .from(employeeLeaveBalances)
+        .where(and(eq(employeeLeaveBalances.employeeId, employeeId), eq(employeeLeaveBalances.leaveType, "EL")))
+    : await db.select().from(employeeLeaveBalances).where(eq(employeeLeaveBalances.leaveType, "EL"));
+
+  let healed = 0;
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    const setOff = Number(row.setOffDays ?? 0);
+    if (setOff <= 0) continue;
+    const expiry = row.setOffExpiryDate ? String(row.setOffExpiryDate).trim().slice(0, 10) : "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(expiry)) continue;
+    await db
+      .update(employeeLeaveBalances)
+      .set({ setOffExpiryDate: defaultExpiry, updatedAt: now })
+      .where(eq(employeeLeaveBalances.id, row.id));
+    healed += 1;
+  }
+  return healed;
 }
 
 /** Ensure a placeholder row exists (used rarely); kept for heal tooling. */
