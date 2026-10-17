@@ -13,6 +13,7 @@ import { KeyRound, Loader2 } from "lucide-react";
 import { ADMIN_403_MESSAGE, fetchApiGet } from "@/lib/queryClient";
 import { isValidEmailFormat, parseIndianMobile10Digits, sanitizeMobile10Input } from "@shared/india-validation";
 import { getPasswordPolicyBrUsr10FirstViolation, passwordPolicyBrUsr10Hint } from "@shared/password-policy-br-usr-10";
+import { parseAdditionalChargeYardIds } from "@shared/hr-additional-charge-locations";
 
 interface UserRoleRef {
   id: string;
@@ -58,6 +59,12 @@ interface EmployeeLoginAccessSectionProps {
   employeeStatus: string;
   displayName: string;
   workEmail?: string | null;
+  /** Live Primary Location Posted from Public info (preferred over fetched employee). */
+  primaryYardId?: string | null;
+  /** Live Additional Charge Location ids from Public info. */
+  additionalYardIds?: string[];
+  /** Fallback when additionalYardIds not passed. */
+  locationPosted?: string | null;
 }
 
 export function EmployeeLoginAccessSection({
@@ -65,6 +72,9 @@ export function EmployeeLoginAccessSection({
   employeeStatus,
   displayName,
   workEmail,
+  primaryYardId: primaryYardIdProp,
+  additionalYardIds: additionalYardIdsProp,
+  locationPosted: locationPostedProp,
 }: EmployeeLoginAccessSectionProps) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -80,7 +90,6 @@ export function EmployeeLoginAccessSection({
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [selectedRoleIds, setSelectedRoleIds] = useState<Set<string>>(new Set());
-  const [selectedYardIds, setSelectedYardIds] = useState<Set<string>>(new Set());
 
   const profileUrl = `/api/hr/employees/${employeeId}/login-profile`;
   const {
@@ -97,6 +106,17 @@ export function EmployeeLoginAccessSection({
   const linkedUser = profile?.login ?? undefined;
   const isEditMode = Boolean(linkedUser);
 
+  const needsEmployeeLocations =
+    primaryYardIdProp === undefined && additionalYardIdsProp === undefined && locationPostedProp === undefined;
+  const { data: employeeRow, isLoading: employeeLocLoading } = useQuery<{
+    yardId?: string | null;
+    locationPosted?: string | null;
+  }>({
+    queryKey: ["/api/hr/employees", employeeId],
+    queryFn: () => fetchApiGet(`/api/hr/employees/${employeeId}`),
+    enabled: canM10Read && Boolean(employeeId) && needsEmployeeLocations,
+  });
+
   const {
     data: roles = [],
     isLoading: rolesLoading,
@@ -110,14 +130,45 @@ export function EmployeeLoginAccessSection({
   const {
     data: yards = [],
     isLoading: yardsLoading,
-    isError: yardsError,
-    error: yardsErr,
   } = useQuery<Yard[]>({
     queryKey: ["/api/admin/yards"],
     enabled: canM10Read,
   });
 
-  const activeYards = useMemo(() => yards.filter((y) => y.isActive !== false), [yards]);
+  const syncedLocations = useMemo(() => {
+    const primary = String(
+      primaryYardIdProp !== undefined ? primaryYardIdProp : (employeeRow?.yardId ?? ""),
+    ).trim();
+    const additional =
+      additionalYardIdsProp !== undefined
+        ? additionalYardIdsProp.filter((id) => id && id !== primary)
+        : parseAdditionalChargeYardIds(
+            locationPostedProp !== undefined ? locationPostedProp : employeeRow?.locationPosted,
+            primary,
+          );
+    const yardName = (id: string) => {
+      const fromMaster = yards.find((y) => y.id === id);
+      if (fromMaster) return fromMaster.name;
+      const fromLogin = linkedUser?.yards?.find((y) => y.id === id);
+      return fromLogin?.name ?? id;
+    };
+    const rows: { id: string; name: string; kind: "primary" | "additional" }[] = [];
+    if (primary) rows.push({ id: primary, name: yardName(primary), kind: "primary" });
+    for (const id of additional) {
+      if (!id || id === primary) continue;
+      rows.push({ id, name: yardName(id), kind: "additional" });
+    }
+    return rows;
+  }, [
+    primaryYardIdProp,
+    additionalYardIdsProp,
+    locationPostedProp,
+    employeeRow?.yardId,
+    employeeRow?.locationPosted,
+    yards,
+    linkedUser?.yards,
+  ]);
+
   const serverRolesKey = useMemo(
     () =>
       (linkedUser?.roles ?? [])
@@ -126,18 +177,10 @@ export function EmployeeLoginAccessSection({
         .join(","),
     [linkedUser?.roles],
   );
-  const serverYardsKey = useMemo(
-    () =>
-      (linkedUser?.yards ?? [])
-        .map((y) => y.id)
-        .sort()
-        .join(","),
-    [linkedUser?.yards],
-  );
   const lastHydratedKeyRef = useRef<string>("");
 
   useEffect(() => {
-    const hydrateKey = linkedUser ? `${linkedUser.id}|${serverRolesKey}|${serverYardsKey}|${linkedUser.email}|${linkedUser.name}` : "none";
+    const hydrateKey = linkedUser ? `${linkedUser.id}|${serverRolesKey}|${linkedUser.email}|${linkedUser.name}` : "none";
     if (lastHydratedKeyRef.current === hydrateKey) return;
     lastHydratedKeyRef.current = hydrateKey;
 
@@ -150,7 +193,6 @@ export function EmployeeLoginAccessSection({
       setPassword("");
       setConfirmPassword("");
       setSelectedRoleIds(new Set((linkedUser.roles ?? []).map((r) => r.id)));
-      setSelectedYardIds(new Set((linkedUser.yards ?? []).map((y) => y.id)));
     } else {
       setEmail(workEmail?.trim() ? workEmail.trim() : "");
       setName(displayName);
@@ -160,9 +202,8 @@ export function EmployeeLoginAccessSection({
       setPassword("");
       setConfirmPassword("");
       setSelectedRoleIds(new Set());
-      setSelectedYardIds(new Set());
     }
-  }, [linkedUser, displayName, workEmail, serverRolesKey, serverYardsKey]);
+  }, [linkedUser, displayName, workEmail, serverRolesKey]);
 
   useEffect(() => {
     if (employeeStatus !== "Active") {
@@ -531,29 +572,28 @@ export function EmployeeLoginAccessSection({
               <div className="flex flex-col rounded-md border">
                 <div className="rounded-t-md border-b bg-muted/40 px-3 py-2 text-sm font-medium">Locations</div>
                 <p className="px-3 pt-2 text-xs text-muted-foreground">
-                  Read-only. Synced from employee Primary Location Posted and Additional Charge Locations — edit those on the employee form.
+                  Read-only. Always matches Public info → Primary Location Posted and Additional Charge Locations (not editable here).
                 </p>
                 <div className="space-y-2 p-3 max-h-48 overflow-y-auto bg-muted/20">
-                  {usersLoading ? (
+                  {usersLoading || yardsLoading || (needsEmployeeLocations && employeeLocLoading) ? (
                     <Skeleton className="h-20 w-full" />
-                  ) : (linkedUser?.yards?.length ?? 0) === 0 && selectedYardIds.size === 0 ? (
+                  ) : syncedLocations.length === 0 ? (
                     <p className="text-xs text-muted-foreground">
-                      No locations yet. Set primary/additional on the employee record; they appear here after save.
+                      No locations yet. Set Primary Location Posted (and optional Additional Charge Locations) under Public info, then save the employee.
                     </p>
-                  ) : (linkedUser?.yards?.length ?? 0) > 0 ? (
-                    linkedUser!.yards!.map((y) => (
-                      <p key={y.id} className="text-sm">
-                        {y.name}
-                      </p>
-                    ))
                   ) : (
-                    activeYards
-                      .filter((y) => selectedYardIds.has(y.id))
-                      .map((y) => (
-                        <p key={y.id} className="text-sm">
-                          {y.name}
-                        </p>
-                      ))
+                    syncedLocations.map((loc) => (
+                      <div key={loc.id} className="flex items-center gap-2 text-sm">
+                        <Checkbox checked disabled className="opacity-100" />
+                        <span>
+                          {loc.name}
+                          <span className="text-muted-foreground">
+                            {" "}
+                            ({loc.kind === "primary" ? "primary" : "additional"})
+                          </span>
+                        </span>
+                      </div>
+                    ))
                   )}
                 </div>
               </div>

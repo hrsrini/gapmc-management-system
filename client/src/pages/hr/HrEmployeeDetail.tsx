@@ -907,6 +907,8 @@ export default function HrEmployeeDetail() {
                 employeeStatus={employee.status}
                 displayName={fullName}
                 workEmail={employee.workEmail}
+                primaryYardId={employee.yardId}
+                locationPosted={employee.locationPosted}
               />
             </TabsContent>
           </Tabs>

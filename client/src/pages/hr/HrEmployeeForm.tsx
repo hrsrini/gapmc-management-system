@@ -1286,6 +1286,8 @@ export default function HrEmployeeForm() {
                       employeeStatus={status}
                       displayName={displayNameForAccess || employee?.empId || id}
                       workEmail={workEmail}
+                      primaryYardId={yardId}
+                      additionalYardIds={additionalChargeYardIds}
                     />
                   )}
                 </TabsContent>
