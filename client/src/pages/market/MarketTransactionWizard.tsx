@@ -183,6 +183,8 @@ export default function MarketTransactionWizard() {
   const [receiptResult, setReceiptResult] = useState<{ receiptId: string; receiptNo: string } | null>(null);
   const [receiptDownloading, setReceiptDownloading] = useState(false);
   const [prefillApplied, setPrefillApplied] = useState(false);
+  /** True when opened via licence detail → Transaction (trader must stay read-only). */
+  const [traderLockedFromLicencePage, setTraderLockedFromLicencePage] = useState(false);
   const preferredEntryYardRef = useRef<string>("");
 
   const meta = MARKET_TRANSACTION_CASES[caseType];
@@ -204,6 +206,7 @@ export default function MarketTransactionWizard() {
     }
     if (licId) {
       setTraderLicenceId(licId);
+      setTraderLockedFromLicencePage(true);
       applied = true;
     }
     if (preferredYard) {
@@ -330,9 +333,10 @@ export default function MarketTransactionWizard() {
   });
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
 
-  /** Case A (and other cases): Active. Case B: no status filter (Expired / expired-by-date). */
-  const licenceStatusFilter = caseType === "B" ? undefined : "Active";
-  const traderPrefillLocked = Boolean(traderLicenceId.trim() && prefilledLicence?.id === traderLicenceId);
+  /** Direct wizard search: Case A → Active only; Case B → Expired only. */
+  const licenceStatusFilter = caseType === "B" ? "Expired" : "Active";
+  const showLockedTraderCard =
+    traderLockedFromLicencePage && Boolean(traderLicenceId.trim());
 
   const payload = useMemo(
     () =>
@@ -749,44 +753,45 @@ export default function MarketTransactionWizard() {
 
             {meta.requiresTraderLicence && (
               <div className="space-y-1 sm:col-span-2 border-t pt-4">
-                <Label>Trader licence {caseType === "B" ? "(expired)" : ""}</Label>
-                {prefilledLicenceLoading && traderLicenceId ? (
-                  <p className="text-sm text-muted-foreground">Loading licence details…</p>
-                ) : null}
-                {prefilledLicenceError && traderLicenceId ? (
-                  <p className="text-sm text-destructive">
-                    Could not load this licence. Pick entry location and select the trader again, or return from the licence page.
-                  </p>
-                ) : null}
-                {traderPrefillLocked && prefilledLicence ? (
-                  <div className="rounded-md border bg-muted/40 p-3 space-y-1 text-sm">
-                    <p className="font-medium">
-                      {prefilledLicence.licenceNo?.trim() || prefilledLicence.id}
-                      {prefilledLicence.firmName ? ` — ${prefilledLicence.firmName}` : ""}
-                    </p>
-                    <p className="text-muted-foreground">
-                      Status: {prefilledLicence.status ?? "—"}
-                      {prefilledLicence.validTo
-                        ? ` · Valid to ${String(prefilledLicence.validTo).slice(0, 10)}`
-                        : ""}
-                      {prefilledLicence.mobile ? ` · ${prefilledLicence.mobile}` : ""}
-                    </p>
-                    {prefilledLicence.address ? (
-                      <p className="text-muted-foreground text-xs">{prefilledLicence.address}</p>
+                <Label>Trader licence {caseType === "B" ? "(expired only)" : "(active only)"}</Label>
+                {showLockedTraderCard ? (
+                  <>
+                    {prefilledLicenceLoading ? (
+                      <p className="text-sm text-muted-foreground">Loading licence details…</p>
                     ) : null}
-                    <p className="text-xs text-muted-foreground">
-                      Selected trader licence. Set or change entry location above if needed.
-                    </p>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2"
-                      onClick={() => setTraderLicenceId("")}
-                    >
-                      Clear and search again
-                    </Button>
-                  </div>
+                    {prefilledLicenceError ? (
+                      <p className="text-sm text-destructive">
+                        Could not load this licence. Return to the trader page and open Transaction again.
+                      </p>
+                    ) : null}
+                    {prefilledLicence ? (
+                      <div className="rounded-md border bg-muted/40 p-3 space-y-1 text-sm">
+                        <p className="font-medium">
+                          {prefilledLicence.licenceNo?.trim() || prefilledLicence.id}
+                          {prefilledLicence.firmName ? ` — ${prefilledLicence.firmName}` : ""}
+                        </p>
+                        <p className="text-muted-foreground">
+                          Status: {prefilledLicence.status ?? "—"}
+                          {prefilledLicence.validTo
+                            ? ` · Valid to ${String(prefilledLicence.validTo).slice(0, 10)}`
+                            : ""}
+                          {prefilledLicence.mobile ? ` · ${prefilledLicence.mobile}` : ""}
+                        </p>
+                        {prefilledLicence.address ? (
+                          <p className="text-muted-foreground text-xs">{prefilledLicence.address}</p>
+                        ) : null}
+                        <p className="text-xs text-muted-foreground">
+                          Read-only — opened from the trader licence Transaction button. Trader cannot be changed here.
+                        </p>
+                      </div>
+                    ) : !prefilledLicenceLoading && !prefilledLicenceError ? (
+                      <Input
+                        readOnly
+                        className="bg-muted"
+                        value={traderLicenceId}
+                      />
+                    ) : null}
+                  </>
                 ) : (
                   <>
                     <TraderLicenceSearchSelect
@@ -797,12 +802,14 @@ export default function MarketTransactionWizard() {
                       placeholder="Search trader licence…"
                       searchPlaceholder={
                         caseType === "B"
-                          ? "Type licence no., firm name, or mobile (includes expired)…"
-                          : "Type licence no., firm name, or mobile…"
+                          ? "Type licence no., firm name, or mobile (Expired only)…"
+                          : "Type licence no., firm name, or mobile (Active only)…"
                       }
                     />
                     <p className="text-xs text-muted-foreground">
-                      Search here when you did not open Transaction from a licence page. Entry location is still required before continuing.
+                      {caseType === "B"
+                        ? "Only Expired licences are listed. Entry location is required before continuing."
+                        : "Only Active licences are listed. Entry location is required before continuing."}
                     </p>
                   </>
                 )}
