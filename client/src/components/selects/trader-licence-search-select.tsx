@@ -12,6 +12,8 @@ import {
   type TraderLicenceSelectFields,
 } from "@shared/select-display-labels"
 
+export type TraderLicenceSearchBy = "licenceNo" | "name" | "mobile" | "all"
+
 export type TraderLicenceSearchSelectProps = Omit<
   AsyncSearchSelectProps,
   "onSearch" | "resolveOption" | "searchPlaceholder"
@@ -23,6 +25,8 @@ export type TraderLicenceSearchSelectProps = Omit<
   lmActive?: boolean
   allYards?: boolean
   excludeId?: string
+  /** Defaults to licence number search. */
+  searchBy?: TraderLicenceSearchBy
   searchPlaceholder?: string
 }
 
@@ -52,7 +56,8 @@ export function TraderLicenceSearchSelect({
   lmActive,
   allYards,
   excludeId,
-  searchPlaceholder = "Type license no. or trader name…",
+  searchBy = "licenceNo",
+  searchPlaceholder = "Type license number…",
   placeholder = "Select trader licence",
   ...props
 }: TraderLicenceSearchSelectProps) {
@@ -63,7 +68,10 @@ export function TraderLicenceSearchSelect({
       const res = await fetch(
         buildLicencesUrl({
           q: query,
-          limit: "50",
+          paged: "1",
+          page: "1",
+          pageSize: "50",
+          searchBy: searchBy === "all" ? undefined : searchBy,
           yardId,
           status,
           licenceTypes: licenceTypesParam,
@@ -78,7 +86,7 @@ export function TraderLicenceSearchSelect({
       const rows = (Array.isArray(body) ? body : Array.isArray(body?.rows) ? body.rows : []) as TraderLicenceSelectFields[]
       return rows.filter((row) => row?.id && row.id !== excludeId).map(toOption)
     },
-    [yardId, status, licenceTypesParam, lmLinked, lmActive, allYards, excludeId],
+    [yardId, status, licenceTypesParam, lmLinked, lmActive, allYards, excludeId, searchBy],
   )
 
   const resolveOption = React.useCallback(async (value: string): Promise<AsyncSearchSelectOption | null> => {

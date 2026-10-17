@@ -51,7 +51,7 @@ export default function TraderLicences() {
   const canCreate = !TRADER_LICENCE_CRUD_DISABLED && can("M-02", "Create");
   const isAdmin = Boolean(user?.roles?.some((r) => r.tier === "ADMIN"));
   const [allYards, setAllYards] = useState(false);
-  const [searchBy, setSearchBy] = useState<LicenceSearchBy>("name");
+  const [searchBy, setSearchBy] = useState<LicenceSearchBy>("licenceNo");
   const [tableParams, setTableParams] = useState<ReportPagedParams>({
     page: 1,
     pageSize: 25,

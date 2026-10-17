@@ -803,8 +803,8 @@ export default function MarketTransactionWizard() {
                       placeholder="Search trader licence…"
                       searchPlaceholder={
                         caseType === "B"
-                          ? "Type licence no., firm name, or mobile (Expired only)…"
-                          : "Type licence no., firm name, or mobile (Active only)…"
+                          ? "Type license number (Expired only)…"
+                          : "Type license number (Active only)…"
                       }
                     />
                     <p className="text-xs text-muted-foreground">
@@ -837,7 +837,7 @@ export default function MarketTransactionWizard() {
                     value={receiverTraderLicenceId}
                     onValueChange={setReceiverTraderLicenceId}
                     placeholder="Search receiver trader…"
-                    searchPlaceholder="Type licence no., firm name, or mobile…"
+                    searchPlaceholder="Type license number…"
                   />
                 </div>
                 <div className="space-y-1 sm:col-span-2">
