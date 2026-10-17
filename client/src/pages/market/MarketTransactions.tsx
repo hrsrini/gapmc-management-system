@@ -26,6 +26,7 @@ import { ApiUserError, readApiErrorEnvelope, fetchApiGet } from "@/lib/queryClie
 import { formatInr } from "@/lib/formatInr";
 import { ArrowRightLeft, AlertCircle, Plus } from "lucide-react";
 import { Link } from "wouter";
+import { localCalendarYmd } from "@shared/premises-allocation";
 
 type ToastInvoker = (props: { title: string; description?: string; variant?: "destructive" }) => void;
 
@@ -244,7 +245,7 @@ export default function MarketTransactions() {
   const [unit, setUnit] = useState("Quintal");
   const [declaredValue, setDeclaredValue] = useState("");
   const [purchaseType, setPurchaseType] = useState("TraderPurchase");
-  const [transactionDate, setTransactionDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [transactionDate, setTransactionDate] = useState(() => localCalendarYmd());
 
   const canCreate = can("M-04", "Create");
 
@@ -253,7 +254,7 @@ export default function MarketTransactions() {
   const [adjustFee, setAdjustFee] = useState("");
   const [adjustDeclared, setAdjustDeclared] = useState("");
   const [adjustQty, setAdjustQty] = useState("");
-  const [adjustDate, setAdjustDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [adjustDate, setAdjustDate] = useState(() => localCalendarYmd());
 
   const { data: list, isLoading, isError } = useQuery<Transaction[]>({
     queryKey: ["/api/ioms/market/transactions"],
@@ -441,7 +442,7 @@ export default function MarketTransactions() {
       setUnit("Quintal");
       setDeclaredValue("");
       setPurchaseType("TraderPurchase");
-      setTransactionDate(new Date().toISOString().slice(0, 10));
+      setTransactionDate(localCalendarYmd());
     },
     onError: (e: unknown) => {
       const message = e instanceof Error ? e.message : String(e);
@@ -498,7 +499,7 @@ export default function MarketTransactions() {
     setAdjustFee(t.marketFeeAmount > 0 ? String(-Math.abs(t.marketFeeAmount)) : "-1");
     setAdjustDeclared(String(t.declaredValue));
     setAdjustQty(String(t.quantity));
-    setAdjustDate(new Date().toISOString().slice(0, 10));
+    setAdjustDate(localCalendarYmd());
     setAdjustOpen(true);
   }
 

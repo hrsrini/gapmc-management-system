@@ -15,17 +15,22 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { readApiErrorEnvelope } from "@/lib/queryClient";
 import { formatInr } from "@/lib/formatInr";
+import { downloadIomsReceiptPdf } from "@/lib/downloadIomsReceiptPdf";
 import {
   MARKET_TRANSACTION_CASES,
+  isMarketTransactionCaseId,
   type MarketTransactionCalculation,
   type MarketTransactionCaseId,
   type MarketTransactionWizardInput,
 } from "@shared/market-transaction-cases";
+import { localCalendarYmd, localClockHm } from "@shared/premises-allocation";
 import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
   ClipboardList,
+  Download,
+  Loader2,
   Package,
   Receipt,
   Truck,
@@ -140,8 +145,8 @@ export default function MarketTransactionWizard() {
   const [step, setStep] = useState<WizardStep>("case");
   const [caseType, setCaseType] = useState<MarketTransactionCaseId>("A");
   const [entryLocationId, setEntryLocationId] = useState("");
-  const [transactionDate, setTransactionDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [transactionTime, setTransactionTime] = useState("");
+  const [transactionDate, setTransactionDate] = useState(() => localCalendarYmd());
+  const [transactionTime, setTransactionTime] = useState(() => localClockHm());
   const [captureMode, setCaptureMode] = useState("Normal");
   const [captureLocationText, setCaptureLocationText] = useState("");
   const [vehicleNumber, setVehicleNumber] = useState("");
@@ -176,8 +181,63 @@ export default function MarketTransactionWizard() {
   const [transactionNo, setTransactionNo] = useState<string | null>(null);
   const [calculation, setCalculation] = useState<MarketTransactionCalculation | null>(null);
   const [receiptResult, setReceiptResult] = useState<{ receiptId: string; receiptNo: string } | null>(null);
+  const [receiptDownloading, setReceiptDownloading] = useState(false);
+  const [prefillApplied, setPrefillApplied] = useState(false);
 
   const meta = MARKET_TRANSACTION_CASES[caseType];
+
+  // Prefill from licence detail: ?caseType=A|B&traderLicenceId=&entryLocationId=&step=party
+  useEffect(() => {
+    if (prefillApplied || typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const caseRaw = String(sp.get("caseType") ?? "").trim().toUpperCase();
+    const licId = String(sp.get("traderLicenceId") ?? "").trim();
+    const yardId = String(sp.get("entryLocationId") ?? "").trim();
+    const stepRaw = String(sp.get("step") ?? "").trim().toLowerCase();
+    const dateRaw = String(sp.get("transactionDate") ?? "").trim().slice(0, 10);
+    let applied = false;
+    if (isMarketTransactionCaseId(caseRaw)) {
+      setCaseType(caseRaw);
+      applied = true;
+    }
+    if (licId) {
+      setTraderLicenceId(licId);
+      applied = true;
+    }
+    if (yardId) {
+      setEntryLocationId(yardId);
+      applied = true;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) {
+      setTransactionDate(dateRaw);
+      applied = true;
+    }
+    if (stepRaw === "party" || stepRaw === "commodities" || stepRaw === "payment" || stepRaw === "case") {
+      setStep(stepRaw);
+      applied = true;
+    } else if (licId || isMarketTransactionCaseId(caseRaw)) {
+      setStep("party");
+      applied = true;
+    }
+    if (applied) setPrefillApplied(true);
+  }, [prefillApplied]);
+
+  async function downloadIssuedReceipt() {
+    if (!receiptResult?.receiptId) return;
+    setReceiptDownloading(true);
+    try {
+      await downloadIomsReceiptPdf(receiptResult.receiptId, receiptResult.receiptNo);
+      toast({ title: "Receipt downloaded", description: `PDF for ${receiptResult.receiptNo} saved.` });
+    } catch (e) {
+      toast({
+        title: "Download failed",
+        description: e instanceof Error ? e.message : "Could not download receipt PDF.",
+        variant: "destructive",
+      });
+    } finally {
+      setReceiptDownloading(false);
+    }
+  }
 
   useEffect(() => {
     if (caseType === "G") setCaptureMode("FlyingSquad");
@@ -435,12 +495,25 @@ export default function MarketTransactionWizard() {
             {transactionNo && <p className="font-mono text-sm">Transaction: {transactionNo}</p>}
             <p className="font-mono text-sm">Receipt: {receiptResult.receiptNo}</p>
             <p className="text-sm text-muted-foreground">Total paid: {formatInr(calculation?.totalPayable ?? 0)}</p>
-            <div className="flex gap-2 pt-2">
+            <p className="text-sm text-muted-foreground">
+              Payment recorded and transaction finalized. Download the receipt PDF below.
+            </p>
+            <div className="flex flex-wrap gap-2 pt-2">
+              <Button type="button" onClick={() => void downloadIssuedReceipt()} disabled={receiptDownloading}>
+                {receiptDownloading ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4 mr-1" />
+                )}
+                {receiptDownloading ? "Downloading…" : "Download receipt"}
+              </Button>
+              <Button asChild variant="outline">
+                <Link href={`/receipts/ioms?receiptNo=${encodeURIComponent(receiptResult.receiptNo)}`}>
+                  View in receipts
+                </Link>
+              </Button>
               <Button asChild variant="outline">
                 <Link href="/market/transactions">Back to transactions</Link>
-              </Button>
-              <Button asChild>
-                <Link href={`/receipts/ioms?receiptNo=${encodeURIComponent(receiptResult.receiptNo)}`}>View receipt</Link>
               </Button>
             </div>
           </CardContent>
@@ -524,10 +597,12 @@ export default function MarketTransactionWizard() {
             <div className="space-y-1">
               <Label>Transaction date</Label>
               <Input type="date" value={transactionDate} onChange={(e) => setTransactionDate(e.target.value)} />
+              <p className="text-xs text-muted-foreground">Defaults to today; change if needed.</p>
             </div>
             <div className="space-y-1">
-              <Label>Time (optional)</Label>
+              <Label>Time</Label>
               <Input type="time" value={transactionTime} onChange={(e) => setTransactionTime(e.target.value)} />
+              <p className="text-xs text-muted-foreground">Defaults to current time; change if needed.</p>
             </div>
 
             {caseType === "G" && (

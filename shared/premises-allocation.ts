@@ -110,6 +110,11 @@ export function localCalendarYmd(d = new Date()): string {
   return `${y}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/** Local clock HH:mm for `<input type="time">` defaults. */
+export function localClockHm(d = new Date()): string {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 /** Vacated-on (agreement end) must be on or before `todayYmd` (lexicographic YYYY-MM-DD compare). */
 export function assertVacatedToDateNotFuture(toYmd: string, todayYmd = todayYmdUtc()): string | null {
   const s = String(toYmd ?? "").trim();

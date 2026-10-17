@@ -52,8 +52,13 @@ export async function generateNextMarketTransactionNo(params: {
   return `GAPLMB/${loc}/${fy}/MT/${String(nextSeq).padStart(5, "0")}`;
 }
 
-function licenceIsExpired(validTo: string | null | undefined, transactionDate: string): boolean {
-  const vt = String(validTo ?? "").trim();
+function licenceIsExpired(
+  validTo: string | null | undefined,
+  transactionDate: string,
+  status?: string | null,
+): boolean {
+  if (String(status ?? "").trim() === "Expired") return true;
+  const vt = String(validTo ?? "").trim().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(vt)) return false;
   return transactionDate > vt;
 }
@@ -149,7 +154,7 @@ export async function validateMarketTransactionWizard(
     if (!tid) return { ok: false, code: "MKT_TX_LICENCE_REQUIRED", message: "Trader licence is required" };
     const licRow = await resolveLicence(tid);
     if (!licRow) return { ok: false, code: "MKT_TX_LICENCE_NOT_FOUND", message: "Trader licence not found" };
-    const expired = licenceIsExpired(licRow.licence.validTo, txDate);
+    const expired = licenceIsExpired(licRow.licence.validTo, txDate, licRow.licence.status);
     if (caseType === "B") {
       if (!expired) {
         return { ok: false, code: "MKT_TX_LICENCE_NOT_EXPIRED", message: "Case B requires an expired licence holder" };
@@ -157,10 +162,12 @@ export async function validateMarketTransactionWizard(
     } else if (!meta.allowsExpiredLicence && expired) {
       return { ok: false, code: "MKT_TX_LICENCE_EXPIRED", message: "Trader licence is expired" };
     }
-    if (licRow.licence.isBlocked) {
+    // Case B: cron often marks expired licences blocked — allow those; still block other cases.
+    if (licRow.licence.isBlocked && !(caseType === "B" && expired)) {
       return { ok: false, code: "MKT_TX_LICENCE_BLOCKED", message: "Trader licence is blocked" };
     }
     try {
+      const lmOpts = caseType === "B" && expired ? { allowExpiredHolder: true } : undefined;
       const lineIds = Array.from(
         new Set(
           (input.commodities ?? [])
@@ -169,7 +176,7 @@ export async function validateMarketTransactionWizard(
         ),
       );
       if (lineIds.length === 0) {
-        assertLmLicenceAllowsOperation(licRow.licence);
+        assertLmLicenceAllowsOperation(licRow.licence, undefined, lmOpts);
       } else {
         const names =
           lineIds.length > 0
@@ -181,8 +188,8 @@ export async function validateMarketTransactionWizard(
         const nameById = Object.fromEntries(names.map((n) => [n.id, String(n.name ?? "").trim()]));
         for (const cid of lineIds) {
           const name = nameById[cid];
-          if (name) assertLmLicenceAllowsOperation(licRow.licence, name);
-          else assertLmLicenceAllowsOperation(licRow.licence);
+          if (name) assertLmLicenceAllowsOperation(licRow.licence, name, lmOpts);
+          else assertLmLicenceAllowsOperation(licRow.licence, undefined, lmOpts);
         }
       }
     } catch (e) {

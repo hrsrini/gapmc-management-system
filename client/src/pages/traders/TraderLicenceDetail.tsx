@@ -9,7 +9,8 @@ import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert, Loader2, Trash2, Package, Pencil, MessageSquareWarning, Wallet, BookOpen, Plus } from "lucide-react";
+import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert, Loader2, Trash2, Package, Pencil, MessageSquareWarning, Wallet, BookOpen, Plus, ArrowRightLeft } from "lucide-react";
+import { localCalendarYmd } from "@shared/premises-allocation";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -204,6 +205,7 @@ export default function TraderLicenceDetail() {
   const queryClient = useQueryClient();
   const canUpdateLicence = can("M-02", "Update");
   const canCreateAllotment = can("M-02", "Create");
+  const canCreateMarketTx = can("M-04", "Create");
   const [exemptCategoryId, setExemptCategoryId] = useState<string>("__none__");
   const [nonGst, setNonGst] = useState(false);
   const [stockCommodityId, setStockCommodityId] = useState<string>("");
@@ -697,6 +699,25 @@ export default function TraderLicenceDetail() {
       licence.status !== "Rejected",
   );
 
+  /** Active → Case A; expired (status or validTo) → Case B. Other statuses / non-expiry blocks: no CTA. */
+  const marketTxHref = useMemo(() => {
+    if (!licence || !canCreateMarketTx || !licenceIssued) return null;
+    const today = localCalendarYmd();
+    const validTo = licence.validTo ? String(licence.validTo).trim().slice(0, 10) : "";
+    const expiredByDate = Boolean(validTo && /^\d{4}-\d{2}-\d{2}$/.test(validTo) && today > validTo);
+    const expired = licence.status === "Expired" || expiredByDate;
+    if (licence.isBlocked && !expired) return null;
+    if (!expired && licence.status !== "Active") return null;
+    const caseType = expired ? "B" : "A";
+    const sp = new URLSearchParams({
+      caseType,
+      traderLicenceId: licence.id,
+      step: "party",
+    });
+    if (licence.yardId) sp.set("entryLocationId", licence.yardId);
+    return `/market/transactions/new?${sp.toString()}`;
+  }, [licence, canCreateMarketTx, licenceIssued]);
+
   if (!id) return null;
   if (isLoading || licence === undefined) {
     return (
@@ -734,6 +755,19 @@ export default function TraderLicenceDetail() {
               {licence.licenceNo ?? licence.id} — {licence.firmName}
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2">
+              {marketTxHref ? (
+                <Button size="sm" asChild>
+                  <Link href={marketTxHref}>
+                    <ArrowRightLeft className="h-4 w-4 mr-1" />
+                    Transaction
+                    {licence.status === "Expired" ||
+                    (licence.validTo &&
+                      localCalendarYmd() > String(licence.validTo).slice(0, 10))
+                      ? " (expired)"
+                      : ""}
+                  </Link>
+                </Button>
+              ) : null}
               <Button variant="outline" size="sm" asChild>
                 <Link href={`/traders/dues?unifiedId=${encodeURIComponent(`TA:${licence.id}`)}`}>
                   <Wallet className="h-4 w-4 mr-1" />
