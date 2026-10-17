@@ -263,6 +263,42 @@ export default function MarketTransactionWizard() {
   const scopedYards = yards;
   const singleBoundYard = scopedYards.length === 1 ? scopedYards[0]! : null;
 
+  /** Prefill trader from licence detail / URL — fetch full licence for party display. */
+  const {
+    data: prefilledLicence,
+    isLoading: prefilledLicenceLoading,
+    isError: prefilledLicenceError,
+  } = useQuery<{
+    id: string;
+    licenceNo?: string | null;
+    firmName?: string | null;
+    status?: string | null;
+    yardId?: string | null;
+    validTo?: string | null;
+    mobile?: string | null;
+    address?: string | null;
+  }>({
+    queryKey: ["/api/ioms/traders/licences", traderLicenceId],
+    queryFn: async () => {
+      const res = await fetch(`/api/ioms/traders/licences/${encodeURIComponent(traderLicenceId)}`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    enabled: Boolean(traderLicenceId.trim()) && meta.requiresTraderLicence,
+  });
+
+  // After licence loads: prefer its home yard as entry location when still empty and in scope.
+  useEffect(() => {
+    const home = String(prefilledLicence?.yardId ?? "").trim();
+    if (!home || preferredEntryYardRef.current) return;
+    preferredEntryYardRef.current = home;
+  }, [prefilledLicence?.yardId]);
+
   // Bind entry location to the user's yard scope: one yard → lock; many → choose among them.
   useEffect(() => {
     if (yardsLoading) return;
@@ -287,14 +323,16 @@ export default function MarketTransactionWizard() {
       setEntryLocationId(preferred);
       preferredEntryYardRef.current = "";
     }
-  }, [yardsLoading, scopedYards, singleBoundYard, entryLocationId]);
+  }, [yardsLoading, scopedYards, singleBoundYard, entryLocationId, prefilledLicence?.yardId]);
 
   const { data: commodities = [] } = useQuery<Array<{ id: string; name: string; unit?: string | null }>>({
     queryKey: ["/api/ioms/commodities"],
   });
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
 
+  /** Case B allows expired; Case A lists Active. Search is not limited to entry yard (Active traders may use any yard). */
   const licenceStatusFilter = caseType === "B" ? undefined : "Active";
+  const traderPrefillLocked = Boolean(traderLicenceId.trim() && prefilledLicence?.id === traderLicenceId);
 
   const payload = useMemo(
     () =>
@@ -712,14 +750,57 @@ export default function MarketTransactionWizard() {
             {meta.requiresTraderLicence && (
               <div className="space-y-1 sm:col-span-2 border-t pt-4">
                 <Label>Trader licence {caseType === "B" ? "(expired)" : ""}</Label>
-                <TraderLicenceSearchSelect
-                  yardId={entryLocationId}
-                  status={licenceStatusFilter}
-                  value={traderLicenceId}
-                  onValueChange={setTraderLicenceId}
-                  disabled={!entryLocationId}
-                  placeholder={entryLocationId ? "Select trader" : "Select yard first"}
-                />
+                {prefilledLicenceLoading && traderLicenceId ? (
+                  <p className="text-sm text-muted-foreground">Loading licence details…</p>
+                ) : null}
+                {prefilledLicenceError && traderLicenceId ? (
+                  <p className="text-sm text-destructive">
+                    Could not load this licence. Pick entry location and select the trader again, or return from the licence page.
+                  </p>
+                ) : null}
+                {traderPrefillLocked && prefilledLicence ? (
+                  <div className="rounded-md border bg-muted/40 p-3 space-y-1 text-sm">
+                    <p className="font-medium">
+                      {prefilledLicence.licenceNo?.trim() || prefilledLicence.id}
+                      {prefilledLicence.firmName ? ` — ${prefilledLicence.firmName}` : ""}
+                    </p>
+                    <p className="text-muted-foreground">
+                      Status: {prefilledLicence.status ?? "—"}
+                      {prefilledLicence.validTo
+                        ? ` · Valid to ${String(prefilledLicence.validTo).slice(0, 10)}`
+                        : ""}
+                      {prefilledLicence.mobile ? ` · ${prefilledLicence.mobile}` : ""}
+                    </p>
+                    {prefilledLicence.address ? (
+                      <p className="text-muted-foreground text-xs">{prefilledLicence.address}</p>
+                    ) : null}
+                    <p className="text-xs text-muted-foreground">
+                      Prefilled from trader licence. Change entry location above if needed; trader stays linked to this licence.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => setTraderLicenceId("")}
+                    >
+                      Clear and pick another
+                    </Button>
+                  </div>
+                ) : (
+                  <TraderLicenceSearchSelect
+                    allYards
+                    status={licenceStatusFilter}
+                    value={traderLicenceId}
+                    onValueChange={setTraderLicenceId}
+                    disabled={!entryLocationId && !traderLicenceId}
+                    placeholder={
+                      entryLocationId || traderLicenceId
+                        ? "Select trader"
+                        : "Select entry location first (or open Transaction from a licence)"
+                    }
+                  />
+                )}
               </div>
             )}
 
@@ -737,7 +818,7 @@ export default function MarketTransactionWizard() {
                 <div className="space-y-1 sm:col-span-2 border-t pt-4"><Label>Receiver trader (within Goa)</Label></div>
                 <div className="space-y-1 sm:col-span-2">
                   <TraderLicenceSearchSelect
-                    yardId={entryLocationId}
+                    allYards
                     status={licenceStatusFilter}
                     excludeId={traderLicenceId || undefined}
                     value={receiverTraderLicenceId}

@@ -709,12 +709,13 @@ export default function TraderLicenceDetail() {
     if (licence.isBlocked && !expired) return null;
     if (!expired && licence.status !== "Active") return null;
     const caseType = expired ? "B" : "A";
-    // Entry yard comes from the signed-in user's scope in the wizard (not the licence home yard).
+    // Prefer licence home yard as entry location when it is in the user's scope (wizard validates).
     const sp = new URLSearchParams({
       caseType,
       traderLicenceId: licence.id,
       step: "party",
     });
+    if (licence.yardId) sp.set("entryLocationId", licence.yardId);
     return `/market/transactions/new?${sp.toString()}`;
   }, [licence, canCreateMarketTx, licenceIssued]);
 
