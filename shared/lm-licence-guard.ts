@@ -20,12 +20,26 @@ export class LmLicenceGuardError extends Error {
   }
 }
 
+export type LmLicenceAssertOpts = {
+  /**
+   * Case B (expired holder): allow auto-expiry blocked / LM-inactive licences;
+   * still enforce commodity allow-list when linked.
+   */
+  allowExpiredHolder?: boolean;
+};
+
 /**
  * Enforce LM rules only when the row is linked (`lmSyncedAt` set).
  * App 2-only licences (Hamali etc.) skip LM checks.
  */
-export function assertLmLicenceAllowsOperation(licence: LmLinkedLicence, commodity?: string): void {
-  if (licence.isBlocked || licence.status === "Blocked") {
+export function assertLmLicenceAllowsOperation(
+  licence: LmLinkedLicence,
+  commodity?: string,
+  opts?: LmLicenceAssertOpts,
+): void {
+  const allowExpired = opts?.allowExpiredHolder === true;
+
+  if (!allowExpired && (licence.isBlocked || licence.status === "Blocked")) {
     throw new LmLicenceGuardError("LICENCE_BLOCKED", "Licence is blocked");
   }
 
@@ -33,7 +47,7 @@ export function assertLmLicenceAllowsOperation(licence: LmLinkedLicence, commodi
     return;
   }
 
-  if (licence.lmIsActive !== true) {
+  if (!allowExpired && licence.lmIsActive !== true) {
     throw new LmLicenceGuardError("LICENCE_LM_INACTIVE", "Licence is not active in License Manager");
   }
 

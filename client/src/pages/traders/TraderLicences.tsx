@@ -9,8 +9,17 @@ import { ReportDataTable, type ReportPagedParams } from "@/components/reports/Re
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useAuth } from "@/context/AuthContext";
 import { TRADER_LICENCE_CRUD_DISABLED } from "@shared/trader-licence-crud";
+
+type LicenceSearchBy = "licenceNo" | "name" | "mobile";
+
+const LICENCE_SEARCH_BY_OPTIONS: { value: LicenceSearchBy; label: string; placeholder: string }[] = [
+  { value: "licenceNo", label: "License number", placeholder: "Search by license number…" },
+  { value: "name", label: "Name", placeholder: "Search by trader / firm name…" },
+  { value: "mobile", label: "Mobile number", placeholder: "Search by mobile number…" },
+];
 
 interface Licence {
   id: string;
@@ -42,6 +51,7 @@ export default function TraderLicences() {
   const canCreate = !TRADER_LICENCE_CRUD_DISABLED && can("M-02", "Create");
   const isAdmin = Boolean(user?.roles?.some((r) => r.tier === "ADMIN"));
   const [allYards, setAllYards] = useState(false);
+  const [searchBy, setSearchBy] = useState<LicenceSearchBy>("name");
   const [tableParams, setTableParams] = useState<ReportPagedParams>({
     page: 1,
     pageSize: 25,
@@ -54,6 +64,10 @@ export default function TraderLicences() {
     setTableParams((s) => ({ ...s, ...next }));
   }, []);
 
+  const searchPlaceholder =
+    LICENCE_SEARCH_BY_OPTIONS.find((o) => o.value === searchBy)?.placeholder ??
+    "Search trader licences…";
+
   const listUrl = useMemo(() => {
     const sp = new URLSearchParams({
       paged: "1",
@@ -62,10 +76,11 @@ export default function TraderLicences() {
       q: tableParams.q,
       sort: tableParams.sortKey,
       sortDir: tableParams.sortDir,
+      searchBy,
     });
     if (isAdmin && allYards) sp.set("allYards", "1");
     return `/api/ioms/traders/licences?${sp}`;
-  }, [tableParams, isAdmin, allYards]);
+  }, [tableParams, isAdmin, allYards, searchBy]);
 
   const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ["/api/yards"],
@@ -167,7 +182,7 @@ export default function TraderLicences() {
             <p className="text-sm text-muted-foreground">
               {TRADER_LICENCE_CRUD_DISABLED
                 ? "Licences are synced from License Manager. Create, edit, and delete are disabled here — view-only."
-                : "IOMS licence lifecycle — Associated, Functionary, Hamali, Weighman, Assistant. Search by trader name, licence number, or mobile; use pagination for large lists."}
+                : "IOMS licence lifecycle — Associated, Functionary, Hamali, Weighman, Assistant. Choose how to search, then open a licence for details."}
             </p>
           </div>
           {canCreate ? (
@@ -188,6 +203,28 @@ export default function TraderLicences() {
               </Label>
             </div>
           ) : null}
+          <div className="space-y-2 rounded-md border bg-muted/20 px-3 py-3">
+            <Label className="text-sm">Search by</Label>
+            <RadioGroup
+              value={searchBy}
+              onValueChange={(v) => {
+                setSearchBy(v as LicenceSearchBy);
+                setTableParams((s) => ({ ...s, page: 1 }));
+              }}
+              className="flex flex-wrap gap-4"
+            >
+              {LICENCE_SEARCH_BY_OPTIONS.map((opt) => (
+                <label
+                  key={opt.value}
+                  htmlFor={`licence-search-by-${opt.value}`}
+                  className="flex items-center gap-2 text-sm font-normal cursor-pointer"
+                >
+                  <RadioGroupItem value={opt.value} id={`licence-search-by-${opt.value}`} />
+                  {opt.label}
+                </label>
+              ))}
+            </RadioGroup>
+          </div>
           <ReportDataTable
             columns={columns}
             rows={rowsForTable}
@@ -195,7 +232,7 @@ export default function TraderLicences() {
             params={tableParams}
             onParamsChange={mergeParams}
             isLoading={isLoading}
-            searchPlaceholder="Search by Name of Trader, License Number, Trader Mobile No."
+            searchPlaceholder={searchPlaceholder}
           />
         </CardContent>
       </Card>

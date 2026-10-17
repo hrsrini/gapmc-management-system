@@ -1751,23 +1751,43 @@ export function registerTradersAssetsRoutes(app: Express) {
         const { page, pageSize, q } = parseReportPaging(req);
         const { sortKey, sortDir } = parseReportSort(req, LICENCE_REPORT_SORT_ALLOW, "licenceNo");
         const pattern = reportSearchPattern(q);
+        const searchBy = String(req.query.searchBy ?? "")
+          .trim()
+          .toLowerCase()
+          .replace(/[_-]/g, "");
         const all = [...conditions];
         if (pattern) {
-          all.push(
-            or(
-              ilike(traderLicences.licenceNo, pattern),
-              ilike(traderLicences.firmName, pattern),
-              ilike(traderLicences.mobile, pattern),
-              ilike(traderLicences.id, pattern),
-              ilike(traderLicences.email, pattern),
-              ilike(traderLicences.licenceType, pattern),
-              ilike(traderLicences.contactName, pattern),
-              ilike(traderLicences.provisionalLicenceNo, pattern),
-              ilike(traderLicences.applicationSerial, pattern),
-              ilike(traderLicences.entityPublicCode, pattern),
-              sql`cast(${traderLicences.feeAmount} as text) ilike ${pattern}`,
-            )!,
-          );
+          // Radio: licenceNo | name (firm/contact) | mobile — default keeps broad OR for legacy clients.
+          if (searchBy === "licenceno" || searchBy === "licenseno" || searchBy === "license") {
+            all.push(
+              or(
+                ilike(traderLicences.licenceNo, pattern),
+                ilike(traderLicences.provisionalLicenceNo, pattern),
+              )!,
+            );
+          } else if (searchBy === "name" || searchBy === "firmname" || searchBy === "tradername") {
+            all.push(
+              or(ilike(traderLicences.firmName, pattern), ilike(traderLicences.contactName, pattern))!,
+            );
+          } else if (searchBy === "mobile" || searchBy === "mobileno" || searchBy === "phone") {
+            all.push(ilike(traderLicences.mobile, pattern));
+          } else {
+            all.push(
+              or(
+                ilike(traderLicences.licenceNo, pattern),
+                ilike(traderLicences.firmName, pattern),
+                ilike(traderLicences.mobile, pattern),
+                ilike(traderLicences.id, pattern),
+                ilike(traderLicences.email, pattern),
+                ilike(traderLicences.licenceType, pattern),
+                ilike(traderLicences.contactName, pattern),
+                ilike(traderLicences.provisionalLicenceNo, pattern),
+                ilike(traderLicences.applicationSerial, pattern),
+                ilike(traderLicences.entityPublicCode, pattern),
+                sql`cast(${traderLicences.feeAmount} as text) ilike ${pattern}`,
+              )!,
+            );
+          }
         }
         const wc = all.length ? and(...all) : undefined;
         const countQ = db.select({ c: sql<number>`count(*)::int` }).from(traderLicences);
