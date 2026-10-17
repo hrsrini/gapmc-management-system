@@ -330,7 +330,7 @@ export default function MarketTransactionWizard() {
   });
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
 
-  /** Case B allows expired; Case A lists Active. Search is not limited to entry yard (Active traders may use any yard). */
+  /** Case A (and other cases): Active. Case B: no status filter (Expired / expired-by-date). */
   const licenceStatusFilter = caseType === "B" ? undefined : "Active";
   const traderPrefillLocked = Boolean(traderLicenceId.trim() && prefilledLicence?.id === traderLicenceId);
 
@@ -775,7 +775,7 @@ export default function MarketTransactionWizard() {
                       <p className="text-muted-foreground text-xs">{prefilledLicence.address}</p>
                     ) : null}
                     <p className="text-xs text-muted-foreground">
-                      Prefilled from trader licence. Change entry location above if needed; trader stays linked to this licence.
+                      Selected trader licence. Set or change entry location above if needed.
                     </p>
                     <Button
                       type="button"
@@ -784,22 +784,27 @@ export default function MarketTransactionWizard() {
                       className="h-8 px-2"
                       onClick={() => setTraderLicenceId("")}
                     >
-                      Clear and pick another
+                      Clear and search again
                     </Button>
                   </div>
                 ) : (
-                  <TraderLicenceSearchSelect
-                    allYards
-                    status={licenceStatusFilter}
-                    value={traderLicenceId}
-                    onValueChange={setTraderLicenceId}
-                    disabled={!entryLocationId && !traderLicenceId}
-                    placeholder={
-                      entryLocationId || traderLicenceId
-                        ? "Select trader"
-                        : "Select entry location first (or open Transaction from a licence)"
-                    }
-                  />
+                  <>
+                    <TraderLicenceSearchSelect
+                      allYards
+                      status={licenceStatusFilter}
+                      value={traderLicenceId}
+                      onValueChange={setTraderLicenceId}
+                      placeholder="Search trader licence…"
+                      searchPlaceholder={
+                        caseType === "B"
+                          ? "Type licence no., firm name, or mobile (includes expired)…"
+                          : "Type licence no., firm name, or mobile…"
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Search here when you did not open Transaction from a licence page. Entry location is still required before continuing.
+                    </p>
+                  </>
                 )}
               </div>
             )}
@@ -823,8 +828,8 @@ export default function MarketTransactionWizard() {
                     excludeId={traderLicenceId || undefined}
                     value={receiverTraderLicenceId}
                     onValueChange={setReceiverTraderLicenceId}
-                    disabled={!entryLocationId}
-                    placeholder="Select receiver"
+                    placeholder="Search receiver trader…"
+                    searchPlaceholder="Type licence no., firm name, or mobile…"
                   />
                 </div>
                 <div className="space-y-1 sm:col-span-2">
