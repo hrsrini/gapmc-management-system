@@ -319,6 +319,7 @@ export default function MarketTransactions() {
     queryKey: ["/api/yards"],
   });
   const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y])), [yards]);
+  const singleBoundYard = yards.length === 1 ? yards[0]! : null;
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
 
   /** Unit is driven by the commodity master (read-only in the create form). */
@@ -327,6 +328,11 @@ export default function MarketTransactions() {
     const u = c?.unit != null && String(c.unit).trim() !== "" ? String(c.unit).trim() : "Quintal";
     setUnit(u);
   }, [commodityId, commodityById]);
+
+  useEffect(() => {
+    if (singleBoundYard && yardId !== singleBoundYard.id) setYardId(singleBoundYard.id);
+    else if (yardId && yards.length > 0 && !yardById.has(yardId)) setYardId("");
+  }, [singleBoundYard, yards, yardById, yardId]);
 
   const feePreviewParamsReady =
     Boolean(yardId.trim() && commodityId.trim()) && /^\d{4}-\d{2}-\d{2}$/.test(transactionDate.trim());
@@ -697,22 +703,34 @@ export default function MarketTransactions() {
                   )}
                   <div className="space-y-1">
                     <Label>Yard</Label>
-                    <Select
-                      value={yardId || undefined}
-                      onValueChange={(v) => {
-                        setYardId(v);
-                        setTraderLicenceId("");
-                      }}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Select yard" /></SelectTrigger>
-                      <SelectContent>
-                        {yards.map((y) => (
-                          <SelectItem key={y.id} value={y.id}>
-                            {`${y.name} (${y.code})`.slice(0, 64)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {yards.length === 0 ? (
+                      <p className="text-sm text-destructive">No yard assigned to your login.</p>
+                    ) : singleBoundYard ? (
+                      <Input
+                        readOnly
+                        className="bg-muted"
+                        value={`${singleBoundYard.name} (${singleBoundYard.code})`}
+                      />
+                    ) : (
+                      <Select
+                        value={yardId || undefined}
+                        onValueChange={(v) => {
+                          setYardId(v);
+                          setTraderLicenceId("");
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select your yard" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {yards.map((y) => (
+                            <SelectItem key={y.id} value={y.id}>
+                              {`${y.name} (${y.code})`.slice(0, 64)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
                   <div className="space-y-1">
                     <Label>Commodity</Label>

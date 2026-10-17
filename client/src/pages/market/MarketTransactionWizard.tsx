@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
@@ -183,16 +183,18 @@ export default function MarketTransactionWizard() {
   const [receiptResult, setReceiptResult] = useState<{ receiptId: string; receiptNo: string } | null>(null);
   const [receiptDownloading, setReceiptDownloading] = useState(false);
   const [prefillApplied, setPrefillApplied] = useState(false);
+  const preferredEntryYardRef = useRef<string>("");
 
   const meta = MARKET_TRANSACTION_CASES[caseType];
 
-  // Prefill from licence detail: ?caseType=A|B&traderLicenceId=&entryLocationId=&step=party
+  // Prefill from licence detail: ?caseType=A|B&traderLicenceId=&step=party
+  // Entry location is resolved from the signed-in user's yard scope (see sync below).
   useEffect(() => {
     if (prefillApplied || typeof window === "undefined") return;
     const sp = new URLSearchParams(window.location.search);
     const caseRaw = String(sp.get("caseType") ?? "").trim().toUpperCase();
     const licId = String(sp.get("traderLicenceId") ?? "").trim();
-    const yardId = String(sp.get("entryLocationId") ?? "").trim();
+    const preferredYard = String(sp.get("entryLocationId") ?? "").trim();
     const stepRaw = String(sp.get("step") ?? "").trim().toLowerCase();
     const dateRaw = String(sp.get("transactionDate") ?? "").trim().slice(0, 10);
     let applied = false;
@@ -204,8 +206,8 @@ export default function MarketTransactionWizard() {
       setTraderLicenceId(licId);
       applied = true;
     }
-    if (yardId) {
-      setEntryLocationId(yardId);
+    if (preferredYard) {
+      preferredEntryYardRef.current = preferredYard;
       applied = true;
     }
     if (/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) {
@@ -252,9 +254,41 @@ export default function MarketTransactionWizard() {
     }
   }, [caseType, meta.defaultAdminCharges, meta.defaultSecurityDeposit, securityDepositAmount, adminChargesAmount]);
 
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string; code: string }>>({
+  const { data: yards = [], isLoading: yardsLoading } = useQuery<
+    Array<{ id: string; name: string; code: string }>
+  >({
     queryKey: ["/api/yards"],
   });
+  /** `/api/yards` already returns only locations assigned to the signed-in user. */
+  const scopedYards = yards;
+  const singleBoundYard = scopedYards.length === 1 ? scopedYards[0]! : null;
+
+  // Bind entry location to the user's yard scope: one yard → lock; many → choose among them.
+  useEffect(() => {
+    if (yardsLoading) return;
+    if (scopedYards.length === 0) {
+      if (entryLocationId) setEntryLocationId("");
+      return;
+    }
+    const inScope = (id: string) => scopedYards.some((y) => y.id === id);
+    const preferred = preferredEntryYardRef.current.trim();
+    if (singleBoundYard) {
+      if (entryLocationId !== singleBoundYard.id) setEntryLocationId(singleBoundYard.id);
+      preferredEntryYardRef.current = "";
+      return;
+    }
+    if (entryLocationId && !inScope(entryLocationId)) {
+      const next = preferred && inScope(preferred) ? preferred : "";
+      setEntryLocationId(next);
+      preferredEntryYardRef.current = "";
+      return;
+    }
+    if (!entryLocationId && preferred && inScope(preferred)) {
+      setEntryLocationId(preferred);
+      preferredEntryYardRef.current = "";
+    }
+  }, [yardsLoading, scopedYards, singleBoundYard, entryLocationId]);
+
   const { data: commodities = [] } = useQuery<Array<{ id: string; name: string; unit?: string | null }>>({
     queryKey: ["/api/ioms/commodities"],
   });
@@ -585,14 +619,49 @@ export default function MarketTransactionWizard() {
           <CardContent className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1 sm:col-span-2">
               <Label>Entry location (yard)</Label>
-              <Select value={entryLocationId || undefined} onValueChange={(v) => { setEntryLocationId(v); setTraderLicenceId(""); setReceiverTraderLicenceId(""); }}>
-                <SelectTrigger><SelectValue placeholder="Select yard" /></SelectTrigger>
-                <SelectContent>
-                  {yards.map((y) => (
-                    <SelectItem key={y.id} value={y.id}>{y.name} ({y.code})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {yardsLoading ? (
+                <p className="text-sm text-muted-foreground">Loading your locations…</p>
+              ) : scopedYards.length === 0 ? (
+                <p className="text-sm text-destructive">
+                  No yard is assigned to your login. Ask an admin to map you to a location.
+                </p>
+              ) : singleBoundYard ? (
+                <>
+                  <Input
+                    readOnly
+                    value={`${singleBoundYard.name} (${singleBoundYard.code})`}
+                    className="bg-muted"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Fixed to your assigned yard.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Select
+                    value={entryLocationId || undefined}
+                    onValueChange={(v) => {
+                      setEntryLocationId(v);
+                      setTraderLicenceId("");
+                      setReceiverTraderLicenceId("");
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select your yard" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {scopedYards.map((y) => (
+                        <SelectItem key={y.id} value={y.id}>
+                          {y.name} ({y.code})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Showing the {scopedYards.length} locations assigned to you.
+                  </p>
+                </>
+              )}
             </div>
             <div className="space-y-1">
               <Label>Transaction date</Label>
