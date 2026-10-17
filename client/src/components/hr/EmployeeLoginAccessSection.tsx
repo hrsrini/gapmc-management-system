@@ -185,7 +185,6 @@ export function EmployeeLoginAccessSection({
       phone?: string;
       password: string;
       roleIds: string[];
-      yardIds: string[];
     }) => {
       const res = await fetch(`/api/hr/employees/${employeeId}/login`, {
         method: "POST",
@@ -203,7 +202,10 @@ export function EmployeeLoginAccessSection({
       queryClient.invalidateQueries({ queryKey: ["/api/hr/employees"] });
       queryClient.invalidateQueries({ queryKey: [profileUrl] });
       queryClient.invalidateQueries({ queryKey: ["/api/hr/employees", employeeId] });
-      toast({ title: "Login enabled", description: "They can sign in with email (or username) and the password you set." });
+      toast({
+        title: "Login enabled",
+        description: "Sign-in is ready. App locations were taken from the employee primary and additional yards.",
+      });
     },
     onError: (e: Error) =>
       toast({ title: "Failed to create login", description: e.message, variant: "destructive" }),
@@ -217,7 +219,6 @@ export function EmployeeLoginAccessSection({
       phone: string | null;
       isActive: boolean;
       roleIds: string[];
-      yardIds: string[];
       password?: string;
     }) => {
       const res = await fetch(`/api/hr/employees/${employeeId}/login`, {
@@ -247,15 +248,6 @@ export function EmployeeLoginAccessSection({
       const next = new Set(prev);
       if (next.has(roleId)) next.delete(roleId);
       else next.add(roleId);
-      return next;
-    });
-  }
-
-  function toggleYard(yardId: string) {
-    setSelectedYardIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(yardId)) next.delete(yardId);
-      else next.add(yardId);
       return next;
     });
   }
@@ -295,7 +287,6 @@ export function EmployeeLoginAccessSection({
         phone: string | null;
         isActive: boolean;
         roleIds: string[];
-        yardIds: string[];
         password?: string;
       } = {
         email: email.trim(),
@@ -304,7 +295,6 @@ export function EmployeeLoginAccessSection({
         phone: phoneNorm,
         isActive: employeeStatus === "Active" ? isActive : false,
         roleIds: Array.from(selectedRoleIds),
-        yardIds: Array.from(selectedYardIds),
       };
       if (!getPasswordPolicyBrUsr10FirstViolation(password)) body.password = password;
       updateMutation.mutate(body);
@@ -349,7 +339,6 @@ export function EmployeeLoginAccessSection({
       phone: phoneOut,
       password,
       roleIds: Array.from(selectedRoleIds),
-      yardIds: Array.from(selectedYardIds),
     });
   }
 
@@ -390,7 +379,7 @@ export function EmployeeLoginAccessSection({
           Login &amp; roles
         </CardTitle>
         <CardDescription>
-          One login per employee (SRS §1.4). Checkboxes assign <span className="font-medium">roles</span> (DO/DV/DA, etc.); module rights for each role are set under Admin → Permission matrix. Locations limit yard-scoped data. HR status changes can deactivate sign-in.
+          One login per employee (SRS §1.4). Checkboxes assign <span className="font-medium">roles</span> (DO/DV/DA, etc.); module rights for each role are set under Admin → Permission matrix. <span className="font-medium">Locations</span> are read-only here — they stay in sync with the employee&apos;s Primary Location Posted and Additional Charge Locations. HR status changes can deactivate sign-in.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -541,24 +530,30 @@ export function EmployeeLoginAccessSection({
               </div>
               <div className="flex flex-col rounded-md border">
                 <div className="rounded-t-md border-b bg-muted/40 px-3 py-2 text-sm font-medium">Locations</div>
-                <div className="space-y-2 p-3 max-h-48 overflow-y-auto">
-                  {yardsLoading ? (
+                <p className="px-3 pt-2 text-xs text-muted-foreground">
+                  Read-only. Synced from employee Primary Location Posted and Additional Charge Locations — edit those on the employee form.
+                </p>
+                <div className="space-y-2 p-3 max-h-48 overflow-y-auto bg-muted/20">
+                  {usersLoading ? (
                     <Skeleton className="h-20 w-full" />
-                  ) : yardsError && yardsErr instanceof Error ? (
-                    <p className="text-xs text-destructive">{yardsErr.message}</p>
-                  ) : activeYards.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No yards. Add under Admin → Locations.</p>
-                  ) : (
-                    activeYards.map((y) => (
-                      <label key={y.id} className="flex cursor-pointer items-center gap-2 text-sm">
-                        <Checkbox
-                          checked={selectedYardIds.has(y.id)}
-                          onCheckedChange={() => toggleYard(y.id)}
-                          disabled={(isEditMode && !canUpdate) || (!isEditMode && !canCreate)}
-                        />
-                        <span>{y.name}</span>
-                      </label>
+                  ) : (linkedUser?.yards?.length ?? 0) === 0 && selectedYardIds.size === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      No locations yet. Set primary/additional on the employee record; they appear here after save.
+                    </p>
+                  ) : (linkedUser?.yards?.length ?? 0) > 0 ? (
+                    linkedUser!.yards!.map((y) => (
+                      <p key={y.id} className="text-sm">
+                        {y.name}
+                      </p>
                     ))
+                  ) : (
+                    activeYards
+                      .filter((y) => selectedYardIds.has(y.id))
+                      .map((y) => (
+                        <p key={y.id} className="text-sm">
+                          {y.name}
+                        </p>
+                      ))
                   )}
                 </div>
               </div>

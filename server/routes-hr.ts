@@ -78,6 +78,8 @@ import {
   buildLoginProfileForEmployee,
   handleCreateEmployeeLogin,
   handleUpdateEmployeeLogin,
+  resolveUserIdForEmployee,
+  syncUserYardsFromEmployeeLocations,
 } from "./hr-employee-login";
 import {
   HrEmployeeRuleError,
@@ -1436,7 +1438,12 @@ export function registerHrRoutes(app: Express) {
       await db.transaction(async (tx) => {
         await tx.update(employees).set(setPayload).where(eq(employees.id, id));
         const [after] = await tx
-          .select({ status: employees.status, userId: employees.userId })
+          .select({
+            status: employees.status,
+            userId: employees.userId,
+            yardId: employees.yardId,
+            locationPosted: employees.locationPosted,
+          })
           .from(employees)
           .where(eq(employees.id, id))
           .limit(1);
@@ -1450,6 +1457,11 @@ export function registerHrRoutes(app: Express) {
           } else {
             await tx.update(users).set({ isActive: false, disabledAt: t, updatedAt: t }).where(eq(users.employeeId, id));
           }
+        }
+        // Login & roles Locations (user_yards) follow employee primary + additional.
+        const loginUid = after?.userId ?? (await resolveUserIdForEmployee(id));
+        if (loginUid && after) {
+          await syncUserYardsFromEmployeeLocations(tx, loginUid, after.yardId, after.locationPosted);
         }
       });
 

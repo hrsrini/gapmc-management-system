@@ -183,7 +183,6 @@ export default function HrEmployeeForm() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginConfirm, setLoginConfirm] = useState("");
   const [createRoleIds, setCreateRoleIds] = useState<Set<string>>(new Set());
-  const [createYardIds, setCreateYardIds] = useState<Set<string>>(new Set());
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
   const { data: designationRows = [] } = useQuery<
@@ -196,16 +195,10 @@ export default function HrEmployeeForm() {
     queryKey: ["/api/hr/employees", id],
     enabled: isEdit,
   });
-
   const { data: roles = [] } = useQuery<Role[]>({
     queryKey: ["/api/admin/roles"],
     enabled: !isEdit && canM10Create,
   });
-  const { data: adminYards = [] } = useQuery<Array<{ id: string; name: string; isActive?: boolean | null }>>({
-    queryKey: ["/api/admin/yards"],
-    enabled: !isEdit && canM10Create && enableLoginOnCreate,
-  });
-  const activeAdminYards = useMemo(() => adminYards.filter((y) => y.isActive !== false), [adminYards]);
 
   useEffect(() => {
     if (employee) {
@@ -341,15 +334,6 @@ export default function HrEmployeeForm() {
       const n = new Set(prev);
       if (n.has(roleId)) n.delete(roleId);
       else n.add(roleId);
-      return n;
-    });
-  }
-
-  function toggleCreateYard(yid: string) {
-    setCreateYardIds((prev) => {
-      const n = new Set(prev);
-      if (n.has(yid)) n.delete(yid);
-      else n.add(yid);
       return n;
     });
   }
@@ -501,7 +485,6 @@ export default function HrEmployeeForm() {
       surname,
       photoUrl: photoUrl || null,
       designation: designation.trim(),
-      yardId,
       employeeType,
       pan: pan || null,
       dob: dob || null,
@@ -521,6 +504,7 @@ export default function HrEmployeeForm() {
       reportingOfficerEmployeeId: reportingOfficerEmployeeId.trim() || null,
       serviceBookNo: serviceBookNo.trim() || null,
       section: sectionToSave,
+      yardId,
       additionalChargeYardIds: additionalChargeYardIds.filter((id) => id && id !== yardId),
       locationPosted: serializeAdditionalChargeYardIds(additionalChargeYardIds, yardId),
       payLevel: payLevel ? parseInt(payLevel, 10) : null,
@@ -636,7 +620,7 @@ export default function HrEmployeeForm() {
             username: loginUsername.trim() || undefined,
             password: loginPassword,
             roleIds: Array.from(createRoleIds),
-            yardIds: Array.from(createYardIds),
+            // Locations are seeded server-side from employee primary + additional.
           }),
           credentials: "include",
         });
@@ -863,6 +847,11 @@ export default function HrEmployeeForm() {
                         ))}
                       </SelectContent>
                     </Select>
+                    {isEdit && employee?.userId ? (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Changes also update Login &amp; roles → Locations (app yard scope).
+                      </p>
+                    ) : null}
                   </div>
                   <div>
                     <Label>Section (HO employees)</Label>
@@ -898,6 +887,9 @@ export default function HrEmployeeForm() {
                     <p className="text-xs text-muted-foreground mt-1 mb-2">
                       Optional. Select one or more locations in addition to Primary Location Posted. The primary
                       location is excluded from this list.
+                      {isEdit && employee?.userId
+                        ? " These also sync to Login & roles → Locations."
+                        : ""}
                     </p>
                     <div className="max-h-48 overflow-y-auto rounded-md border p-3 space-y-2">
                       {(yards ?? [])
@@ -1255,13 +1247,32 @@ export default function HrEmployeeForm() {
                             </div>
                             <div className="rounded-md border">
                               <div className="border-b bg-muted/40 px-3 py-2 text-sm font-medium">Locations</div>
-                              <div className="p-3 space-y-2 max-h-40 overflow-y-auto">
-                                {activeAdminYards.map((y) => (
-                                  <label key={y.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                                    <Checkbox checked={createYardIds.has(y.id)} onCheckedChange={() => toggleCreateYard(y.id)} />
-                                    <span>{y.name}</span>
-                                  </label>
-                                ))}
+                              <p className="px-3 pt-2 text-xs text-muted-foreground">
+                                Taken from Primary Location Posted and Additional Charge Locations above (not editable here).
+                              </p>
+                              <div className="p-3 space-y-2 max-h-40 overflow-y-auto bg-muted/20">
+                                {(() => {
+                                  const ids = [
+                                    yardId,
+                                    ...additionalChargeYardIds.filter((id) => id && id !== yardId),
+                                  ].filter(Boolean);
+                                  const labels = ids.map((id) => {
+                                    const y = (yards ?? []).find((row) => row.id === id);
+                                    return { id, label: y?.name ?? y?.code ?? id };
+                                  });
+                                  if (labels.length === 0) {
+                                    return (
+                                      <p className="text-xs text-muted-foreground">
+                                        Set primary (and optional additional) locations on the Details tab first.
+                                      </p>
+                                    );
+                                  }
+                                  return labels.map((row) => (
+                                    <p key={row.id} className="text-sm">
+                                      {row.label}
+                                    </p>
+                                  ));
+                                })()}
                               </div>
                             </div>
                           </div>

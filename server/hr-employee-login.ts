@@ -27,6 +27,45 @@ import {
   HrEmployeeRuleError,
   normalizeMobile10,
 } from "./hr-employee-rules";
+import { parseAdditionalChargeYardIds } from "@shared/hr-additional-charge-locations";
+
+/** Primary + additional charge yard IDs for app scope (user_yards). */
+export function collectEmployeeLocationYardIds(
+  primaryYardId: string | null | undefined,
+  locationPosted: string | null | undefined,
+): string[] {
+  const primary = String(primaryYardId ?? "").trim();
+  const additional = parseAdditionalChargeYardIds(locationPosted, primary);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  if (primary) {
+    seen.add(primary);
+    out.push(primary);
+  }
+  for (const id of additional) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/** Rewrite user_yards from employee primary + additional locations (source of truth). */
+export async function syncUserYardsFromEmployeeLocations(
+  tx: {
+    delete: typeof db.delete;
+    insert: typeof db.insert;
+  },
+  userId: string,
+  primaryYardId: string | null | undefined,
+  locationPosted: string | null | undefined,
+): Promise<void> {
+  const ids = collectEmployeeLocationYardIds(primaryYardId, locationPosted);
+  await tx.delete(userYards).where(eq(userYards.userId, userId));
+  for (const yardId of ids) {
+    await tx.insert(userYards).values({ userId, yardId }).onConflictDoNothing();
+  }
+}
 
 function userSnapshotForAudit(u: Record<string, unknown> | undefined) {
   if (!u) return undefined;
@@ -281,7 +320,7 @@ export async function enrichEmployeesWithAppLogin<T extends { id: string; userId
 export async function handleCreateEmployeeLogin(req: Request, res: Response, employeeIdParam: string): Promise<void> {
   try {
     const employeeIdRaw = String(employeeIdParam ?? "").trim();
-    const { email, username, name, phone, roleIds, yardIds, password } = req.body ?? {};
+    const { email, username, name, phone, roleIds, password } = req.body ?? {};
     if (!email || !name) {
       sendApiError(res, 400, "HR_LOGIN_FIELDS_REQUIRED", "email, name required");
       return;
@@ -360,11 +399,8 @@ export async function handleCreateEmployeeLogin(req: Request, res: Response, emp
           await tx.insert(userRoles).values({ userId: id, roleId: String(roleId) }).onConflictDoNothing();
         }
       }
-      if (Array.isArray(yardIds) && yardIds.length) {
-        for (const yardId of yardIds) {
-          await tx.insert(userYards).values({ userId: id, yardId: String(yardId) }).onConflictDoNothing();
-        }
-      }
+      // App yard scope follows employee primary + additional locations (not editable on Login & roles).
+      await syncUserYardsFromEmployeeLocations(tx, id, emp.yardId, emp.locationPosted);
     });
     const [row] = await db.select().from(users).where(eq(users.id, id));
     writeAuditLog(req, {
@@ -419,7 +455,8 @@ export async function handleUpdateEmployeeLogin(req: Request, res: Response, emp
       return;
     }
 
-    const { email, username, name, phone, isActive, roleIds, yardIds, password } = req.body ?? {};
+    // yardIds from the client are ignored — Login & roles Locations are read-only; sync from employee.
+    const { email, username, name, phone, isActive, roleIds, password } = req.body ?? {};
     const usernameUpdate =
       username === undefined
         ? {}
@@ -522,12 +559,8 @@ export async function handleUpdateEmployeeLogin(req: Request, res: Response, emp
           await tx.insert(userRoles).values({ userId: id, roleId: String(roleId) }).onConflictDoNothing();
         }
       }
-      if (Array.isArray(yardIds)) {
-        await tx.delete(userYards).where(eq(userYards.userId, id));
-        for (const yardId of yardIds) {
-          await tx.insert(userYards).values({ userId: id, yardId: String(yardId) }).onConflictDoNothing();
-        }
-      }
+      // Keep user_yards aligned with current employee primary + additional (Locations UI is read-only).
+      await syncUserYardsFromEmployeeLocations(tx, id, emp.yardId, emp.locationPosted);
     });
 
     const [row] = await db.select().from(users).where(eq(users.id, id));
