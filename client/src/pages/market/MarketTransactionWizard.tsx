@@ -684,7 +684,8 @@ export default function MarketTransactionWizard() {
                     value={entryLocationId || undefined}
                     onValueChange={(v) => {
                       setEntryLocationId(v);
-                      setTraderLicenceId("");
+                      // Keep trader when opened from licence → Transaction (read-only link).
+                      if (!traderLockedFromLicencePage) setTraderLicenceId("");
                       setReceiverTraderLicenceId("");
                     }}
                   >
