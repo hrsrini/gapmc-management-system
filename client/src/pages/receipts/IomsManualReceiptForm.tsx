@@ -45,6 +45,7 @@ interface UnifiedEntityRow {
   kind: "TrackA" | "TrackB" | "AdHoc";
   yardId: string;
   name: string;
+  status?: string | null;
   publicEntityCode?: string | null;
 }
 
@@ -99,7 +100,12 @@ export default function IomsManualReceiptForm() {
   });
 
   const { data: unified = [] } = useQuery<UnifiedEntityRow[]>({
-    queryKey: ["/api/ioms/unified-entities"],
+    queryKey: ["/api/ioms/unified-entities", { status: "Active" }],
+    queryFn: async () => {
+      const res = await fetch("/api/ioms/unified-entities?status=Active", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load entities");
+      return res.json();
+    },
   });
 
   const { data: assets = [] } = useQuery<AssetRef[]>({
@@ -153,7 +159,7 @@ export default function IomsManualReceiptForm() {
   );
 
   const unifiedForParty = useMemo(() => {
-    let list = unified;
+    let list = unified.filter((u) => String(u.status ?? "") === "Active");
     if (yardId) list = list.filter((u) => u.yardId === yardId);
     if (partyType === "Trader") return list.filter((u) => u.kind === "TrackA");
     if (partyType === "Entity") return list.filter((u) => u.kind === "TrackB" || u.kind === "AdHoc");

@@ -22,7 +22,12 @@ export function isSingleDayLeavePeriod(
 export function formatLeaveOrderDateDisplay(isoYmd: string | null | undefined): string {
   const raw = String(isoYmd ?? "").trim().slice(0, 10);
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  if (m) {
+    let y = Number(m[1]);
+    // Heal display when HTML date inputs stored 0026 instead of 2026
+    if (y >= 0 && y <= 99) y += 2000;
+    return `${m[3]}/${m[2]}/${String(y).padStart(4, "0")}`;
+  }
   return raw;
 }
 
@@ -324,11 +329,22 @@ export function classifyLeaveRevisionKind(
   return "revision";
 }
 
+/** One leave in a revision chain (chronological: root original first, current last). */
+export type SanctionRevisionLeaveRef = {
+  applicationDated: string;
+  fromDate: string;
+  toDate: string;
+  fileNo?: string | null;
+  orderDate?: string | null;
+};
+
 /**
- * READ references for a revised sanction (extension / curtailment), matching board specimens:
- * 1) original application + period
- * 2) original Leave Sanction Order No. + date
- * 3) revised application + period + "consequent upon extension|curtailment…"
+ * READ block for extension / curtailment orders (board specimen):
+ *   READ: -
+ *   1. Leave application of …
+ *   2. Leave Sanction Order No. …
+ *   3. Revised leave application …
+ * Serial count grows with each leave-revision iteration in `chain` (min 2: original + current).
  */
 export function buildSanctionRevisionHistoryLines(opts: {
   gender?: string | null;
@@ -339,14 +355,17 @@ export function buildSanctionRevisionHistoryLines(opts: {
   section?: string | null;
   yardIsHo?: boolean;
   leaveTypeLabel: string;
-  originalApplicationDated: string;
-  originalFromDate: string;
-  originalToDate: string;
+  /** Prefer this. Chronological: original first … current revision last. */
+  chain?: SanctionRevisionLeaveRef[];
+  /** @deprecated Single-revision fields — used when `chain` is omitted. */
+  originalApplicationDated?: string;
+  originalFromDate?: string;
+  originalToDate?: string;
   originalFileNo?: string | null;
   originalOrderDate?: string | null;
-  revisedApplicationDated: string;
-  revisedFromDate: string;
-  revisedToDate: string;
+  revisedApplicationDated?: string;
+  revisedFromDate?: string;
+  revisedToDate?: string;
 }): string[] {
   const honorific = employeeHonorific(opts.gender, opts.maritalStatus);
   const applicantBits = [
@@ -357,42 +376,56 @@ export function buildSanctionRevisionHistoryLines(opts: {
   ].filter(Boolean);
   const applicant = applicantBits.join(", ");
   const leaveLabel = leaveTypeSanctionLabel(opts.leaveTypeLabel);
-  const kind = classifyLeaveRevisionKind(
-    opts.originalFromDate,
-    opts.originalToDate,
-    opts.revisedFromDate,
-    opts.revisedToDate,
+
+  const chain: SanctionRevisionLeaveRef[] =
+    opts.chain && opts.chain.length >= 2
+      ? opts.chain
+      : [
+          {
+            applicationDated: String(opts.originalApplicationDated ?? ""),
+            fromDate: String(opts.originalFromDate ?? ""),
+            toDate: String(opts.originalToDate ?? ""),
+            fileNo: opts.originalFileNo,
+            orderDate: opts.originalOrderDate,
+          },
+          {
+            applicationDated: String(opts.revisedApplicationDated ?? ""),
+            fromDate: String(opts.revisedFromDate ?? ""),
+            toDate: String(opts.revisedToDate ?? ""),
+          },
+        ];
+
+  const root = chain[0]!;
+  const items: string[] = [];
+  items.push(
+    `Leave application of ${applicant}, dated ${formatLeaveOrderDateDisplay(root.applicationDated)} for ${leaveLabel} for the period from ${formatLeaveOrderDateDisplay(root.fromDate)} to ${formatLeaveOrderDateDisplay(root.toDate)}.`,
   );
-  const consequent =
-    kind === "curtailment"
-      ? "consequent upon curtailment of the originally sanctioned leave"
-      : kind === "extension"
-        ? "consequent upon extension of the originally sanctioned leave"
-        : "consequent upon revision of the originally sanctioned leave";
 
-  const origFrom = formatLeaveOrderDateDisplay(opts.originalFromDate);
-  const origTo = formatLeaveOrderDateDisplay(opts.originalToDate);
-  const revFrom = formatLeaveOrderDateDisplay(opts.revisedFromDate);
-  const revTo = formatLeaveOrderDateDisplay(opts.revisedToDate);
-  const origApp = formatLeaveOrderDateDisplay(opts.originalApplicationDated);
-  const revApp = formatLeaveOrderDateDisplay(opts.revisedApplicationDated);
-
-  const lines: string[] = [
-    `READ: - Leave application of ${applicant}, dated ${origApp} for ${leaveLabel} for the period from ${origFrom} to ${origTo}.`,
-  ];
-  const fileNo = opts.originalFileNo?.trim();
-  const orderDated = opts.originalOrderDate?.trim();
-  if (fileNo) {
-    lines.push(
-      `READ: - Leave Sanction Order No. ${fileNo}${
-        orderDated ? ` dated ${formatLeaveOrderDateDisplay(orderDated)}` : ""
-      }.`,
+  for (let i = 0; i < chain.length - 1; i++) {
+    const prior = chain[i]!;
+    const next = chain[i + 1]!;
+    const fileNo = prior.fileNo?.trim();
+    const orderDated = prior.orderDate?.trim();
+    if (fileNo) {
+      items.push(
+        `Leave Sanction Order No. ${fileNo}${
+          orderDated ? ` dated ${formatLeaveOrderDateDisplay(orderDated)}` : ""
+        }.`,
+      );
+    }
+    const kind = classifyLeaveRevisionKind(prior.fromDate, prior.toDate, next.fromDate, next.toDate);
+    const consequent =
+      kind === "curtailment"
+        ? "consequent upon curtailment of the originally sanctioned leave"
+        : kind === "extension"
+          ? "consequent upon extension of the originally sanctioned leave"
+          : "consequent upon revision of the originally sanctioned leave";
+    items.push(
+      `Revised leave application dated ${formatLeaveOrderDateDisplay(next.applicationDated)} for ${leaveLabel} from ${formatLeaveOrderDateDisplay(next.fromDate)} to ${formatLeaveOrderDateDisplay(next.toDate)} ${consequent}.`,
     );
   }
-  lines.push(
-    `READ: - Revised leave application dated ${revApp} for ${leaveLabel} from ${revFrom} to ${revTo} ${consequent}.`,
-  );
-  return lines;
+
+  return ["READ: -", ...items.map((text, idx) => `${idx + 1}. ${text}`)];
 }
 
 /**

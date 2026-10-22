@@ -11,6 +11,7 @@ import {
   buildSanctionReadLine,
   buildSanctionRevisionHistoryLines,
   classifyLeaveYardKind,
+  type SanctionRevisionLeaveRef,
   applySalutationsToCopyToLines,
   ensureSanctionCopyToTrailers,
   employeeMrHonorific,
@@ -301,11 +302,13 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     doc.x = leftX;
   };
 
-  const writeLeft = (text: string, opts?: { gap?: number; bold?: boolean }) => {
+  const writeLeft = (text: string, opts?: { gap?: number; bold?: boolean; indent?: number }) => {
+    const indent = Math.max(0, Number(opts?.indent ?? 0));
+    const x = leftX + indent;
     goLeft();
     doc.font(opts?.bold ? fontBold : fontRegular).fontSize(bodySize);
-    doc.text(text, leftX, doc.y, {
-      width: contentWidth,
+    doc.text(text, x, doc.y, {
+      width: Math.max(40, contentWidth - indent),
       align: "left",
       lineGap,
     });
@@ -365,21 +368,42 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
 
   writeCenter("ORDER", { bold: true, gap: 0.35 });
 
-  // Curtailment / extension: prior application + original order + revised application READ lines.
+  // Curtailment / extension: single READ: - then numbered history (grows with each revision).
   if (lr.revisedFromLeaveId) {
-    const [orig] = await db
-      .select()
-      .from(leaveRequests)
-      .where(eq(leaveRequests.id, lr.revisedFromLeaveId))
-      .limit(1);
-    if (orig) {
-      let origAppDated = String(orig.appliedAt ?? "").trim().slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(origAppDated)) {
-        origAppDated = (await resolveLeaveApplicationDateFromAudit(orig.id)) || orig.fromDate;
-      }
-      let origOrderDated = String(orig.orderDate ?? "").trim().slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(origOrderDated)) {
-        origOrderDated = (await resolveLeaveOrderDateFromAudit(orig.id)) || "";
+    // Walk revisedFromLeaveId to the root (oldest first).
+    const chainRows: (typeof lr)[] = [];
+    let walkId: string | null = lr.revisedFromLeaveId;
+    const seen = new Set<string>([lr.id]);
+    while (walkId && !seen.has(walkId)) {
+      seen.add(walkId);
+      const [row] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, walkId)).limit(1);
+      if (!row) break;
+      chainRows.unshift(row);
+      walkId = row.revisedFromLeaveId ? String(row.revisedFromLeaveId) : null;
+    }
+    chainRows.push(lr);
+
+    if (chainRows.length >= 2) {
+      const chain: SanctionRevisionLeaveRef[] = [];
+      for (const row of chainRows) {
+        let appDated = String(row.appliedAt ?? "").trim().slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(appDated)) {
+          appDated =
+            row.id === lr.id
+              ? applicationDated || row.fromDate
+              : (await resolveLeaveApplicationDateFromAudit(row.id)) || row.fromDate;
+        }
+        let orderDated = String(row.orderDate ?? "").trim().slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(orderDated) && row.id !== lr.id) {
+          orderDated = (await resolveLeaveOrderDateFromAudit(row.id)) || "";
+        }
+        chain.push({
+          applicationDated: appDated,
+          fromDate: row.fromDate,
+          toDate: row.toDate,
+          fileNo: row.id === lr.id ? null : row.fileNo,
+          orderDate: row.id === lr.id ? null : orderDated || null,
+        });
       }
       const historyLines = buildSanctionRevisionHistoryLines({
         gender: emp.gender,
@@ -390,17 +414,16 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
         section: emp.section,
         yardIsHo,
         leaveTypeLabel,
-        originalApplicationDated: origAppDated,
-        originalFromDate: orig.fromDate,
-        originalToDate: orig.toDate,
-        originalFileNo: orig.fileNo,
-        originalOrderDate: origOrderDated || null,
-        revisedApplicationDated: applicationDated || lr.fromDate,
-        revisedFromDate: lr.fromDate,
-        revisedToDate: lr.toDate,
+        chain,
       });
       for (let i = 0; i < historyLines.length; i++) {
-        writeLeft(historyLines[i]!, { gap: i === historyLines.length - 1 ? 0.4 : 0.15 });
+        const line = historyLines[i]!;
+        const isHeader = i === 0;
+        const isLast = i === historyLines.length - 1;
+        writeLeft(line, {
+          gap: isLast ? 0.4 : isHeader ? 0.1 : 0.12,
+          indent: isHeader ? 0 : 12,
+        });
       }
     } else {
       writeLeft(

@@ -28,6 +28,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Calendar, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal, Plus, Download, Loader2, FileText, Pencil } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { localCalendarYmd } from "@shared/premises-allocation";
+import { normalizeIsoCalendarYmd } from "@shared/iso-calendar-ymd";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
 import {
   buildDefaultSanctionCopyTo,
@@ -471,8 +472,10 @@ function SanctionOrderPreviewPanel({
       ) : null}
       {revisionReadLines ? (
         <div className="space-y-1 text-muted-foreground">
-          {revisionReadLines.map((line) => (
-            <p key={line}>{line}</p>
+          {revisionReadLines.map((line, idx) => (
+            <p key={`${idx}-${line.slice(0, 40)}`} className={idx > 0 ? "pl-3" : undefined}>
+              {line}
+            </p>
           ))}
         </div>
       ) : (
@@ -1736,11 +1739,19 @@ export default function LeaveRequests() {
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <Label>From</Label>
-                <Input type="date" value={newFrom} onChange={(e) => setNewFrom(e.target.value)} />
+                <Input
+                  type="date"
+                  value={newFrom}
+                  onChange={(e) => setNewFrom(normalizeIsoCalendarYmd(e.target.value) ?? e.target.value)}
+                />
               </div>
               <div className="space-y-1">
                 <Label>To</Label>
-                <Input type="date" value={newTo} onChange={(e) => setNewTo(e.target.value)} />
+                <Input
+                  type="date"
+                  value={newTo}
+                  onChange={(e) => setNewTo(normalizeIsoCalendarYmd(e.target.value) ?? e.target.value)}
+                />
               </div>
             </div>
             )}
@@ -2017,15 +2028,18 @@ export default function LeaveRequests() {
                   return;
                 }
                 const today = localCalendarYmd();
-                const applicationDate = (newApplicationDate || today).slice(0, 10);
-                if (!/^\d{4}-\d{2}-\d{2}$/.test(applicationDate)) {
+                const fromDate = normalizeIsoCalendarYmd(newFrom);
+                const toDate = normalizeIsoCalendarYmd(newTo);
+                if (!fromDate || !toDate) {
                   toast({
-                    title: "Invalid application date",
-                    description: "Enter a valid leave application date.",
+                    title: "Invalid dates",
+                    description: "From/To must use a 4-digit year (e.g. 2026), not 0026.",
                     variant: "destructive",
                   });
                   return;
                 }
+                const applicationDate =
+                  normalizeIsoCalendarYmd(newApplicationDate || today) ?? today;
                 if (applicationDate > today) {
                   toast({
                     title: "Future date not allowed",
@@ -2035,7 +2049,7 @@ export default function LeaveRequests() {
                   return;
                 }
                 const lt = newLeaveType.trim().toUpperCase() || "EL";
-                const calDays = inclusiveCalendarDays(newFrom, newTo);
+                const calDays = inclusiveCalendarDays(fromDate, toDate);
                 if (leaveSupportingDocRequired(lt, calDays) && !newDocUrl.trim()) {
                   toast({
                     title: "Supporting document required",
@@ -2047,8 +2061,8 @@ export default function LeaveRequests() {
                 createMutation.mutate({
                   employeeId,
                   leaveType: lt,
-                  fromDate: newFrom,
-                  toDate: newTo,
+                  fromDate,
+                  toDate,
                   applicationDate,
                   reason: newReason.trim() || null,
                   supportingDocumentUrl: newDocUrl.trim() || null,
@@ -2574,11 +2588,19 @@ export default function LeaveRequests() {
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <Label>From</Label>
-                <Input type="date" value={editFrom} onChange={(e) => setEditFrom(e.target.value)} />
+                <Input
+                  type="date"
+                  value={editFrom}
+                  onChange={(e) => setEditFrom(normalizeIsoCalendarYmd(e.target.value) ?? e.target.value)}
+                />
               </div>
               <div className="space-y-1">
                 <Label>To</Label>
-                <Input type="date" value={editTo} onChange={(e) => setEditTo(e.target.value)} />
+                <Input
+                  type="date"
+                  value={editTo}
+                  onChange={(e) => setEditTo(normalizeIsoCalendarYmd(e.target.value) ?? e.target.value)}
+                />
               </div>
             </div>
             {editPublicHolidaysInPeriod.length > 0 && (
@@ -2619,11 +2641,21 @@ export default function LeaveRequests() {
                   });
                   return;
                 }
+                const fromDate = normalizeIsoCalendarYmd(editFrom);
+                const toDate = normalizeIsoCalendarYmd(editTo);
+                if (!fromDate || !toDate) {
+                  toast({
+                    title: "Invalid dates",
+                    description: "From and To must be valid calendar dates with a 4-digit year (e.g. 2026).",
+                    variant: "destructive",
+                  });
+                  return;
+                }
                 updateMutation.mutate({
                   id: editLeaveId,
                   body: {
-                    fromDate: editFrom,
-                    toDate: editTo,
+                    fromDate,
+                    toDate,
                     reason: editReason.trim() || null,
                   },
                 });

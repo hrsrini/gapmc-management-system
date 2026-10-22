@@ -101,6 +101,7 @@ import {
   leaveSupportingDocRequired,
   leaveTypeSkipsBalanceDebit,
 } from "@shared/hr-leave-display";
+import { normalizeIsoCalendarYmd } from "@shared/iso-calendar-ymd";
 import { calculatePrefixSuffix, calculateDebitDays, validateRhDate } from "./hr-leave-prefix-suffix";
 import { debitLeaveBalanceOnApproval, creditLeaveBalanceOnReversal, balanceLeaveTypeFor, assertSufficientBalanceForApprovalTx } from "./hr-leave-balance-debit";
 import {
@@ -2319,14 +2320,21 @@ export function registerHrRoutes(app: Express) {
       const body = req.body;
       const leaveType = String(body.leaveType ?? "").trim().toUpperCase();
       const employeeId = String(body.employeeId ?? "").trim();
-      const fromDate = String(body.fromDate ?? "").trim();
-      const toDate = String(body.toDate ?? "").trim();
+      const fromDate = normalizeIsoCalendarYmd(body.fromDate);
+      const toDate = normalizeIsoCalendarYmd(body.toDate);
       const isRetrospective = Boolean((body as Record<string, unknown>).isRetrospective);
       const isExPostFacto = Boolean((body as Record<string, unknown>).isExPostFacto);
       const halfDay = body.halfDay ? String(body.halfDay).trim() : null;
 
       if (!employeeId) return sendApiError(res, 400, "LEAVE_EMPLOYEE_REQUIRED", "employeeId is required");
-      if (!fromDate || !toDate) return sendApiError(res, 400, "LEAVE_DATES_REQUIRED", "fromDate and toDate are required");
+      if (!fromDate || !toDate) {
+        return sendApiError(
+          res,
+          400,
+          "LEAVE_DATES_REQUIRED",
+          "fromDate and toDate are required (YYYY-MM-DD; use a 4-digit year, e.g. 2026).",
+        );
+      }
       if (fromDate > toDate) return sendApiError(res, 400, "LEAVE_DATES_INVALID", "fromDate must be <= toDate");
 
       const publicHolidayErr = await validateLeaveDatesNotPublicHoliday(fromDate, toDate);
@@ -2397,16 +2405,16 @@ export function registerHrRoutes(app: Express) {
       const todayYmd = localCalendarYmdUtc();
       const rawAppDate =
         body.applicationDate != null && String(body.applicationDate).trim() !== ""
-          ? String(body.applicationDate).trim().slice(0, 10)
+          ? normalizeIsoCalendarYmd(body.applicationDate)
           : body.appliedAt != null && String(body.appliedAt).trim() !== ""
-            ? String(body.appliedAt).trim().slice(0, 10)
+            ? normalizeIsoCalendarYmd(body.appliedAt)
             : todayYmd;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(rawAppDate)) {
+      if (!rawAppDate) {
         return sendApiError(
           res,
           400,
           "LEAVE_APPLICATION_DATE_INVALID",
-          "Leave application date must be YYYY-MM-DD.",
+          "Leave application date must be YYYY-MM-DD with a 4-digit year (e.g. 2026).",
         );
       }
       if (rawAppDate > todayYmd) {
@@ -2572,7 +2580,9 @@ export function registerHrRoutes(app: Express) {
             ? String(body.refundUndertakingIi).trim()
             : null,
         leaveHq: body.leaveHq ? String(body.leaveHq).trim() : null,
-        dutyDateForSplH: body.dutyDateForSplH ? String(body.dutyDateForSplH).trim() : null,
+        dutyDateForSplH: body.dutyDateForSplH
+          ? normalizeIsoCalendarYmd(body.dutyDateForSplH) ?? String(body.dutyDateForSplH).trim()
+          : null,
         copyToJson: body.copyToJson ? String(body.copyToJson) : null,
         revisedFromLeaveId,
         cancelledAt: null,
@@ -2772,11 +2782,43 @@ export function registerHrRoutes(app: Express) {
           updates.orderDate = new Date().toISOString().slice(0, 10);
         }
       }
-      ["leaveType", "fromDate", "toDate", "reason", "supportingDocumentUrl"].forEach((k) => {
+      ["leaveType", "reason", "supportingDocumentUrl"].forEach((k) => {
         if (body[k] !== undefined) {
           updates[k] = body[k] === null || body[k] === "" ? null : String(body[k]);
         }
       });
+      if (body.fromDate !== undefined) {
+        if (body.fromDate === null || body.fromDate === "") {
+          updates.fromDate = null;
+        } else {
+          const n = normalizeIsoCalendarYmd(body.fromDate);
+          if (!n) {
+            return sendApiError(
+              res,
+              400,
+              "LEAVE_DATES_INVALID",
+              "fromDate must be YYYY-MM-DD with a 4-digit year (e.g. 2026).",
+            );
+          }
+          updates.fromDate = n;
+        }
+      }
+      if (body.toDate !== undefined) {
+        if (body.toDate === null || body.toDate === "") {
+          updates.toDate = null;
+        } else {
+          const n = normalizeIsoCalendarYmd(body.toDate);
+          if (!n) {
+            return sendApiError(
+              res,
+              400,
+              "LEAVE_DATES_INVALID",
+              "toDate must be YYYY-MM-DD with a 4-digit year (e.g. 2026).",
+            );
+          }
+          updates.toDate = n;
+        }
+      }
       // Ex-post facto may be corrected at Verify / Approve (and other edits with Update permission).
       if (body.isExPostFacto !== undefined) {
         updates.isExPostFacto = body.isExPostFacto === true;
@@ -2785,11 +2827,27 @@ export function registerHrRoutes(app: Express) {
         updates.copyToJson =
           body.copyToJson === null || body.copyToJson === "" ? null : String(body.copyToJson);
       }
-      ["halfDay", "substituteEmployeeId", "addressDuringLeave", "leaveHq", "dutyDateForSplH", "ltcBlockYear", "refundUndertakingI", "refundUndertakingIi"].forEach((k) => {
+      ["halfDay", "substituteEmployeeId", "addressDuringLeave", "leaveHq", "ltcBlockYear", "refundUndertakingI", "refundUndertakingIi"].forEach((k) => {
         if (body[k] !== undefined) {
           updates[k] = body[k] === null || body[k] === "" ? null : String(body[k]);
         }
       });
+      if (body.dutyDateForSplH !== undefined) {
+        if (body.dutyDateForSplH === null || body.dutyDateForSplH === "") {
+          updates.dutyDateForSplH = null;
+        } else {
+          const n = normalizeIsoCalendarYmd(body.dutyDateForSplH);
+          if (!n) {
+            return sendApiError(
+              res,
+              400,
+              "LEAVE_DATES_INVALID",
+              "dutyDateForSplH must be YYYY-MM-DD with a 4-digit year (e.g. 2026).",
+            );
+          }
+          updates.dutyDateForSplH = n;
+        }
+      }
       if (!statusChange && body.ltcProposed !== undefined) {
         updates.ltcProposed = body.ltcProposed === true;
       }

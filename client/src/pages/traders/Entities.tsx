@@ -20,6 +20,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -33,6 +43,14 @@ import { sanitizeMobile10Input } from "@shared/india-validation";
 import { PanInput } from "@/components/inputs/PanInput";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
 import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
+
+function entityStatusBadge(status: string) {
+  const s = String(status ?? "").trim();
+  if (s === "Active") return <Badge>{s}</Badge>;
+  if (s === "Inactive") return <Badge variant="secondary">{s}</Badge>;
+  if (s === "Blocked") return <Badge variant="destructive">{s}</Badge>;
+  return <Badge variant="outline">{s || "—"}</Badge>;
+}
 
 interface Entity {
   id: string;
@@ -53,20 +71,12 @@ interface EntitySubtypeRef {
   trackB: string[];
 }
 
-const columns: ReportTableColumn[] = [
-  { key: "_code", header: "Entity ID" },
-  { key: "name", header: "Entity Name" },
-  { key: "subType", header: "Sub-type" },
-  { key: "_billing", header: "Billing Type", sortField: "billingLabel" },
-  { key: "yardName", header: "Yard" },
-  { key: "mobile", header: "Mobile" },
-  { key: "_status", header: "Status", sortField: "status" },
-];
-
 export default function Entities() {
   const { toast } = useToast();
   const { can } = useAuth();
   const canCreate = can("M-02", "Create");
+  const canUpdate = can("M-02", "Update");
+  const canDelete = can("M-02", "Delete");
   const queryClient = useQueryClient();
 
   const {
@@ -96,6 +106,8 @@ export default function Entities() {
   const [gstin, setGstin] = useState("");
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "Active" | "Inactive">("all");
+  const [deleteTarget, setDeleteTarget] = useState<Entity | null>(null);
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -125,9 +137,84 @@ export default function Entities() {
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
 
+  const statusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      const res = await fetch(`/api/ioms/entities/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(
+          (err as { message?: string; error?: string }).message ??
+            (err as { error?: string }).error ??
+            res.statusText,
+        );
+      }
+      return res.json() as Promise<Entity>;
+    },
+    onSuccess: (row) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/entities"] });
+      toast({
+        title: row.status === "Inactive" ? "Entity marked inactive" : "Entity reactivated",
+        description:
+          row.status === "Inactive"
+            ? "Retained for history; excluded from active operations."
+            : undefined,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Status update failed", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/ioms/entities/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(
+          (err as { message?: string; error?: string }).message ??
+            (err as { error?: string }).error ??
+            res.statusText,
+        );
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/entities"] });
+      setDeleteTarget(null);
+      toast({ title: "Entity deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Delete not allowed", description: e.message, variant: "destructive" }),
+  });
+
+  const filteredEntities = useMemo(() => {
+    if (statusFilter === "all") return entities ?? [];
+    return (entities ?? []).filter((e) => e.status === statusFilter);
+  }, [entities, statusFilter]);
+
+  const columns = useMemo((): ReportTableColumn[] => {
+    const base: ReportTableColumn[] = [
+      { key: "_code", header: "Entity ID" },
+      { key: "name", header: "Entity Name" },
+      { key: "subType", header: "Sub-type" },
+      { key: "_billing", header: "Billing Type", sortField: "billingLabel" },
+      { key: "yardName", header: "Yard" },
+      { key: "mobile", header: "Mobile" },
+      { key: "_status", header: "Status", sortField: "status" },
+    ];
+    if (canUpdate || canDelete) base.push({ key: "_actions", header: "Actions" });
+    return base;
+  }, [canUpdate, canDelete]);
+
   const sourceRows = useMemo((): Record<string, unknown>[] => {
-    return (entities ?? []).map((e) => {
+    return filteredEntities.map((e) => {
       const billingLabel = trackBShortBillingLabel(e.subType);
+      const isActive = e.status === "Active";
+      const isInactive = e.status === "Inactive";
       return {
         id: e.id,
         code: e.entityCode ?? e.id,
@@ -143,10 +230,47 @@ export default function Entities() {
         yardName: yardById[e.yardId] ?? e.yardId,
         mobile: e.mobile ?? "—",
         status: e.status,
-        _status: <span>{e.status}</span>,
+        _status: entityStatusBadge(e.status),
+        _actions: (
+          <div className="flex flex-wrap gap-1">
+            {canUpdate && isActive ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={statusMutation.isPending}
+                onClick={() => statusMutation.mutate({ id: e.id, status: "Inactive" })}
+              >
+                Mark inactive
+              </Button>
+            ) : null}
+            {canUpdate && isInactive ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={statusMutation.isPending}
+                onClick={() => statusMutation.mutate({ id: e.id, status: "Active" })}
+              >
+                Reactivate
+              </Button>
+            ) : null}
+            {canDelete ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                disabled={deleteMutation.isPending}
+                onClick={() => setDeleteTarget(e)}
+              >
+                Delete
+              </Button>
+            ) : null}
+          </div>
+        ),
       };
     });
-  }, [entities, yardById]);
+  }, [filteredEntities, yardById, canUpdate, canDelete, statusMutation, deleteMutation.isPending]);
 
   if (isError) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -203,15 +327,31 @@ export default function Entities() {
               sub-type: <span className="font-medium text-foreground">Govt</span> uses pre-receipts;{" "}
               <span className="font-medium text-foreground">Commercial</span> and{" "}
               <span className="font-medium text-foreground">Ad-hoc occupant</span> use M-03 rent / GST invoices — open
-              an entity profile for links and hints.
+              an entity profile for links and hints. Delete is allowed only with no linked receipts/transactions;
+              otherwise mark Inactive to retain history.
             </p>
           </div>
-          {canCreate && (
-            <Button size="sm" onClick={() => setOpen(true)}>
-              <Plus className="h-4 w-4 mr-1" />
-              New entity
-            </Button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={statusFilter}
+              onValueChange={(v) => setStatusFilter(v as "all" | "Active" | "Inactive")}
+            >
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="Active">Active</SelectItem>
+                <SelectItem value="Inactive">Inactive</SelectItem>
+              </SelectContent>
+            </Select>
+            {canCreate && (
+              <Button size="sm" onClick={() => setOpen(true)}>
+                <Plus className="h-4 w-4 mr-1" />
+                New entity
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -229,6 +369,33 @@ export default function Entities() {
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete entity permanently?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget
+                ? `Delete ${deleteTarget.entityCode ?? deleteTarget.id} (${deleteTarget.name}) only if no receipt or other transaction is linked. If links exist, mark the entity Inactive instead.`
+                : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+              }}
+            >
+              {deleteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-lg">

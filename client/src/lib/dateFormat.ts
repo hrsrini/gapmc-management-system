@@ -59,12 +59,17 @@ export function formatIsoLikeForDisplay(iso: string): string {
 
 /**
  * API calendar date as YYYY-MM-DD → DD-MM-YYYY without `Date` parsing (avoids timezone shifts).
+ * Years 00–99 (e.g. 0026 from a mistyped date input) are shown as 20xx.
  */
 export function formatYmdToDisplay(ymd: string | null | undefined): string {
   if (ymd == null || String(ymd).trim() === '') return '—';
   const part = String(ymd).trim().slice(0, 10);
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(part);
-  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  if (m) {
+    let y = Number(m[1]);
+    if (y >= 0 && y <= 99) y += 2000;
+    return `${m[3]}-${m[2]}-${String(y).padStart(4, '0')}`;
+  }
   return formatIsoLikeForDisplay(String(ymd));
 }
 

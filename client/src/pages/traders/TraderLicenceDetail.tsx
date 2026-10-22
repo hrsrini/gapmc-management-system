@@ -10,7 +10,6 @@ import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert, Loader2, Trash2, Package, Pencil, MessageSquareWarning, Wallet, BookOpen, Plus, ArrowRightLeft } from "lucide-react";
-import { localCalendarYmd } from "@shared/premises-allocation";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -62,6 +61,28 @@ import {
   formatAllocationMoney,
 } from "@/lib/premises-allocation-table";
 
+interface LmPreviousTraderLicenceDetails {
+  licenceNo: string | null;
+  classOfLicense: string | null;
+  receiptNo: string | null;
+  dated: string | null;
+  securityDeposit: number | null;
+}
+
+interface LmApplicationProfile {
+  traderName: string | null;
+  typeOfFirm: string | null;
+  businessAddress: string | null;
+  licenseFee: number | null;
+  receiptNo: string | null;
+  securityDeposit: number | null;
+  bankName: string | null;
+  ifscCode: string | null;
+  accountNo: string | null;
+  aadhaarMasked: string | null;
+  previousTraderLicence: LmPreviousTraderLicenceDetails | null;
+}
+
 interface Licence {
   id: string;
   licenceNo?: string | null;
@@ -110,6 +131,7 @@ interface Licence {
   lmIsActive?: boolean | null;
   lmLicenseClass?: string | null;
   lmSyncedAt?: string | null;
+  lmProfile?: LmApplicationProfile | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -819,16 +841,6 @@ export default function TraderLicenceDetail() {
               <span className="font-mono">{licence.applicationSerial?.trim() || "—"}</span>
             </div>
             <div className="text-sm">
-              <span className="text-muted-foreground">Provisional licence ref.</span>
-              <br />
-              <span className="font-mono break-all">{licence.provisionalLicenceNo?.trim() || "—"}</span>
-            </div>
-            <div className="text-sm">
-              <span className="text-muted-foreground">Public entity code (ENT)</span>
-              <br />
-              <span className="font-mono">{licence.entityPublicCode?.trim() || "—"}</span>
-            </div>
-            <div className="text-sm">
               <span className="text-muted-foreground">Application kind</span>
               <br />
               {licence.applicationKind ?? "New"}
@@ -858,121 +870,199 @@ export default function TraderLicenceDetail() {
                 <Badge variant="outline">Resubmissions: {licence.workflowRevisionCount}</Badge>
               ) : null}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-              <div><span className="text-muted-foreground">Yard</span><br />{yardById[licence.yardId] ?? licence.yardId}</div>
-              <div><span className="text-muted-foreground">Firm type</span><br />{licence.firmType ?? "—"}</div>
-              <div><span className="text-muted-foreground">Contact</span><br />{licence.contactName ?? "—"}</div>
-              <div><span className="text-muted-foreground">Mobile</span><br />{licence.mobile}</div>
-              <div><span className="text-muted-foreground">Email</span><br />{licence.email ?? "—"}</div>
-              <div><span className="text-muted-foreground">Address</span><br />{licence.address ?? "—"}</div>
-              <div><span className="text-muted-foreground">PAN</span><br />{licence.pan ?? "—"}</div>
-              <div><span className="text-muted-foreground">GSTIN</span><br />{licence.gstin ?? "—"}</div>
-              {traderLicenceUsesBmSupplement(licence.licenceType) ? (
+            {(() => {
+              const lm = licence.lmProfile;
+              const traderName = lm?.traderName?.trim() || licence.contactName?.trim() || "—";
+              const typeOfFirm = lm?.typeOfFirm?.trim() || licence.firmType?.trim() || "—";
+              const businessAddress = lm?.businessAddress?.trim() || licence.address?.trim() || "—";
+              const licenseFee =
+                lm?.licenseFee != null && Number.isFinite(lm.licenseFee)
+                  ? lm.licenseFee
+                  : licence.feeAmount != null && Number.isFinite(Number(licence.feeAmount))
+                    ? Number(licence.feeAmount)
+                    : null;
+              const receiptNo =
+                lm?.receiptNo?.trim() ||
+                (licence.receiptId ? receiptById[licence.receiptId] ?? licence.receiptId : null) ||
+                "—";
+              const securityDeposit =
+                lm?.securityDeposit != null && Number.isFinite(lm.securityDeposit) ? lm.securityDeposit : null;
+              const aadhaar =
+                lm?.aadhaarMasked?.trim() ||
+                (licence.aadhaarToken?.trim()
+                  ? (() => {
+                      const digits = licence.aadhaarToken.replace(/\D/g, "");
+                      if (digits.length >= 4) return `${"X".repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
+                      return licence.aadhaarToken;
+                    })()
+                  : null) ||
+                "—";
+              const prev = lm?.previousTraderLicence;
+              return (
                 <>
-                  <div><span className="text-muted-foreground">Father / spouse (BM)</span><br />{licence.fatherSpouseName ?? "—"}</div>
-                  <div><span className="text-muted-foreground">Date of birth (BM)</span><br />{formatYmdToDisplay(licence.dateOfBirth ?? "")}</div>
-                  <div><span className="text-muted-foreground">Emergency mobile (BM)</span><br />{licence.emergencyContactMobile ?? "—"}</div>
-                  <div><span className="text-muted-foreground">Character cert. issuer</span><br />{licence.characterCertIssuer ?? "—"}</div>
-                  <div><span className="text-muted-foreground">Character cert. date</span><br />{formatYmdToDisplay(licence.characterCertDate ?? "")}</div>
-                  <div className="sm:col-span-2">
-                    <span className="text-muted-foreground">Supporting document (BM)</span>
-                    <br />
-                    {licence.bmFormDocUrl?.trim() ? (
-                      <a
-                        href={licence.bmFormDocUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline break-all"
-                      >
-                        {licence.bmFormDocUrl}
-                      </a>
-                    ) : (
-                      "—"
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                    <div><span className="text-muted-foreground">Yard</span><br />{yardById[licence.yardId] ?? licence.yardId}</div>
+                    <div><span className="text-muted-foreground">Type of Firm</span><br />{typeOfFirm}</div>
+                    <div><span className="text-muted-foreground">Trader Name</span><br />{traderName}</div>
+                    <div><span className="text-muted-foreground">Mobile</span><br />{licence.mobile}</div>
+                    <div><span className="text-muted-foreground">Email</span><br />{licence.email ?? "—"}</div>
+                    <div className="md:col-span-2"><span className="text-muted-foreground">Business Address</span><br />{businessAddress}</div>
+                    <div><span className="text-muted-foreground">PAN</span><br />{licence.pan ?? "—"}</div>
+                    <div><span className="text-muted-foreground">GSTIN</span><br />{licence.gstin ?? "—"}</div>
+                    {traderLicenceUsesBmSupplement(licence.licenceType) ? (
+                      <>
+                        <div><span className="text-muted-foreground">Father / spouse (BM)</span><br />{licence.fatherSpouseName ?? "—"}</div>
+                        <div><span className="text-muted-foreground">Date of birth (BM)</span><br />{formatYmdToDisplay(licence.dateOfBirth ?? "")}</div>
+                        <div><span className="text-muted-foreground">Emergency mobile (BM)</span><br />{licence.emergencyContactMobile ?? "—"}</div>
+                        <div><span className="text-muted-foreground">Character cert. issuer</span><br />{licence.characterCertIssuer ?? "—"}</div>
+                        <div><span className="text-muted-foreground">Character cert. date</span><br />{formatYmdToDisplay(licence.characterCertDate ?? "")}</div>
+                        <div className="sm:col-span-2">
+                          <span className="text-muted-foreground">Supporting document (BM)</span>
+                          <br />
+                          {licence.bmFormDocUrl?.trim() ? (
+                            <a
+                              href={licence.bmFormDocUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary hover:underline break-all"
+                            >
+                              {licence.bmFormDocUrl}
+                            </a>
+                          ) : (
+                            "—"
+                          )}
+                        </div>
+                        {licence.bmFormDocFile?.trim() ? (
+                          <div className="sm:col-span-2">
+                            <span className="text-muted-foreground">BM uploaded file</span>
+                            <br />
+                            <a
+                              href={`/api/ioms/traders/licences/${encodeURIComponent(licence.id)}/bm-form-document`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary hover:underline break-all"
+                            >
+                              Open supporting document
+                            </a>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {licence.applicationKind === "Renewal" ? (
+                      <>
+                        <div>
+                          <span className="text-muted-foreground">BK — no-arrears declared</span>
+                          <br />
+                          {licence.renewalNoArrearsDeclared ? "Yes" : "No"}
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Parent fee snapshot (BK)</span>
+                          <br />
+                          {licence.parentLicenceFeeSnapshot != null && Number.isFinite(Number(licence.parentLicenceFeeSnapshot))
+                            ? `${formatInr(Number(licence.parentLicenceFeeSnapshot))}`
+                            : "—"}
+                        </div>
+                      </>
+                    ) : null}
+                    <div><span className="text-muted-foreground">Aadhaar (masked)</span><br />{aadhaar}</div>
+                    <div>
+                      <span className="text-muted-foreground">Valid from</span>
+                      <br />
+                      {formatYmdToDisplay(licence.validFrom ?? "")}
+                      {licence.lmSyncedAt ? <span className="ml-1 text-xs text-muted-foreground">(LM)</span> : null}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Valid to</span>
+                      <br />
+                      {formatYmdToDisplay(licence.validTo ?? "")}
+                      {licence.lmSyncedAt ? <span className="ml-1 text-xs text-muted-foreground">(LM)</span> : null}
+                    </div>
+                    {licence.lmSyncedAt ? (
+                      <>
+                        <div>
+                          <span className="text-muted-foreground">License Manager</span>
+                          <br />
+                          <Badge variant={licence.lmIsActive ? "default" : "secondary"}>
+                            {licence.lmIsActive ? "LM active" : "LM inactive"}
+                            {licence.lmLicenseClass ? ` · Class ${licence.lmLicenseClass}` : ""}
+                          </Badge>
+                          {licence.lmStatus ? (
+                            <span className="ml-2 text-xs text-muted-foreground">{licence.lmStatus}</span>
+                          ) : null}
+                        </div>
+                        <div className="md:col-span-2">
+                          <span className="text-muted-foreground">LM commodities</span>
+                          <br />
+                          {Array.isArray(licence.commodities) && licence.commodities.length > 0
+                            ? licence.commodities.join(", ")
+                            : "—"}
+                        </div>
+                      </>
+                    ) : null}
+                    <div>
+                      <span className="text-muted-foreground">License Fee (Rs.)</span>
+                      <br />
+                      {licenseFee != null ? formatInr(licenseFee) : "—"}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Receipt No.</span>
+                      <br />
+                      {receiptNo}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Security Deposit (Rs.)</span>
+                      <br />
+                      {securityDeposit != null ? formatInr(securityDeposit) : "—"}
+                    </div>
+                    <div className="md:col-span-2">
+                      <span className="text-muted-foreground">Govt. GST exempt category (office/godown)</span>
+                      <br />
+                      {exemptCategoryName ?? (licence.govtGstExemptCategoryId ? licence.govtGstExemptCategoryId : "— (taxable)")}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Declared non-GST entity</span>
+                      <br />
+                      {licence.isNonGstEntity ? "Yes" : "No"}
+                    </div>
+                    {licence.isBlocked && licence.blockReason && (
+                      <div className="md:col-span-2"><span className="text-muted-foreground">Block reason</span><br /><span className="text-destructive">{licence.blockReason}</span></div>
                     )}
                   </div>
-                  {licence.bmFormDocFile?.trim() ? (
-                    <div className="sm:col-span-2">
-                      <span className="text-muted-foreground">BM uploaded file</span>
-                      <br />
-                      <a
-                        href={`/api/ioms/traders/licences/${encodeURIComponent(licence.id)}/bm-form-document`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline break-all"
-                      >
-                        Open supporting document
-                      </a>
+
+                  <div className="pt-2 space-y-2">
+                    <p className="text-sm font-medium">Bank Details :</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                      <div><span className="text-muted-foreground">Bank Name</span><br />{lm?.bankName?.trim() || "—"}</div>
+                      <div><span className="text-muted-foreground">IFSC Code</span><br />{lm?.ifscCode?.trim() || "—"}</div>
+                      <div className="md:col-span-2"><span className="text-muted-foreground">Account No.</span><br />{lm?.accountNo?.trim() || "—"}</div>
+                    </div>
+                  </div>
+
+                  {prev ? (
+                    <div className="pt-2 space-y-2 border-t">
+                      <p className="text-sm font-medium">Previous Trader License Details :</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                        <div><span className="text-muted-foreground">License No.</span><br />{prev.licenceNo?.trim() || "—"}</div>
+                        <div><span className="text-muted-foreground">Class of License</span><br />{prev.classOfLicense?.trim() || "—"}</div>
+                        <div><span className="text-muted-foreground">Receipt No.</span><br />{prev.receiptNo?.trim() || "—"}</div>
+                        <div>
+                          <span className="text-muted-foreground">Dated</span>
+                          <br />
+                          {prev.dated ? formatYmdToDisplay(prev.dated) : "—"}
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">Security Deposit (Rs.)</span>
+                          <br />
+                          {prev.securityDeposit != null && Number.isFinite(prev.securityDeposit)
+                            ? formatInr(prev.securityDeposit)
+                            : "—"}
+                        </div>
+                      </div>
                     </div>
                   ) : null}
                 </>
-              ) : null}
-              {licence.applicationKind === "Renewal" ? (
-                <>
-                  <div>
-                    <span className="text-muted-foreground">BK — no-arrears declared</span>
-                    <br />
-                    {licence.renewalNoArrearsDeclared ? "Yes" : "No"}
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Parent fee snapshot (BK)</span>
-                    <br />
-                    {licence.parentLicenceFeeSnapshot != null && Number.isFinite(Number(licence.parentLicenceFeeSnapshot))
-                      ? `${formatInr(Number(licence.parentLicenceFeeSnapshot))}`
-                      : "—"}
-                  </div>
-                </>
-              ) : null}
-              <div><span className="text-muted-foreground">Aadhaar (masked)</span><br />{licence.aadhaarToken ?? "—"}</div>
-              <div>
-                <span className="text-muted-foreground">Valid from</span>
-                <br />
-                {formatYmdToDisplay(licence.validFrom ?? "")}
-                {licence.lmSyncedAt ? <span className="ml-1 text-xs text-muted-foreground">(LM)</span> : null}
-              </div>
-              <div>
-                <span className="text-muted-foreground">Valid to</span>
-                <br />
-                {formatYmdToDisplay(licence.validTo ?? "")}
-                {licence.lmSyncedAt ? <span className="ml-1 text-xs text-muted-foreground">(LM)</span> : null}
-              </div>
-              {licence.lmSyncedAt ? (
-                <>
-                  <div>
-                    <span className="text-muted-foreground">License Manager</span>
-                    <br />
-                    <Badge variant={licence.lmIsActive ? "default" : "secondary"}>
-                      {licence.lmIsActive ? "LM active" : "LM inactive"}
-                      {licence.lmLicenseClass ? ` · Class ${licence.lmLicenseClass}` : ""}
-                    </Badge>
-                    {licence.lmStatus ? (
-                      <span className="ml-2 text-xs text-muted-foreground">{licence.lmStatus}</span>
-                    ) : null}
-                  </div>
-                  <div className="md:col-span-2">
-                    <span className="text-muted-foreground">LM commodities</span>
-                    <br />
-                    {Array.isArray(licence.commodities) && licence.commodities.length > 0
-                      ? licence.commodities.join(", ")
-                      : "—"}
-                  </div>
-                </>
-              ) : null}
-              <div><span className="text-muted-foreground">Fee amount</span><br />{licence.feeAmount != null ? formatInr(licence.feeAmount) : "—"}</div>
-              <div><span className="text-muted-foreground">Receipt</span><br />{licence.receiptId ? (receiptById[licence.receiptId] ?? licence.receiptId) : "—"}</div>
-              <div className="md:col-span-2">
-                <span className="text-muted-foreground">Govt. GST exempt category (office/godown)</span>
-                <br />
-                {exemptCategoryName ?? (licence.govtGstExemptCategoryId ? licence.govtGstExemptCategoryId : "— (taxable)")}
-              </div>
-              <div>
-                <span className="text-muted-foreground">Declared non-GST entity</span>
-                <br />
-                {licence.isNonGstEntity ? "Yes" : "No"}
-              </div>
-              {licence.isBlocked && licence.blockReason && (
-                <div className="md:col-span-2"><span className="text-muted-foreground">Block reason</span><br /><span className="text-destructive">{licence.blockReason}</span></div>
-              )}
-            </div>
+              );
+            })()}
           </CardContent>
         </Card>
 

@@ -22,6 +22,8 @@ import {
   mspSettings,
   yards,
   rentInvoices,
+  rentCombinedInvoices,
+  rentDepositLedger,
   iomsReceipts,
   adHocEntities,
   purchaseTransactions,
@@ -133,8 +135,53 @@ import {
   nextApplicationSerialTx,
   nextEntityPublicCodeTx,
 } from "./trader-licence-identity";
+import { fetchLmApplicationProfile } from "./lm-application-profile";
 
 const TRADER_LICENCE_MOBILE_DUP_STATUSES = ["Draft", "Pending", "Query", "Active"] as const;
+const ENTITY_STATUSES = ["Draft", "Active", "Inactive", "Blocked"] as const;
+
+type EntityFinancialLinkCounts = {
+  preReceipts: number;
+  iomsReceipts: number;
+  rentInvoices: number;
+  rentCombinedInvoices: number;
+  rentDepositLedger: number;
+};
+
+async function countEntityFinancialLinks(entityId: string): Promise<EntityFinancialLinkCounts> {
+  const unifiedId = unifiedEntityIdFromTrackB(entityId);
+  const countInt = sql<number>`count(*)::int`;
+  const [[pr], [ir], [ri], [rc], [rd]] = await Promise.all([
+    db.select({ n: countInt }).from(preReceipts).where(eq(preReceipts.entityId, entityId)),
+    db.select({ n: countInt }).from(iomsReceipts).where(eq(iomsReceipts.unifiedEntityId, unifiedId)),
+    db
+      .select({ n: countInt })
+      .from(rentInvoices)
+      .where(or(eq(rentInvoices.entityId, entityId), eq(rentInvoices.tenantLicenceId, unifiedId))),
+    db.select({ n: countInt }).from(rentCombinedInvoices).where(eq(rentCombinedInvoices.unifiedEntityId, unifiedId)),
+    db
+      .select({ n: countInt })
+      .from(rentDepositLedger)
+      .where(or(eq(rentDepositLedger.unifiedEntityId, unifiedId), eq(rentDepositLedger.tenantLicenceId, unifiedId))),
+  ]);
+  return {
+    preReceipts: Number(pr?.n ?? 0),
+    iomsReceipts: Number(ir?.n ?? 0),
+    rentInvoices: Number(ri?.n ?? 0),
+    rentCombinedInvoices: Number(rc?.n ?? 0),
+    rentDepositLedger: Number(rd?.n ?? 0),
+  };
+}
+
+function entityHasFinancialLinks(links: EntityFinancialLinkCounts): boolean {
+  return (
+    links.preReceipts > 0 ||
+    links.iomsReceipts > 0 ||
+    links.rentInvoices > 0 ||
+    links.rentCombinedInvoices > 0 ||
+    links.rentDepositLedger > 0
+  );
+}
 
 async function traderLicenceMobileInUse(mobileNorm: string, excludeLicenceId: string | null): Promise<boolean> {
   const statusDup = inArray(traderLicences.status, [...TRADER_LICENCE_MOBILE_DUP_STATUSES]);
@@ -359,10 +406,22 @@ export function registerTradersAssetsRoutes(app: Express) {
   app.get("/api/ioms/entities", async (req, res) => {
     try {
       const yardId = req.query.yardId as string | undefined;
+      const statusQ = String(req.query.status ?? "").trim();
       const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
       const conditions = [];
       if (scopedIds && scopedIds.length > 0) conditions.push(inArray(entities.yardId, scopedIds));
       if (yardId) conditions.push(eq(entities.yardId, yardId));
+      if (statusQ) {
+        if (!(ENTITY_STATUSES as readonly string[]).includes(statusQ)) {
+          return sendApiError(
+            res,
+            400,
+            "ENTITY_STATUS_INVALID",
+            `status must be one of: ${ENTITY_STATUSES.join(", ")}`,
+          );
+        }
+        conditions.push(eq(entities.status, statusQ));
+      }
       const base = db.select().from(entities).orderBy(desc(entities.updatedAt));
       const list = conditions.length ? await base.where(and(...conditions)) : await base;
       res.json(list);
@@ -394,6 +453,22 @@ export function registerTradersAssetsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch entity");
+    }
+  });
+
+  /** Whether hard-delete is allowed (no linked receipts / rent transactions). */
+  app.get("/api/ioms/entities/:id/deletion-check", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const [row] = await db.select().from(entities).where(eq(entities.id, id)).limit(1);
+      if (!row) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      if (!yardInScope(req, row.yardId)) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      const links = await countEntityFinancialLinks(id);
+      const canDelete = !entityHasFinancialLinks(links);
+      res.json({ canDelete, links });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to check entity deletion eligibility");
     }
   });
 
@@ -481,6 +556,18 @@ export function registerTradersAssetsRoutes(app: Express) {
           updates[k] = v;
         }
       });
+      if (updates.status !== undefined) {
+        const st = String(updates.status ?? "").trim();
+        if (!(ENTITY_STATUSES as readonly string[]).includes(st)) {
+          return sendApiError(
+            res,
+            400,
+            "ENTITY_STATUS_INVALID",
+            `status must be one of: ${ENTITY_STATUSES.join(", ")}`,
+          );
+        }
+        updates.status = st;
+      }
       if (updates.pan != null && String(updates.pan).trim() !== "") {
         const p = String(updates.pan);
         if (p.length !== 10 || !INDIAN_PAN_RE.test(p)) {
@@ -566,10 +653,56 @@ export function registerTradersAssetsRoutes(app: Express) {
     }
   });
 
+  /**
+   * Hard-delete Track B entity only when no receipts / rent transactions are linked.
+   * Prefer Mark Inactive when the entity has vacated but history must be retained.
+   */
+  app.delete("/api/ioms/entities/:id", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const [existing] = await db.select().from(entities).where(eq(entities.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+
+      const links = await countEntityFinancialLinks(id);
+      if (entityHasFinancialLinks(links)) {
+        return sendApiError(
+          res,
+          409,
+          "ENTITY_HAS_LINKED_TRANSACTIONS",
+          "This entity cannot be deleted because receipts or other transactions are linked. Mark it Inactive instead to retain history.",
+          { links },
+        );
+      }
+
+      await disablePortalAccessForUnifiedEntity(`TB:${id}`, req.user?.id ?? null).catch((e) =>
+        console.error("[portal] disable before entity delete failed:", e),
+      );
+
+      await db.transaction(async (tx) => {
+        await tx.delete(entityAllotments).where(eq(entityAllotments.entityId, id));
+        await tx.delete(entities).where(eq(entities.id, id));
+      });
+
+      writeAuditLog(req, {
+        module: "Traders",
+        action: "Delete",
+        recordId: id,
+        beforeValue: existing,
+      }).catch((e) => console.error("Audit log failed:", e));
+
+      res.status(204).send();
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete entity");
+    }
+  });
+
   // ----- M-02 Sr.15: Unified entity master (Track A + Track B + Ad-hoc) -----
   app.get("/api/ioms/unified-entities", async (req, res) => {
     try {
       const yardId = req.query.yardId as string | undefined;
+      const statusQ = String(req.query.status ?? "").trim();
       const q = String(req.query.q ?? "").trim().toLowerCase();
       const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
 
@@ -641,6 +774,7 @@ export function registerTradersAssetsRoutes(app: Express) {
       ]
         .filter((r) => inScope(r.yardId))
         .filter((r) => (yardId ? r.yardId === yardId : true))
+        .filter((r) => (statusQ ? String(r.status ?? "") === statusQ : true))
         .filter((r) => {
           if (!q) return true;
           const hay =
@@ -1484,6 +1618,14 @@ export function registerTradersAssetsRoutes(app: Express) {
       const [ent] = await db.select().from(entities).where(eq(entities.id, entityId)).limit(1);
       if (!ent) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
       if (!yardInScope(req, ent.yardId)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this entity yard");
+      if (String(ent.status ?? "").trim() !== "Active") {
+        return sendApiError(
+          res,
+          400,
+          "ENTITY_INACTIVE",
+          "Pre-receipts can be issued only for Active entities. Reactivate the entity or use historical records only.",
+        );
+      }
       // Track B: pre-receipt billing instrument applies only to Govt sub-type (Commercial / AdHocOccupant → M-03 tax invoices).
       if (!isTrackBGovtSubType(ent.subType)) {
         return sendApiError(
@@ -1846,7 +1988,11 @@ export function registerTradersAssetsRoutes(app: Express) {
       const [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, req.params.id)).limit(1);
       if (!row) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       if (!licenceYardAccessible(req, row.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
-      res.json(row);
+      const lmProfile = await fetchLmApplicationProfile(row.licenceNo).catch((e) => {
+        console.error("[lm] fetch application profile failed:", e);
+        return null;
+      });
+      res.json({ ...row, lmProfile });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch licence");

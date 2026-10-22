@@ -27,6 +27,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -134,11 +144,30 @@ export default function EntityDetail() {
   const tiers = useMemo(() => userTierSet(user ?? null), [user]);
   const canCreate = can("M-02", "Create");
   const canUpdate = can("M-02", "Update");
+  const canDelete = can("M-02", "Delete");
   const queryClient = useQueryClient();
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const { data: entity, isLoading, isError } = useQuery<Entity>({
     queryKey: ["/api/ioms/entities", id],
     enabled: !!id,
+  });
+  const { data: deletionCheck } = useQuery<{
+    canDelete: boolean;
+    links: Record<string, number>;
+  }>({
+    queryKey: ["/api/ioms/entities", id, "deletion-check"],
+    queryFn: async () => {
+      const res = await fetch(`/api/ioms/entities/${encodeURIComponent(id!)}/deletion-check`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    enabled: !!id && canDelete,
   });
   const { data: subtypes } = useQuery<EntitySubtypeRef>({
     queryKey: ["/api/ioms/reference/entity-subtypes"],
@@ -318,6 +347,63 @@ export default function EntityDetail() {
       toast({ title: "Saved", description: "Entity register updated." });
     },
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
+  });
+
+  const setEntityStatusMutation = useMutation({
+    mutationFn: async (status: string) => {
+      const res = await fetch(`/api/ioms/entities/${encodeURIComponent(id!)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(
+          (err as { message?: string; error?: string }).message ??
+            (err as { error?: string }).error ??
+            res.statusText,
+        );
+      }
+      return (await res.json()) as Entity;
+    },
+    onSuccess: (row) => {
+      queryClient.setQueryData(["/api/ioms/entities", id], row);
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/entities"] });
+      setEditStatus(row.status);
+      toast({
+        title: row.status === "Inactive" ? "Entity marked inactive" : "Entity reactivated",
+        description:
+          row.status === "Inactive"
+            ? "Retained for historical reference; excluded from active operations."
+            : undefined,
+      });
+    },
+    onError: (e: Error) => toast({ title: "Status update failed", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteEntityMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/ioms/entities/${encodeURIComponent(id!)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(
+          (err as { message?: string; error?: string }).message ??
+            (err as { error?: string }).error ??
+            res.statusText,
+        );
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/entities"] });
+      setConfirmDelete(false);
+      toast({ title: "Entity deleted" });
+      setLocation("/traders/entities");
+    },
+    onError: (e: Error) => toast({ title: "Delete not allowed", description: e.message, variant: "destructive" }),
   });
 
   const createMutation = useMutation({
@@ -506,7 +592,12 @@ export default function EntityDetail() {
                 <div><span className="text-muted-foreground">Sub-type:</span> {entity.subType ?? "—"}</div>
                 <div><span className="text-muted-foreground">Yard:</span> {yardDisplayName}</div>
                 <div><span className="text-muted-foreground">Mobile:</span> {entity.mobile ?? "—"}</div>
-                <div><span className="text-muted-foreground">Status:</span> {entity.status}</div>
+                <div>
+                  <span className="text-muted-foreground">Status:</span>{" "}
+                  <Badge variant={entity.status === "Active" ? "default" : entity.status === "Blocked" ? "destructive" : "secondary"}>
+                    {entity.status}
+                  </Badge>
+                </div>
                 <div><span className="text-muted-foreground">PAN:</span> {entity.pan ?? "—"}</div>
                 <div className="md:col-span-2"><span className="text-muted-foreground">GSTIN:</span> {entity.gstin ?? "—"}</div>
                 <div className="md:col-span-3 break-all"><span className="text-muted-foreground">Email:</span> {entity.email ?? "—"}</div>
@@ -514,6 +605,62 @@ export default function EntityDetail() {
                   <span className="whitespace-pre-wrap">{entity.address?.trim() ? entity.address : "—"}</span>
                 </div>
               </div>
+              {(canUpdate || canDelete) && (
+                <div className="rounded-md border p-3 space-y-2">
+                  <p className="text-sm font-medium">Deletion and deactivation</p>
+                  <p className="text-xs text-muted-foreground">
+                    Delete only when no receipt or other transaction is linked. If the entity has permanently vacated,
+                    mark Inactive to keep history while excluding it from active operations.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {canUpdate && entity.status === "Active" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={setEntityStatusMutation.isPending}
+                        onClick={() => setEntityStatusMutation.mutate("Inactive")}
+                      >
+                        {setEntityStatusMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Mark inactive"}
+                      </Button>
+                    ) : null}
+                    {canUpdate && entity.status === "Inactive" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={setEntityStatusMutation.isPending}
+                        onClick={() => setEntityStatusMutation.mutate("Active")}
+                      >
+                        {setEntityStatusMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Reactivate"}
+                      </Button>
+                    ) : null}
+                    {canDelete ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        disabled={deleteEntityMutation.isPending}
+                        onClick={() => setConfirmDelete(true)}
+                      >
+                        Delete entity
+                      </Button>
+                    ) : null}
+                  </div>
+                  {canDelete && deletionCheck && !deletionCheck.canDelete ? (
+                    <p className="text-xs text-amber-800 dark:text-amber-200">
+                      Linked records prevent delete
+                      {deletionCheck.links
+                        ? `: ${Object.entries(deletionCheck.links)
+                            .filter(([, n]) => Number(n) > 0)
+                            .map(([k, n]) => `${k}=${n}`)
+                            .join(", ")}`
+                        : ""}
+                      . Use Mark inactive instead.
+                    </p>
+                  ) : null}
+                </div>
+              )}
               <Alert>
                 <AlertTitle>Billing route — {trackBShortBillingLabel(entity.subType)}</AlertTitle>
                 <AlertDescription className="text-foreground space-y-2">
@@ -657,7 +804,7 @@ export default function EntityDetail() {
                   DO drafts an allocation with rent and dates; DV verifies once the agreement copy (PDF) is uploaded; DA approves and assigns the premises reference.
                 </p>
               </div>
-              {canCreate && (
+              {canCreate && entity.status === "Active" && (
                 <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
                   <Plus className="h-4 w-4 mr-1" /> Add allotment
                 </Button>
@@ -1249,6 +1396,36 @@ export default function EntityDetail() {
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete entity permanently?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {entity
+                ? `Delete ${entity.entityCode ?? entity.id} (${entity.name}) only if no receipt or other transaction is linked. Prefer Mark inactive when the occupant has vacated but history must be kept.`
+                : null}
+              {deletionCheck && !deletionCheck.canDelete
+                ? " Linked transactions were found — delete will be rejected; mark Inactive instead."
+                : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteEntityMutation.isPending || (deletionCheck != null && !deletionCheck.canDelete)}
+              onClick={(e) => {
+                e.preventDefault();
+                deleteEntityMutation.mutate();
+              }}
+            >
+              {deleteEntityMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }

@@ -37,6 +37,7 @@ interface EntityRef {
   name: string;
   yardId: string;
   subType?: string | null;
+  status?: string | null;
 }
 
 interface PreReceiptIssueContext {
@@ -112,7 +113,12 @@ export default function PreReceipts() {
   const queryClient = useQueryClient();
 
   const { data: entities = [], isLoading: entLoading } = useQuery<EntityRef[]>({
-    queryKey: ["/api/ioms/entities"],
+    queryKey: ["/api/ioms/entities", { status: "Active" }],
+    queryFn: async () => {
+      const res = await fetch("/api/ioms/entities?status=Active", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load entities");
+      return res.json();
+    },
   });
   const { data: list = [], isLoading, isError } = useQuery<PreReceipt[]>({
     queryKey: ["/api/ioms/pre-receipts"],
@@ -126,7 +132,10 @@ export default function PreReceipts() {
     },
   });
 
-  const govtEntities = useMemo(() => entities.filter((e) => String(e.subType ?? "").trim() === "Govt"), [entities]);
+  const govtEntities = useMemo(
+    () => entities.filter((e) => String(e.subType ?? "").trim() === "Govt" && e.status === "Active"),
+    [entities],
+  );
 
   const govtWithAllotment = useMemo(() => {
     const billable = billableEntityAllotments(entityAllotments);
