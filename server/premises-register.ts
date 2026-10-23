@@ -140,6 +140,8 @@ export async function fetchPremisesRegister(query: PremisesRegisterQuery): Promi
   const allRows: PremisesRegisterRow[] = [];
 
   for (const asset of allAssets) {
+    // Deactivated premises are hidden from the operational register.
+    if (asset.isActive === false) continue;
     const premisesStatus = (normalizePremisesStatus(asset.premisesStatus) ?? "Vacant") as PremisesStatus;
     const occupancy = pickCurrentOccupancy(
       traderByAsset.get(asset.id) ?? traderByAsset.get(asset.assetId) ?? [],

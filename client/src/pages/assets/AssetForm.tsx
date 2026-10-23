@@ -13,7 +13,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/context/AuthContext";
 import { invalidatePremisesRegisterQueries } from "@/lib/premisesRegisterCache";
 import { Building2, Loader2, AlertCircle } from "lucide-react";
 import { PREMISES_STATUS_VALUES, premisesStatusLabel } from "@shared/premises-allocation";
@@ -49,6 +60,7 @@ interface Asset {
   fileNumber?: string | null;
   orderNumber?: string | null;
   premisesStatus?: string | null;
+  isActive?: boolean | null;
 }
 
 /** Allow digits and at most one decimal point with up to two fractional digits. */
@@ -73,8 +85,12 @@ export default function AssetForm() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { can } = useAuth();
+  const canUpdate = can("M-02", "Update");
+  const canDelete = can("M-02", "Delete");
   const queryClient = useQueryClient();
   const isEdit = !!id;
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const [assetId, setAssetId] = useState("");
   const [yardId, setYardId] = useState("");
@@ -109,6 +125,25 @@ export default function AssetForm() {
       if (!res.ok) throw new Error("Asset not found");
       return res.json();
     },
+  });
+
+  const { data: deletionCheck } = useQuery<{
+    canDelete: boolean;
+    links: Record<string, number>;
+    isActive?: boolean;
+  }>({
+    queryKey: ["/api/ioms/assets", id, "deletion-check"],
+    queryFn: async () => {
+      const res = await fetch(`/api/ioms/assets/${encodeURIComponent(id!)}/deletion-check`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    enabled: isEdit && !!id && (canDelete || canUpdate),
   });
 
   useEffect(() => {
@@ -165,17 +200,48 @@ export default function AssetForm() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error ?? res.statusText);
+        throw new Error(
+          (err as { message?: string; error?: string }).message ??
+            (err as { error?: string }).error ??
+            res.statusText,
+        );
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (_row, variables) => {
       invalidatePremisesRegisterQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets", id] });
-      toast({ title: "Premises updated" });
-      setLocation("/assets");
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/assets", id, "deletion-check"] });
+      const deactivated = variables.isActive === false;
+      toast({ title: deactivated ? "Premises deactivated" : "Premises updated" });
+      if (deactivated) setLocation("/assets");
+      else setLocation("/assets");
     },
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/ioms/assets/${encodeURIComponent(id!)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(
+          (err as { message?: string; error?: string }).message ??
+            (err as { error?: string }).error ??
+            res.statusText,
+        );
+      }
+    },
+    onSuccess: () => {
+      invalidatePremisesRegisterQueries(queryClient);
+      toast({ title: "Premises deleted" });
+      setConfirmDelete(false);
+      setLocation("/assets");
+    },
+    onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
   const buildPayload = (): Record<string, unknown> => {
@@ -461,6 +527,63 @@ export default function AssetForm() {
               </div>
             </div>
 
+            {isEdit && (canUpdate || canDelete) ? (
+              <div className="rounded-md border p-3 space-y-2">
+                <p className="text-sm font-medium">Deletion and deactivation</p>
+                <p className="text-xs text-muted-foreground">
+                  Delete only when no receipt, rent transaction, or allotment is linked. If history must be kept,
+                  deactivate the premises so it is hidden from the register.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {canUpdate && existing?.isActive !== false ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={updateMutation.isPending}
+                      onClick={() => updateMutation.mutate({ ...buildPayload(), isActive: false })}
+                    >
+                      {updateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Deactivate"}
+                    </Button>
+                  ) : null}
+                  {canUpdate && existing?.isActive === false ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={updateMutation.isPending}
+                      onClick={() => updateMutation.mutate({ ...buildPayload(), isActive: true })}
+                    >
+                      {updateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Reactivate"}
+                    </Button>
+                  ) : null}
+                  {canDelete ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="destructive"
+                      disabled={deleteMutation.isPending}
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      Delete premises
+                    </Button>
+                  ) : null}
+                </div>
+                {canDelete && deletionCheck && !deletionCheck.canDelete ? (
+                  <p className="text-xs text-amber-800 dark:text-amber-200">
+                    Linked records prevent delete
+                    {deletionCheck.links
+                      ? `: ${Object.entries(deletionCheck.links)
+                          .filter(([, n]) => Number(n) > 0)
+                          .map(([k, n]) => `${k}=${n}`)
+                          .join(", ")}`
+                      : ""}
+                    . Use Deactivate instead.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="flex items-center gap-2 pt-2">
               <Button type="button" variant="outline" onClick={() => setLocation("/assets")}>
                 Cancel
@@ -473,6 +596,36 @@ export default function AssetForm() {
           </form>
         </CardContent>
       </Card>
+
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete premises permanently?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {existing
+                ? `Delete ${existing.assetId} only if no receipt or other transaction is linked. Prefer Deactivate when history must be kept.`
+                : null}
+              {deletionCheck && !deletionCheck.canDelete
+                ? " Linked transactions were found — delete will be rejected; deactivate instead."
+                : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteMutation.isPending || (deletionCheck != null && !deletionCheck.canDelete)}
+              onClick={(e) => {
+                e.preventDefault();
+                deleteMutation.mutate();
+              }}
+            >
+              {deleteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }

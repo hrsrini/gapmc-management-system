@@ -183,6 +183,68 @@ function entityHasFinancialLinks(links: EntityFinancialLinkCounts): boolean {
   );
 }
 
+type PremisesFinancialLinkCounts = {
+  iomsReceipts: number;
+  rentInvoices: number;
+  rentDepositLedger: number;
+  traderAllotments: number;
+  entityAllotments: number;
+};
+
+/** Linked receipts / rent / allotments that block hard-delete of a premises (asset). */
+async function countPremisesFinancialLinks(
+  assetRowId: string,
+  premisesCode: string,
+): Promise<PremisesFinancialLinkCounts> {
+  const countInt = sql<number>`count(*)::int`;
+  const code = String(premisesCode ?? "").trim();
+  const receiptCond =
+    code.length > 0
+      ? or(eq(iomsReceipts.premisesAssetId, assetRowId), eq(iomsReceipts.premisesAssetId, code))
+      : eq(iomsReceipts.premisesAssetId, assetRowId);
+  const invoiceCond =
+    code.length > 0
+      ? or(eq(rentInvoices.assetId, assetRowId), eq(rentInvoices.assetId, code))
+      : eq(rentInvoices.assetId, assetRowId);
+  const ledgerCond =
+    code.length > 0
+      ? or(eq(rentDepositLedger.assetId, assetRowId), eq(rentDepositLedger.assetId, code))
+      : eq(rentDepositLedger.assetId, assetRowId);
+  const traderAllotCond =
+    code.length > 0
+      ? or(eq(assetAllotments.assetId, assetRowId), eq(assetAllotments.assetId, code))
+      : eq(assetAllotments.assetId, assetRowId);
+  const entityAllotCond =
+    code.length > 0
+      ? or(eq(entityAllotments.assetId, assetRowId), eq(entityAllotments.assetId, code))
+      : eq(entityAllotments.assetId, assetRowId);
+
+  const [[ir], [ri], [rd], [ta], [ea]] = await Promise.all([
+    db.select({ n: countInt }).from(iomsReceipts).where(receiptCond),
+    db.select({ n: countInt }).from(rentInvoices).where(invoiceCond),
+    db.select({ n: countInt }).from(rentDepositLedger).where(ledgerCond),
+    db.select({ n: countInt }).from(assetAllotments).where(traderAllotCond),
+    db.select({ n: countInt }).from(entityAllotments).where(entityAllotCond),
+  ]);
+  return {
+    iomsReceipts: Number(ir?.n ?? 0),
+    rentInvoices: Number(ri?.n ?? 0),
+    rentDepositLedger: Number(rd?.n ?? 0),
+    traderAllotments: Number(ta?.n ?? 0),
+    entityAllotments: Number(ea?.n ?? 0),
+  };
+}
+
+function premisesHasBlockingLinks(links: PremisesFinancialLinkCounts): boolean {
+  return (
+    links.iomsReceipts > 0 ||
+    links.rentInvoices > 0 ||
+    links.rentDepositLedger > 0 ||
+    links.traderAllotments > 0 ||
+    links.entityAllotments > 0
+  );
+}
+
 async function traderLicenceMobileInUse(mobileNorm: string, excludeLicenceId: string | null): Promise<boolean> {
   const statusDup = inArray(traderLicences.status, [...TRADER_LICENCE_MOBILE_DUP_STATUSES]);
   const hit = excludeLicenceId
@@ -4119,6 +4181,10 @@ export function registerTradersAssetsRoutes(app: Express) {
         const n = normalizePremisesStatus(raw.premisesStatus ?? raw.premises_status);
         if (n) updates.premisesStatus = n;
       }
+      if (raw.isActive !== undefined || raw.is_active !== undefined) {
+        const v = raw.isActive !== undefined ? raw.isActive : raw.is_active;
+        updates.isActive = v === true || v === "true" || v === 1 || v === "1";
+      }
       await db.update(assets).set(updates as Record<string, string | number | boolean | null>).where(eq(assets.id, id));
       const [row] = await db.select().from(assets).where(eq(assets.id, id));
       if (!row) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
@@ -4127,6 +4193,68 @@ export function registerTradersAssetsRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update asset");
+    }
+  });
+
+  /** Whether hard-delete is allowed (no linked receipts / rent / allotments). */
+  app.get("/api/ioms/assets/:id/deletion-check", async (req, res) => {
+    try {
+      if (!hasPermission(req.user, "M-02", "Delete") && !hasPermission(req.user, "M-02", "Update")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-02 Delete or Update required", {
+          required: "M-02:Delete",
+        });
+      }
+      const id = req.params.id;
+      const [row] = await db.select().from(assets).where(eq(assets.id, id)).limit(1);
+      if (!row) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      if (!yardInScope(req, row.yardId)) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      const links = await countPremisesFinancialLinks(row.id, row.assetId);
+      const canDelete = !premisesHasBlockingLinks(links);
+      res.json({ canDelete, links, isActive: row.isActive !== false });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to check premises deletion eligibility");
+    }
+  });
+
+  /**
+   * Hard-delete premises only when no receipt, rent transaction, or allotment is linked.
+   * Prefer deactivate (isActive=false) when history must be retained.
+   */
+  app.delete("/api/ioms/assets/:id", async (req, res) => {
+    try {
+      if (!hasPermission(req.user, "M-02", "Delete")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-02 Delete required", { required: "M-02:Delete" });
+      }
+      const id = req.params.id;
+      const [existing] = await db.select().from(assets).where(eq(assets.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Asset not found");
+
+      const links = await countPremisesFinancialLinks(existing.id, existing.assetId);
+      if (premisesHasBlockingLinks(links)) {
+        return sendApiError(
+          res,
+          409,
+          "PREMISES_HAS_LINKED_TRANSACTIONS",
+          "This premises cannot be deleted because a receipt, rent transaction, or allotment is linked. Deactivate it instead to retain history.",
+          { links },
+        );
+      }
+
+      await db.delete(assets).where(eq(assets.id, id));
+
+      writeAuditLog(req, {
+        module: "Traders",
+        action: "Delete",
+        recordId: id,
+        beforeValue: existing,
+      }).catch((e) => console.error("Audit log failed:", e));
+
+      res.status(204).send();
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to delete premises");
     }
   });
 

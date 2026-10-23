@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -21,13 +21,25 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/hooks/use-toast";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
 import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
 import { formatInr } from "@/lib/formatInr";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
+import { invalidatePremisesRegisterQueries } from "@/lib/premisesRegisterCache";
 import { PREMISES_TYPE_VALUES } from "@shared/premises-master";
 import { PREMISES_STATUS_VALUES, premisesStatusLabel } from "@shared/premises-allocation";
 import type { PremisesRegisterResponse } from "@shared/premises-register";
@@ -36,11 +48,13 @@ import {
   Building2,
   Eye,
   Info,
+  Loader2,
   MoreVertical,
   Pencil,
   Plus,
   RefreshCcw,
   Search,
+  Trash2,
 } from "lucide-react";
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
@@ -121,12 +135,16 @@ const alertColumns: ReportTableColumn[] = [
 
 export default function PremisesRegister() {
   const { can } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const canCreate = can("M-02", "Create");
   const canUpdate = can("M-02", "Update");
+  const canDelete = can("M-02", "Delete");
   const [, setLocation] = useLocation();
   const initialFilters = filtersFromSearch(typeof window !== "undefined" ? window.location.search : "");
   const [draft, setDraft] = useState<RegisterFilters>(initialFilters);
   const [applied, setApplied] = useState<RegisterFilters>(initialFilters);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; assetId: string } | null>(null);
 
   const { data: yards = [] } = useScopedActiveYards();
   const premiseYardOptions = useMemo(() => filterYardTypeLocations(yards), [yards]);
@@ -141,6 +159,45 @@ export default function PremisesRegister() {
       if (!res.ok) throw new Error("Failed to fetch premises register");
       return res.json();
     },
+  });
+
+  const { data: deleteCheck } = useQuery<{ canDelete: boolean; links: Record<string, number> }>({
+    queryKey: ["/api/ioms/assets", deleteTarget?.id, "deletion-check"],
+    queryFn: async () => {
+      const res = await fetch(`/api/ioms/assets/${encodeURIComponent(deleteTarget!.id)}/deletion-check`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    enabled: !!deleteTarget?.id && canDelete,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (assetRowId: string) => {
+      const res = await fetch(`/api/ioms/assets/${encodeURIComponent(assetRowId)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(
+          (err as { message?: string; error?: string }).message ??
+            (err as { error?: string }).error ??
+            res.statusText,
+        );
+      }
+    },
+    onSuccess: () => {
+      invalidatePremisesRegisterQueries(queryClient);
+      toast({ title: "Premises deleted" });
+      setDeleteTarget(null);
+      void refetch();
+    },
+    onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
   const applyFilters = useCallback(() => {
@@ -239,13 +296,22 @@ export default function PremisesRegister() {
                     <Link href={`/assets/${row.id}/edit`}>Edit premises</Link>
                   </DropdownMenuItem>
                 ) : null}
+                {canDelete ? (
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => setDeleteTarget({ id: row.id, assetId: row.assetId })}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete premises
+                  </DropdownMenuItem>
+                ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
         ),
       };
     });
-  }, [data?.rows, canUpdate]);
+  }, [data?.rows, canUpdate, canDelete]);
 
   const alertRows = useMemo((): Record<string, unknown>[] => {
     return (data?.alerts ?? []).map((row) => {
@@ -311,6 +377,7 @@ export default function PremisesRegister() {
                 </CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">
                   View, search, and manage all premises — status, allottee, agreement and rent in one place.
+                  Delete is allowed only when no receipt or other transaction is linked; otherwise deactivate from Edit.
                 </p>
               </div>
               {canCreate && (
@@ -504,6 +571,47 @@ export default function PremisesRegister() {
           </CardContent>
         </Card>
       </div>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete premises permanently?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget
+                ? `Delete ${deleteTarget.assetId} only if no receipt, rent transaction, or allotment is linked. Prefer Deactivate from Edit premises when history must be kept.`
+                : null}
+              {deleteCheck && !deleteCheck.canDelete
+                ? ` Linked records found${
+                    deleteCheck.links
+                      ? ` (${Object.entries(deleteCheck.links)
+                          .filter(([, n]) => Number(n) > 0)
+                          .map(([k, n]) => `${k}=${n}`)
+                          .join(", ")})`
+                      : ""
+                  } — delete is not permitted.`
+                : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={
+                deleteMutation.isPending ||
+                !deleteTarget ||
+                (deleteCheck != null && !deleteCheck.canDelete)
+              }
+              onClick={(e) => {
+                e.preventDefault();
+                if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+              }}
+            >
+              {deleteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }
