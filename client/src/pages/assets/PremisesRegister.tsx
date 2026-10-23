@@ -200,6 +200,35 @@ export default function PremisesRegister() {
     onError: (e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }),
   });
 
+  const deactivateMutation = useMutation({
+    mutationFn: async ({ id }: { id: string; assetId: string }) => {
+      const res = await fetch(`/api/ioms/assets/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ isActive: false }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(
+          (err as { message?: string; error?: string }).message ??
+            (err as { error?: string }).error ??
+            res.statusText,
+        );
+      }
+      return res.json();
+    },
+    onSuccess: (_row, vars) => {
+      invalidatePremisesRegisterQueries(queryClient);
+      toast({
+        title: "Premises deactivated",
+        description: `${vars.assetId} is retained for history and hidden from the active register.`,
+      });
+      void refetch();
+    },
+    onError: (e: Error) => toast({ title: "Deactivate failed", description: e.message, variant: "destructive" }),
+  });
+
   const applyFilters = useCallback(() => {
     setApplied({ ...draft });
     const params = new URLSearchParams();
@@ -260,7 +289,7 @@ export default function PremisesRegister() {
         renewalSort: row.renewalCount ?? null,
         renewalCount: row.renewalCount != null ? String(row.renewalCount) : "—",
         _actions: (
-          <div className="flex items-center justify-end gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1">
             <Button
               variant="ghost"
               size="icon"
@@ -279,6 +308,31 @@ export default function PremisesRegister() {
                 </Link>
               </Button>
             )}
+            {canUpdate ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={deactivateMutation.isPending}
+                title="Hide from active register; keep for history"
+                onClick={() => deactivateMutation.mutate({ id: row.id, assetId: row.assetId })}
+              >
+                Deactivate
+              </Button>
+            ) : null}
+            {canDelete ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                disabled={deleteMutation.isPending}
+                title="Delete only if no linked receipts or transactions"
+                onClick={() => setDeleteTarget({ id: row.id, assetId: row.assetId })}
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+                Delete
+              </Button>
+            ) : null}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" aria-label="More actions">
@@ -296,6 +350,14 @@ export default function PremisesRegister() {
                     <Link href={`/assets/${row.id}/edit`}>Edit premises</Link>
                   </DropdownMenuItem>
                 ) : null}
+                {canUpdate ? (
+                  <DropdownMenuItem
+                    disabled={deactivateMutation.isPending}
+                    onClick={() => deactivateMutation.mutate({ id: row.id, assetId: row.assetId })}
+                  >
+                    Deactivate
+                  </DropdownMenuItem>
+                ) : null}
                 {canDelete ? (
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
@@ -311,7 +373,7 @@ export default function PremisesRegister() {
         ),
       };
     });
-  }, [data?.rows, canUpdate, canDelete]);
+  }, [data?.rows, canUpdate, canDelete, deactivateMutation.isPending, deleteMutation.isPending]);
 
   const alertRows = useMemo((): Record<string, unknown>[] => {
     return (data?.alerts ?? []).map((row) => {
@@ -377,7 +439,8 @@ export default function PremisesRegister() {
                 </CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">
                   View, search, and manage all premises — status, allottee, agreement and rent in one place.
-                  Delete is allowed only when no receipt or other transaction is linked; otherwise deactivate from Edit.
+                  Delete only when no receipt, rent transaction, or allotment is linked; otherwise use Deactivate to
+                  retain history while hiding the premises from the active register.
                 </p>
               </div>
               {canCreate && (
