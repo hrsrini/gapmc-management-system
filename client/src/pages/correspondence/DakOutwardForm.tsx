@@ -67,17 +67,19 @@ function emptyExternalRow(): DakRecipientRow {
 }
 
 function recipientsFromLocationIds(ids: string[], yardById: Record<string, Yard>): DakRecipientRow[] {
-  return ids
-    .map((id) => {
-      const loc = yardById[id];
-      if (!loc) return null;
-      return {
-        name: loc.partyName?.trim() || loc.name?.trim() || loc.code?.trim() || "",
-        address: loc.address?.trim() || "",
-        locationId: id,
-      } satisfies DakRecipientRow;
-    })
-    .filter((r): r is DakRecipientRow => r != null && Boolean(r.name.trim()));
+  const out: DakRecipientRow[] = [];
+  for (const id of ids) {
+    const loc = yardById[id];
+    if (!loc) continue;
+    const name = loc.partyName?.trim() || loc.name?.trim() || loc.code?.trim() || "";
+    if (!name) continue;
+    out.push({
+      name,
+      address: loc.address?.trim() || "",
+      locationId: id,
+    });
+  }
+  return out;
 }
 
 type RecipientBlockProps = {
