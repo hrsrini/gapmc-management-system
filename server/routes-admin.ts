@@ -121,7 +121,7 @@ export function registerAdminRoutes(app: Express) {
 
   app.post("/api/admin/yards", async (req, res) => {
     try {
-      const { name, code, type, phone, mobile, address, email } = req.body;
+      const { name, code, type, phone, mobile, address, email, partyName } = req.body;
       if (!name || !code || !type) {
         return sendApiError(res, 400, "ADMIN_YARD_FIELDS_REQUIRED", "name, code, type required");
       }
@@ -143,6 +143,8 @@ export function registerAdminRoutes(app: Express) {
         phone: phone ? String(phone) : null,
         mobile: mobileNorm,
         address: address ? String(address) : null,
+        partyName:
+          partyName != null && String(partyName).trim() !== "" ? String(partyName).trim() : null,
         email: email != null && String(email).trim() !== "" ? String(email).trim() : null,
         isActive: true,
       });
@@ -161,7 +163,7 @@ export function registerAdminRoutes(app: Express) {
     try {
       const id = req.params.id;
       const [before] = await db.select().from(yards).where(eq(yards.id, id)).limit(1);
-      const { name, code, type, phone, mobile, address, email, isActive } = req.body;
+      const { name, code, type, phone, mobile, address, email, partyName, isActive } = req.body;
       let mobilePatch: { mobile: string | null } | null = null;
       if (mobile !== undefined) {
         try {
@@ -182,6 +184,9 @@ export function registerAdminRoutes(app: Express) {
         ...(phone !== undefined && { phone: phone ? String(phone) : null }),
         ...(mobilePatch ?? {}),
         ...(address !== undefined && { address: address ? String(address) : null }),
+        ...(partyName !== undefined && {
+          partyName: partyName != null && String(partyName).trim() !== "" ? String(partyName).trim() : null,
+        }),
         ...(email !== undefined && { email: email != null && String(email).trim() !== "" ? String(email).trim() : null }),
         ...(isActive !== undefined && { isActive: Boolean(isActive) }),
       }).where(eq(yards.id, id));

@@ -37,8 +37,19 @@ interface Yard {
   phone?: string | null;
   mobile?: string | null;
   address?: string | null;
+  /** Sender designation for Tapal Inward/Outward autofill. */
+  partyName?: string | null;
   email?: string | null;
   isActive: boolean;
+}
+
+function defaultPartyNameForType(t: string): string {
+  const u = String(t ?? "").trim().toUpperCase();
+  if (u === "HO") return "The Secretary";
+  if (u === "CHECKPOST" || u === "CHECK_POST" || u === "CHECK-POST") {
+    return "Market Supervisor / Checkpost In-charge";
+  }
+  return "Market Supervisor / Yard In-charge";
 }
 
 export default function AdminLocations() {
@@ -61,6 +72,7 @@ export default function AdminLocations() {
   const [phone, setPhone] = useState("");
   const [mobile, setMobile] = useState("");
   const [address, setAddress] = useState("");
+  const [partyName, setPartyName] = useState("");
   const [email, setEmail] = useState("");
   const [isActive, setIsActive] = useState(true);
 
@@ -72,6 +84,7 @@ export default function AdminLocations() {
     setType("Yard");
     setPhone("");
     setMobile("");
+    setPartyName(defaultPartyNameForType("Yard"));
     setAddress("");
     setEmail("");
     setIsActive(true);
@@ -86,6 +99,7 @@ export default function AdminLocations() {
     setType(y.type || "Yard");
     setPhone(y.phone ?? "");
     setMobile(sanitizeMobile10Input(y.mobile ?? ""));
+    setPartyName(y.partyName?.trim() || defaultPartyNameForType(y.type || "Yard"));
     setAddress(y.address ?? "");
     setEmail(y.email ?? "");
     setIsActive(y.isActive);
@@ -97,6 +111,7 @@ export default function AdminLocations() {
       { key: "code", header: "Code" },
       { key: "name", header: "Name" },
       { key: "_type", header: "Type", sortField: "type" },
+      { key: "partyNameDisplay", header: "Party Name", sortField: "partyNameSort" },
       { key: "phoneDisplay", header: "Phone" },
       { key: "_email", header: "Notify email", sortField: "email" },
       { key: "statusLabel", header: "Status", sortField: "isActive" },
@@ -112,6 +127,8 @@ export default function AdminLocations() {
       name: y.name,
       type: y.type,
       email: y.email ?? "",
+      partyNameSort: y.partyName ?? "",
+      partyNameDisplay: y.partyName?.trim() || "—",
       _type: (
         <Badge variant={y.type === "Yard" ? "default" : y.type === "HO" ? "outline" : "secondary"}>{y.type}</Badge>
       ),
@@ -142,6 +159,7 @@ export default function AdminLocations() {
       phone: string | null;
       mobile: string | null;
       address: string | null;
+      partyName: string | null;
       email: string | null;
     }) => {
       const res = await fetch("/api/admin/yards", {
@@ -179,6 +197,7 @@ export default function AdminLocations() {
         phone: string | null;
         mobile: string | null;
         address: string | null;
+        partyName: string | null;
         email: string | null;
         isActive: boolean;
       };
@@ -215,6 +234,7 @@ export default function AdminLocations() {
         phone: phone.trim() || null,
         mobile: mobile.trim() || null,
         address: address.trim() || null,
+        partyName: partyName.trim() || null,
         email: email.trim() || null,
       });
       return;
@@ -229,6 +249,7 @@ export default function AdminLocations() {
         phone: phone.trim() || null,
         mobile: mobile.trim() || null,
         address: address.trim() || null,
+        partyName: partyName.trim() || null,
         email: email.trim() || null,
         isActive,
       },
@@ -279,7 +300,7 @@ export default function AdminLocations() {
             <ClientDataGrid
               columns={locationColumns}
               sourceRows={locationRows}
-              searchKeys={["code", "name", "type", "phoneDisplay", "email", "statusLabel"]}
+              searchKeys={["code", "name", "type", "partyNameSort", "phoneDisplay", "email", "statusLabel"]}
               defaultSortKey="code"
               defaultSortDir="asc"
               emptyMessage="No locations. Run the M-10 seed script."
@@ -304,7 +325,21 @@ export default function AdminLocations() {
             </div>
             <div className="space-y-1">
               <Label>Type</Label>
-              <Select value={type} onValueChange={setType}>
+              <Select
+                value={type}
+                onValueChange={(v) => {
+                  setType(v);
+                  setPartyName((prev) => {
+                    const trimmed = prev.trim();
+                    const wasDefault =
+                      !trimmed ||
+                      trimmed === defaultPartyNameForType("Yard") ||
+                      trimmed === defaultPartyNameForType("CheckPost") ||
+                      trimmed === defaultPartyNameForType("HO");
+                    return wasDefault ? defaultPartyNameForType(v) : prev;
+                  });
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -332,8 +367,24 @@ export default function AdminLocations() {
               />
             </div>
             <div className="space-y-1">
+              <Label htmlFor="loc-party-name">Party Name</Label>
+              <Input
+                id="loc-party-name"
+                value={partyName}
+                onChange={(e) => setPartyName(e.target.value)}
+                placeholder="e.g. The Secretary / Market Supervisor"
+              />
+              <p className="text-xs text-muted-foreground">
+                Location in-charge designation — used to auto-fill From (Party) on Tapal Inward when this location is
+                selected.
+              </p>
+            </div>
+            <div className="space-y-1">
               <Label htmlFor="loc-address">Address</Label>
               <Input id="loc-address" value={address} onChange={(e) => setAddress(e.target.value)} />
+              <p className="text-xs text-muted-foreground">
+                Auto-filled into From Address on Tapal Inward when this location is selected.
+              </p>
             </div>
             <div className="space-y-1">
               <Label htmlFor="loc-email">Notification email</Label>

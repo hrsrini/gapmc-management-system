@@ -965,7 +965,10 @@ export default function HrEmployeeForm() {
                         <SelectItem value="__none__">Not specified</SelectItem>
                       </SelectContent>
                     </Select>
-                    <p className="text-xs text-muted-foreground mt-1">Reservation / employee category (§4.1.1).</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Reservation / employee category (§4.1.1). Select <strong>PwBD</strong> for Persons with
+                      Disabilities — Casual Leave credit is 12 days/year (vs 8 for others).
+                    </p>
                   </div>
                   {isEdit && (
                     <div className="md:col-span-2">

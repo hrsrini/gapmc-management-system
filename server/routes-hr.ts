@@ -110,6 +110,7 @@ import {
   resolveElSetOffExpiryDate,
   resolveEmployeePkForLeaveBalance,
 } from "./hr-leave-balance-resolve";
+import { isNonSelectableEmployeeDesignation } from "@shared/hr-employee-selectable";
 import {
   parseLeaveBalanceImportCsv,
   upsertLeaveBalanceImportRows,
@@ -230,6 +231,27 @@ function requireLeaveRead(req: Request, res: Response): boolean {
   return true;
 }
 
+/** Map designation_master id → uppercase code (for STAFF/ADMIN picker exclusion). */
+async function designationCodeByIdMap(): Promise<Map<string, string>> {
+  const rows = await db
+    .select({ id: designationMaster.id, code: designationMaster.code })
+    .from(designationMaster);
+  return new Map(rows.map((r) => [r.id, String(r.code ?? "").trim().toUpperCase()]));
+}
+
+/** Drop STAFF / ADMIN (and matching free-text labels) from employee picker lists. */
+function excludeNonSelectableEmployees<
+  T extends { designation?: string | null; designationId?: string | null },
+>(rows: T[], codeById: Map<string, string>): T[] {
+  return rows.filter((e) => {
+    const designationId = e.designationId ? String(e.designationId).trim() : "";
+    return !isNonSelectableEmployeeDesignation({
+      designation: e.designation,
+      designationCode: designationId ? codeById.get(designationId) ?? null : null,
+    });
+  });
+}
+
 function sanctionOrderBlobKey(leaveRequestId: string): string {
   return assertSafeUploadRelativeKey(`leaves/sanction-orders/${leaveRequestId}.pdf`);
 }
@@ -333,13 +355,18 @@ async function linkSanctionOrderToEmployeeDocuments(
   leaveId: string,
   fileNo: string,
   buffer: Buffer,
+  opts?: { superseded?: boolean },
 ): Promise<void> {
   // Stored name must match isAllowedEmployeeDocumentFileName (8–32 chars before ext).
   const stored = `lsn-${leaveId}.pdf`;
   if (!isAllowedEmployeeDocumentFileName(stored)) return;
   await writeEmployeeDocumentBuffer(employeeId, stored, buffer);
   const blobKey = `employees/${employeeId}/${stored}`;
-  const displayName = `Leave Sanction Order (${fileNo}).pdf`;
+  const superseded = opts?.superseded === true;
+  const displayName = superseded
+    ? `Leave Sanction Order — Superseded (${fileNo}).pdf`
+    : `Leave Sanction Order (${fileNo}).pdf`;
+  const docType = superseded ? "Leave Sanction Order (Superseded)" : "Leave Sanction Order";
   const ts = new Date().toISOString();
   const [existing] = await db
     .select()
@@ -350,11 +377,13 @@ async function linkSanctionOrderToEmployeeDocuments(
     await db
       .update(employeeDocuments)
       .set({
+        docType,
         fileName: displayName,
         mimeType: "application/pdf",
         sizeBytes: buffer.length,
         status: "Approved",
-        createdAt: ts,
+        // Keep original uploaded timestamp for superseded copies (audit trail).
+        ...(superseded ? {} : { createdAt: ts }),
       })
       .where(eq(employeeDocuments.id, existing.id));
     return;
@@ -362,7 +391,7 @@ async function linkSanctionOrderToEmployeeDocuments(
   await db.insert(employeeDocuments).values({
     id: nanoid(),
     employeeId,
-    docType: "Leave Sanction Order",
+    docType,
     fileName: displayName,
     mimeType: "application/pdf",
     sizeBytes: buffer.length,
@@ -371,6 +400,42 @@ async function linkSanctionOrderToEmployeeDocuments(
     uploadedBy: null,
     createdAt: ts,
   });
+}
+
+/**
+ * Ensure a leave's Sanction Order PDF is present under the employee Documents tab.
+ * Used so superseded (revised) orders remain available for audit alongside the latest order.
+ * Prefers the already-stored sanction PDF blob; regenerates only if missing.
+ */
+async function ensureSanctionOrderInEmployeeDocuments(
+  leaveId: string,
+  opts?: { superseded?: boolean },
+): Promise<void> {
+  const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveId)).limit(1);
+  if (!lr) return;
+  if (lr.status !== "Approved" && lr.status !== "Superseded") return;
+
+  const store = getUploadBlobStore();
+  const blobKey = sanctionOrderBlobKey(leaveId);
+  let buffer = await store.get(blobKey);
+  let fileNo = String(lr.fileNo ?? "").trim();
+
+  if (!buffer || !fileNo) {
+    const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
+    const gen = await generateSanctionOrderPdf(leaveId);
+    buffer = gen.buffer;
+    fileNo = gen.fileNo;
+    await store.put(blobKey, buffer, "application/pdf");
+    if (!lr.orderPdfUrl) {
+      await db
+        .update(leaveRequests)
+        .set({ orderPdfUrl: `/api/hr/leaves/${leaveId}/sanction-order`, fileNo })
+        .where(eq(leaveRequests.id, leaveId));
+    }
+  }
+
+  const superseded = opts?.superseded === true || lr.status === "Superseded";
+  await linkSanctionOrderToEmployeeDocuments(lr.employeeId, leaveId, fileNo, buffer, { superseded });
 }
 
 async function generateAndEmailSanctionOrder(leaveId: string, employeeId: string): Promise<void> {
@@ -386,6 +451,13 @@ async function generateAndEmailSanctionOrder(leaveId: string, employeeId: string
     await linkSanctionOrderToEmployeeDocuments(employeeId, leaveId, fileNo, buffer).catch((e) =>
       console.error("Link sanction order to employee documents failed:", e),
     );
+    // Keep the prior (superseded) sanction order in Documents for audit / record-keeping.
+    const parentId = lr.revisedFromLeaveId ? String(lr.revisedFromLeaveId).trim() : "";
+    if (parentId) {
+      await ensureSanctionOrderInEmployeeDocuments(parentId, { superseded: true }).catch((e) =>
+        console.error("Link superseded sanction order to employee documents failed:", e),
+      );
+    }
     await emailSanctionOrderPdf({
       employeeId,
       leaveRequestId: leaveId,
@@ -726,6 +798,8 @@ export function registerHrRoutes(app: Express) {
           required: "M-10:Read",
         });
       }
+      /** Employee master / admin lists may pass 1; pickers omit so STAFF & ADMIN are hidden. */
+      const includeSystemDesignations = req.query.includeSystemDesignations === "1";
       const yardId = req.query.yardId as string | undefined;
       const id = String(req.query.id ?? "").trim();
       const q = String(req.query.q ?? "").trim();
@@ -764,6 +838,13 @@ export function registerHrRoutes(app: Express) {
       if (id && !list.some((row) => row.id === id)) {
         const [extra] = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
         if (extra) list = [extra, ...list];
+      }
+
+      // Hide STAFF / ADMIN from selection lists. Keep them when resolving a specific id
+      // (so an already-saved reporting officer still displays) or when the master list asks.
+      if (!includeSystemDesignations && !id) {
+        const codeById = await designationCodeByIdMap();
+        list = excludeNonSelectableEmployees(list, codeById);
       }
 
       if (!includeApp) {
@@ -3967,18 +4048,39 @@ export function registerHrRoutes(app: Express) {
       const { id } = req.params;
       const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, id)).limit(1);
       if (!lr) return sendApiError(res, 404, "LEAVE_NOT_FOUND", "Leave request not found");
-      if (lr.status !== "Approved") {
-        return sendApiError(res, 400, "LEAVE_NOT_APPROVED", "Sanction Order can only be generated for approved leaves");
+      if (lr.status !== "Approved" && lr.status !== "Superseded") {
+        return sendApiError(
+          res,
+          400,
+          "LEAVE_NOT_APPROVED",
+          "Sanction Order can only be generated for approved or superseded leaves",
+        );
       }
       const blobKey = sanctionOrderBlobKey(id);
       const store = getUploadBlobStore();
-      const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
-      const { buffer, fileNo } = await generateSanctionOrderPdf(id);
-      await store.put(blobKey, buffer, "application/pdf");
-      await db.update(leaveRequests).set({ orderPdfUrl: `/api/hr/leaves/${id}/sanction-order` }).where(eq(leaveRequests.id, id));
-      await linkSanctionOrderToEmployeeDocuments(lr.employeeId, id, fileNo, buffer).catch((e) =>
-        console.error("Link sanction order to employee documents failed:", e),
-      );
+      const isSuperseded = lr.status === "Superseded";
+      // Prefer the stored PDF for superseded orders so the historical text is preserved.
+      let buffer: Buffer | null = isSuperseded ? await store.get(blobKey) : null;
+      let fileNo = String(lr.fileNo ?? "").trim();
+      if (!buffer) {
+        const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
+        const gen = await generateSanctionOrderPdf(id);
+        buffer = gen.buffer;
+        fileNo = gen.fileNo;
+        await store.put(blobKey, buffer, "application/pdf");
+        await db.update(leaveRequests).set({ orderPdfUrl: `/api/hr/leaves/${id}/sanction-order` }).where(eq(leaveRequests.id, id));
+      }
+      if (!fileNo) fileNo = String(lr.fileNo ?? id);
+      await linkSanctionOrderToEmployeeDocuments(lr.employeeId, id, fileNo, buffer, {
+        superseded: isSuperseded,
+      }).catch((e) => console.error("Link sanction order to employee documents failed:", e));
+      // When opening a revised (current) order, also keep the prior order in Documents.
+      const parentId = lr.revisedFromLeaveId ? String(lr.revisedFromLeaveId).trim() : "";
+      if (parentId && !isSuperseded) {
+        await ensureSanctionOrderInEmployeeDocuments(parentId, { superseded: true }).catch((e) =>
+          console.error("Link superseded sanction order to employee documents failed:", e),
+        );
+      }
 
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `inline; filename="Sanction_Order_${fileNo.replace(/\//g, "_")}.pdf"`);
@@ -4145,22 +4247,25 @@ export function registerHrRoutes(app: Express) {
           section: employees.section,
           gender: employees.gender,
           maritalStatus: employees.maritalStatus,
+          designation: employees.designation,
+          designationId: employees.designationId,
         })
         .from(employees)
         .where(eq(employees.status, "Active"));
 
-      const onLeave = await db.select({ employeeId: leaveRequests.employeeId }).from(leaveRequests).where(
-        and(
-          lte(leaveRequests.fromDate, toDate),
-          gte(leaveRequests.toDate, fromDate),
+      const onLeaveIds = new Set(
+        (
+          await db
+            .select({ employeeId: leaveRequests.employeeId, status: leaveRequests.status })
+            .from(leaveRequests)
+            .where(and(lte(leaveRequests.fromDate, toDate), gte(leaveRequests.toDate, fromDate)))
         )
+          .filter((r) => ["Pending", "Verified", "Approved"].includes(String(r.status)))
+          .map((r) => r.employeeId),
       );
-      const onLeaveFiltered = onLeave.filter((r) => true); // already filtered by date in query
-      const onLeaveIds = new Set((await db.select({ employeeId: leaveRequests.employeeId, status: leaveRequests.status }).from(leaveRequests).where(
-        and(lte(leaveRequests.fromDate, toDate), gte(leaveRequests.toDate, fromDate))
-      )).filter((r) => ["Pending", "Verified", "Approved"].includes(String(r.status))).map((r) => r.employeeId));
 
-      const available = allActive.filter((e) => !onLeaveIds.has(e.id));
+      const codeById = await designationCodeByIdMap();
+      const available = excludeNonSelectableEmployees(allActive, codeById).filter((e) => !onLeaveIds.has(e.id));
       res.json(available);
     } catch (e) {
       console.error(e);
@@ -4332,21 +4437,25 @@ export function registerHrRoutes(app: Express) {
     return [e.firstName, e.middleName, e.surname].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
   }
 
-  /** Download CSV template: all Active employees with empId + name; leave columns blank to fill. */
+  /** Download CSV template: Active employees (excl. STAFF/ADMIN) with empId + name; leave columns blank. */
   app.get("/api/hr/leave-balances/import-template.csv", async (req, res) => {
     try {
       if (!requireLeaveRead(req, res)) return;
-      const emps = await db
+      const empsRaw = await db
         .select({
           empId: employees.empId,
           id: employees.id,
           firstName: employees.firstName,
           middleName: employees.middleName,
           surname: employees.surname,
+          designation: employees.designation,
+          designationId: employees.designationId,
         })
         .from(employees)
         .where(eq(employees.status, "Active"))
         .orderBy(asc(employees.empId), asc(employees.surname), asc(employees.firstName));
+      const codeById = await designationCodeByIdMap();
+      const emps = excludeNonSelectableEmployees(empsRaw, codeById);
 
       const headers = [
         "employeeId",

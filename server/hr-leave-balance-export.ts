@@ -4,8 +4,9 @@
  */
 import { asc, eq } from "drizzle-orm";
 import { formatLeaveOrderDateDisplay } from "@shared/hr-leave-display";
+import { isNonSelectableEmployeeDesignation } from "@shared/hr-employee-selectable";
 import { db } from "./db";
-import { employeeLeaveBalances, employees } from "@shared/db-schema";
+import { designationMaster, employeeLeaveBalances, employees } from "@shared/db-schema";
 import { normalizeLeaveBalanceType } from "./hr-leave-balance-resolve";
 
 const EXPORT_LEAVE_COLS = ["CL", "RH", "SPL_H", "HPL", "PL", "ML", "EOL", "CCL", "EL"] as const;
@@ -51,17 +52,32 @@ export async function buildLeaveBalanceExportAoa(asOnDate?: string): Promise<{
     ? formatLeaveOrderDateDisplay(asOnDate) || asOnDate.trim()
     : localAsOnDateDdMmYyyy();
 
-  const emps = await db
+  const desigRows = await db
+    .select({ id: designationMaster.id, code: designationMaster.code })
+    .from(designationMaster);
+  const codeById = new Map(desigRows.map((r) => [r.id, String(r.code ?? "").trim().toUpperCase()]));
+
+  const empsRaw = await db
     .select({
       id: employees.id,
       empId: employees.empId,
       firstName: employees.firstName,
       middleName: employees.middleName,
       surname: employees.surname,
+      designation: employees.designation,
+      designationId: employees.designationId,
     })
     .from(employees)
     .where(eq(employees.status, "Active"))
     .orderBy(asc(employees.empId), asc(employees.surname), asc(employees.firstName));
+
+  const emps = empsRaw.filter((e) => {
+    const designationId = e.designationId ? String(e.designationId).trim() : "";
+    return !isNonSelectableEmployeeDesignation({
+      designation: e.designation,
+      designationCode: designationId ? codeById.get(designationId) ?? null : null,
+    });
+  });
 
   const bals = await db.select().from(employeeLeaveBalances);
   const byEmp = new Map<

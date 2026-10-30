@@ -7,7 +7,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import multer from "multer";
 import { eq, desc, and, inArray, or, isNull, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { db } from "./db";
-import { dakInward, dakOutward, dakActionLog, dakEscalations } from "@shared/db-schema";
+import { dakInward, dakOutward, dakActionLog, dakEscalations, employees } from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
@@ -78,9 +78,36 @@ export function registerDakRoutes(app: Express) {
       }
       if (assignedToMe) {
         const u = req.user;
-        const candidates = [u?.id, u?.email, u?.name].filter((x): x is string => Boolean(x && String(x).trim()));
-        if (candidates.length > 0) {
-          conditions.push(inArray(dakInward.assignedTo, candidates));
+        const candidates = [u?.id, u?.email, u?.name, u?.employeeId].filter((x): x is string =>
+          Boolean(x && String(x).trim()),
+        );
+        // Also match employee display name / empId so Marked To (employee full name) appears in My Pending
+        if (u?.employeeId) {
+          const [emp] = await db
+            .select({
+              id: employees.id,
+              empId: employees.empId,
+              firstName: employees.firstName,
+              middleName: employees.middleName,
+              surname: employees.surname,
+            })
+            .from(employees)
+            .where(eq(employees.id, u.employeeId))
+            .limit(1);
+          if (emp) {
+            const fullName = [emp.firstName, emp.middleName, emp.surname]
+              .filter(Boolean)
+              .join(" ")
+              .replace(/\s+/g, " ")
+              .trim();
+            if (fullName) candidates.push(fullName);
+            if (emp.empId) candidates.push(String(emp.empId));
+            candidates.push(emp.id);
+          }
+        }
+        const uniq = Array.from(new Set(candidates.map((c) => String(c).trim()).filter(Boolean)));
+        if (uniq.length > 0) {
+          conditions.push(inArray(dakInward.assignedTo, uniq));
           conditions.push(ne(dakInward.status, "Closed"));
         }
       }
@@ -90,6 +117,75 @@ export function registerDakRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch inward dak");
+    }
+  });
+
+  /**
+   * Inward Register report (print/paste): Inward No., Date, From, Address, Subject, Mode of Receipt.
+   * Excludes Status. format=json|xlsx|pdf. Date filter: mode=date|range.
+   */
+  app.get("/api/ioms/dak/inward/register-report", async (req, res) => {
+    try {
+      const modeRaw = String(req.query.mode ?? "date").trim().toLowerCase();
+      const mode = modeRaw === "range" ? "range" : "date";
+      const format = String(req.query.format ?? "json").trim().toLowerCase();
+      const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+      const {
+        buildDakInwardRegisterReport,
+        buildDakInwardRegisterAoa,
+        generateDakInwardRegisterPdf,
+      } = await import("./dak-inward-register-report");
+
+      let payload;
+      try {
+        payload = await buildDakInwardRegisterReport({
+          mode,
+          date: req.query.date != null ? String(req.query.date) : undefined,
+          fromDate: req.query.fromDate != null ? String(req.query.fromDate) : undefined,
+          toDate: req.query.toDate != null ? String(req.query.toDate) : undefined,
+          subject: req.query.subject != null ? String(req.query.subject) : undefined,
+          scopedLocationIds: scopedIds,
+        });
+      } catch (err) {
+        return sendApiError(
+          res,
+          400,
+          "DAK_REGISTER_DATES",
+          err instanceof Error ? err.message : "Invalid date criteria",
+        );
+      }
+
+      if (format === "json") return res.json(payload);
+
+      const stamp =
+        mode === "date"
+          ? payload.fromDate
+          : `${payload.fromDate}_to_${payload.toDate}`;
+
+      if (format === "xlsx" || format === "excel") {
+        const XLSX = await import("xlsx");
+        const aoa = buildDakInwardRegisterAoa(payload);
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws["!cols"] = [{ wch: 16 }, { wch: 12 }, { wch: 28 }, { wch: 28 }, { wch: 40 }, { wch: 14 }];
+        XLSX.utils.book_append_sheet(wb, ws, "Inward Register");
+        const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="Inward_Register_${stamp}.xlsx"`);
+        return res.send(Buffer.from(buf));
+      }
+
+      if (format === "pdf") {
+        const buffer = await generateDakInwardRegisterPdf(payload);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `attachment; filename="Inward_Register_${stamp}.pdf"`);
+        return res.send(buffer);
+      }
+
+      return sendApiError(res, 400, "FORMAT_INVALID", "format must be json, pdf, or xlsx");
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate inward register report");
     }
   });
 
@@ -400,6 +496,75 @@ export function registerDakRoutes(app: Express) {
     }
   });
 
+  /**
+   * Outward Register report (print/paste): Outward No., Date, To, Address, Subject, Mode.
+   * Excludes Inward Ref. format=json|xlsx|pdf. Date filter: mode=date|range.
+   */
+  app.get("/api/ioms/dak/outward/register-report", async (req, res) => {
+    try {
+      const modeRaw = String(req.query.mode ?? "date").trim().toLowerCase();
+      const mode = modeRaw === "range" ? "range" : "date";
+      const format = String(req.query.format ?? "json").trim().toLowerCase();
+      const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+      const {
+        buildDakOutwardRegisterReport,
+        buildDakOutwardRegisterAoa,
+        generateDakOutwardRegisterPdf,
+      } = await import("./dak-outward-register-report");
+
+      let payload;
+      try {
+        payload = await buildDakOutwardRegisterReport({
+          mode,
+          date: req.query.date != null ? String(req.query.date) : undefined,
+          fromDate: req.query.fromDate != null ? String(req.query.fromDate) : undefined,
+          toDate: req.query.toDate != null ? String(req.query.toDate) : undefined,
+          subject: req.query.subject != null ? String(req.query.subject) : undefined,
+          scopedLocationIds: scopedIds,
+        });
+      } catch (err) {
+        return sendApiError(
+          res,
+          400,
+          "DAK_REGISTER_DATES",
+          err instanceof Error ? err.message : "Invalid date criteria",
+        );
+      }
+
+      if (format === "json") return res.json(payload);
+
+      const stamp =
+        mode === "date"
+          ? payload.fromDate
+          : `${payload.fromDate}_to_${payload.toDate}`;
+
+      if (format === "xlsx" || format === "excel") {
+        const XLSX = await import("xlsx");
+        const aoa = buildDakOutwardRegisterAoa(payload);
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws["!cols"] = [{ wch: 16 }, { wch: 12 }, { wch: 28 }, { wch: 28 }, { wch: 40 }, { wch: 14 }];
+        XLSX.utils.book_append_sheet(wb, ws, "Outward Register");
+        const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="Outward_Register_${stamp}.xlsx"`);
+        return res.send(Buffer.from(buf));
+      }
+
+      if (format === "pdf") {
+        const buffer = await generateDakOutwardRegisterPdf(payload);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `attachment; filename="Outward_Register_${stamp}.pdf"`);
+        return res.send(buffer);
+      }
+
+      return sendApiError(res, 400, "FORMAT_INVALID", "format must be json, pdf, or xlsx");
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to generate outward register report");
+    }
+  });
+
   app.post("/api/ioms/dak/outward", async (req, res) => {
     try {
       const body = req.body;
@@ -408,15 +573,29 @@ export function registerDakRoutes(app: Express) {
       const despatchDateRaw = String(body.despatchDate ?? "").trim().slice(0, 10) || new Date().toISOString().slice(0, 10);
       const manualDespatch = body.despatchNo != null ? String(body.despatchNo).trim() : "";
       const despatchNo = manualDespatch || (await generateNextTapalRef({ kind: "OUT", yardId, date: despatchDateRaw }));
+      const { parseDakRecipients, joinRecipientNames, joinRecipientAddresses } = await import("@shared/dak-recipients");
+      const toRecipients = parseDakRecipients(body.toRecipients ?? body.toRecipientsJson);
+      const copyTo = parseDakRecipients(body.copyTo ?? body.copyToJson);
+      const toParty =
+        joinRecipientNames(toRecipients) ||
+        String(body.toParty ?? "").trim();
+      if (!toParty) {
+        return sendApiError(res, 400, "DAK_TO_REQUIRED", "At least one To recipient name is required");
+      }
+      const toAddress =
+        joinRecipientAddresses(toRecipients) ||
+        (body.toAddress ? String(body.toAddress) : null);
       const id = nanoid();
       await db.insert(dakOutward).values({
         id,
         yardId: yardId || null,
         despatchDate: despatchDateRaw,
-        toParty: String(body.toParty ?? ""),
+        toParty,
         subject: String(body.subject ?? ""),
         modeOfDespatch: String(body.modeOfDespatch ?? "Post"),
-        toAddress: body.toAddress ? String(body.toAddress) : null,
+        toAddress: toAddress || null,
+        toRecipientsJson: toRecipients.length ? toRecipients : null,
+        copyToJson: copyTo.length ? copyTo : null,
         inwardRefId: body.inwardRefId ? String(body.inwardRefId) : null,
         fileRef: body.fileRef ? String(body.fileRef) : null,
         attachments: null,

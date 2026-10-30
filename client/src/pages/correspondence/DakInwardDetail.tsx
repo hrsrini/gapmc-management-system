@@ -239,9 +239,9 @@ export default function DakInwardDetail() {
             <div><span className="text-muted-foreground">Received date</span><br />{formatYmdToDisplay(inward.receivedDate)}</div>
             <div><span className="text-muted-foreground">From</span><br />{inward.fromParty}</div>
             <div><span className="text-muted-foreground">Mode</span><br />{inward.modeOfReceipt}</div>
-            <div><span className="text-muted-foreground">Yard</span><br />{inward.yardId ? (yardById[inward.yardId] ?? inward.yardId) : "—"}</div>
+            <div><span className="text-muted-foreground">Received Location</span><br />{inward.yardId ? (yardById[inward.yardId] ?? inward.yardId) : "—"}</div>
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant="secondary">{inward.status}</Badge></div>
-            <div><span className="text-muted-foreground">Assigned to</span><br />{inward.assignedTo ?? "—"}</div>
+            <div><span className="text-muted-foreground">Marked To</span><br />{inward.assignedTo ?? "—"}</div>
             <div><span className="text-muted-foreground">Deadline</span><br />{inward.deadline ?? "—"}</div>
             {inward.fromAddress && (
               <div className="md:col-span-2"><span className="text-muted-foreground">From address</span><br />{inward.fromAddress}</div>

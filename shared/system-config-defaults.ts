@@ -105,20 +105,24 @@ export const SYSTEM_CONFIG_DEFAULTS = {
    */
   ta_da_entitlement_json:
     '[{"payLevel":"1-5","trainClass":"Sleeper / 3AC","daA":500,"daB":300,"hotelA":1000,"hotelB":800},{"payLevel":"6-8","trainClass":"AC 3 Tier","daA":800,"daB":500,"hotelA":2250,"hotelB":1500},{"payLevel":"9-11","trainClass":"AC 2 Tier","daA":1200,"daB":800,"hotelA":4500,"hotelB":3000},{"payLevel":"12-13","trainClass":"AC 1st Class","daA":1500,"daB":1000,"hotelA":7500,"hotelB":4500},{"payLevel":"14+","trainClass":"AC 1st / Air (Economy)","daA":2000,"daB":1200,"hotelA":10000,"hotelB":6000}]',
-  /** M-01 Leave: EL credit per half-year (days). */
+  /** M-01 Leave: EL credit per half-year (days) — credited on 1 Jan and 1 Jul. */
   leave_el_credit_half_year_days: "15",
-  /** M-01 Leave: CL credit per year (days). */
+  /** M-01 Leave: CL credit per calendar year (days) for non-PwD — credited on 1 Jan; unused lapses on 31 Dec. */
   leave_cl_credit_year_days: "8",
-  /** M-01 Leave: HPL credit per year (days). */
-  leave_hpl_credit_year_days: "20",
+  /** M-01 Leave: CL credit per calendar year (days) for Persons with Disabilities (PwD / PwBD). */
+  leave_cl_credit_year_days_pwd: "12",
+  /** M-01 Leave: HPL credit per half-year (days) — credited on 1 Jan and 1 Jul (10 × 2 = 20 / year). */
+  leave_hpl_credit_half_year_days: "10",
   /** M-01 Leave: EL balance cap (days) for warning. */
   leave_el_cap_days: "300",
   /** M-01 Leave: JSON array of holiday ISO dates (YYYY-MM-DD). @deprecated Use hr_holidays table instead. */
   leave_holidays_json: "[]",
   /** M-01 Leave: weekly offs JSON — location-type → day numbers (0=Sun..6=Sat). Default: Yard/HO = Sat+Sun; Checkpost = none. */
   leave_weekly_offs_json: '{"default":[0,6],"Checkpost":[]}',
-  /** M-01 Leave: RH entitlement per calendar year (days). */
+  /** M-01 Leave: RH credit / entitlement per calendar year (days) — credited on 1 Jan; unused lapses on 31 Dec. */
   leave_rh_entitlement_per_year: "2",
+  /** M-01 Leave: Special Holiday credit per calendar year (days) — credited on 1 Jan; unused lapses on 31 Dec. */
+  leave_spl_h_credit_year_days: "0",
   /** M-01 Leave: ML default days. */
   leave_ml_default_days: "180",
   /** M-01 Leave: PL default days. */
@@ -202,11 +206,13 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "ta_da_entitlement_json",
   "leave_el_credit_half_year_days",
   "leave_cl_credit_year_days",
-  "leave_hpl_credit_year_days",
+  "leave_cl_credit_year_days_pwd",
+  "leave_hpl_credit_half_year_days",
   "leave_el_cap_days",
   "leave_holidays_json",
   "leave_weekly_offs_json",
   "leave_rh_entitlement_per_year",
+  "leave_spl_h_credit_year_days",
   "leave_ml_default_days",
   "leave_pl_default_days",
   "leave_ccl_lifetime_cap_days",
@@ -271,12 +277,14 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   data_retention_trader_blocking_log_years: "Retention policy (years) — trader_blocking_log.actioned_at snapshot",
   ta_da_entitlement_json: "M-01 TA/DA: entitlement matrix JSON (payLevel, trainClass, daA, daB, hotelA, hotelB in INR)",
   leave_el_credit_half_year_days: "M-01 Leave: EL credit per half-year (days)",
-  leave_cl_credit_year_days: "M-01 Leave: CL credit per year (days)",
-  leave_hpl_credit_year_days: "M-01 Leave: HPL credit per year (days)",
+  leave_cl_credit_year_days: "M-01 Leave: CL credit per year (days) — non-PwD",
+  leave_cl_credit_year_days_pwd: "M-01 Leave: CL credit per year (days) — PwD / PwBD",
+  leave_hpl_credit_half_year_days: "M-01 Leave: HPL credit per half-year (days)",
   leave_el_cap_days: "M-01 Leave: EL cap (days) for warning",
   leave_holidays_json: "M-01 Leave: holidays JSON array (YYYY-MM-DD) [deprecated — use Holiday Master]",
   leave_weekly_offs_json: "M-01 Leave: weekly offs by location type (JSON)",
-  leave_rh_entitlement_per_year: "M-01 Leave: Restricted Holiday entitlement per year",
+  leave_rh_entitlement_per_year: "M-01 Leave: Restricted Holiday credit per year (days)",
+  leave_spl_h_credit_year_days: "M-01 Leave: Special Holiday credit per year (days)",
   leave_ml_default_days: "M-01 Leave: Maternity Leave default days",
   leave_pl_default_days: "M-01 Leave: Paternity Leave default days",
   leave_ccl_lifetime_cap_days: "M-01 Leave: Child Care Leave lifetime cap (days)",

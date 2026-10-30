@@ -228,7 +228,9 @@ app.use((req, res, next) => {
     cron.default.schedule("45 7 * * *", async () => {
       try {
         const r = await runHrLeaveAccrual();
-        log(`Cron M-01: HR leave accrual credited=${r.credited} warnings=${r.warnings}`);
+        log(
+          `Cron M-01: HR leave accrual credited=${r.credited} warnings=${r.warnings} settled=${r.settled} lapsed=${r.lapsed}`,
+        );
       } catch (e) {
         console.error("Cron M-01 HR leave accrual failed:", e);
       }

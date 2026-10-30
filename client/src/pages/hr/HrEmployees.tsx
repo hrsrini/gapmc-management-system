@@ -52,9 +52,12 @@ export default function HrEmployees() {
   const canM10Read = can("M-10", "Read");
   const queryModeKey = canM10Read ? "app" : "basic";
   const { data: employees, isLoading, isError } = useQuery<Employee[]>({
-    queryKey: ["/api/hr/employees", queryModeKey],
-    queryFn: () =>
-      fetchApiGet<Employee[]>(`/api/hr/employees${canM10Read ? "?includeApp=1" : ""}`),
+    queryKey: ["/api/hr/employees", queryModeKey, "master"],
+    queryFn: () => {
+      const params = new URLSearchParams({ includeSystemDesignations: "1" });
+      if (canM10Read) params.set("includeApp", "1");
+      return fetchApiGet<Employee[]>(`/api/hr/employees?${params.toString()}`);
+    },
   });
   const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ["/api/yards"],

@@ -51,7 +51,7 @@ function parseIso(ymd: string): number {
   return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
 
-/** Inclusive overlap days between [aFrom,aTo] and [bFrom,bTo] (ISO dates). */
+/** Inclusive overlap calendar days between [aFrom,aTo] and [bFrom,bTo] (ISO dates). */
 export function inclusiveOverlapDays(aFrom: string, aTo: string, bFrom: string, bTo: string): number {
   const a0 = parseIso(aFrom);
   const a1 = parseIso(aTo);
@@ -62,6 +62,47 @@ export function inclusiveOverlapDays(aFrom: string, aTo: string, bFrom: string, 
   const end = Math.min(a1, b1);
   if (end < start) return 0;
   return Math.round((end - start) / 86400000) + 1;
+}
+
+/**
+ * Days to show in the organisation leave report for one sanctioned leave.
+ * Uses debitDays (e.g. 0.5 for half-day CL) when the whole leave falls in the report window;
+ * otherwise scales debit across calendar overlap, or falls back to half-day / calendar days.
+ */
+export function daysInReportPeriodForLeave(
+  lr: {
+    fromDate: string;
+    toDate: string;
+    halfDay?: string | null;
+    debitDays?: number | null;
+  },
+  reportFrom: string,
+  reportTo: string,
+): number {
+  const leaveFrom = String(lr.fromDate).slice(0, 10);
+  const leaveTo = String(lr.toDate).slice(0, 10);
+  const overlap = inclusiveOverlapDays(leaveFrom, leaveTo, reportFrom, reportTo);
+  if (overlap <= 0) return 0;
+
+  const leaveSpan = inclusiveOverlapDays(leaveFrom, leaveTo, leaveFrom, leaveTo);
+  const half = String(lr.halfDay ?? "").trim();
+  const debitRaw = lr.debitDays != null ? Number(lr.debitDays) : NaN;
+  const debit = Number.isFinite(debitRaw) && debitRaw > 0 ? debitRaw : null;
+
+  // Full leave inside report period → use sanctioned debit (0.5 for half-day CL).
+  if (debit != null && leaveSpan > 0 && overlap === leaveSpan) {
+    return Math.round(debit * 100) / 100;
+  }
+
+  // Partial window: scale debit by calendar overlap share.
+  if (debit != null && leaveSpan > 0 && overlap < leaveSpan) {
+    return Math.round((debit * overlap) / leaveSpan * 100) / 100;
+  }
+
+  // Legacy rows without debitDays: half-day single-day leave.
+  if (half && leaveFrom === leaveTo) return 0.5;
+
+  return overlap;
 }
 
 function formatPeriodLong(fromIso: string, toIso: string): string {
@@ -161,7 +202,7 @@ export async function buildEmployeeLeaveReport(opts: {
   for (const lr of leaves) {
     const emp = empById.get(lr.employeeId);
     if (!emp) continue;
-    const days = inclusiveOverlapDays(String(lr.fromDate), String(lr.toDate), fromDate, toDate);
+    const days = daysInReportPeriodForLeave(lr, fromDate, toDate);
     if (days <= 0) continue;
     const add = parseAdditionalChargeYardIds(emp.locationPosted, emp.yardId);
     const code = normalizeLeaveBalanceType(lr.leaveType);

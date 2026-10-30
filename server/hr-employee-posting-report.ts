@@ -9,8 +9,9 @@ import {
   formatAdditionalChargeLabels,
   parseAdditionalChargeYardIds,
 } from "@shared/hr-additional-charge-locations";
+import { isNonSelectableEmployeeDesignation } from "@shared/hr-employee-selectable";
 import { db } from "./db";
-import { employees, yards } from "@shared/db-schema";
+import { designationMaster, employees, yards } from "@shared/db-schema";
 
 export type PostingPerson = {
   employeeId: string;
@@ -88,7 +89,12 @@ function sortPeople(a: PostingPerson, b: PostingPerson): number {
 export async function buildEmployeePostingReportData(): Promise<EmployeePostingReportData> {
   const updatedOnDisplay = formatUpdatedOn();
   const yardRows = await db.select().from(yards).orderBy(asc(yards.name));
-  const empRows = await db
+  const desigRows = await db
+    .select({ id: designationMaster.id, code: designationMaster.code })
+    .from(designationMaster);
+  const codeById = new Map(desigRows.map((r) => [r.id, String(r.code ?? "").trim().toUpperCase()]));
+
+  const empRowsRaw = await db
     .select({
       id: employees.id,
       empId: employees.empId,
@@ -96,6 +102,7 @@ export async function buildEmployeePostingReportData(): Promise<EmployeePostingR
       middleName: employees.middleName,
       surname: employees.surname,
       designation: employees.designation,
+      designationId: employees.designationId,
       gender: employees.gender,
       maritalStatus: employees.maritalStatus,
       yardId: employees.yardId,
@@ -106,6 +113,15 @@ export async function buildEmployeePostingReportData(): Promise<EmployeePostingR
     .from(employees)
     .where(eq(employees.status, "Active"))
     .orderBy(asc(employees.surname), asc(employees.firstName));
+
+  // Exclude STAFF / ADMIN from organisation posting lists.
+  const empRows = empRowsRaw.filter((e) => {
+    const designationId = e.designationId ? String(e.designationId).trim() : "";
+    return !isNonSelectableEmployeeDesignation({
+      designation: e.designation,
+      designationCode: designationId ? codeById.get(designationId) ?? null : null,
+    });
+  });
 
   const yardById = Object.fromEntries(yardRows.map((y) => [y.id, y]));
 

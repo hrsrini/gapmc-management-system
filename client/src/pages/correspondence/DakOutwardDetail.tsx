@@ -13,6 +13,12 @@ import { FormFileAttachments } from "@/components/forms/FormFileAttachments";
 import { AuthenticatedBlobPreviewDialog } from "@/components/attachment/AuthenticatedBlobPreviewDialog";
 import { filesToFileList } from "@/lib/filesToFileList";
 
+interface Recipient {
+  name: string;
+  address?: string;
+  locationId?: string | null;
+}
+
 interface Outward {
   id: string;
   yardId?: string | null;
@@ -20,6 +26,8 @@ interface Outward {
   despatchDate: string;
   toParty: string;
   toAddress?: string | null;
+  toRecipientsJson?: Recipient[] | null;
+  copyToJson?: Recipient[] | null;
   subject: string;
   modeOfDespatch: string;
   inwardRefId?: string | null;
@@ -149,30 +157,52 @@ export default function DakOutwardDetail() {
           </CardHeader>
           <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div>
-              <span className="text-muted-foreground">Despatch date</span>
+              <span className="text-muted-foreground">Outward Date</span>
               <br />
               {formatYmdToDisplay(outward.despatchDate)}
             </div>
             <div>
-              <span className="text-muted-foreground">To</span>
-              <br />
-              {outward.toParty}
-            </div>
-            <div>
-              <span className="text-muted-foreground">Mode</span>
+              <span className="text-muted-foreground">Mode of Despatch</span>
               <br />
               {outward.modeOfDespatch}
             </div>
             <div>
-              <span className="text-muted-foreground">Yard</span>
+              <span className="text-muted-foreground">Outward Location</span>
               <br />
               {outward.yardId ? (yardById[outward.yardId] ?? outward.yardId) : "—"}
             </div>
-            {outward.toAddress && (
-              <div className="md:col-span-2">
-                <span className="text-muted-foreground">To address</span>
+            {outward.fileRef && (
+              <div>
+                <span className="text-muted-foreground">File Reference No.</span>
                 <br />
-                {outward.toAddress}
+                {outward.fileRef}
+              </div>
+            )}
+            <div className="md:col-span-2">
+              <span className="text-muted-foreground">To</span>
+              <ul className="mt-1 list-disc pl-5 space-y-1">
+                {(outward.toRecipientsJson?.length
+                  ? outward.toRecipientsJson
+                  : [{ name: outward.toParty, address: outward.toAddress ?? "" }]
+                ).map((r, i) => (
+                  <li key={i}>
+                    <span className="font-medium">{r.name}</span>
+                    {r.address ? <span className="text-muted-foreground"> — {r.address}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            {outward.copyToJson && outward.copyToJson.length > 0 && (
+              <div className="md:col-span-2">
+                <span className="text-muted-foreground">Copy To</span>
+                <ul className="mt-1 list-disc pl-5 space-y-1">
+                  {outward.copyToJson.map((r, i) => (
+                    <li key={i}>
+                      <span className="font-medium">{r.name}</span>
+                      {r.address ? <span className="text-muted-foreground"> — {r.address}</span> : null}
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
             <div className="md:col-span-2">
@@ -180,13 +210,6 @@ export default function DakOutwardDetail() {
               <br />
               {outward.subject}
             </div>
-            {outward.inwardRefId && (
-              <div>
-                <span className="text-muted-foreground">Inward ref</span>
-                <br />
-                {outward.inwardRefId}
-              </div>
-            )}
             {outward.despatchedBy && (
               <div>
                 <span className="text-muted-foreground">Despatched by</span>

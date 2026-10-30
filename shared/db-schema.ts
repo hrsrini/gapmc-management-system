@@ -208,6 +208,11 @@ export const yards = gapmc.table("yards", {
   phone: text("phone"),
   mobile: text("mobile"),
   address: text("address"),
+  /**
+   * Sender designation/name for Tapal Inward/Outward when this location is selected
+   * (e.g. "The Secretary", "Market Supervisor / Yard In-charge").
+   */
+  partyName: text("party_name"),
   /** Notification email for this location (sanction order copy). */
   email: text("email"),
   isActive: boolean("is_active").default(true),
@@ -2044,6 +2049,13 @@ export const dakInward = gapmc.table("dak_inward", {
   createdAt: text("created_at"),
 });
 
+export type DakOutwardRecipient = {
+  name: string;
+  address: string;
+  /** When set, row was filled from Location Master (HO / Yard / Checkpost). */
+  locationId?: string | null;
+};
+
 export const dakOutward = gapmc.table("dak_outward", {
   id: text("id").primaryKey(),
   yardId: text("yard_id"), // optional; when set, scoped by user's yards
@@ -2051,6 +2063,10 @@ export const dakOutward = gapmc.table("dak_outward", {
   despatchDate: text("despatch_date").notNull(),
   toParty: text("to_party").notNull(),
   toAddress: text("to_address"),
+  /** Primary To recipients (external rows and/or location-mapped). */
+  toRecipientsJson: jsonb("to_recipients_json").$type<DakOutwardRecipient[] | null>(),
+  /** Copy-to recipients (external and/or location-mapped). */
+  copyToJson: jsonb("copy_to_json").$type<DakOutwardRecipient[] | null>(),
   subject: text("subject").notNull(),
   modeOfDespatch: text("mode_of_despatch").notNull(),
   inwardRefId: text("inward_ref_id"),

@@ -28,6 +28,27 @@ export const LEAVE_TYPE_LABELS: Record<string, string> = {
 
 const SHORT_FORM_TYPES = new Set(["CL", "RH", "SPL_H"]);
 
+/**
+ * Form-1 item 9 (Rule 14): leave types that share a common "last leave" history.
+ * When applying for any of these, show the most recent leave among any of these types
+ * (not necessarily the same type as the current application).
+ */
+const FORM1_LAST_LEAVE_GROUP = new Set([
+  "EL",
+  "COMMUTED",
+  "PL",
+  "ML",
+  "EOL",
+  "CCL",
+  "HPL",
+]);
+
+/**
+ * Short-form types: item-9 style "last leave" must be the same leave type only
+ * (e.g. applying for CL → most recent CL only).
+ */
+const SAME_TYPE_LAST_LEAVE_GROUP = new Set(["CL", "RH", "SPL_H"]);
+
 function empDisplayName(emp: {
   firstName: string;
   middleName?: string | null;
@@ -63,14 +84,38 @@ function blankOr(value: string | null | undefined, blank = "_______________"): s
 }
 
 /**
- * Form-1 item 9: prior completed leave only.
+ * Whether a prior approved leave may appear as Form-1 item 9 for the leave type being applied.
+ * - Group 1 (EL, COMMUTED, PL, ML, EOL, CCL, HPL): any prior leave in that same group.
+ * - Group 2 (CL, RH, SPL_H): only prior leave of the exact same type.
+ */
+function priorLeaveMatchesAppliedType(appliedLeaveType: string, priorLeaveType: string): boolean {
+  const applied = String(appliedLeaveType ?? "").trim().toUpperCase();
+  const prior = String(priorLeaveType ?? "").trim().toUpperCase();
+  if (!applied || !prior) return false;
+  if (FORM1_LAST_LEAVE_GROUP.has(applied)) {
+    return FORM1_LAST_LEAVE_GROUP.has(prior);
+  }
+  if (SAME_TYPE_LAST_LEAVE_GROUP.has(applied)) {
+    return prior === applied;
+  }
+  // Unknown types: fall back to same-type only.
+  return prior === applied;
+}
+
+/**
+ * Form-1 item 9: prior completed leave only, filtered by applied leave-type rules.
  * Excludes this application and its entire revision family (original + revisions),
- * and ignores leave approved/created on or after this application's submission date.
+ * and ignores leave that ended on or after this application's submission date.
  */
 async function lastLeaveSummary(
   employeeId: string,
   excludeId: string,
-  opts: { applicationDate?: string | null; revisedFromLeaveId?: string | null },
+  opts: {
+    applicationDate?: string | null;
+    revisedFromLeaveId?: string | null;
+    /** Leave type of the application being printed (drives item-9 filter). */
+    leaveType?: string | null;
+  },
 ): Promise<string> {
   const allForEmp = await db
     .select({
@@ -111,6 +156,7 @@ async function lastLeaveSummary(
   }
 
   const cutoff = String(opts.applicationDate ?? "").trim().slice(0, 10);
+  const appliedType = String(opts.leaveType ?? "").trim().toUpperCase();
   const excludeList = [...excludeIds];
   const whereClause =
     excludeList.length > 0
@@ -123,6 +169,7 @@ async function lastLeaveSummary(
   const rows = await db.select().from(leaveRequests).where(whereClause).orderBy(desc(leaveRequests.toDate));
 
   const last = rows.find((r) => {
+    if (appliedType && !priorLeaveMatchesAppliedType(appliedType, r.leaveType)) return false;
     if (/^\d{4}-\d{2}-\d{2}$/.test(cutoff)) {
       // Must have ended before this application was submitted (not same-chain / later revisions).
       return String(r.toDate).slice(0, 10) < cutoff;
@@ -590,6 +637,7 @@ export async function generateLeaveApplicationPdf(
   const lastLeave = await lastLeaveSummary(lr.employeeId, lr.id, {
     applicationDate,
     revisedFromLeaveId: lr.revisedFromLeaveId ?? null,
+    leaveType,
   });
   const verifyingOfficerDate = (await resolveLeaveVerifiedDateFromAudit(leaveRequestId)) || "";
 
