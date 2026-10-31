@@ -134,7 +134,15 @@ export default function DakInwardForm() {
   const [fileRef, setFileRef] = useState("");
   const [partyLockedFromLocation, setPartyLockedFromLocation] = useState(false);
 
-  const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  /** All active locations for Received From (not limited by logged-in employee's posting). */
+  const { data: yards = [] } = useQuery<Yard[]>({
+    queryKey: ["/api/yards/for-correspondence"],
+    queryFn: async () => {
+      const res = await fetch("/api/yards/for-correspondence", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load locations");
+      return res.json();
+    },
+  });
   const { data: inward, isError: inwardError } = useQuery<Inward>({
     queryKey: ["/api/ioms/dak/inward", id],
     enabled: isEdit,
@@ -154,11 +162,9 @@ export default function DakInwardForm() {
 
   const yardById = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, y])), [yards]);
 
+  // All active locations — not limited by employee posting or location type.
   const fromLocationOptions = useMemo(
-    () =>
-      yards
-        .filter((y) => isReceivedFromLocation(y))
-        .sort((a, b) => (a.name || "").localeCompare(b.name || "")),
+    () => yards.slice().sort((a, b) => (a.name || "").localeCompare(b.name || "")),
     [yards],
   );
 
@@ -500,7 +506,8 @@ export default function DakInwardForm() {
                 </Select>
                 {fromYardOrCheckpost === "yes" ? (
                   <p className="text-xs text-muted-foreground mt-1">
-                    Party Name and Address autofill from Location Master for the selected location.
+                    All locations are listed (not limited by your posting). Party Name and Address autofill from Location
+                    Master.
                   </p>
                 ) : null}
               </div>
@@ -543,6 +550,22 @@ export default function DakInwardForm() {
               />
             </div>
 
+            <div>
+              <Label>Subject *</Label>
+              <Input value={subject} onChange={(e) => setSubject(e.target.value)} required />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label>File Reference No.</Label>
+                <Input value={fileRef} onChange={(e) => setFileRef(e.target.value)} placeholder="Optional" />
+              </div>
+              <div>
+                <Label>Deadline Date</Label>
+                <Input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label>Received by</Label>
@@ -553,22 +576,6 @@ export default function DakInwardForm() {
                 <Label>Received Location</Label>
                 <Input value={receivedLocationLabel || "—"} readOnly className="bg-muted/40" />
                 <p className="text-xs text-muted-foreground mt-1">Logged-in user location (auto-filled)</p>
-              </div>
-            </div>
-
-            <div>
-              <Label>Subject *</Label>
-              <Input value={subject} onChange={(e) => setSubject(e.target.value)} required />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label>Deadline</Label>
-                <Input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
-              </div>
-              <div>
-                <Label>File ref</Label>
-                <Input value={fileRef} onChange={(e) => setFileRef(e.target.value)} placeholder="Optional" />
               </div>
             </div>
 

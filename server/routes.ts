@@ -24,7 +24,7 @@ import { registerReportsRoutes } from "./routes-reports";
 import { registerFinanceReferenceRoutes } from "./routes-finance-reference";
 import { registerAuthMeRoute, registerMfaRoutes, registerPublicAuthRoutes } from "./routes-auth";
 import { getMergedSystemConfig, omitSensitiveSystemConfigKeys } from "./system-config";
-import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermissionByPath } from "./auth";
+import { requireAuthApi, requireAdminPermissionByMethod, requireModulePermissionByPath, hasPermission } from "./auth";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
 import { agreementDocuments, agreements as agreementsTable, yards } from "@shared/db-schema";
@@ -342,6 +342,32 @@ export async function registerRoutes(
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch yards");
+    }
+  });
+
+  /**
+   * Tapal (M-09): all active locations for Inward From / Outward To & Copy To.
+   * Not limited by the logged-in employee's place of posting.
+   */
+  app.get("/api/yards/for-correspondence", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      const isAdmin = Boolean(req.user.roles?.some((r) => String(r.tier) === "ADMIN"));
+      const canDak =
+        hasPermission(req.user, "M-09", "Read") ||
+        hasPermission(req.user, "M-09", "Create") ||
+        hasPermission(req.user, "M-09", "Update");
+      if (!isAdmin && !canDak) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-09 permission required", {
+          required: "M-09:Read|Create|Update",
+        });
+      }
+      const activeCond = or(eq(yards.isActive, true), isNull(yards.isActive));
+      const list = await db.select().from(yards).where(activeCond).orderBy(yards.name);
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch correspondence yards");
     }
   });
 

@@ -41,23 +41,6 @@ interface EmployeeRef {
 
 const MODES = ["Post", "Courier", "Hand", "Email", "Fax"];
 
-function isHeadOfficeYard(y: { type?: string | null; name?: string | null; code?: string | null } | undefined): boolean {
-  if (!y) return false;
-  if (String(y.type ?? "").trim().toUpperCase() === "HO") return true;
-  const name = String(y.name ?? "").toLowerCase();
-  const code = String(y.code ?? "").toLowerCase();
-  return name.includes("head office") || code === "ho" || code.startsWith("ho-");
-}
-
-function isYardOrCheckPost(y: { type?: string | null } | undefined): boolean {
-  const t = String(y?.type ?? "").trim().toLowerCase();
-  return t === "yard" || t === "checkpost" || t === "check_post" || t === "check-post";
-}
-
-function isOfficeLocation(y: { type?: string | null; name?: string | null; code?: string | null } | undefined): boolean {
-  return isYardOrCheckPost(y) || isHeadOfficeYard(y);
-}
-
 function employeeFullName(e: EmployeeRef): string {
   return [e.firstName, e.middleName, e.surname].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 }
@@ -92,6 +75,8 @@ type RecipientBlockProps = {
   selectedLocationIds: string[];
   onSelectedLocationIdsChange: (ids: string[]) => void;
   locationOptions: Yard[];
+  /** Locations that cannot be chosen (e.g. already in To — hide/disable in Copy To). */
+  disabledLocationIds?: string[];
   addRowLabel: string;
 };
 
@@ -105,18 +90,25 @@ function RecipientBlock({
   selectedLocationIds,
   onSelectedLocationIdsChange,
   locationOptions,
+  disabledLocationIds = [],
   addRowLabel,
 }: RecipientBlockProps) {
-  const allIds = locationOptions.map((y) => y.id);
-  const allSelected = allIds.length > 0 && allIds.every((id) => selectedLocationIds.includes(id));
+  const disabled = useMemo(() => new Set(disabledLocationIds), [disabledLocationIds]);
+  const selectableIds = useMemo(
+    () => locationOptions.map((y) => y.id).filter((id) => !disabled.has(id)),
+    [locationOptions, disabled],
+  );
+  const allSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedLocationIds.includes(id));
 
   function toggleLocation(id: string, checked: boolean) {
+    if (disabled.has(id)) return;
     if (checked) onSelectedLocationIdsChange([...selectedLocationIds, id]);
     else onSelectedLocationIdsChange(selectedLocationIds.filter((x) => x !== id));
   }
 
   function toggleSelectAll(checked: boolean) {
-    onSelectedLocationIdsChange(checked ? allIds : []);
+    onSelectedLocationIdsChange(checked ? selectableIds : []);
   }
 
   function updateExternal(i: number, patch: Partial<DakRecipientRow>) {
@@ -169,21 +161,30 @@ function RecipientBlock({
             </Label>
           </div>
           {locationOptions.map((loc) => {
+            const isDisabled = disabled.has(loc.id);
             const checked = selectedLocationIds.includes(loc.id);
             const party = loc.partyName?.trim() || loc.name?.trim() || loc.code?.trim() || loc.id;
             return (
-              <div key={loc.id} className="flex items-start gap-2 py-1">
+              <div
+                key={loc.id}
+                className={`flex items-start gap-2 py-1 ${isDisabled ? "opacity-50" : ""}`}
+              >
                 <Checkbox
                   id={`${title}-loc-${loc.id}`}
-                  checked={checked}
+                  checked={checked && !isDisabled}
+                  disabled={isDisabled}
                   onCheckedChange={(c) => toggleLocation(loc.id, c === true)}
                   className="mt-0.5"
                 />
-                <Label htmlFor={`${title}-loc-${loc.id}`} className="font-normal cursor-pointer text-sm leading-snug">
+                <Label
+                  htmlFor={`${title}-loc-${loc.id}`}
+                  className={`font-normal text-sm leading-snug ${isDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+                >
                   <span className="font-medium">{loc.name ?? loc.code ?? loc.id}</span>
                   <span className="block text-xs text-muted-foreground">
-                    {party}
-                    {loc.address?.trim() ? ` — ${loc.address.trim()}` : ""}
+                    {isDisabled
+                      ? "Already selected under To — cannot also mark Copy To"
+                      : `${party}${loc.address?.trim() ? ` — ${loc.address.trim()}` : ""}`}
                   </span>
                 </Label>
               </div>
@@ -264,7 +265,15 @@ export default function DakOutwardForm() {
   const [copyExternalRows, setCopyExternalRows] = useState<DakRecipientRow[]>([emptyExternalRow()]);
   const [copyLocationIds, setCopyLocationIds] = useState<string[]>([]);
 
-  const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  /** All active locations (not limited by logged-in employee's posting). */
+  const { data: yards = [] } = useQuery<Yard[]>({
+    queryKey: ["/api/yards/for-correspondence"],
+    queryFn: async () => {
+      const res = await fetch("/api/yards/for-correspondence", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load locations");
+      return res.json();
+    },
+  });
 
   const { data: selfEmployee } = useQuery<EmployeeRef>({
     queryKey: ["/api/hr/employees", user?.employeeId],
@@ -280,13 +289,21 @@ export default function DakOutwardForm() {
 
   const yardById = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, y])), [yards]);
 
+  // All active locations from API — do not filter by posting or by type (Yard/HO/Checkpost).
   const locationOptions = useMemo(
-    () =>
-      yards
-        .filter((y) => isOfficeLocation(y))
-        .sort((a, b) => (a.name || "").localeCompare(b.name || "")),
+    () => yards.slice().sort((a, b) => (a.name || "").localeCompare(b.name || "")),
     [yards],
   );
+
+  // Drop Copy To locations that were later chosen under To.
+  useEffect(() => {
+    if (toLocationIds.length === 0) return;
+    const blocked = new Set(toLocationIds);
+    setCopyLocationIds((prev) => {
+      const next = prev.filter((id) => !blocked.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [toLocationIds]);
 
   useEffect(() => {
     const name = user?.name?.trim() || "";
@@ -439,6 +456,11 @@ export default function DakOutwardForm() {
               </div>
             </div>
 
+            <div>
+              <Label>Subject *</Label>
+              <Input value={subject} onChange={(e) => setSubject(e.target.value)} required />
+            </div>
+
             <RecipientBlock
               title="To"
               internalLabel="To Yard / Checkpost / Head Office"
@@ -470,13 +492,9 @@ export default function DakOutwardForm() {
               selectedLocationIds={copyLocationIds}
               onSelectedLocationIdsChange={setCopyLocationIds}
               locationOptions={locationOptions}
+              disabledLocationIds={toInternal === "yes" ? toLocationIds : []}
               addRowLabel="Add Copy To row"
             />
-
-            <div>
-              <Label>Subject *</Label>
-              <Input value={subject} onChange={(e) => setSubject(e.target.value)} required />
-            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
