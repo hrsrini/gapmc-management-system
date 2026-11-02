@@ -11,6 +11,7 @@ import { RequirePermission } from "@/components/RequirePermission";
 import { Auth403Listener } from "@/components/Auth403Listener";
 
 import Login from "@/pages/Login";
+import ChangePassword from "@/pages/ChangePassword";
 import { DashboardRouteGate, WelcomeRouteGate } from "@/components/HomeRouteGate";
 import RentInvoiceList from "@/pages/rent/RentInvoiceList";
 import RentInvoiceForm from "@/pages/rent/RentInvoiceForm";
@@ -150,6 +151,11 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Login} />
+      <Route path="/change-password">
+        <ProtectedRoute allowForcePasswordChange>
+          <ChangePassword />
+        </ProtectedRoute>
+      </Route>
       <Route path="/dashboard">
         <ProtectedRoute><DashboardRouteGate /></ProtectedRoute>
       </Route>

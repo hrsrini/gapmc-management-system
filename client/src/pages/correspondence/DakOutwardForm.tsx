@@ -150,6 +150,10 @@ function RecipientBlock({
 
       {mode === "yes" ? (
         <div className="space-y-2 max-h-56 overflow-y-auto rounded border bg-muted/20 p-2">
+          <p className="text-xs text-muted-foreground">
+            Select Yard / Checkpost / Head Office locations (multiple allowed). You can also add Name /
+            Address rows below for additional recipients.
+          </p>
           <div className="flex items-center gap-2 pb-1 border-b">
             <Checkbox
               id={`${title}-select-all`}
@@ -194,50 +198,54 @@ function RecipientBlock({
             <p className="text-xs text-muted-foreground">No yards / checkposts / head office in Location Master.</p>
           )}
         </div>
-      ) : (
-        <div className="space-y-2">
-          <div className="hidden sm:grid grid-cols-[1fr_1fr_auto] gap-2 text-xs text-muted-foreground px-0.5">
-            <span>Name</span>
-            <span>Address</span>
-            <span className="w-9" />
-          </div>
-          {externalRows.map((row, i) => (
-            <div key={i} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-center">
-              <Input
-                placeholder="Name"
-                value={row.name}
-                onChange={(e) => updateExternal(i, { name: e.target.value, locationId: null })}
-                aria-label={`${title} name ${i + 1}`}
-              />
-              <Input
-                placeholder="Address"
-                value={row.address}
-                onChange={(e) => updateExternal(i, { address: e.target.value, locationId: null })}
-                aria-label={`${title} address ${i + 1}`}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="shrink-0"
-                onClick={() => removeExternal(i)}
-                aria-label={`Remove ${title} row ${i + 1}`}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
-          ))}
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => onExternalRowsChange([...externalRows, emptyExternalRow()])}
-          >
-            <Plus className="h-4 w-4 mr-1" />
-            {addRowLabel}
-          </Button>
+      ) : null}
+
+      {/* Name/Address rows + Add Row — available for both Yes and No (FRD multi-recipient). */}
+      <div className="space-y-2">
+        {mode === "yes" ? (
+          <p className="text-xs font-medium text-muted-foreground">Additional Name / Address rows</p>
+        ) : null}
+        <div className="hidden sm:grid grid-cols-[1fr_1fr_auto] gap-2 text-xs text-muted-foreground px-0.5">
+          <span>Name</span>
+          <span>Address</span>
+          <span className="w-9" />
         </div>
-      )}
+        {externalRows.map((row, i) => (
+          <div key={i} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 items-center">
+            <Input
+              placeholder="Name"
+              value={row.name}
+              onChange={(e) => updateExternal(i, { name: e.target.value, locationId: null })}
+              aria-label={`${title} name ${i + 1}`}
+            />
+            <Input
+              placeholder="Address"
+              value={row.address}
+              onChange={(e) => updateExternal(i, { address: e.target.value, locationId: null })}
+              aria-label={`${title} address ${i + 1}`}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="shrink-0"
+              onClick={() => removeExternal(i)}
+              aria-label={`Remove ${title} row ${i + 1}`}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        ))}
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => onExternalRowsChange([...externalRows, emptyExternalRow()])}
+        >
+          <Plus className="h-4 w-4 mr-1" />
+          {addRowLabel}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -320,26 +328,28 @@ export default function DakOutwardForm() {
     if (empName) setDespatchedBy(empName);
   }, [selfEmployee, yardById]);
 
-  const toRecipients = useMemo(() => {
-    if (toInternal === "yes") return recipientsFromLocationIds(toLocationIds, yardById);
-    return toExternalRows
+  const manualRows = (rows: DakRecipientRow[]) =>
+    rows
       .map((r) => ({
         name: r.name.trim(),
         address: r.address.trim(),
         locationId: null as string | null,
       }))
       .filter((r) => r.name);
+
+  const toRecipients = useMemo(() => {
+    const fromLocations =
+      toInternal === "yes" ? recipientsFromLocationIds(toLocationIds, yardById) : [];
+    const fromRows = manualRows(toExternalRows);
+    // Prefer location-linked rows first; append freeform Name/Address entries.
+    return [...fromLocations, ...fromRows];
   }, [toInternal, toLocationIds, toExternalRows, yardById]);
 
   const copyToRecipients = useMemo(() => {
-    if (copyInternal === "yes") return recipientsFromLocationIds(copyLocationIds, yardById);
-    return copyExternalRows
-      .map((r) => ({
-        name: r.name.trim(),
-        address: r.address.trim(),
-        locationId: null as string | null,
-      }))
-      .filter((r) => r.name);
+    const fromLocations =
+      copyInternal === "yes" ? recipientsFromLocationIds(copyLocationIds, yardById) : [];
+    const fromRows = manualRows(copyExternalRows);
+    return [...fromLocations, ...fromRows];
   }, [copyInternal, copyLocationIds, copyExternalRows, yardById]);
 
   const createMutation = useMutation({
@@ -375,7 +385,7 @@ export default function DakOutwardForm() {
         title: "To recipient required",
         description:
           toInternal === "yes"
-            ? "Select at least one location."
+            ? "Select at least one location and/or enter a To name."
             : "Enter at least one To name (and address).",
         variant: "destructive",
       });
@@ -467,7 +477,8 @@ export default function DakOutwardForm() {
               mode={toInternal}
               onModeChange={(v) => {
                 setToInternal(v);
-                if (v === "no" && toExternalRows.length === 0) setToExternalRows([emptyExternalRow()]);
+                // Keep Add-row UI usable for both Yes and No.
+                if (toExternalRows.length === 0) setToExternalRows([emptyExternalRow()]);
                 if (v === "yes") setToLocationIds([]);
               }}
               externalRows={toExternalRows}
@@ -484,7 +495,7 @@ export default function DakOutwardForm() {
               mode={copyInternal}
               onModeChange={(v) => {
                 setCopyInternal(v);
-                if (v === "no" && copyExternalRows.length === 0) setCopyExternalRows([emptyExternalRow()]);
+                if (copyExternalRows.length === 0) setCopyExternalRows([emptyExternalRow()]);
                 if (v === "yes") setCopyLocationIds([]);
               }}
               externalRows={copyExternalRows}

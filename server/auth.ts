@@ -22,6 +22,10 @@ export interface AuthUser {
   yardIds: string[];
   /** Resolved from role_permissions + permissions; used for permission checks. */
   permissions: { module: string; action: string }[];
+  /** Must change password before using the app (first login / reset / migration). */
+  forcePasswordChange: boolean;
+  /** True when any role tier is ADMIN. */
+  isAdmin: boolean;
 }
 
 declare global {
@@ -153,6 +157,9 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
     roles: roleRows.map((r) => ({ id: r.roleId, tier: r.tier, name: r.name })),
     yardIds: yardRows.map((y) => y.yardId),
     permissions: permList,
+    // ADMIN accounts are exempt from mandatory password-change gating.
+    forcePasswordChange: isAdmin ? false : user.forcePasswordChange === true,
+    isAdmin,
   };
 }
 
@@ -188,6 +195,27 @@ export async function requireAuthApi(req: Request, res: Response, next: NextFunc
     }
     req.user = user;
     req.scopedLocationIds = user.yardIds;
+
+    // Mandatory password change: block all APIs except me / logout / change-password.
+    if (user.forcePasswordChange) {
+      const path = req.path;
+      const method = req.method;
+      const allowed =
+        (path === "/api/auth/me" && method === "GET") ||
+        (path === "/api/auth/logout" && method === "POST") ||
+        (path === "/api/auth/change-password" && method === "POST") ||
+        (path === "/api/auth/password-policy" && method === "GET");
+      if (!allowed) {
+        sendApiError(
+          res,
+          403,
+          "AUTH_PASSWORD_CHANGE_REQUIRED",
+          "You must change your password before continuing.",
+        );
+        return;
+      }
+    }
+
     next();
   } catch (err) {
     console.error(err);

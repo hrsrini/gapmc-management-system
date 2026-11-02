@@ -12,6 +12,7 @@ import {
   assistantTraders,
   entities,
   entityAllotments,
+  entityLocationMappings,
   preReceipts,
   assets,
   assetAllotments,
@@ -67,6 +68,20 @@ import {
 } from "./hr-employee-rules";
 import { INDIAN_PAN_RE, normalizePanInput } from "@shared/india-validation";
 import { findPanConflictAcrossActiveMasters, formatPanDuplicateMessage } from "./pan-uniqueness";
+import {
+  findGstinConflictAcrossActiveMasters,
+  formatGstinDuplicateMessage,
+  isValidGstin,
+  normalizeGstinInput,
+} from "./gstin-uniqueness";
+import {
+  entityAccessibleInScope,
+  entityIdsWithActiveMappingInYards,
+  listMappedYardsForEntity,
+  unmapEntityLocation,
+  upsertActiveMappings,
+  allYardsInScope,
+} from "./entity-location-mappings";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
 import {
@@ -471,8 +486,22 @@ export function registerTradersAssetsRoutes(app: Express) {
       const statusQ = String(req.query.status ?? "").trim();
       const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
       const conditions = [];
-      if (scopedIds && scopedIds.length > 0) conditions.push(inArray(entities.yardId, scopedIds));
-      if (yardId) conditions.push(eq(entities.yardId, yardId));
+      if (scopedIds && scopedIds.length > 0) {
+        const mappedIds = await entityIdsWithActiveMappingInYards(scopedIds);
+        if (mappedIds.length > 0) {
+          conditions.push(or(inArray(entities.id, mappedIds), inArray(entities.yardId, scopedIds)));
+        } else {
+          conditions.push(inArray(entities.yardId, scopedIds));
+        }
+      }
+      if (yardId) {
+        const mappedToYard = await entityIdsWithActiveMappingInYards([yardId]);
+        if (mappedToYard.length > 0) {
+          conditions.push(or(inArray(entities.id, mappedToYard), eq(entities.yardId, yardId)));
+        } else {
+          conditions.push(eq(entities.yardId, yardId));
+        }
+      }
       if (statusQ) {
         if (!(ENTITY_STATUSES as readonly string[]).includes(statusQ)) {
           return sendApiError(
@@ -486,23 +515,111 @@ export function registerTradersAssetsRoutes(app: Express) {
       }
       const base = db.select().from(entities).orderBy(desc(entities.updatedAt));
       const list = conditions.length ? await base.where(and(...conditions)) : await base;
-      res.json(list);
+      const withMaps = await Promise.all(
+        list.map(async (row) => ({
+          ...row,
+          mappedYards: await listMappedYardsForEntity(row.id),
+        })),
+      );
+      res.json(withMaps);
     } catch (e) {
       console.error(e);
       const pg = e as { code?: string; message?: string };
       const msg = String(pg?.message ?? (e instanceof Error ? e.message : e));
       if (
         pg?.code === "42P01" ||
-        /gapmc\.entities.*does not exist|relation\s+"gapmc\.entities"/i.test(msg)
+        /gapmc\.entities.*does not exist|relation\s+"gapmc\.entities"/i.test(msg) ||
+        /entity_location_mappings/i.test(msg)
       ) {
         return sendApiError(
           res,
           503,
           "ENTITY_SCHEMA_MISSING",
-          "The Track B entities table is missing. Run: npm run db:apply-m02-trackb-entities (or npm run db:push), then reload.",
+          "Entity / location-mapping tables missing. Run: npm run db:apply-entity-location-mappings (and db:apply-m02-trackb-entities if needed).",
         );
       }
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch entities");
+    }
+  });
+
+  /**
+   * Real-time identity lookup for Entity create (PAN / GSTIN) — returns existing Track B
+   * entity + mapped locations so the user can reuse instead of duplicating.
+   */
+  app.get("/api/ioms/entities/lookup-by-identity", async (req, res) => {
+    try {
+      const panRaw = String(req.query.pan ?? "").trim();
+      const gstinRaw = String(req.query.gstin ?? "").trim();
+      if (!panRaw && !gstinRaw) {
+        return sendApiError(res, 400, "IDENTITY_REQUIRED", "Provide pan and/or gstin");
+      }
+
+      let match: (typeof entities.$inferSelect) | null = null;
+      let matchField: "pan" | "gstin" | null = null;
+
+      if (panRaw) {
+        const pan = normalizePanInput(panRaw);
+        if (pan.length === 10 && INDIAN_PAN_RE.test(pan)) {
+          const [row] = await db
+            .select()
+            .from(entities)
+            .where(
+              and(
+                sql`upper(trim(${entities.pan})) = ${pan}`,
+                inArray(entities.status, ["Active", "Draft"]),
+              ),
+            )
+            .limit(1);
+          if (row) {
+            match = row;
+            matchField = "pan";
+          }
+        }
+      }
+      if (!match && gstinRaw) {
+        const gst = normalizeGstinInput(gstinRaw);
+        if (isValidGstin(gst)) {
+          const [row] = await db
+            .select()
+            .from(entities)
+            .where(
+              and(
+                sql`upper(trim(${entities.gstin})) = ${gst}`,
+                inArray(entities.status, ["Active", "Draft"]),
+              ),
+            )
+            .limit(1);
+          if (row) {
+            match = row;
+            matchField = "gstin";
+          }
+        }
+      }
+
+      if (!match) {
+        return res.json({ found: false });
+      }
+
+      const mappedYards = await listMappedYardsForEntity(match.id);
+      return res.json({
+        found: true,
+        matchField,
+        entity: {
+          id: match.id,
+          entityCode: match.entityCode,
+          name: match.name,
+          pan: match.pan,
+          gstin: match.gstin,
+          status: match.status,
+          yardId: match.yardId,
+          subType: match.subType,
+          mobile: match.mobile,
+          mappedYards,
+        },
+      });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to look up entity by identity");
     }
   });
 
@@ -510,8 +627,11 @@ export function registerTradersAssetsRoutes(app: Express) {
     try {
       const [row] = await db.select().from(entities).where(eq(entities.id, req.params.id)).limit(1);
       if (!row) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
-      if (!yardInScope(req, row.yardId)) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
-      res.json(row);
+      if (!(await entityAccessibleInScope(req, row.id, row.yardId))) {
+        return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      }
+      const mappedYards = await listMappedYardsForEntity(row.id);
+      res.json({ ...row, mappedYards });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch entity");
@@ -524,7 +644,9 @@ export function registerTradersAssetsRoutes(app: Express) {
       const id = req.params.id;
       const [row] = await db.select().from(entities).where(eq(entities.id, id)).limit(1);
       if (!row) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
-      if (!yardInScope(req, row.yardId)) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      if (!(await entityAccessibleInScope(req, row.id, row.yardId))) {
+        return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      }
       const links = await countEntityFinancialLinks(id);
       const canDelete = !entityHasFinancialLinks(links);
       res.json({ canDelete, links });
@@ -534,15 +656,135 @@ export function registerTradersAssetsRoutes(app: Express) {
     }
   });
 
+  app.post("/api/ioms/entities/:id/location-mappings", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const [existing] = await db.select().from(entities).where(eq(entities.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      if (!(await entityAccessibleInScope(req, existing.id, existing.yardId))) {
+        return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      }
+      const body = req.body as { yardIds?: unknown; yardId?: unknown };
+      const yardIdsRaw = Array.isArray(body.yardIds)
+        ? body.yardIds.map((y) => String(y))
+        : body.yardId != null
+          ? [String(body.yardId)]
+          : [];
+      const yardIds = [...new Set(yardIdsRaw.map((y) => y.trim()).filter(Boolean))];
+      if (yardIds.length === 0) {
+        return sendApiError(res, 400, "YARD_REQUIRED", "Select at least one location to map");
+      }
+      if (!allYardsInScope(req, yardIds)) {
+        return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to one or more selected locations");
+      }
+      for (const yid of yardIds) {
+        const yardTypeCheck = await assertPremisesYardLocation(yid);
+        if (!yardTypeCheck.ok) {
+          return sendApiError(res, 400, yardTypeCheck.code, yardTypeCheck.message);
+        }
+      }
+      const ts = now();
+      await db.transaction(async (tx) => {
+        await upsertActiveMappings(tx as any, {
+          entityId: id,
+          yardIds,
+          createdBy: req.user?.id ?? null,
+          ts,
+          setHomeYard: false,
+        });
+      });
+      writeAuditLog(req, {
+        module: "Traders",
+        action: "MapEntityLocations",
+        recordId: id,
+        afterValue: { yardIds },
+      }).catch((e) => console.error("Audit log failed:", e));
+      const mappedYards = await listMappedYardsForEntity(id);
+      const [row] = await db.select().from(entities).where(eq(entities.id, id)).limit(1);
+      res.json({ ...row, mappedYards });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to map locations");
+    }
+  });
+
+  app.post("/api/ioms/entities/:id/location-mappings/:yardId/unmap", async (req, res) => {
+    try {
+      const id = req.params.id;
+      const yardId = String(req.params.yardId ?? "").trim();
+      const [existing] = await db.select().from(entities).where(eq(entities.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      if (!(await entityAccessibleInScope(req, existing.id, existing.yardId))) {
+        return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      }
+      if (!yardInScope(req, yardId)) {
+        return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this location");
+      }
+      const reason = String((req.body as { reason?: string })?.reason ?? "").trim();
+      if (!reason) {
+        return sendApiError(res, 400, "UNMAP_REASON_REQUIRED", "Reason is required to unmap a location");
+      }
+      const effectiveTo = (req.body as { effectiveTo?: string })?.effectiveTo
+        ? String((req.body as { effectiveTo?: string }).effectiveTo).trim()
+        : null;
+      const result = await unmapEntityLocation({
+        entityId: id,
+        yardId,
+        reason,
+        effectiveTo,
+        ts: now(),
+      });
+      if (result === "not_found") {
+        return sendApiError(res, 404, "MAPPING_NOT_FOUND", "Location mapping not found");
+      }
+      if (result === "already_inactive") {
+        return sendApiError(res, 400, "MAPPING_ALREADY_INACTIVE", "Location is already unmapped");
+      }
+      if (result === "last_active") {
+        return sendApiError(
+          res,
+          400,
+          "MAPPING_LAST_ACTIVE",
+          "Cannot unmap the last active location. Map another location first.",
+        );
+      }
+      writeAuditLog(req, {
+        module: "Traders",
+        action: "UnmapEntityLocation",
+        recordId: id,
+        afterValue: { yardId, reason, effectiveTo },
+      }).catch((e) => console.error("Audit log failed:", e));
+      const mappedYards = await listMappedYardsForEntity(id);
+      const [row] = await db.select().from(entities).where(eq(entities.id, id)).limit(1);
+      res.json({ ...row, mappedYards });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to unmap location");
+    }
+  });
+
   app.post("/api/ioms/entities", async (req, res) => {
     try {
       const body = req.body;
-      const yardId = String(body.yardId ?? "");
-      if (!yardInScope(req, yardId)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
-      const yardTypeCheck = await assertPremisesYardLocation(yardId);
-      if (!yardTypeCheck.ok) {
-        return sendApiError(res, 400, yardTypeCheck.code, yardTypeCheck.message);
+      const yardIdsFromBody: string[] = Array.isArray(body.yardIds)
+        ? body.yardIds.map((y: unknown) => String(y).trim()).filter(Boolean)
+        : body.yardId
+          ? [String(body.yardId).trim()]
+          : [];
+      const yardIds = [...new Set(yardIdsFromBody)];
+      if (yardIds.length === 0) {
+        return sendApiError(res, 400, "YARD_REQUIRED", "Select at least one location");
       }
+      if (!allYardsInScope(req, yardIds)) {
+        return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to one or more selected locations");
+      }
+      for (const yid of yardIds) {
+        const yardTypeCheck = await assertPremisesYardLocation(yid);
+        if (!yardTypeCheck.ok) {
+          return sendApiError(res, 400, yardTypeCheck.code, yardTypeCheck.message);
+        }
+      }
+      const homeYardId = yardIds[0]!;
       const panNorm = body.pan != null && String(body.pan).trim() !== "" ? normalizePanInput(String(body.pan)) : null;
       if (panNorm && (panNorm.length !== 10 || !INDIAN_PAN_RE.test(panNorm))) {
         return sendApiError(res, 400, "ENTITY_PAN_FORMAT", "PAN must match ABCDE1234F.");
@@ -552,6 +794,26 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (panConflict) {
           return sendApiError(res, 400, "ENTITY_PAN_DUPLICATE", formatPanDuplicateMessage(panConflict), {
             conflict: panConflict,
+            existingEntityId: panConflict.kind === "TrackBEntity" ? panConflict.id : undefined,
+          });
+        }
+      }
+      const gstinNorm =
+        body.gstin != null && String(body.gstin).trim() !== "" ? normalizeGstinInput(String(body.gstin)) : null;
+      if (gstinNorm) {
+        if (!isValidGstin(gstinNorm)) {
+          return sendApiError(
+            res,
+            400,
+            "ENTITY_GSTIN_FORMAT",
+            "GSTIN must be 15 characters (e.g. 22AAAAA0000A1Z5).",
+          );
+        }
+        const gstConflict = await findGstinConflictAcrossActiveMasters({ gstinUpper: gstinNorm });
+        if (gstConflict) {
+          return sendApiError(res, 400, "ENTITY_GSTIN_DUPLICATE", formatGstinDuplicateMessage(gstConflict), {
+            conflict: gstConflict,
+            existingEntityId: gstConflict.kind === "TrackBEntity" ? gstConflict.id : undefined,
           });
         }
       }
@@ -579,9 +841,9 @@ export function registerTradersAssetsRoutes(app: Express) {
           track,
           subType,
           name: String(body.name ?? ""),
-          yardId,
+          yardId: homeYardId,
           pan: panNorm,
-          gstin: body.gstin ? String(body.gstin) : null,
+          gstin: gstinNorm,
           mobile: body.mobile ? normalizeMobile10(String(body.mobile)) : null,
           email: body.email ? String(body.email).trim().toLowerCase() : null,
           address: body.address ? String(body.address) : null,
@@ -589,10 +851,26 @@ export function registerTradersAssetsRoutes(app: Express) {
           createdAt: ts,
           updatedAt: ts,
         });
+        await upsertActiveMappings(tx as any, {
+          entityId: id,
+          yardIds,
+          createdBy: req.user?.id ?? null,
+          ts,
+          setHomeYard: true,
+        });
         return tx.select().from(entities).where(eq(entities.id, id));
       });
-      if (row) writeAuditLog(req, { module: "Traders", action: "Create", recordId: id, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
-      res.status(201).json(row);
+      const mappedYards = await listMappedYardsForEntity(id);
+      const payload = row ? { ...row, mappedYards } : null;
+      if (payload) {
+        writeAuditLog(req, {
+          module: "Traders",
+          action: "Create",
+          recordId: id,
+          afterValue: payload,
+        }).catch((e) => console.error("Audit log failed:", e));
+      }
+      res.status(201).json(payload);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create entity");
@@ -604,7 +882,9 @@ export function registerTradersAssetsRoutes(app: Express) {
       const id = req.params.id;
       const [existing] = await db.select().from(entities).where(eq(entities.id, id)).limit(1);
       if (!existing) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
-      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      if (!(await entityAccessibleInScope(req, existing.id, existing.yardId))) {
+        return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      }
       const body = req.body;
       const updates: Record<string, unknown> = { updatedAt: now() };
       ["name", "pan", "gstin", "email", "address", "status"].forEach((k) => {
@@ -614,6 +894,9 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (k === "pan") {
           const p = v != null && v.trim() !== "" ? normalizePanInput(v) : null;
           updates[k] = p;
+        } else if (k === "gstin") {
+          const g = v != null && v.trim() !== "" ? normalizeGstinInput(v) : null;
+          updates[k] = g;
         } else {
           updates[k] = v;
         }
@@ -639,6 +922,26 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (panConflict) {
           return sendApiError(res, 400, "ENTITY_PAN_DUPLICATE", formatPanDuplicateMessage(panConflict), {
             conflict: panConflict,
+          });
+        }
+      }
+      if (updates.gstin != null && String(updates.gstin).trim() !== "") {
+        const g = String(updates.gstin);
+        if (!isValidGstin(g)) {
+          return sendApiError(
+            res,
+            400,
+            "ENTITY_GSTIN_FORMAT",
+            "GSTIN must be 15 characters (e.g. 22AAAAA0000A1Z5).",
+          );
+        }
+        const gstConflict = await findGstinConflictAcrossActiveMasters({
+          gstinUpper: g,
+          excludeEntityId: id,
+        });
+        if (gstConflict) {
+          return sendApiError(res, 400, "ENTITY_GSTIN_DUPLICATE", formatGstinDuplicateMessage(gstConflict), {
+            conflict: gstConflict,
           });
         }
       }
@@ -671,7 +974,27 @@ export function registerTradersAssetsRoutes(app: Express) {
         updates.subType = subType;
       }
       if (body.mobile !== undefined) updates.mobile = body.mobile == null ? null : normalizeMobile10(String(body.mobile));
-      if (body.yardId !== undefined) {
+      let mapYardIds: string[] | null = null;
+      if (Array.isArray(body.yardIds) && body.yardIds.length > 0) {
+        const nextYards = [
+          ...new Set(
+            (body.yardIds as unknown[])
+              .map((y) => String(y).trim())
+              .filter((y): y is string => Boolean(y)),
+          ),
+        ];
+        if (!allYardsInScope(req, nextYards)) {
+          return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to one or more selected locations");
+        }
+        for (const yid of nextYards) {
+          const yardTypeCheck = await assertPremisesYardLocation(yid);
+          if (!yardTypeCheck.ok) {
+            return sendApiError(res, 400, yardTypeCheck.code, yardTypeCheck.message);
+          }
+        }
+        mapYardIds = nextYards;
+        updates.yardId = nextYards[0];
+      } else if (body.yardId !== undefined) {
         const yid = String(body.yardId);
         if (!yardInScope(req, yid)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
         const yardTypeCheck = await assertPremisesYardLocation(yid);
@@ -679,6 +1002,7 @@ export function registerTradersAssetsRoutes(app: Express) {
           return sendApiError(res, 400, yardTypeCheck.code, yardTypeCheck.message);
         }
         updates.yardId = yid;
+        mapYardIds = [yid];
       }
       if (body.entityCode !== undefined) {
         const incoming = String(body.entityCode ?? "").trim();
@@ -695,11 +1019,21 @@ export function registerTradersAssetsRoutes(app: Express) {
       const nextStatus = updates.status !== undefined ? String(updates.status ?? "") : String(existing.status ?? "");
       const needsEntityCode =
         !String(existing.entityCode ?? "").trim() && nextStatus === "Active";
+      const ts = String(updates.updatedAt ?? now());
       await db.transaction(async (tx) => {
         if (needsEntityCode) {
           (updates as Record<string, unknown>).entityCode = await nextEntityPublicCodeTx(tx);
         }
         await tx.update(entities).set(updates as Record<string, string | null>).where(eq(entities.id, id));
+        if (mapYardIds && mapYardIds.length > 0) {
+          await upsertActiveMappings(tx as any, {
+            entityId: id,
+            yardIds: mapYardIds,
+            createdBy: req.user?.id ?? null,
+            ts,
+            setHomeYard: true,
+          });
+        }
       });
       if (nextStatus && nextStatus !== "Active") {
         await disablePortalAccessForUnifiedEntity(`TB:${id}`, req.user?.id ?? null).catch((e) =>
@@ -707,8 +1041,18 @@ export function registerTradersAssetsRoutes(app: Express) {
         );
       }
       const [row] = await db.select().from(entities).where(eq(entities.id, id));
-      if (row) writeAuditLog(req, { module: "Traders", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) => console.error("Audit log failed:", e));
-      res.json(row);
+      const mappedYards = await listMappedYardsForEntity(id);
+      const payload = row ? { ...row, mappedYards } : null;
+      if (payload) {
+        writeAuditLog(req, {
+          module: "Traders",
+          action: "Update",
+          recordId: id,
+          beforeValue: existing,
+          afterValue: payload,
+        }).catch((e) => console.error("Audit log failed:", e));
+      }
+      res.json(payload);
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update entity");
@@ -724,7 +1068,9 @@ export function registerTradersAssetsRoutes(app: Express) {
       const id = req.params.id;
       const [existing] = await db.select().from(entities).where(eq(entities.id, id)).limit(1);
       if (!existing) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
-      if (!yardInScope(req, existing.yardId)) return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      if (!(await entityAccessibleInScope(req, existing.id, existing.yardId))) {
+        return sendApiError(res, 404, "ENTITY_NOT_FOUND", "Entity not found");
+      }
 
       const links = await countEntityFinancialLinks(id);
       if (entityHasFinancialLinks(links)) {
@@ -743,6 +1089,7 @@ export function registerTradersAssetsRoutes(app: Express) {
 
       await db.transaction(async (tx) => {
         await tx.delete(entityAllotments).where(eq(entityAllotments.entityId, id));
+        await tx.delete(entityLocationMappings).where(eq(entityLocationMappings.entityId, id));
         await tx.delete(entities).where(eq(entities.id, id));
       });
 

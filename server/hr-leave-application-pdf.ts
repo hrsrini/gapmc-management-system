@@ -375,14 +375,14 @@ function renderForm1(
     doc,
     "(i)",
     "The difference between the leave salary drawn during the commuted leave and that admissible during the half pay leave which would not have been admissible had sub-rule (1) of rule 30 not been applied",
-    blankOr(ctx.refundUndertakingI),
+    blankOr(ctx.refundUndertakingI, "Not Applicable"),
     { labelWidth: 320 },
   );
   form1Row(
     doc,
     "(ii)",
     "The leave salary during the leave which would not have been admissible had sub-rule (1) of rule 31 not been applied",
-    blankOr(ctx.refundUndertakingIi),
+    blankOr(ctx.refundUndertakingIi, "Not Applicable"),
     { labelWidth: 320 },
   );
   form1FullWidth(doc, "(Score out whichever be not applicable)", { size: 8, gapAfter: 8 });

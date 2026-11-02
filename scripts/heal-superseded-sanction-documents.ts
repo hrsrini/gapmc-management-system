@@ -30,8 +30,9 @@ async function linkDoc(
   if (!isAllowedEmployeeDocumentFileName(stored)) return "skipped";
   await writeEmployeeDocumentBuffer(employeeId, stored, buffer);
   const blobKey = `employees/${employeeId}/${stored}`;
+  // ASCII hyphen only — Node rejects non-ASCII Content-Disposition on download.
   const displayName = superseded
-    ? `Leave Sanction Order — Superseded (${fileNo}).pdf`
+    ? `Leave Sanction Order - Superseded (${fileNo}).pdf`
     : `Leave Sanction Order (${fileNo}).pdf`;
   const docType = superseded ? "Leave Sanction Order (Superseded)" : "Leave Sanction Order";
   const [existing] = await db

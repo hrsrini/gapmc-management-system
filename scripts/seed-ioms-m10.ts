@@ -21,7 +21,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { SYSTEM_CONFIG_DEFAULTS } from "../shared/system-config-defaults";
 
-/** BR-USR-10 compliant (≥12 chars, mixed case, digit, special) — change in production. */
+/** Admin password policy (≥15 chars, mixed case, digit, special) — change in production. */
 const DEFAULT_ADMIN_PASSWORD = "GapmcAdmin@2026!";
 
 const LOCATIONS = [

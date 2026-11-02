@@ -28,6 +28,14 @@ export default function Login() {
     setIsLoading(true);
     const result = await login(loginId, password, mfaRequired ? mfaCode : undefined);
     if (result.ok) {
+      if (result.forcePasswordChange) {
+        toast({
+          title: 'Password change required',
+          description: 'You must set a new password before continuing.',
+        });
+        window.location.href = '/change-password';
+        return;
+      }
       toast({
         title: 'Welcome back!',
         description: 'You have successfully signed in.',

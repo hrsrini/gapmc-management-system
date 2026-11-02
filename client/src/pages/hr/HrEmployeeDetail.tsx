@@ -383,7 +383,11 @@ export default function HrEmployeeDetail() {
                 Download
               </a>
             </Button>
-            {(canUpdate || canCreate) && (
+            {(canUpdate || canCreate) &&
+              !String(d.docType ?? "")
+                .trim()
+                .toLowerCase()
+                .startsWith("leave sanction order") && (
               <Button
                 size="sm"
                 variant="destructive"

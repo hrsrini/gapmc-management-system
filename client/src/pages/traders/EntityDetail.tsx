@@ -72,6 +72,19 @@ import {
   type PaymentPreferenceValue,
 } from "@/lib/duesCounterPayment";
 import { downloadIomsReceiptPdf } from "@/lib/downloadIomsReceiptPdf";
+import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
+
+type MappedYard = {
+  mappingId?: string;
+  yardId: string;
+  yardName?: string | null;
+  yardCode?: string | null;
+  status: string;
+  effectiveFrom?: string | null;
+  effectiveTo?: string | null;
+  unmappedReason?: string | null;
+};
 
 interface Entity {
   id: string;
@@ -86,6 +99,7 @@ interface Entity {
   email?: string | null;
   address?: string | null;
   status: string;
+  mappedYards?: MappedYard[];
 }
 
 interface EntitySubtypeRef {
@@ -175,12 +189,27 @@ export default function EntityDetail() {
   const { data: yards = [] } = useQuery<Array<{ id: string; name?: string | null; code?: string | null }>>({
     queryKey: ["/api/yards"],
   });
+  const { data: scopedYards = [] } = useScopedActiveYards();
+  const yardOptions = useMemo(() => filterYardTypeLocations(scopedYards), [scopedYards]);
   const yardDisplayName = useMemo(() => {
     if (!entity?.yardId) return "—";
     const y = yards.find((x) => x.id === entity.yardId);
     if (!y) return entity.yardId;
     return (y.name?.trim() || y.code?.trim() || y.id) as string;
   }, [yards, entity?.yardId]);
+
+  const activeMappedYards = useMemo(
+    () => (entity?.mappedYards ?? []).filter((m) => m.status === "Active"),
+    [entity?.mappedYards],
+  );
+  const inactiveMappedYards = useMemo(
+    () => (entity?.mappedYards ?? []).filter((m) => m.status !== "Active"),
+    [entity?.mappedYards],
+  );
+  const addableYards = useMemo(() => {
+    const activeIds = new Set(activeMappedYards.map((m) => m.yardId));
+    return yardOptions.filter((y) => !activeIds.has(y.id));
+  }, [yardOptions, activeMappedYards]);
 
   const { data: allotments = [] } = useQuery<Allotment[]>({
     queryKey: [id ? `/api/ioms/entity-allotments?entityId=${encodeURIComponent(id)}` : ""],
@@ -191,10 +220,34 @@ export default function EntityDetail() {
       return res.json();
     },
   });
-  const vacantUrl = entity?.yardId ? `/api/ioms/assets/vacant?yardId=${encodeURIComponent(entity.yardId)}` : "";
+
+  const [allotmentYardId, setAllotmentYardId] = useState("");
+  const [mapYardIds, setMapYardIds] = useState<string[]>([]);
+  const [unmapTarget, setUnmapTarget] = useState<MappedYard | null>(null);
+  const [unmapReason, setUnmapReason] = useState("");
+  const [unmapEffectiveTo, setUnmapEffectiveTo] = useState(() => localCalendarYmd());
+
+  const [open, setOpen] = useState(false);
+  const [assetId, setAssetId] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    const preferred =
+      (allotmentYardId && activeMappedYards.some((m) => m.yardId === allotmentYardId) && allotmentYardId) ||
+      activeMappedYards.find((m) => m.yardId === entity?.yardId)?.yardId ||
+      activeMappedYards[0]?.yardId ||
+      "";
+    setAllotmentYardId(preferred);
+    setAssetId("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, entity?.yardId, activeMappedYards]);
+
+  const vacantUrl = allotmentYardId
+    ? `/api/ioms/assets/vacant?yardId=${encodeURIComponent(allotmentYardId)}`
+    : "";
   const { data: vacantRows = [] } = useQuery<VacantAssetRow[]>({
     queryKey: [vacantUrl],
-    enabled: !!entity?.yardId,
+    enabled: !!allotmentYardId && open,
     queryFn: async () => {
       const res = await fetch(vacantUrl, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load vacant premises");
@@ -216,8 +269,6 @@ export default function EntityDetail() {
   const assetDisplayById = useMemo(() => buildAssetDisplayByRowId(allPremisesAssets), [allPremisesAssets]);
   const vacantByAssetPk = useMemo(() => Object.fromEntries(vacantRows.map((r) => [r.asset.id, r])), [vacantRows]);
 
-  const [open, setOpen] = useState(false);
-  const [assetId, setAssetId] = useState("");
   const [allotmentDate, setAllotmentDate] = useState("");
   const [allotmentRefNo, setAllotmentRefNo] = useState("");
   const [fromDate, setFromDate] = useState("");
@@ -347,6 +398,56 @@ export default function EntityDetail() {
       toast({ title: "Saved", description: "Entity register updated." });
     },
     onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
+  });
+
+  const mapLocationsMutation = useMutation({
+    mutationFn: async (yardIdsToAdd: string[]) => {
+      const res = await fetch(`/api/ioms/entities/${encodeURIComponent(id!)}/location-mappings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ yardIds: yardIdsToAdd }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return (await res.json()) as Entity;
+    },
+    onSuccess: (row) => {
+      queryClient.setQueryData(["/api/ioms/entities", id], row);
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/entities"] });
+      setMapYardIds([]);
+      toast({ title: "Locations mapped" });
+    },
+    onError: (e: Error) => toast({ title: "Map failed", description: e.message, variant: "destructive" }),
+  });
+
+  const unmapLocationMutation = useMutation({
+    mutationFn: async (vars: { yardId: string; reason: string; effectiveTo: string }) => {
+      const res = await fetch(
+        `/api/ioms/entities/${encodeURIComponent(id!)}/location-mappings/${encodeURIComponent(vars.yardId)}/unmap`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ reason: vars.reason, effectiveTo: vars.effectiveTo || null }),
+        },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return (await res.json()) as Entity;
+    },
+    onSuccess: (row) => {
+      queryClient.setQueryData(["/api/ioms/entities", id], row);
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/entities"] });
+      setUnmapTarget(null);
+      setUnmapReason("");
+      toast({ title: "Location unmapped", description: "Existing allotments at that location remain valid." });
+    },
+    onError: (e: Error) => toast({ title: "Unmap failed", description: e.message, variant: "destructive" }),
   });
 
   const setEntityStatusMutation = useMutation({
@@ -590,7 +691,15 @@ export default function EntityDetail() {
                 <div><span className="text-muted-foreground">Entity ID:</span> {entity.entityCode ?? entity.id}</div>
                 <div><span className="text-muted-foreground">Track:</span> {entity.track}</div>
                 <div><span className="text-muted-foreground">Sub-type:</span> {entity.subType ?? "—"}</div>
-                <div><span className="text-muted-foreground">Yard:</span> {yardDisplayName}</div>
+                <div>
+                  <span className="text-muted-foreground">Home yard:</span> {yardDisplayName}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-muted-foreground">Mapped locations:</span>{" "}
+                  {activeMappedYards.length
+                    ? activeMappedYards.map((m) => m.yardName || m.yardCode || m.yardId).join(", ")
+                    : yardDisplayName}
+                </div>
                 <div><span className="text-muted-foreground">Mobile:</span> {entity.mobile ?? "—"}</div>
                 <div>
                   <span className="text-muted-foreground">Status:</span>{" "}
@@ -797,6 +906,100 @@ export default function EntityDetail() {
           )}
 
           <Card className="mt-6">
+            <CardHeader>
+              <CardTitle>Mapped locations</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Map this Entity to one or more locations. Premises allotment is available only for Active mappings.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                {activeMappedYards.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No active location mappings.</p>
+                ) : (
+                  activeMappedYards.map((m) => (
+                    <div
+                      key={m.yardId}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
+                    >
+                      <div>
+                        <span className="font-medium">{m.yardName || m.yardCode || m.yardId}</span>
+                        {m.yardId === entity.yardId ? (
+                          <Badge variant="secondary" className="ml-2">
+                            Home
+                          </Badge>
+                        ) : null}
+                        <Badge className="ml-2">Active</Badge>
+                      </div>
+                      {canUpdate && activeMappedYards.length > 1 ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setUnmapTarget(m);
+                            setUnmapReason("");
+                            setUnmapEffectiveTo(localCalendarYmd());
+                          }}
+                        >
+                          Unmap
+                        </Button>
+                      ) : null}
+                    </div>
+                  ))
+                )}
+              </div>
+              {inactiveMappedYards.length > 0 ? (
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">Previously unmapped</p>
+                  {inactiveMappedYards.map((m) => (
+                    <div key={`inact-${m.yardId}`} className="text-xs text-muted-foreground">
+                      {m.yardName || m.yardCode || m.yardId}
+                      {m.unmappedReason ? ` — ${m.unmappedReason}` : ""}
+                      {m.effectiveTo ? ` (to ${m.effectiveTo})` : ""}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {canUpdate && addableYards.length > 0 ? (
+                <div className="rounded-md border p-3 space-y-2">
+                  <p className="text-sm font-medium">Add location mapping</p>
+                  <div className="max-h-36 overflow-y-auto space-y-2">
+                    {addableYards.map((y) => {
+                      const checked = mapYardIds.includes(y.id);
+                      return (
+                        <label key={y.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(c) => {
+                              setMapYardIds((prev) =>
+                                c === true ? [...prev, y.id] : prev.filter((x) => x !== y.id),
+                              );
+                            }}
+                          />
+                          <span>{y.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={mapLocationsMutation.isPending || mapYardIds.length === 0}
+                    onClick={() => mapLocationsMutation.mutate(mapYardIds)}
+                  >
+                    {mapLocationsMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      "Map selected"
+                    )}
+                  </Button>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="mt-6">
             <CardHeader className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
               <div>
                 <CardTitle>Premises allocations ({allotments.length})</CardTitle>
@@ -804,7 +1007,7 @@ export default function EntityDetail() {
                   DO drafts an allocation with rent and dates; DV verifies once the agreement copy (PDF) is uploaded; DA approves and assigns the premises reference.
                 </p>
               </div>
-              {canCreate && entity.status === "Active" && (
+              {canCreate && entity.status === "Active" && activeMappedYards.length > 0 && (
                 <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
                   <Plus className="h-4 w-4 mr-1" /> Add allotment
                 </Button>
@@ -836,15 +1039,41 @@ export default function EntityDetail() {
           </DialogHeader>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="md:col-span-2 space-y-1">
-              <Label>Vacant premises in this yard *</Label>
+              <Label>Location *</Label>
+              <Select
+                value={allotmentYardId || "__pick__"}
+                onValueChange={(v) => {
+                  setAllotmentYardId(v === "__pick__" ? "" : v);
+                  setAssetId("");
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select mapped location" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__pick__">Select…</SelectItem>
+                  {activeMappedYards.map((m) => (
+                    <SelectItem key={m.yardId} value={m.yardId}>
+                      {m.yardName || m.yardCode || m.yardId}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Only locations mapped to this Entity are listed.
+              </p>
+            </div>
+            <div className="md:col-span-2 space-y-1">
+              <Label>Vacant premises at selected location *</Label>
               <LocalSearchSelect
                 value={assetId}
                 onValueChange={setAssetId}
                 options={vacantPremiseOptions}
-                placeholder="Select premises"
+                placeholder={allotmentYardId ? "Select premises" : "Select a location first"}
                 searchPlaceholder="Type premises id or type…"
                 emptyMessage="No matching vacant premises."
                 required
+                disabled={!allotmentYardId}
               />
               {selectedVacant?.asset ? (
                 <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-0.5">
@@ -1394,6 +1623,64 @@ export default function EntityDetail() {
               />
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={unmapTarget != null}
+        onOpenChange={(o) => {
+          if (!o) setUnmapTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Unmap location</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Unmap{" "}
+              <span className="font-medium text-foreground">
+                {unmapTarget?.yardName || unmapTarget?.yardCode || unmapTarget?.yardId}
+              </span>
+              . Existing allotments at this location remain valid; fresh allotment will not be allowed until remapped.
+            </p>
+            <div className="space-y-1">
+              <Label>Effective to</Label>
+              <Input
+                type="date"
+                value={unmapEffectiveTo}
+                onChange={(e) => setUnmapEffectiveTo(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Reason *</Label>
+              <Textarea
+                value={unmapReason}
+                onChange={(e) => setUnmapReason(e.target.value)}
+                rows={2}
+                placeholder="Reason for unmapping"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setUnmapTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={unmapLocationMutation.isPending || !unmapReason.trim() || !unmapTarget}
+              onClick={() => {
+                if (!unmapTarget) return;
+                unmapLocationMutation.mutate({
+                  yardId: unmapTarget.yardId,
+                  reason: unmapReason.trim(),
+                  effectiveTo: unmapEffectiveTo,
+                });
+              }}
+            >
+              {unmapLocationMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Unmap"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

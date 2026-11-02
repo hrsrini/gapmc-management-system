@@ -75,6 +75,8 @@
     "db:apply-agreement-documents": "dotenv -e .env -- tsx scripts/apply-agreement-documents.ts",
     "db:apply-rent-non-gst-charges": "dotenv -e .env -- tsx scripts/apply-rent-non-gst-charges.ts",
     "db:apply-m02-trackb-entities": "dotenv -e .env -- tsx scripts/apply-m02-trackb-entities.ts",
+    "db:apply-entity-location-mappings": "dotenv -e .env -- tsx scripts/apply-entity-location-mappings.ts",
+    "db:apply-users-force-password-change": "dotenv -e .env -- tsx scripts/apply-users-force-password-change.ts",
     "db:apply-m02-pre-receipts": "dotenv -e .env -- tsx scripts/apply-m02-pre-receipts.ts",
     "db:apply-pre-receipt-print-fields": "dotenv -e .env -- tsx scripts/apply-pre-receipt-print-fields.ts",
     "db:apply-receipt-deposit-workflow": "dotenv -e .env -- tsx scripts/apply-receipt-deposit-workflow.ts",

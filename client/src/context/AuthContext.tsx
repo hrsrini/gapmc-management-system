@@ -13,6 +13,9 @@ export interface AuthUser {
   yardIds?: string[];
   /** Resolved from role_permissions via assigned roles; used for permission-based access. */
   permissions?: { module: string; action: string }[];
+  /** Must change password before using the app. */
+  forcePasswordChange?: boolean;
+  isAdmin?: boolean;
 }
 
 interface LoginResult {
@@ -22,6 +25,7 @@ interface LoginResult {
   mfaRequired?: boolean;
   mfaEnrolled?: boolean;
   mfaMessage?: string;
+  forcePasswordChange?: boolean;
 }
 
 /** Map older API / proxy messages so UI always mentions username + email. */
@@ -45,6 +49,10 @@ function authUserFromApiPayload(raw: unknown): AuthUser | null {
   const u = raw as Record<string, unknown>;
   const eid = employeeIdFromApiUser(u);
   if (typeof u.id !== 'string' || typeof u.email !== 'string' || !eid) return null;
+  const isAdmin =
+    u.isAdmin === true ||
+    (Array.isArray(u.roles) &&
+      (u.roles as { tier?: string }[]).some((r) => r?.tier === 'ADMIN'));
   return {
     id: u.id,
     email: u.email,
@@ -59,6 +67,26 @@ function authUserFromApiPayload(raw: unknown): AuthUser | null {
     roles: u.roles as AuthUser['roles'],
     yardIds: u.yardIds as AuthUser['yardIds'],
     permissions: u.permissions as AuthUser['permissions'],
+    // ADMIN is exempt from mandatory password-change gating.
+    forcePasswordChange:
+      !isAdmin &&
+      (u.forcePasswordChange === true || u.force_password_change === true),
+    isAdmin,
+  };
+}
+
+/** Clear stale forcePasswordChange for ADMIN from localStorage sessions. */
+function normalizeStoredAuthUser(raw: unknown): AuthUser | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const parsed = raw as AuthUser;
+  if (!parsed?.id || !parsed?.email || typeof parsed.employeeId !== 'string') return null;
+  const isAdmin =
+    parsed.isAdmin === true ||
+    (parsed.roles ?? []).some((r) => r?.tier === 'ADMIN');
+  return {
+    ...parsed,
+    isAdmin,
+    forcePasswordChange: isAdmin ? false : parsed.forcePasswordChange === true,
   };
 }
 
@@ -72,7 +100,9 @@ interface AuthContextType {
   can: (module: string, action: PermissionAction) => boolean;
   /** `identifier` may be email address or username (case-insensitive). */
   login: (identifier: string, password: string, mfaCode?: string) => Promise<LoginResult>;
-  logout: () => void;
+  logout: () => Promise<void>;
+  /** Re-fetch /api/auth/me into context (e.g. after password change). */
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -104,8 +134,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         const stored = localStorage.getItem(AUTH_STORAGE_KEY);
         if (stored) {
-          const parsed = JSON.parse(stored) as AuthUser;
-          if (parsed?.id && parsed?.email && typeof parsed.employeeId === 'string') {
+          const parsed = normalizeStoredAuthUser(JSON.parse(stored));
+          if (parsed) {
             setUser(parsed);
             setIsAuthenticated(true);
           }
@@ -114,8 +144,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const stored = localStorage.getItem(AUTH_STORAGE_KEY);
         if (!cancelled && stored) {
           try {
-            const parsed = JSON.parse(stored) as AuthUser;
-            if (parsed?.id && parsed?.email && typeof parsed.employeeId === 'string') {
+            const parsed = normalizeStoredAuthUser(JSON.parse(stored));
+            if (parsed) {
               setUser(parsed);
               setIsAuthenticated(true);
             }
@@ -183,10 +213,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authUser));
       setUser(authUser);
       setIsAuthenticated(true);
-      return { ok: true };
+      return { ok: true, forcePasswordChange: authUser.forcePasswordChange === true };
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Network or server error';
       return { ok: false, error: msg };
+    }
+  };
+
+  const refreshUser = async () => {
+    try {
+      const res = await fetch('/api/auth/me', { credentials: 'include' });
+      if (!res.ok) {
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+        setUser(null);
+        setIsAuthenticated(false);
+        return;
+      }
+      const data = await res.json();
+      const authUser = authUserFromApiPayload(data?.user);
+      if (authUser) {
+        setUser(authUser);
+        setIsAuthenticated(true);
+        localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authUser));
+      }
+    } catch {
+      /* ignore */
     }
   };
 
@@ -208,7 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user]);
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, isLoading, user, can, login, logout }}>
+    <AuthContext.Provider value={{ isAuthenticated, isLoading, user, can, login, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

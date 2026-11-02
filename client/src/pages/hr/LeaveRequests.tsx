@@ -652,8 +652,8 @@ export default function LeaveRequests() {
   const [newAddress, setNewAddress] = useState("");
   const [newLtc, setNewLtc] = useState(false);
   const [newLtcBlockYear, setNewLtcBlockYear] = useState("");
-  const [newRefundI, setNewRefundI] = useState("");
-  const [newRefundIi, setNewRefundIi] = useState("");
+  const [newRefundI, setNewRefundI] = useState("Not Applicable");
+  const [newRefundIi, setNewRefundIi] = useState("Not Applicable");
   const [newLeaveHq, setNewLeaveHq] = useState("");
   const [newDutyDate, setNewDutyDate] = useState("");
   const [newExPostFacto, setNewExPostFacto] = useState(false);
@@ -959,8 +959,8 @@ export default function LeaveRequests() {
       setNewAddress("");
       setNewLtc(false);
       setNewLtcBlockYear("");
-      setNewRefundI("");
-      setNewRefundIi("");
+      setNewRefundI("Not Applicable");
+      setNewRefundIi("Not Applicable");
       setNewLeaveHq("");
       setNewDutyDate("");
       setNewExPostFacto(false);
@@ -1874,7 +1874,7 @@ export default function LeaveRequests() {
                       value={newRefundI}
                       onChange={(e) => setNewRefundI(e.target.value)}
                       rows={2}
-                      placeholder="User entry for Form-1 item 12(i) — leave blank if not applicable"
+                      placeholder="Not Applicable"
                     />
                   </div>
                   <p className="text-xs text-muted-foreground">
@@ -1887,7 +1887,7 @@ export default function LeaveRequests() {
                       value={newRefundIi}
                       onChange={(e) => setNewRefundIi(e.target.value)}
                       rows={2}
-                      placeholder="User entry for Form-1 item 12(ii) — leave blank if not applicable"
+                      placeholder="Not Applicable"
                     />
                   </div>
                   <p className="text-xs text-muted-foreground">(Score out whichever be not applicable)</p>
@@ -2073,8 +2073,8 @@ export default function LeaveRequests() {
                   addressDuringLeave: newAddress.trim() || null,
                   ltcProposed: newLtc,
                   ltcBlockYear: newLtcBlockYear.trim() || null,
-                  refundUndertakingI: newRefundI.trim() || null,
-                  refundUndertakingIi: newRefundIi.trim() || null,
+                  refundUndertakingI: newRefundI.trim() || "Not Applicable",
+                  refundUndertakingIi: newRefundIi.trim() || "Not Applicable",
                   leaveHq: newLeaveHq.trim() || null,
                   dutyDateForSplH: newDutyDate || null,
                   copyToJson: null,

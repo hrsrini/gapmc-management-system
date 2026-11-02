@@ -47,6 +47,10 @@ import {
   readEntityAllotmentAgreementBuffer,
   writeEntityAllotmentAgreementBuffer,
 } from "./entity-allotment-agreement-storage";
+import {
+  entityAccessibleInScope,
+  entityHasActiveMapping,
+} from "./entity-location-mappings";
 
 type EntityAllotmentAgreementUploadFile = { buffer: Buffer; mimetype: string; originalname?: string };
 
@@ -173,12 +177,25 @@ export function registerEntityAllotmentRoutes(app: Express) {
       if (String(ent.status ?? "").trim() !== "Active") {
         return sendApiError(res, 400, "ENTITY_INACTIVE", "Entity must be Active to allocate premises.");
       }
-      if (!yardInScope(req, ent.yardId)) return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this entity yard");
+      if (!(await entityAccessibleInScope(req, ent.id, ent.yardId))) {
+        return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this entity");
+      }
 
       const assetRow = await fetchAssetForAllocationGuard(assetId);
       if (!assetRow) return sendApiError(res, 404, "ASSET_NOT_FOUND", "Premises / asset not found");
       if (!yardInScope(req, assetRow.yardId))
         return sendApiError(res, 403, "ASSET_YARD_ACCESS_DENIED", "You do not have access to this asset's yard");
+
+      const mappedOk = await entityHasActiveMapping(ent.id, assetRow.yardId);
+      if (!mappedOk) {
+        return sendApiError(
+          res,
+          400,
+          "ENTITY_LOCATION_NOT_MAPPED",
+          "Premises location is not mapped to this Entity. Add the location mapping first.",
+          { entityId: ent.id, yardId: assetRow.yardId },
+        );
+      }
 
       const allocPrem = isPremisesAllocatable({
         isActive: assetRow.isActive,

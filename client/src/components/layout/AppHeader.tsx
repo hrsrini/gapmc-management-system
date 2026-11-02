@@ -171,8 +171,18 @@ export function AppHeader({ breadcrumbs = [] }: AppHeaderProps) {
               <User className="h-4 w-4 mr-2" />
               Profile
             </DropdownMenuItem>
+            {!user?.isAdmin && !user?.roles?.some((r) => r.tier === "ADMIN") ? (
+              <DropdownMenuItem
+                data-testid="menu-change-password"
+                onClick={() => {
+                  window.location.href = "/change-password";
+                }}
+              >
+                Change password
+              </DropdownMenuItem>
+            ) : null}
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={logout} className="text-destructive" data-testid="menu-logout">
+            <DropdownMenuItem onClick={() => void logout()} className="text-destructive" data-testid="menu-logout">
               <LogOut className="h-4 w-4 mr-2" />
               Sign Out
             </DropdownMenuItem>

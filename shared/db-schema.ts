@@ -18,6 +18,7 @@ import {
   jsonb,
   primaryKey,
   timestamp,
+  unique,
 } from "drizzle-orm/pg-core";
 
 export const gapmc = pgSchema("gapmc");
@@ -228,6 +229,11 @@ export const users = gapmc.table("users", {
   /** Required for all sessions: must reference employees.id (enforced in loadAuthUser + HR login APIs). */
   employeeId: text("employee_id"),
   passwordHash: text("password_hash"),
+  /**
+   * When true, user must change password before accessing the app
+   * (first login / admin reset / existing-user migration).
+   */
+  forcePasswordChange: boolean("force_password_change").notNull().default(true),
   isActive: boolean("is_active").default(true),
   /** Set when account is disabled (employment ended or admin); cleared when re-enabled. US-M10-001 / §1.4. */
   disabledAt: text("disabled_at"),
@@ -752,9 +758,9 @@ export const leaveRequests = gapmc.table("leave_requests", {
   ltcProposed: boolean("ltc_proposed").default(false),
   /** Form-1 item 10: LTC block year (user-entered, e.g. 2024-2027). */
   ltcBlockYear: text("ltc_block_year"),
-  /** Form-1 item 12(i): refund undertaking text (user-entered; blank allowed). */
+  /** Form-1 item 12(i): refund undertaking text (default "Not Applicable"). */
   refundUndertakingI: text("refund_undertaking_i"),
-  /** Form-1 item 12(ii): refund undertaking text (user-entered; blank allowed). */
+  /** Form-1 item 12(ii): refund undertaking text (default "Not Applicable"). */
   refundUndertakingIi: text("refund_undertaking_ii"),
   /** Leave headquarters / destination. */
   leaveHq: text("leave_hq"),
@@ -1072,6 +1078,7 @@ export const entities = gapmc.table("entities", {
   track: text("track").notNull(), // TrackA | TrackB
   subType: text("sub_type"),
   name: text("name").notNull(),
+  /** Home/primary yard (first Active mapping); kept for legacy filters/reports. */
   yardId: text("yard_id").notNull(),
   pan: text("pan"),
   gstin: text("gstin"),
@@ -1082,6 +1089,29 @@ export const entities = gapmc.table("entities", {
   createdAt: text("created_at"),
   updatedAt: text("updated_at"),
 });
+
+/**
+ * M-02 Entity ↔ location (yard) mapping — one Entity Master may map to many locations.
+ * Unique (entity_id, yard_id); reactivate Inactive rows instead of inserting duplicates.
+ */
+export const entityLocationMappings = gapmc.table(
+  "entity_location_mappings",
+  {
+    id: text("id").primaryKey(),
+    entityId: text("entity_id").notNull(),
+    yardId: text("yard_id").notNull(),
+    /** Active | Inactive */
+    status: text("status").notNull().default("Active"),
+    effectiveFrom: text("effective_from"),
+    effectiveTo: text("effective_to"),
+    unmappedAt: text("unmapped_at"),
+    unmappedReason: text("unmapped_reason"),
+    createdBy: text("created_by"),
+    createdAt: text("created_at"),
+    updatedAt: text("updated_at"),
+  },
+  (t) => [unique("entity_location_mappings_entity_yard").on(t.entityId, t.yardId)],
+);
 
 /** M-02 Ad-hoc occupants / entities (for unified entity master). */
 export const adHocEntities = gapmc.table("ad_hoc_entities", {

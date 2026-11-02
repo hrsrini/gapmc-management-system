@@ -16,13 +16,15 @@ async function main() {
     .update(users)
     .set({
       passwordHash,
+      // ADMIN is exempt from mandatory password-change gating.
+      forcePasswordChange: false,
       updatedAt: now,
       // If the account was disabled, keep disabledAt but re-enable sign-in by default for recovery.
       isActive: true,
       disabledAt: null,
     })
     .where(eq(users.email, "admin@gapmc.local"))
-    .returning({ id: users.id, email: users.email });
+    .returning({ id: users.id, email: users.email, forcePasswordChange: users.forcePasswordChange });
 
   if (updated.length === 0) {
     console.error("No admin@gapmc.local user found.");
@@ -30,6 +32,7 @@ async function main() {
   }
   console.log("Reset password for:", updated[0]);
   console.log("New password:", DEFAULT_ADMIN_PASSWORD);
+  console.log("forcePasswordChange=false (Admin exempt from mandatory password change).");
 }
 
 main().catch((e) => {

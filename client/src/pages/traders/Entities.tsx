@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { AlertCircle, Building2, Plus, Loader2 } from "lucide-react";
@@ -36,13 +37,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { trackBShortBillingLabel } from "@shared/track-b-entity";
 import { sanitizeMobile10Input } from "@shared/india-validation";
 import { PanInput } from "@/components/inputs/PanInput";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
 import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
+
+type MappedYard = {
+  yardId: string;
+  yardName?: string | null;
+  yardCode?: string | null;
+  status: string;
+};
+
+type IdentityHit = {
+  id: string;
+  entityCode?: string | null;
+  name: string;
+  pan?: string | null;
+  gstin?: string | null;
+  status?: string | null;
+  mappedYards?: MappedYard[];
+};
 
 function entityStatusBadge(status: string) {
   const s = String(status ?? "").trim();
@@ -73,7 +91,8 @@ interface EntitySubtypeRef {
 
 export default function Entities() {
   const { toast } = useToast();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
+  const [, setLocation] = useLocation();
   const canCreate = can("M-02", "Create");
   const canUpdate = can("M-02", "Update");
   const canDelete = can("M-02", "Delete");
@@ -98,7 +117,7 @@ export default function Entities() {
 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [yardId, setYardId] = useState("");
+  const [yardIds, setYardIds] = useState<string[]>([]);
   const [track] = useState("TrackB");
   const [subType, setSubType] = useState("Govt");
   const [mobile, setMobile] = useState("");
@@ -108,6 +127,61 @@ export default function Entities() {
   const [address, setAddress] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "Active" | "Inactive">("all");
   const [deleteTarget, setDeleteTarget] = useState<Entity | null>(null);
+  const [identityHit, setIdentityHit] = useState<IdentityHit | null>(null);
+  const [identityChecking, setIdentityChecking] = useState(false);
+
+  function defaultYardSelection(): string[] {
+    const scoped = yardOptions.map((y) => y.id);
+    const userYards = (user?.yardIds ?? []).filter((id) => scoped.includes(id));
+    if (userYards.length > 0) return [userYards[0]!];
+    if (scoped.length === 1) return [scoped[0]!];
+    return [];
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    setYardIds((prev) => (prev.length > 0 ? prev : defaultYardSelection()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when dialog opens
+  }, [open, yardOptions, user?.yardIds]);
+
+  async function lookupIdentity(opts: { pan?: string; gstin?: string }) {
+    const params = new URLSearchParams();
+    if (opts.pan) params.set("pan", opts.pan);
+    if (opts.gstin) params.set("gstin", opts.gstin);
+    if (![...params.keys()].length) {
+      setIdentityHit(null);
+      return;
+    }
+    setIdentityChecking(true);
+    try {
+      const res = await fetch(`/api/ioms/entities/lookup-by-identity?${params.toString()}`, {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.found && data.entity) {
+        setIdentityHit(data.entity as IdentityHit);
+      } else {
+        setIdentityHit(null);
+      }
+    } catch {
+      /* keep prior hit */
+    } finally {
+      setIdentityChecking(false);
+    }
+  }
+
+  function toggleYard(id: string, checked: boolean) {
+    setYardIds((prev) => {
+      if (checked) {
+        if (prev.includes(id)) return prev;
+        // Keep user's default first when re-adding
+        const def = defaultYardSelection()[0];
+        if (def && id === def) return [id, ...prev.filter((x) => x !== id)];
+        return [...prev, id];
+      }
+      return prev.filter((x) => x !== id);
+    });
+  }
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -119,6 +193,13 @@ export default function Entities() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
+        const existingId = (err as { details?: { existingEntityId?: string } })?.details?.existingEntityId;
+        if (existingId) {
+          await lookupIdentity({
+            pan: body.pan ? String(body.pan) : undefined,
+            gstin: body.gstin ? String(body.gstin) : undefined,
+          });
+        }
         throw new Error((err as { error?: string }).error ?? res.statusText);
       }
       return res.json();
@@ -128,11 +209,13 @@ export default function Entities() {
       toast({ title: "Entity created" });
       setOpen(false);
       setName("");
+      setYardIds([]);
       setMobile("");
       setPan("");
       setGstin("");
       setEmail("");
       setAddress("");
+      setIdentityHit(null);
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
@@ -346,7 +429,21 @@ export default function Entities() {
               </SelectContent>
             </Select>
             {canCreate && (
-              <Button size="sm" onClick={() => setOpen(true)}>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setName("");
+                  setMobile("");
+                  setPan("");
+                  setGstin("");
+                  setEmail("");
+                  setAddress("");
+                  setSubType("Govt");
+                  setIdentityHit(null);
+                  setYardIds(defaultYardSelection());
+                  setOpen(true);
+                }}
+              >
                 <Plus className="h-4 w-4 mr-1" />
                 New entity
               </Button>
@@ -428,17 +525,29 @@ export default function Entities() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label>Yard *</Label>
-              <Select value={yardId || "__pick__"} onValueChange={(v) => setYardId(v === "__pick__" ? "" : v)}>
-                <SelectTrigger><SelectValue placeholder="Select yard" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__pick__">Select…</SelectItem>
-                  {yardOptions.map((y) => (
-                    <SelectItem key={y.id} value={y.id}>{y.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="md:col-span-2 space-y-2">
+              <Label>Locations (yards) *</Label>
+              <p className="text-xs text-muted-foreground">
+                Select one or more locations to map. Your assigned location is selected by default.
+              </p>
+              <div className="max-h-40 overflow-y-auto rounded-md border p-2 space-y-2">
+                {yardOptions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No locations available.</p>
+                ) : (
+                  yardOptions.map((y) => {
+                    const checked = yardIds.includes(y.id);
+                    return (
+                      <label key={y.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(c) => toggleYard(y.id, c === true)}
+                        />
+                        <span>{y.name}</span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
             </div>
             <div className="space-y-1">
               <Label>Mobile</Label>
@@ -452,12 +561,87 @@ export default function Entities() {
             </div>
             <div className="space-y-1">
               <Label>PAN</Label>
-              <PanInput id="entity-create-pan" value={pan} onChange={setPan} />
+              <PanInput
+                id="entity-create-pan"
+                value={pan}
+                onChange={(v) => {
+                  setPan(v);
+                  setIdentityHit(null);
+                }}
+                onBlurCheckUniqueness={async (p) => {
+                  await lookupIdentity({ pan: p, gstin: gstin.trim() || undefined });
+                  const res = await fetch(
+                    `/api/identity/pan/check?pan=${encodeURIComponent(p)}`,
+                    { credentials: "include" },
+                  );
+                  const data = await res.json().catch(() => ({}));
+                  if (!res.ok) return { ok: false, message: (data as { error?: string }).error ?? "PAN check failed" };
+                  if (data?.ok === false) return { ok: false, message: data.message ?? "PAN is already in use." };
+                  return { ok: true };
+                }}
+              />
             </div>
             <div className="space-y-1 md:col-span-2">
               <Label>GSTIN</Label>
-              <Input value={gstin} onChange={(e) => setGstin(e.target.value)} placeholder="Optional" />
+              <Input
+                value={gstin}
+                onChange={(e) => {
+                  setGstin(e.target.value.toUpperCase());
+                  setIdentityHit(null);
+                }}
+                onBlur={() => {
+                  const g = gstin.trim();
+                  if (g.length >= 15) void lookupIdentity({ gstin: g, pan: pan.trim() || undefined });
+                }}
+                placeholder="Optional"
+                maxLength={15}
+              />
             </div>
+            {identityChecking && (
+              <p className="md:col-span-2 text-xs text-muted-foreground flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" /> Checking existing entity…
+              </p>
+            )}
+            {identityHit && (
+              <div className="md:col-span-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 space-y-2 text-sm">
+                <p className="font-medium text-amber-900 dark:text-amber-100">
+                  An entity with the same PAN/GSTIN already exists. Reuse it instead of creating a duplicate.
+                </p>
+                <div className="grid gap-1 text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Name:</span> {identityHit.name}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Entity ID:</span>{" "}
+                    {identityHit.entityCode ?? identityHit.id}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">PAN:</span> {identityHit.pan ?? "—"}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">GSTIN:</span> {identityHit.gstin ?? "—"}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Mapped locations:</span>{" "}
+                    {(identityHit.mappedYards ?? [])
+                      .filter((m) => m.status === "Active")
+                      .map((m) => m.yardName || m.yardCode || m.yardId)
+                      .join(", ") || "—"}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setOpen(false);
+                    setLocation(`/traders/entities/${encodeURIComponent(identityHit.id)}`);
+                  }}
+                >
+                  Open existing entity
+                </Button>
+              </div>
+            )}
             <div className="space-y-1 md:col-span-2">
               <Label>Email</Label>
               <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Optional" />
@@ -471,11 +655,17 @@ export default function Entities() {
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
             <Button
               type="button"
-              disabled={createMutation.isPending || !name.trim() || !yardId}
+              disabled={
+                createMutation.isPending ||
+                !name.trim() ||
+                yardIds.length === 0 ||
+                Boolean(identityHit)
+              }
               onClick={() =>
                 createMutation.mutate({
                   name: name.trim(),
-                  yardId,
+                  yardIds,
+                  yardId: yardIds[0],
                   track,
                   subType: subType.trim() || null,
                   mobile: mobile.trim() || null,

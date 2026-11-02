@@ -1,12 +1,12 @@
 /**
- * Auth API: login against gapmc.users (M-10), session, me, logout.
+ * Auth API: login against gapmc.users (M-10), session, me, logout, change-password.
  * Login and me return full AuthUser including permissions (from role_permissions).
  *
  * Login + logout are registered *before* requireAuthApi (see routes.ts) so they are not
  * affected by auth middleware ordering. Login awaits session.save (Express 5 async safety).
  */
 import type { Express, Request } from "express";
-import { compare } from "bcryptjs";
+import { compare, hash } from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { sendApiError } from "./api-errors";
 import { loadAuthUser, type AuthUser } from "./auth";
@@ -15,10 +15,22 @@ import { db } from "./db";
 import { employees, roles, userRoles, users } from "@shared/db-schema";
 import speakeasy from "speakeasy";
 import { getMergedSystemConfig } from "./system-config";
+import {
+  passwordForbiddenIdentityFragments,
+  passwordPolicyBrUsr10Hint,
+  passwordMinLength,
+} from "@shared/password-policy-br-usr-10";
+import { assertPasswordComplexityBrUsr10, HrEmployeeRuleError } from "./hr-employee-rules";
 
 function saveSession(req: Request): Promise<void> {
   return new Promise((resolve, reject) => {
     req.session.save((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+function destroySession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.destroy((err) => (err ? reject(err) : resolve()));
   });
 }
 
@@ -37,6 +49,9 @@ function authUserToJson(u: AuthUser) {
     roles: u.roles,
     yardIds: u.yardIds,
     permissions: u.permissions,
+    forcePasswordChange: u.forcePasswordChange === true,
+    force_password_change: u.forcePasswordChange === true,
+    isAdmin: u.isAdmin === true,
   };
 }
 
@@ -267,5 +282,146 @@ export function registerAuthMeRoute(app: Express) {
       return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
     }
     return res.json({ user: authUserToJson(req.user) });
+  });
+
+  /** Password policy hint for the logged-in user (Admin vs Employee length). */
+  app.get("/api/auth/password-policy", (req, res) => {
+    if (!req.user) {
+      return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+    }
+    const isAdmin = req.user.isAdmin === true;
+    return res.json({
+      isAdmin,
+      minLength: passwordMinLength(isAdmin),
+      hint: passwordPolicyBrUsr10Hint(isAdmin),
+      forcePasswordChange: req.user.forcePasswordChange === true,
+      /** Voluntary change is allowed for non-Admin only (FRD §6). Force-change is always allowed. */
+      canVoluntaryChange: !isAdmin,
+    });
+  });
+
+  /**
+   * Change password (mandatory first-login / admin-reset, or voluntary for non-Admin employees).
+   * On success: clears force flag, destroys session → client redirects to login.
+   */
+  app.post("/api/auth/change-password", async (req, res) => {
+    try {
+      if (!req.user) {
+        return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      }
+      const isAdmin = req.user.isAdmin === true;
+      const force = req.user.forcePasswordChange === true;
+      // FRD §6: Admin users must not change password through normal logged-in app,
+      // except when a temporary password requires mandatory change.
+      if (isAdmin && !force) {
+        return sendApiError(
+          res,
+          403,
+          "AUTH_ADMIN_PASSWORD_CHANGE_DENIED",
+          "Admin users cannot change password through the application. Contact the designated administrator for password recovery.",
+        );
+      }
+
+      const body = req.body ?? {};
+      const currentPassword = typeof body.currentPassword === "string" ? body.currentPassword : "";
+      const newPassword = typeof body.newPassword === "string" ? body.newPassword : "";
+      const confirmPassword = typeof body.confirmPassword === "string" ? body.confirmPassword : "";
+
+      if (!currentPassword || !newPassword || !confirmPassword) {
+        return sendApiError(
+          res,
+          400,
+          "AUTH_PASSWORD_FIELDS_REQUIRED",
+          "Current password, new password, and confirm password are required.",
+        );
+      }
+      if (newPassword !== confirmPassword) {
+        return sendApiError(
+          res,
+          400,
+          "AUTH_PASSWORD_CONFIRM_MISMATCH",
+          "New Password and Confirm Password do not match.",
+        );
+      }
+      if (newPassword === currentPassword) {
+        return sendApiError(
+          res,
+          400,
+          "AUTH_PASSWORD_SAME_AS_CURRENT",
+          "New Password must be different from the Current Password.",
+        );
+      }
+
+      const [row] = await db
+        .select({
+          id: users.id,
+          email: users.email,
+          username: users.username,
+          name: users.name,
+          passwordHash: users.passwordHash,
+          employeeId: users.employeeId,
+        })
+        .from(users)
+        .where(eq(users.id, req.user.id))
+        .limit(1);
+      if (!row?.passwordHash) {
+        return sendApiError(res, 400, "AUTH_PASSWORD_NOT_SET", "No password is set on this account.");
+      }
+      const match = await compare(currentPassword, row.passwordHash);
+      if (!match) {
+        return sendApiError(res, 400, "AUTH_CURRENT_PASSWORD_INVALID", "Current password is incorrect.");
+      }
+
+      let empId: string | null = req.user.employeeEmpId;
+      if (!empId && row.employeeId) {
+        const [emp] = await db
+          .select({ empId: employees.empId })
+          .from(employees)
+          .where(eq(employees.id, row.employeeId))
+          .limit(1);
+        empId = emp?.empId ?? null;
+      }
+
+      try {
+        assertPasswordComplexityBrUsr10(newPassword, {
+          isAdmin,
+          forbiddenSubstrings: passwordForbiddenIdentityFragments({
+            email: row.email,
+            username: row.username,
+            empId,
+            name: row.name,
+          }),
+        });
+      } catch (e) {
+        if (e instanceof HrEmployeeRuleError) {
+          return sendApiError(res, 400, e.code, e.message);
+        }
+        throw e;
+      }
+
+      const passwordHash = await hash(newPassword, 10);
+      const ts = new Date().toISOString();
+      await db
+        .update(users)
+        .set({
+          passwordHash,
+          forcePasswordChange: false,
+          updatedAt: ts,
+        })
+        .where(eq(users.id, row.id));
+
+      await destroySession(req);
+      res.clearCookie("gapmc.sid");
+
+      return res.json({
+        ok: true,
+        message:
+          "Your password has been changed successfully. For security purposes, you will be redirected to the Login page. Please log in again using your new password.",
+        redirectToLogin: true,
+      });
+    } catch (e) {
+      console.error(e);
+      return sendApiError(res, 500, "INTERNAL_ERROR", "Failed to change password");
+    }
   });
 }

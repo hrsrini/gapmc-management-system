@@ -27,7 +27,17 @@ import {
   HrEmployeeRuleError,
   normalizeMobile10,
 } from "./hr-employee-rules";
+import { passwordForbiddenIdentityFragments } from "@shared/password-policy-br-usr-10";
 import { parseAdditionalChargeYardIds } from "@shared/hr-additional-charge-locations";
+
+async function roleIdsIncludeAdmin(roleIds: string[]): Promise<boolean> {
+  if (roleIds.length === 0) return false;
+  const rows = await db
+    .select({ tier: roles.tier })
+    .from(roles)
+    .where(inArray(roles.id, roleIds));
+  return rows.some((r) => r.tier === "ADMIN");
+}
 
 /** Primary + additional charge yard IDs for app scope (user_yards). */
 export function collectEmployeeLocationYardIds(
@@ -344,15 +354,9 @@ export async function handleCreateEmployeeLogin(req: Request, res: Response, emp
       sendApiError(res, 400, "HR_LOGIN_PASSWORD_REQUIRED", "password is required");
       return;
     }
-    try {
-      assertPasswordComplexityBrUsr10(passwordStr);
-    } catch (e) {
-      if (sendHrRule(res, e)) return;
-      throw e;
-    }
-    if (Array.isArray(roleIds) && roleIds.length > 0) {
-      const ridList = roleIds.map((r) => String(r));
-      const dvDa = await assertRoleIdsNoDvDaConflict(ridList);
+    const ridListCreate = Array.isArray(roleIds) ? roleIds.map((r) => String(r)) : [];
+    if (ridListCreate.length > 0) {
+      const dvDa = await assertRoleIdsNoDvDaConflict(ridListCreate);
       if (!dvDa.ok) {
         sendApiError(res, 400, "HR_ROLE_DV_DA_CONFLICT", dvDa.message);
         return;
@@ -376,6 +380,21 @@ export async function handleCreateEmployeeLogin(req: Request, res: Response, emp
     }
     const rawU = username != null ? String(username).trim().toLowerCase() : "";
     const usernameVal = rawU === "" ? null : rawU;
+    const isAdminPwd = await roleIdsIncludeAdmin(ridListCreate);
+    try {
+      assertPasswordComplexityBrUsr10(passwordStr, {
+        isAdmin: isAdminPwd,
+        forbiddenSubstrings: passwordForbiddenIdentityFragments({
+          email: emailNorm,
+          username: usernameVal,
+          empId: emp.empId,
+          name: String(name),
+        }),
+      });
+    } catch (e) {
+      if (sendHrRule(res, e)) return;
+      throw e;
+    }
     const passwordHash = await hash(passwordStr, 10);
     const id = nanoid();
     const ts = now();
@@ -388,6 +407,8 @@ export async function handleCreateEmployeeLogin(req: Request, res: Response, emp
         phone: phoneNorm,
         employeeId: employeeIdRaw,
         passwordHash,
+        // ADMIN exempt from mandatory first-login password change.
+        forcePasswordChange: !isAdminPwd,
         isActive: true,
         disabledAt: null,
         createdAt: ts,
@@ -466,16 +487,49 @@ export async function handleUpdateEmployeeLogin(req: Request, res: Response, emp
                 ? null
                 : String(username).trim().toLowerCase(),
           };
-    let passwordUpdate: { passwordHash: string } | Record<string, never> = {};
+    let passwordUpdate: { passwordHash: string; forcePasswordChange: boolean } | Record<string, never> = {};
     if (password !== undefined && password !== null && String(password) !== "") {
       const passwordStr = String(password);
+      const nextRoleIds =
+        Array.isArray(roleIds) ? roleIds.map((r) => String(r)) : undefined;
+      let isAdminPwd = false;
+      if (nextRoleIds) {
+        isAdminPwd = await roleIdsIncludeAdmin(nextRoleIds);
+      } else {
+        const existingRoles = await db
+          .select({ tier: roles.tier })
+          .from(userRoles)
+          .innerJoin(roles, eq(roles.id, userRoles.roleId))
+          .where(eq(userRoles.userId, id));
+        isAdminPwd = existingRoles.some((r) => r.tier === "ADMIN");
+      }
+      const nextEmail =
+        email != null ? String(email).trim().toLowerCase() : String(beforeUser.email ?? "");
+      const nextUsername =
+        username === undefined
+          ? beforeUser.username
+          : username === null || String(username).trim() === ""
+            ? null
+            : String(username).trim().toLowerCase();
       try {
-        assertPasswordComplexityBrUsr10(passwordStr);
+        assertPasswordComplexityBrUsr10(passwordStr, {
+          isAdmin: isAdminPwd,
+          forbiddenSubstrings: passwordForbiddenIdentityFragments({
+            email: nextEmail,
+            username: nextUsername,
+            empId: emp.empId,
+            name: name != null ? String(name) : beforeUser.name,
+          }),
+        });
       } catch (e) {
         if (sendHrRule(res, e)) return;
         throw e;
       }
-      passwordUpdate = { passwordHash: await hash(passwordStr, 10) };
+      // Employee temp/reset → force change on next login. ADMIN accounts are exempt.
+      passwordUpdate = {
+        passwordHash: await hash(passwordStr, 10),
+        forcePasswordChange: !isAdminPwd,
+      };
     }
 
     let emailUpdate: { email: string } | Record<string, never> = {};

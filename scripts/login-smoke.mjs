@@ -72,6 +72,7 @@ for (const password of PASSWORD_CANDIDATES) {
     }
     console.log("me status", meRes.status, "me.user.employeeId", meJson?.user?.employeeId);
 
+    const forcePw = meJson?.user?.forcePasswordChange === true || loginJson?.user?.forcePasswordChange === true;
     const yardsRes = await fetchWithJar(jar, yardsUrl, { method: "GET" });
     const yardsText = await yardsRes.text();
     let yardsJson;
@@ -80,16 +81,24 @@ for (const password of PASSWORD_CANDIDATES) {
     } catch {
       yardsJson = null;
     }
-    console.log("yards status", yardsRes.status, "count", Array.isArray(yardsJson) ? yardsJson.length : "n/a");
+    console.log(
+      "yards status",
+      yardsRes.status,
+      "count",
+      Array.isArray(yardsJson) ? yardsJson.length : "n/a",
+      forcePw ? "(force password change — yards API may be blocked)" : "",
+    );
 
-    const ok =
-      meRes.ok &&
-      meJson?.user?.employeeId &&
-      yardsRes.ok &&
-      Array.isArray(yardsJson);
+    const yardsOk =
+      (yardsRes.ok && Array.isArray(yardsJson)) ||
+      (forcePw && yardsRes.status === 403 && yardsJson?.code === "AUTH_PASSWORD_CHANGE_REQUIRED");
+    const ok = meRes.ok && meJson?.user?.employeeId && yardsOk;
     if (!ok) {
       console.error("[login-smoke] FAIL after login: /me or /api/yards not OK");
       process.exit(1);
+    }
+    if (forcePw) {
+      console.log("[login-smoke] OK — password change required; change via /change-password before using the app.");
     }
     if (label === "legacy Apmc@2026") {
       console.warn(

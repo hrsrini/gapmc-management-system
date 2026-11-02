@@ -363,8 +363,9 @@ async function linkSanctionOrderToEmployeeDocuments(
   await writeEmployeeDocumentBuffer(employeeId, stored, buffer);
   const blobKey = `employees/${employeeId}/${stored}`;
   const superseded = opts?.superseded === true;
+  // ASCII-only display name: Node rejects non-ASCII Content-Disposition (em dash → 500 on View/Download).
   const displayName = superseded
-    ? `Leave Sanction Order — Superseded (${fileNo}).pdf`
+    ? `Leave Sanction Order - Superseded (${fileNo}).pdf`
     : `Leave Sanction Order (${fileNo}).pdf`;
   const docType = superseded ? "Leave Sanction Order (Superseded)" : "Leave Sanction Order";
   const ts = new Date().toISOString();
@@ -562,8 +563,17 @@ export function registerHrRoutes(app: Express) {
       }
       res.setHeader("Content-Type", contentTypeForEmployeeDocument(stored));
       res.setHeader("Cache-Control", "private, max-age=3600");
-      const safeName = (doc.fileName ?? stored).replace(/[\r\n"]/g, "_");
-      res.setHeader("Content-Disposition", `inline; filename="${safeName}"`);
+      // Node rejects non-ASCII header values (e.g. em dash in "Leave Sanction Order — Superseded …").
+      // Do not path.basename() display names — file nos like GAPLMB/415/... would truncate to "37).pdf".
+      const rawName = String(doc.fileName ?? stored)
+        .replace(/[\r\n"]/g, "_")
+        .replace(/[\\/]/g, "_");
+      const asciiName = rawName.replace(/[^\x20-\x7E]/g, "_") || stored;
+      const utf8Star = encodeURIComponent(rawName);
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${asciiName}"; filename*=UTF-8''${utf8Star}`,
+      );
       res.send(buf);
     } catch (e) {
       console.error(e);
@@ -583,7 +593,18 @@ export function registerHrRoutes(app: Express) {
       if (!doc || doc.employeeId !== employeeId) {
         return sendApiError(res, 404, "HR_EMP_DOC_NOT_FOUND", "Document not found");
       }
-      const stored = path.basename(String(doc.blobKey ?? "").replace(/\\/g, "/"));
+      // System-generated leave sanction PDFs must not be deleted from Documents.
+      const docTypeLc = String(doc.docType ?? "").trim().toLowerCase();
+      const storedName = path.basename(String(doc.blobKey ?? "").replace(/\\/g, "/"));
+      if (docTypeLc.startsWith("leave sanction order") || /^lsn-/i.test(storedName)) {
+        return sendApiError(
+          res,
+          403,
+          "HR_EMP_DOC_IMMUTABLE",
+          "Leave Sanction Orders are generated on approval and cannot be deleted.",
+        );
+      }
+      const stored = storedName;
       if (isAllowedEmployeeDocumentFileName(stored)) {
         await unlinkEmployeeDocumentIfExists(employeeId, stored);
       }
@@ -2655,11 +2676,11 @@ export function registerHrRoutes(app: Express) {
         refundUndertakingI:
           body.refundUndertakingI != null && String(body.refundUndertakingI).trim() !== ""
             ? String(body.refundUndertakingI).trim()
-            : null,
+            : "Not Applicable",
         refundUndertakingIi:
           body.refundUndertakingIi != null && String(body.refundUndertakingIi).trim() !== ""
             ? String(body.refundUndertakingIi).trim()
-            : null,
+            : "Not Applicable",
         leaveHq: body.leaveHq ? String(body.leaveHq).trim() : null,
         dutyDateForSplH: body.dutyDateForSplH
           ? normalizeIsoCalendarYmd(body.dutyDateForSplH) ?? String(body.dutyDateForSplH).trim()

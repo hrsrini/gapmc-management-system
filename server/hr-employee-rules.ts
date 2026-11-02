@@ -5,7 +5,10 @@ import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { employees } from "@shared/db-schema";
 import { INDIAN_IFSC_RE, INDIAN_MOBILE_10_RE, isStrictAadhaar12Digits } from "@shared/india-validation";
-import { getPasswordPolicyBrUsr10FirstViolation } from "@shared/password-policy-br-usr-10";
+import {
+  getPasswordPolicyBrUsr10FirstViolation,
+  type PasswordPolicyContext,
+} from "@shared/password-policy-br-usr-10";
 
 /** Official id: EMP-NNN (legacy) or EMP-NNNN (board format, e.g. EMP-0021). */
 const EMP_ID_RE = /^EMP-(\d{3,4})$/i;
@@ -79,9 +82,9 @@ export function assertWorkEmailFormat(email: string | null | undefined): void {
   }
 }
 
-/** M-10 BR-USR-10: local password policy for IOMS user accounts (create / password change). */
-export function assertPasswordComplexityBrUsr10(password: string): void {
-  const v = getPasswordPolicyBrUsr10FirstViolation(password);
+/** Password policy for IOMS user accounts (create / change / reset). */
+export function assertPasswordComplexityBrUsr10(password: string, ctx: PasswordPolicyContext = {}): void {
+  const v = getPasswordPolicyBrUsr10FirstViolation(password, ctx);
   if (v) throw new HrEmployeeRuleError("HR_LOGIN_PASSWORD_COMPLEXITY", v);
 }
 

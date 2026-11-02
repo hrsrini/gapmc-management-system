@@ -127,6 +127,10 @@ export function EmployeeLoginAccessSection({
     enabled: canM10Read,
   });
 
+  const passwordIsAdmin = useMemo(() => {
+    return roles.some((r) => selectedRoleIds.has(r.id) && r.tier === "ADMIN");
+  }, [roles, selectedRoleIds]);
+
   const {
     data: yards = [],
     isLoading: yardsLoading,
@@ -297,7 +301,7 @@ export function EmployeeLoginAccessSection({
     e?.preventDefault();
     if (isEditMode && linkedUser) {
       if (password !== "" || confirmPassword !== "") {
-        const pwdErr = getPasswordPolicyBrUsr10FirstViolation(password);
+        const pwdErr = getPasswordPolicyBrUsr10FirstViolation(password, { isAdmin: passwordIsAdmin });
         if (pwdErr) {
           toast({ title: "Password does not meet policy", description: pwdErr, variant: "destructive" });
           return;
@@ -337,7 +341,7 @@ export function EmployeeLoginAccessSection({
         isActive: employeeStatus === "Active" ? isActive : false,
         roleIds: Array.from(selectedRoleIds),
       };
-      if (!getPasswordPolicyBrUsr10FirstViolation(password)) body.password = password;
+      if (!getPasswordPolicyBrUsr10FirstViolation(password, { isAdmin: passwordIsAdmin })) body.password = password;
       updateMutation.mutate(body);
       return;
     }
@@ -350,7 +354,7 @@ export function EmployeeLoginAccessSection({
       });
       return;
     }
-    const pwdErrCreate = getPasswordPolicyBrUsr10FirstViolation(password);
+    const pwdErrCreate = getPasswordPolicyBrUsr10FirstViolation(password, { isAdmin: passwordIsAdmin });
     if (pwdErrCreate) {
       toast({ title: "Password does not meet policy", description: pwdErrCreate, variant: "destructive" });
       return;
@@ -601,8 +605,8 @@ export function EmployeeLoginAccessSection({
 
             <p className="text-xs text-muted-foreground">
               {isEditMode
-                ? `Change password only if needed; both fields must match. ${passwordPolicyBrUsr10Hint()}`
-                : `${passwordPolicyBrUsr10Hint()} User signs in with email or username plus this password.`}
+                ? `Resetting password sets a temporary password and requires change on next login. ${passwordPolicyBrUsr10Hint(passwordIsAdmin)}`
+                : `${passwordPolicyBrUsr10Hint(passwordIsAdmin)} User must change password on first sign-in.`}
             </p>
 
             {((!isEditMode && canCreate) || (isEditMode && canUpdate)) && (
