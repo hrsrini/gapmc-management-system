@@ -124,10 +124,10 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
   const invoiceDate = formatTaxInvoiceDate(invoiceDateIso);
 
   const rent = Number(invoice.rentAmount ?? 0);
-  const cgst = Number(invoice.cgst ?? 0);
-  const sgst = Number(invoice.sgst ?? 0);
-  const total = Number(invoice.totalAmount ?? 0);
   const isGstExempt = Boolean(invoice.isGovtEntity);
+  // When exempt, never print or total GST even if legacy rows stored CGST/SGST by mistake.
+  const cgst = isGstExempt ? 0 : Number(invoice.cgst ?? 0);
+  const sgst = isGstExempt ? 0 : Number(invoice.sgst ?? 0);
 
   const cgstRate =
     input.cgstPercent != null && Number.isFinite(Number(input.cgstPercent))
@@ -141,7 +141,9 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
   const nonGst = parseNonGstCharges(invoice.nonGstChargesJson);
   const nonGstSum = nonGst.reduce((s, c) => s + c.amount, 0);
   const computed = Math.round((rent + nonGstSum + cgst + sgst) * 100) / 100;
-  let roundOff = Math.round((total - computed) * 100) / 100;
+  const storedTotal = Number(invoice.totalAmount ?? 0);
+  const total = isGstExempt ? computed : storedTotal;
+  let roundOff = isGstExempt ? 0 : Math.round((storedTotal - computed) * 100) / 100;
   if (Math.abs(roundOff) < 0.005) roundOff = 0;
 
   const particularsTitle =

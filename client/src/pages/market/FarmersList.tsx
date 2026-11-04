@@ -19,12 +19,30 @@ interface Farmer {
   id: string;
   name: string;
   yardId: string;
+  farmerCode?: string | null;
+  krishiCardNo?: string | null;
+  address?: string | null;
   village?: string | null;
   taluk?: string | null;
   district?: string | null;
+  state?: string | null;
   mobile?: string | null;
   aadhaarToken?: string | null;
 }
+
+const emptyForm = () => ({
+  name: "",
+  yardId: "",
+  farmerCode: "",
+  krishiCardNo: "",
+  address: "",
+  village: "",
+  taluk: "",
+  district: "",
+  state: "Goa",
+  mobile: "",
+  aadhaarInput: "",
+});
 
 export default function FarmersList() {
   const { can } = useAuth();
@@ -35,14 +53,11 @@ export default function FarmersList() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editId, setEditId] = useState("");
-  const [name, setName] = useState("");
-  const [yardId, setYardId] = useState("");
-  const [village, setVillage] = useState("");
-  const [taluk, setTaluk] = useState("");
-  const [district, setDistrict] = useState("");
-  const [mobile, setMobile] = useState("");
-  /** Optional capture; on edit, empty = keep stored Aadhaar. */
-  const [aadhaarInput, setAadhaarInput] = useState("");
+  const [form, setForm] = useState(emptyForm);
+
+  const setField = <K extends keyof ReturnType<typeof emptyForm>>(key: K, value: ReturnType<typeof emptyForm>[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
 
   const { data: list, isLoading, isError } = useQuery<Farmer[]>({
     queryKey: ["/api/ioms/farmers"],
@@ -53,33 +68,53 @@ export default function FarmersList() {
   const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y])), [yards]);
   const yardIds = useMemo(() => new Set(yards.map((y) => y.id)), [yards]);
   const editingFarmer = useMemo(() => list?.find((f) => f.id === editId), [list, editId]);
+
   const formError = useMemo(() => {
-    if (!name.trim()) return "Name is required.";
-    if (!yardId.trim()) return "Yard ID is required.";
-    if (!yardIds.has(yardId.trim())) return "Yard ID is invalid or out of scope.";
+    if (!form.name.trim()) return "Farmer Name is required.";
+    if (!form.mobile.trim()) return "Mobile No. is required.";
+    if (!parseIndianMobile10Digits(form.mobile)) {
+      return "Mobile No. must be a valid 10-digit number (digits 0–9 only, starting with 6–9).";
+    }
+    if (!form.krishiCardNo.trim()) return "Krishi Card No. is required.";
+    if (!form.farmerCode.trim()) return "Farmer ID is required.";
+    if (!form.address.trim()) return "Address is required.";
+    if (!form.village.trim()) return "Village/Town is required.";
+    if (!form.taluk.trim()) return "Taluka is required.";
+    if (!form.district.trim()) return "District is required.";
+    if (!form.state.trim()) return "State is required.";
+    if (!form.yardId.trim()) return "Yard is required.";
+    if (!yardIds.has(form.yardId.trim())) return "Yard is invalid or out of scope.";
     return null;
-  }, [name, yardId, yardIds]);
+  }, [form, yardIds]);
+
+  const buildBody = () => {
+    const mobileNorm = parseIndianMobile10Digits(form.mobile);
+    if (!mobileNorm) throw new Error("Mobile No. must be a valid 10-digit number.");
+    const aTrim = form.aadhaarInput.trim();
+    if (aTrim && !isStrictAadhaar12Digits(aTrim)) {
+      throw new Error("Aadhaar must be exactly 12 digits when entered.");
+    }
+    const body: Record<string, unknown> = {
+      name: form.name.trim(),
+      yardId: form.yardId.trim(),
+      farmerCode: form.farmerCode.trim(),
+      krishiCardNo: form.krishiCardNo.trim(),
+      address: form.address.trim(),
+      village: form.village.trim(),
+      taluk: form.taluk.trim(),
+      district: form.district.trim(),
+      state: form.state.trim(),
+      mobile: mobileNorm,
+      requireFullMaster: true,
+    };
+    if (aTrim) body.aadhaarToken = aTrim;
+    return body;
+  };
 
   const createMutation = useMutation({
     mutationFn: async () => {
       if (formError) throw new Error(formError);
-      const mobileNorm = parseIndianMobile10Digits(mobile);
-      if (mobile.trim() && !mobileNorm) {
-        throw new Error("Mobile must be a valid 10-digit number (digits 0–9 only, starting with 6–9).");
-      }
-      const aTrim = aadhaarInput.trim();
-      if (aTrim && !isStrictAadhaar12Digits(aTrim)) {
-        throw new Error("Aadhaar must be exactly 12 digits when entered.");
-      }
-      const body: Record<string, unknown> = {
-        name,
-        yardId,
-        village,
-        taluk,
-        district,
-        mobile: mobileNorm ?? null,
-      };
-      if (aTrim) body.aadhaarToken = aTrim;
+      const body = buildBody();
       const res = await fetch("/api/ioms/farmers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -94,7 +129,7 @@ export default function FarmersList() {
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/farmers"] });
       toast({ title: "Farmer created" });
       setCreateOpen(false);
-      setName(""); setYardId(""); setVillage(""); setTaluk(""); setDistrict(""); setMobile(""); setAadhaarInput("");
+      setForm(emptyForm());
     },
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
@@ -102,23 +137,7 @@ export default function FarmersList() {
   const updateMutation = useMutation({
     mutationFn: async () => {
       if (formError) throw new Error(formError);
-      const mobileNorm = parseIndianMobile10Digits(mobile);
-      if (mobile.trim() && !mobileNorm) {
-        throw new Error("Mobile must be a valid 10-digit number (digits 0–9 only, starting with 6–9).");
-      }
-      const aTrim = aadhaarInput.trim();
-      if (aTrim && !isStrictAadhaar12Digits(aTrim)) {
-        throw new Error("Aadhaar must be exactly 12 digits when entered.");
-      }
-      const body: Record<string, unknown> = {
-        name,
-        yardId,
-        village,
-        taluk,
-        district,
-        mobile: mobileNorm ?? null,
-      };
-      if (aTrim) body.aadhaarToken = aTrim;
+      const body = buildBody();
       const res = await fetch(`/api/ioms/farmers/${editId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -140,25 +159,33 @@ export default function FarmersList() {
 
   const openEdit = useCallback((f: Farmer) => {
     setEditId(f.id);
-    setName(f.name ?? "");
-    setYardId(f.yardId ?? "");
-    setVillage(f.village ?? "");
-    setTaluk(f.taluk ?? "");
-    setDistrict(f.district ?? "");
-    setMobile(sanitizeMobile10Input(f.mobile ?? ""));
-    setAadhaarInput("");
+    setForm({
+      name: f.name ?? "",
+      yardId: f.yardId ?? "",
+      farmerCode: f.farmerCode ?? "",
+      krishiCardNo: f.krishiCardNo ?? "",
+      address: f.address ?? "",
+      village: f.village ?? "",
+      taluk: f.taluk ?? "",
+      district: f.district ?? "",
+      state: f.state ?? "Goa",
+      mobile: sanitizeMobile10Input(f.mobile ?? ""),
+      aadhaarInput: "",
+    });
     setEditOpen(true);
   }, []);
 
   const columns = useMemo((): ReportTableColumn[] => {
     const base: ReportTableColumn[] = [
-      { key: "name", header: "Name" },
-      { key: "yardName", header: "Yard" },
-      { key: "village", header: "Village" },
-      { key: "taluk", header: "Taluk" },
+      { key: "name", header: "Farmer Name" },
+      { key: "farmerCode", header: "Farmer ID" },
+      { key: "krishiCardNo", header: "Krishi Card No." },
+      { key: "mobile", header: "Mobile No." },
+      { key: "village", header: "Village/Town" },
+      { key: "taluk", header: "Taluka" },
       { key: "district", header: "District" },
-      { key: "mobile", header: "Mobile" },
-      { key: "aadhaarToken", header: "Aadhaar (masked)" },
+      { key: "state", header: "State" },
+      { key: "yardName", header: "Yard" },
     ];
     if (canUpdate) base.push({ key: "_actions", header: "Actions" });
     return base;
@@ -169,12 +196,14 @@ export default function FarmersList() {
       const row: Record<string, unknown> = {
         id: f.id,
         name: f.name,
-        yardName: yardById.get(f.yardId)?.name ?? f.yardId,
+        farmerCode: f.farmerCode ?? "—",
+        krishiCardNo: f.krishiCardNo ?? "—",
+        mobile: f.mobile ?? "—",
         village: f.village ?? "—",
         taluk: f.taluk ?? "—",
         district: f.district ?? "—",
-        mobile: f.mobile ?? "—",
-        aadhaarToken: f.aadhaarToken ?? "—",
+        state: f.state ?? "—",
+        yardName: yardById.get(f.yardId)?.name ?? f.yardId,
       };
       if (canUpdate) {
         row._actions = (
@@ -186,6 +215,88 @@ export default function FarmersList() {
       return row;
     });
   }, [list, yardById, canUpdate, openEdit]);
+
+  const farmerFields = (
+    <>
+      {formError && <p className="text-sm text-destructive">{formError}</p>}
+      <div className="space-y-1">
+        <Label>Farmer Name *</Label>
+        <Input value={form.name} onChange={(e) => setField("name", e.target.value)} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <Label>Mobile No. *</Label>
+          <Input
+            value={form.mobile}
+            onChange={(e) => setField("mobile", sanitizeMobile10Input(e.target.value))}
+            inputMode="numeric"
+            maxLength={10}
+            placeholder="10-digit mobile"
+            autoComplete="tel-national"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label>Krishi Card No. *</Label>
+          <Input value={form.krishiCardNo} onChange={(e) => setField("krishiCardNo", e.target.value)} />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <Label>Farmer ID *</Label>
+          <Input value={form.farmerCode} onChange={(e) => setField("farmerCode", e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label>Yard *</Label>
+          <Select value={form.yardId || undefined} onValueChange={(v) => setField("yardId", v)}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select yard" />
+            </SelectTrigger>
+            <SelectContent>
+              {yards.map((y) => (
+                <SelectItem key={y.id} value={y.id}>
+                  {`${y.name} (${y.code})`.slice(0, 64)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label>Address *</Label>
+        <Input value={form.address} onChange={(e) => setField("address", e.target.value)} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <Label>Village/Town *</Label>
+          <Input value={form.village} onChange={(e) => setField("village", e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label>Taluka *</Label>
+          <Input value={form.taluk} onChange={(e) => setField("taluk", e.target.value)} />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <Label>District *</Label>
+          <Input value={form.district} onChange={(e) => setField("district", e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label>State *</Label>
+          <Input value={form.state} onChange={(e) => setField("state", e.target.value)} />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label>Aadhaar (optional)</Label>
+        <Input
+          value={form.aadhaarInput}
+          onChange={(e) => setField("aadhaarInput", e.target.value.replace(/\D/g, "").slice(0, 12))}
+          placeholder="Optional — 12 digits"
+          inputMode="numeric"
+          maxLength={12}
+        />
+      </div>
+    </>
+  );
 
   if (isError) {
     return (
@@ -207,64 +318,39 @@ export default function FarmersList() {
           <div>
             <CardTitle className="flex items-center gap-2">
               <Users className="h-5 w-5" />
-              Farmer registry (M-04)
+              Farmer Master (M-04)
             </CardTitle>
-            <p className="text-sm text-muted-foreground">Registered farmers by yard.</p>
+            <p className="text-sm text-muted-foreground">
+              Farmer Name, Mobile, Krishi Card, Farmer ID, Address, Village/Town, Taluka, District, State.
+            </p>
           </div>
           {canCreate && (
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+            <Dialog
+              open={createOpen}
+              onOpenChange={(v) => {
+                setCreateOpen(v);
+                if (v) setForm(emptyForm());
+              }}
+            >
               <DialogTrigger asChild>
-                <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Add farmer</Button>
+                <Button size="sm">
+                  <Plus className="h-4 w-4 mr-1" /> Add farmer
+                </Button>
               </DialogTrigger>
-              <DialogContent>
-                <DialogHeader><DialogTitle>Create farmer</DialogTitle></DialogHeader>
+              <DialogContent className="max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Create farmer</DialogTitle>
+                </DialogHeader>
                 <div className="space-y-3">
-                  {formError && <p className="text-sm text-destructive">{formError}</p>}
-                  <div className="space-y-1"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
-                  <div className="space-y-1">
-                    <Label>Yard ID</Label>
-                    <Select value={yardId || undefined} onValueChange={setYardId}>
-                      <SelectTrigger><SelectValue placeholder="Select yard" /></SelectTrigger>
-                      <SelectContent>
-                        {yards.map((y) => (
-                          <SelectItem key={y.id} value={y.id}>
-                            {`${y.name} (${y.code})`.slice(0, 64)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1"><Label>Village</Label><Input value={village} onChange={(e) => setVillage(e.target.value)} /></div>
-                    <div className="space-y-1"><Label>Taluk</Label><Input value={taluk} onChange={(e) => setTaluk(e.target.value)} /></div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1"><Label>District</Label><Input value={district} onChange={(e) => setDistrict(e.target.value)} /></div>
-                    <div className="space-y-1">
-                      <Label>Mobile</Label>
-                      <Input
-                        value={mobile}
-                        onChange={(e) => setMobile(sanitizeMobile10Input(e.target.value))}
-                        inputMode="numeric"
-                        maxLength={10}
-                        placeholder="10-digit mobile (optional)"
-                        autoComplete="tel-national"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Aadhaar</Label>
-                    <Input
-                      value={aadhaarInput}
-                      onChange={(e) => setAadhaarInput(e.target.value.replace(/\D/g, "").slice(0, 12))}
-                      placeholder="Optional — 12 digits"
-                      inputMode="numeric"
-                      maxLength={12}
-                    />
-                  </div>
+                  {farmerFields}
                   <div className="flex justify-end gap-2">
-                    <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createMutation.isPending}>Cancel</Button>
-                    <Button disabled={createMutation.isPending || formError !== null} onClick={() => createMutation.mutate()}>
+                    <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createMutation.isPending}>
+                      Cancel
+                    </Button>
+                    <Button
+                      disabled={createMutation.isPending || formError !== null}
+                      onClick={() => createMutation.mutate()}
+                    >
                       {createMutation.isPending ? "Creating..." : "Create"}
                     </Button>
                   </div>
@@ -280,7 +366,7 @@ export default function FarmersList() {
             <ClientDataGrid
               columns={columns}
               sourceRows={sourceRows}
-              searchKeys={["name", "yardName", "village", "taluk", "district", "mobile", "aadhaarToken"]}
+              searchKeys={["name", "farmerCode", "krishiCardNo", "mobile", "village", "taluk", "district", "state", "yardName"]}
               searchPlaceholder="Search farmers…"
               defaultSortKey="name"
               defaultSortDir="asc"
@@ -290,61 +376,23 @@ export default function FarmersList() {
         </CardContent>
       </Card>
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Edit farmer</DialogTitle></DialogHeader>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit farmer</DialogTitle>
+          </DialogHeader>
           <div className="space-y-3">
-            {formError && <p className="text-sm text-destructive">{formError}</p>}
             {editingFarmer?.aadhaarToken ? (
               <p className="text-sm text-muted-foreground rounded-md border bg-muted/40 px-3 py-2">
                 Aadhaar on file (masked):{" "}
-                <span className="font-mono tabular-nums text-foreground">{editingFarmer.aadhaarToken}</span>. Leave the
-                field below empty to keep it; enter 12 digits only to replace.
+                <span className="font-mono tabular-nums text-foreground">{editingFarmer.aadhaarToken}</span>. Leave
+                Aadhaar empty to keep it; enter 12 digits only to replace.
               </p>
             ) : null}
-            <div className="space-y-1"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
-            <div className="space-y-1">
-              <Label>Yard ID</Label>
-              <Select value={yardId || undefined} onValueChange={setYardId}>
-                <SelectTrigger><SelectValue placeholder="Select yard" /></SelectTrigger>
-                <SelectContent>
-                  {yards.map((y) => (
-                    <SelectItem key={y.id} value={y.id}>
-                      {`${y.name} (${y.code})`.slice(0, 64)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1"><Label>Village</Label><Input value={village} onChange={(e) => setVillage(e.target.value)} /></div>
-              <div className="space-y-1"><Label>Taluk</Label><Input value={taluk} onChange={(e) => setTaluk(e.target.value)} /></div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1"><Label>District</Label><Input value={district} onChange={(e) => setDistrict(e.target.value)} /></div>
-              <div className="space-y-1">
-                <Label>Mobile</Label>
-                <Input
-                  value={mobile}
-                  onChange={(e) => setMobile(sanitizeMobile10Input(e.target.value))}
-                  inputMode="numeric"
-                  maxLength={10}
-                  placeholder="10-digit mobile (optional)"
-                  autoComplete="tel-national"
-                />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <Label>Aadhaar</Label>
-              <Input
-                value={aadhaarInput}
-                onChange={(e) => setAadhaarInput(e.target.value.replace(/\D/g, "").slice(0, 12))}
-                placeholder="Optional — 12 digits to replace stored Aadhaar"
-                inputMode="numeric"
-                maxLength={12}
-              />
-            </div>
+            {farmerFields}
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setEditOpen(false)} disabled={updateMutation.isPending}>Cancel</Button>
+              <Button variant="outline" onClick={() => setEditOpen(false)} disabled={updateMutation.isPending}>
+                Cancel
+              </Button>
               <Button disabled={updateMutation.isPending || formError !== null} onClick={() => updateMutation.mutate()}>
                 {updateMutation.isPending ? "Saving..." : "Save"}
               </Button>

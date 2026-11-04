@@ -380,6 +380,10 @@ export function registerDakRoutes(app: Express) {
         diaryNo = await generateNextTapalRef({ kind: "IN", yardId, date: receivedDateRaw });
       }
       const id = nanoid();
+      const fromLocationId =
+        body.fromLocationId != null && String(body.fromLocationId).trim()
+          ? String(body.fromLocationId).trim()
+          : null;
       await db.insert(dakInward).values({
         id,
         yardId: yardId || null,
@@ -389,6 +393,7 @@ export function registerDakRoutes(app: Express) {
         modeOfReceipt: String(body.modeOfReceipt ?? "Hand"),
         status: String(body.status ?? "Pending"),
         fromAddress: body.fromAddress ? String(body.fromAddress) : null,
+        fromLocationId,
         receivedBy: body.receivedBy ? String(body.receivedBy) : null,
         assignedTo: body.assignedTo ? String(body.assignedTo) : null,
         deadline: body.deadline ? String(body.deadline) : null,
@@ -420,9 +425,23 @@ export function registerDakRoutes(app: Express) {
       const newYardId = body.yardId !== undefined ? (body.yardId == null ? null : String(body.yardId)) : existing.yardId;
       if (body.yardId !== undefined && newYardId != null && !dakYardInScope(req, newYardId)) return sendApiError(res, 403, "DAK_YARD_ACCESS_DENIED", "You do not have access to this yard");
       const updates: Record<string, unknown> = {};
-      ["yardId", "diaryNo", "receivedDate", "fromParty", "fromAddress", "subject", "modeOfReceipt", "receivedBy", "assignedTo", "deadline", "fileRef", "status"].forEach((k) => {
+      [
+        "yardId",
+        "diaryNo",
+        "receivedDate",
+        "fromParty",
+        "fromAddress",
+        "fromLocationId",
+        "subject",
+        "modeOfReceipt",
+        "receivedBy",
+        "assignedTo",
+        "deadline",
+        "fileRef",
+        "status",
+      ].forEach((k) => {
         if (body[k] === undefined) return;
-        updates[k] = body[k] == null ? null : String(body[k]);
+        updates[k] = body[k] == null || body[k] === "" ? null : String(body[k]);
       });
       await db.update(dakInward).set(updates as Record<string, string | null>).where(eq(dakInward.id, id));
       const [row] = await db.select().from(dakInward).where(eq(dakInward.id, id));
@@ -622,6 +641,69 @@ export function registerDakRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch outward");
+    }
+  });
+
+  app.put("/api/ioms/dak/outward/:id", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const [existing] = await db.select().from(dakOutward).where(eq(dakOutward.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "DAK_OUTWARD_NOT_FOUND", "Outward not found");
+      if (!dakYardInScope(req, existing.yardId)) return sendApiError(res, 404, "DAK_OUTWARD_NOT_FOUND", "Outward not found");
+      const body = req.body ?? {};
+      const newYardId =
+        body.yardId !== undefined ? (body.yardId == null || body.yardId === "" ? null : String(body.yardId)) : existing.yardId;
+      if (body.yardId !== undefined && newYardId != null && !dakYardInScope(req, newYardId)) {
+        return sendApiError(res, 403, "DAK_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
+      const { parseDakRecipients, joinRecipientNames, joinRecipientAddresses } = await import("@shared/dak-recipients");
+      const updates: Record<string, unknown> = {};
+      if (body.yardId !== undefined) updates.yardId = newYardId;
+      if (body.despatchDate !== undefined) {
+        updates.despatchDate = String(body.despatchDate ?? "").trim().slice(0, 10) || existing.despatchDate;
+      }
+      if (body.despatchNo !== undefined) {
+        const dn = body.despatchNo == null ? null : String(body.despatchNo).trim();
+        updates.despatchNo = dn || null;
+      }
+      if (body.subject !== undefined) updates.subject = String(body.subject ?? "");
+      if (body.modeOfDespatch !== undefined) updates.modeOfDespatch = String(body.modeOfDespatch ?? "Post");
+      if (body.fileRef !== undefined) updates.fileRef = body.fileRef ? String(body.fileRef) : null;
+      if (body.despatchedBy !== undefined) updates.despatchedBy = body.despatchedBy ? String(body.despatchedBy) : null;
+      if (body.inwardRefId !== undefined) updates.inwardRefId = body.inwardRefId ? String(body.inwardRefId) : null;
+
+      if (body.toRecipients !== undefined || body.toRecipientsJson !== undefined) {
+        const toRecipients = parseDakRecipients(body.toRecipients ?? body.toRecipientsJson);
+        const toParty = joinRecipientNames(toRecipients) || String(body.toParty ?? "").trim();
+        if (!toParty) {
+          return sendApiError(res, 400, "DAK_TO_REQUIRED", "At least one To recipient name is required");
+        }
+        updates.toParty = toParty;
+        updates.toAddress = joinRecipientAddresses(toRecipients) || null;
+        updates.toRecipientsJson = toRecipients.length ? toRecipients : null;
+      } else if (body.toParty !== undefined) {
+        updates.toParty = String(body.toParty ?? "");
+        if (body.toAddress !== undefined) updates.toAddress = body.toAddress ? String(body.toAddress) : null;
+      }
+
+      if (body.copyTo !== undefined || body.copyToJson !== undefined) {
+        const copyTo = parseDakRecipients(body.copyTo ?? body.copyToJson);
+        updates.copyToJson = copyTo.length ? copyTo : null;
+      }
+
+      await db
+        .update(dakOutward)
+        .set(updates as Partial<typeof dakOutward.$inferInsert>)
+        .where(eq(dakOutward.id, id));
+      const [row] = await db.select().from(dakOutward).where(eq(dakOutward.id, id)).limit(1);
+      if (!row) return sendApiError(res, 404, "DAK_OUTWARD_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "Dak", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update outward");
     }
   });
 

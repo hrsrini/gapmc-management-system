@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { LocalSearchSelect } from "@/components/ui/local-search-select";
 import { TraderLicenceSearchSelect } from "@/components/selects/trader-licence-search-select";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,6 +18,7 @@ import { useToast } from "@/hooks/use-toast";
 import { readApiErrorEnvelope } from "@/lib/queryClient";
 import { formatInr } from "@/lib/formatInr";
 import { downloadIomsReceiptPdf } from "@/lib/downloadIomsReceiptPdf";
+import { parseIndianMobile10Digits } from "@shared/india-validation";
 import {
   MARKET_TRANSACTION_CASES,
   isMarketTransactionCaseId,
@@ -151,6 +154,7 @@ export default function MarketTransactionWizard() {
   const [captureLocationText, setCaptureLocationText] = useState("");
   const [vehicleNumber, setVehicleNumber] = useState("");
   const [vehicleMake, setVehicleMake] = useState("");
+  /** Filled from vehicle category master; not shown on Party step (removed from UI). */
   const [vehicleCapacityKg, setVehicleCapacityKg] = useState("");
   const [traderLicenceId, setTraderLicenceId] = useState("");
   const [traderManualName, setTraderManualName] = useState("");
@@ -158,13 +162,15 @@ export default function MarketTransactionWizard() {
   const [traderManualAddress, setTraderManualAddress] = useState("");
   const [receiverTraderLicenceId, setReceiverTraderLicenceId] = useState("");
   const [feePayer, setFeePayer] = useState("Originator");
-  const [sellerType, setSellerType] = useState("Farmer");
-  const [farmerType, setFarmerType] = useState("Local");
-  const [farmerName, setFarmerName] = useState("");
-  const [farmerKrishiCard, setFarmerKrishiCard] = useState("");
-  const [farmerContact, setFarmerContact] = useState("");
-  const [farmerAddress, setFarmerAddress] = useState("");
-  const [commoditySource, setCommoditySource] = useState("Local");
+  /** Screenshot default: Trader + Outside State. */
+  const [sellerType, setSellerType] = useState("Trader");
+  const [farmerType, setFarmerType] = useState<"Local" | "OutsideState">("OutsideState");
+  const [farmerName, setFarmerName] = useState("NA");
+  const [farmerKrishiCard, setFarmerKrishiCard] = useState("NA");
+  const [farmerContact, setFarmerContact] = useState("NA");
+  const [farmerAddress, setFarmerAddress] = useState("NA");
+  const [selectedFarmerId, setSelectedFarmerId] = useState("");
+  const [commoditySource, setCommoditySource] = useState("OutsideState");
   const [placeOfOrigin, setPlaceOfOrigin] = useState("");
   const [originatingState, setOriginatingState] = useState("");
   const [destinationState, setDestinationState] = useState("");
@@ -262,8 +268,118 @@ export default function MarketTransactionWizard() {
   >({
     queryKey: ["/api/yards"],
   });
+  const { data: vehicleCategories = [] } = useQuery<
+    Array<{ id: string; name: string; capacityKg?: number | null; manufacturerCompany?: string | null }>
+  >({
+    queryKey: ["/api/ioms/reference/vehicle-categories"],
+  });
+  const { data: farmers = [] } = useQuery<
+    Array<{
+      id: string;
+      name: string;
+      yardId?: string | null;
+      krishiCardNo?: string | null;
+      address?: string | null;
+      mobile?: string | null;
+      village?: string | null;
+    }>
+  >({
+    queryKey: ["/api/ioms/farmers"],
+    enabled: meta.requiresFarmer,
+  });
   /** `/api/yards` already returns only locations assigned to the signed-in user. */
   const scopedYards = yards;
+
+  const vehicleCategoryOptions = useMemo(
+    () =>
+      vehicleCategories.map((c) => ({
+        value: c.name,
+        label: c.capacityKg != null ? `${c.name} (${c.capacityKg} kg)` : c.name,
+        keywords: `${c.name} ${c.manufacturerCompany ?? ""} ${c.capacityKg ?? ""}`,
+      })),
+    [vehicleCategories],
+  );
+
+  const farmerOptions = useMemo(
+    () =>
+      farmers
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((f) => ({
+          value: f.id,
+          label: f.name,
+          keywords: `${f.name} ${f.krishiCardNo ?? ""} ${f.mobile ?? ""} ${f.village ?? ""}`,
+        })),
+    [farmers],
+  );
+
+  /** Commodity source drives read-only Farmer Type + farmer detail defaults. */
+  useEffect(() => {
+    if (!meta.requiresFarmer) return;
+    if (commoditySource === "OutsideState") {
+      setFarmerType("OutsideState");
+      setSelectedFarmerId("");
+      setFarmerName("NA");
+      setFarmerKrishiCard("NA");
+      setFarmerContact("NA");
+      setFarmerAddress("NA");
+      return;
+    }
+    setFarmerType("Local");
+    setSelectedFarmerId("");
+    setFarmerName("");
+    setFarmerKrishiCard("");
+    setFarmerContact("");
+    setFarmerAddress("");
+  }, [commoditySource, meta.requiresFarmer]);
+
+  function applyFarmerFromMaster(farmerId: string) {
+    const f = farmers.find((row) => row.id === farmerId);
+    if (!f) return;
+    setSelectedFarmerId(f.id);
+    setFarmerName(f.name ?? "");
+    setFarmerKrishiCard(f.krishiCardNo?.trim() || "");
+    setFarmerContact(f.mobile?.trim() || "");
+    setFarmerAddress(f.address?.trim() || "");
+  }
+
+  async function ensureLocalFarmerSavedToMaster(): Promise<void> {
+    if (!meta.requiresFarmer || commoditySource !== "Local") return;
+    const name = farmerName.trim();
+    if (!name || name.toUpperCase() === "NA") return;
+    if (selectedFarmerId) return;
+    const existing = farmers.find((f) => f.name.trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      setSelectedFarmerId(existing.id);
+      return;
+    }
+    if (!entryLocationId.trim()) return;
+    const mobileNorm = parseIndianMobile10Digits(farmerContact);
+    const res = await fetch("/api/ioms/farmers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        name,
+        yardId: entryLocationId.trim(),
+        autoFarmerCode: true,
+        krishiCardNo: farmerKrishiCard.trim() || null,
+        address: farmerAddress.trim() || null,
+        village: null,
+        taluk: null,
+        district: null,
+        state: "Goa",
+        mobile: mobileNorm,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error ?? "Could not save farmer to Farmer Master.");
+    }
+    const row = (await res.json()) as { id?: string };
+    if (row.id) setSelectedFarmerId(row.id);
+    queryClient.invalidateQueries({ queryKey: ["/api/ioms/farmers"] });
+  }
   const singleBoundYard = scopedYards.length === 1 ? scopedYards[0]! : null;
 
   /** Prefill trader from licence detail / URL — fetch full licence for party display. */
@@ -416,7 +532,10 @@ export default function MarketTransactionWizard() {
     if (meta.requiresTransitFields && (!originatingState.trim() || !destinationState.trim())) {
       return "Originating and destination state are required.";
     }
-    if (meta.requiresFarmer && sellerType === "Farmer" && !farmerName.trim()) return "Farmer name is required.";
+    if (meta.requiresFarmer && commoditySource === "Local") {
+      const n = farmerName.trim();
+      if (!n || n.toUpperCase() === "NA") return "Farmer Name is mandatory for Local (Goa) commodity source.";
+    }
     if (meta.allowsFine && (caseType === "B" || caseType === "C") && !(Number(fineAmount) > 0)) {
       return "Fine amount is required.";
     }
@@ -431,7 +550,7 @@ export default function MarketTransactionWizard() {
     feePayer,
     originatingState,
     destinationState,
-    sellerType,
+    commoditySource,
     farmerName,
     fineAmount,
     caseType,
@@ -743,13 +862,30 @@ export default function MarketTransactionWizard() {
               <Label>Vehicle number</Label>
               <Input value={vehicleNumber} onChange={(e) => setVehicleNumber(e.target.value)} />
             </div>
-            <div className="space-y-1">
-              <Label>Make / model</Label>
-              <Input value={vehicleMake} onChange={(e) => setVehicleMake(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label>Capacity (kg)</Label>
-              <Input type="number" value={vehicleCapacityKg} onChange={(e) => setVehicleCapacityKg(e.target.value)} />
+            <div className="space-y-1 sm:col-span-2">
+              <Label>Vehicle Category (Make/Model)</Label>
+              <LocalSearchSelect
+                value={vehicleMake}
+                onValueChange={(v) => {
+                  setVehicleMake(v);
+                  const cat = vehicleCategories.find((c) => c.name === v);
+                  if (cat?.capacityKg != null && Number.isFinite(Number(cat.capacityKg))) {
+                    setVehicleCapacityKg(String(cat.capacityKg));
+                  } else {
+                    setVehicleCapacityKg("");
+                  }
+                }}
+                options={vehicleCategoryOptions}
+                placeholder="Search make / model…"
+                searchPlaceholder="Type to search vehicle category…"
+                emptyMessage="No matching vehicle category."
+                allowClear
+              />
+              {vehicleCategories.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No active categories. Add them under Fleet → Vehicle categories.
+                </p>
+              ) : null}
             </div>
 
             {meta.requiresTraderLicence && (
@@ -856,45 +992,97 @@ export default function MarketTransactionWizard() {
             {meta.requiresFarmer && (
               <>
                 <div className="space-y-1 sm:col-span-2 border-t pt-4"><Label>Seller / source</Label></div>
-                <div className="space-y-1">
+                <div className="space-y-2 sm:col-span-2">
                   <Label>Seller type</Label>
-                  <Select value={sellerType} onValueChange={setSellerType}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Farmer">Farmer</SelectItem>
-                      <SelectItem value="Trader">Trader (outside)</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <RadioGroup
+                    value={sellerType}
+                    onValueChange={setSellerType}
+                    className="flex flex-wrap gap-4"
+                  >
+                    <div className="flex items-center gap-2">
+                      <RadioGroupItem value="Farmer" id="seller-farmer" />
+                      <Label htmlFor="seller-farmer" className="font-normal cursor-pointer">Farmer</Label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <RadioGroupItem value="Trader" id="seller-trader" />
+                      <Label htmlFor="seller-trader" className="font-normal cursor-pointer">Trader</Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>Commodity source</Label>
+                  <RadioGroup
+                    value={commoditySource}
+                    onValueChange={setCommoditySource}
+                    className="flex flex-wrap gap-4"
+                  >
+                    <div className="flex items-center gap-2">
+                      <RadioGroupItem value="Local" id="source-local" />
+                      <Label htmlFor="source-local" className="font-normal cursor-pointer">Local (Goa)</Label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <RadioGroupItem value="OutsideState" id="source-outside" />
+                      <Label htmlFor="source-outside" className="font-normal cursor-pointer">Outside State</Label>
+                    </div>
+                  </RadioGroup>
                 </div>
                 <div className="space-y-1">
-                  <Label>Commodity source</Label>
-                  <Select value={commoditySource} onValueChange={setCommoditySource}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Local">Local (Goa)</SelectItem>
-                      <SelectItem value="OutsideState">Outside state</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label>Farmer type</Label>
+                  <Input
+                    readOnly
+                    className="bg-muted/40"
+                    value={farmerType === "Local" ? "Local Farmer" : "Outside State Farmer"}
+                  />
+                  <p className="text-xs text-muted-foreground">Set automatically from Commodity source (read-only).</p>
                 </div>
-                {sellerType === "Farmer" && (
-                  <>
-                    <div className="space-y-1">
-                      <Label>Farmer type</Label>
-                      <Select value={farmerType} onValueChange={setFarmerType}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Local">Local farmer</SelectItem>
-                          <SelectItem value="OutsideState">Outside state farmer</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1"><Label>Farmer name</Label><Input value={farmerName} onChange={(e) => setFarmerName(e.target.value)} /></div>
-                    <div className="space-y-1"><Label>Krishi card</Label><Input value={farmerKrishiCard} onChange={(e) => setFarmerKrishiCard(e.target.value)} /></div>
-                    <div className="space-y-1"><Label>Contact</Label><Input value={farmerContact} onChange={(e) => setFarmerContact(e.target.value)} /></div>
-                    <div className="space-y-1 sm:col-span-2"><Label>Address</Label><Textarea value={farmerAddress} onChange={(e) => setFarmerAddress(e.target.value)} rows={2} /></div>
-                  </>
-                )}
-                <div className="space-y-1 sm:col-span-2"><Label>Place of origin</Label><Input value={placeOfOrigin} onChange={(e) => setPlaceOfOrigin(e.target.value)} /></div>
+                <div className="space-y-1">
+                  <Label>
+                    Farmer name{commoditySource === "Local" ? " *" : ""}
+                  </Label>
+                  {commoditySource === "Local" ? (
+                    <LocalSearchSelect
+                      value={selectedFarmerId || farmerName}
+                      onValueChange={(v) => {
+                        const fromMaster = farmers.find((f) => f.id === v);
+                        if (fromMaster) {
+                          applyFarmerFromMaster(fromMaster.id);
+                          return;
+                        }
+                        setSelectedFarmerId("");
+                        setFarmerName(v);
+                      }}
+                      options={farmerOptions}
+                      placeholder="Search farmer or type a new name…"
+                      searchPlaceholder="Type farmer name…"
+                      emptyMessage="No farmer found — use typed name to add."
+                      allowCustom
+                      customLabel={(q) => `Add new farmer “${q}”`}
+                      allowClear
+                    />
+                  ) : (
+                    <Input value={farmerName} onChange={(e) => setFarmerName(e.target.value)} />
+                  )}
+                </div>
+                <div className="space-y-1">
+                  <Label>Krishi Card No.</Label>
+                  <Input value={farmerKrishiCard} onChange={(e) => setFarmerKrishiCard(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Contact No.</Label>
+                  <Input value={farmerContact} onChange={(e) => setFarmerContact(e.target.value)} />
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label>Address</Label>
+                  <Textarea value={farmerAddress} onChange={(e) => setFarmerAddress(e.target.value)} rows={2} />
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label>Place of origin</Label>
+                  <Input
+                    value={placeOfOrigin}
+                    onChange={(e) => setPlaceOfOrigin(e.target.value)}
+                    placeholder="Enter place of origin"
+                  />
+                </div>
               </>
             )}
 
@@ -1071,10 +1259,22 @@ export default function MarketTransactionWizard() {
         </Button>
         {step !== "payment" ? (
           <Button
-            onClick={() => {
+            onClick={async () => {
               if (step === "party" && partyValidation) {
                 toast({ title: "Complete party details", description: partyValidation, variant: "destructive" });
                 return;
+              }
+              if (step === "party") {
+                try {
+                  await ensureLocalFarmerSavedToMaster();
+                } catch (e) {
+                  toast({
+                    title: "Farmer Master",
+                    description: e instanceof Error ? e.message : "Could not save new farmer.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
               }
               if (step === "commodities" && commoditiesValidation) {
                 toast({ title: "Commodities incomplete", description: commoditiesValidation, variant: "destructive" });

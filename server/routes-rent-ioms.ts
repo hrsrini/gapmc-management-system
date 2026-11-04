@@ -441,7 +441,7 @@ export function registerRentIomsRoutes(app: Express) {
         occupancyTo: built.calculation.occupancyTo!,
       });
       const mergedCfg = await getMergedSystemConfig();
-      const gstExempt = false;
+      const gstExempt = Boolean(body.gstExempt ?? body.isGovtEntity ?? false);
       const cgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_cgst_percent");
       const sgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_sgst_percent");
       const g = computeRentInvoiceGstInr(built.calculation.rentAmount, gstExempt, cgstPct, sgstPct);
@@ -450,6 +450,7 @@ export function registerRentIomsRoutes(app: Express) {
         agreementFrom: built.agreementFrom,
         agreementTo: built.agreementTo,
         monthlyRent: built.monthlyRent,
+        gstExempt,
         cgst: g.cgst,
         sgst: g.sgst,
         totalAmount: rentInvoiceTotalInr(built.calculation.rentAmount, 0, g.cgst, g.sgst),
@@ -501,9 +502,12 @@ export function registerRentIomsRoutes(app: Express) {
           isGovtEntity = !ea.gstApplicable;
         }
       }
-      const gstExempt = tenantLicenceId.startsWith("TB:")
-        ? isGovtEntity
-        : Boolean(tenantLicenceId && (await tenantLicenceIsGstExempt(tenantLicenceId)));
+      // Track B: allocation gstApplicable drives exemption. Track A: licence exempt category
+      // OR explicit "Govt entity / pre-receipt-style exempt" toggle on create.
+      let gstExempt = Boolean(isGovtEntity);
+      if (!gstExempt && tenantLicenceId && !tenantLicenceId.startsWith("TB:")) {
+        gstExempt = await tenantLicenceIsGstExempt(tenantLicenceId);
+      }
       if (gstExempt) {
         isGovtEntity = true;
       }

@@ -4,9 +4,17 @@
  * Yard-scoped: list/get/create/update vehicles; trips/fuel/maintenance scoped via vehicle's yard.
  */
 import type { Express } from "express";
-import { eq, desc, asc, and, inArray } from "drizzle-orm";
+import { eq, desc, asc, and, inArray, sql, ne } from "drizzle-orm";
 import { db } from "./db";
-import { employees, vehicles, works, vehicleTripLog, vehicleFuelRegister, vehicleMaintenance } from "@shared/db-schema";
+import {
+  employees,
+  vehicles,
+  vehicleCategories,
+  works,
+  vehicleTripLog,
+  vehicleFuelRegister,
+  vehicleMaintenance,
+} from "@shared/db-schema";
 import { nanoid } from "nanoid";
 import { writeAuditLog } from "./audit";
 import { sendApiError } from "./api-errors";
@@ -14,13 +22,150 @@ import { routeParamString } from "./route-params";
 import { assertRecordDoDvDaSeparation } from "./workflow";
 import { computeFleetRenewalAlerts, listFleetMaintenanceDueEnriched } from "./operational-alerts";
 import { getMergedSystemConfig } from "./system-config";
+import { hasPermission } from "./auth";
 
 function vehicleInScope(req: Express.Request, yardId: string): boolean {
   const scopedIds = (req as Express.Request & { scopedLocationIds?: string[] }).scopedLocationIds;
   return !scopedIds || scopedIds.length === 0 || scopedIds.includes(yardId);
 }
 
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
 export function registerFleetRoutes(app: Express) {
+  // ----- Vehicle Category (Make/Model) master -----
+  app.get("/api/ioms/fleet/vehicle-categories", async (req, res) => {
+    try {
+      const includeInactive =
+        req.query.includeInactive === "1" || String(req.query.includeInactive ?? "").toLowerCase() === "true";
+      const base = db.select().from(vehicleCategories).orderBy(asc(vehicleCategories.name));
+      const list = includeInactive
+        ? await base
+        : await base.where(eq(vehicleCategories.status, "Active"));
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch vehicle categories");
+    }
+  });
+
+  app.post("/api/ioms/fleet/vehicle-categories", async (req, res) => {
+    try {
+      if (!hasPermission(req.user, "M-07", "Create") && !hasPermission(req.user, "M-07", "Update")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-07 Create or Update required");
+      }
+      const body = req.body ?? {};
+      const name = String(body.name ?? body.makeModel ?? "").trim();
+      if (!name) {
+        return sendApiError(res, 400, "VEHICLE_CATEGORY_NAME_REQUIRED", "Vehicle Category (Make/Model) is required.");
+      }
+      const capacityRaw = body.capacityKg ?? body.capacity;
+      const capacityKg =
+        capacityRaw == null || String(capacityRaw).trim() === ""
+          ? null
+          : Number(capacityRaw);
+      if (capacityKg != null && (!Number.isFinite(capacityKg) || capacityKg < 0)) {
+        return sendApiError(res, 400, "VEHICLE_CATEGORY_CAPACITY", "Capacity (Kg) must be a non-negative number.");
+      }
+      const manufacturerCompany =
+        body.manufacturerCompany != null && String(body.manufacturerCompany).trim()
+          ? String(body.manufacturerCompany).trim()
+          : null;
+      const status = String(body.status ?? "Active").trim() === "Inactive" ? "Inactive" : "Active";
+      const dup = await db
+        .select({ id: vehicleCategories.id })
+        .from(vehicleCategories)
+        .where(sql`lower(trim(${vehicleCategories.name})) = ${name.toLowerCase()}`)
+        .limit(1);
+      if (dup[0]) {
+        return sendApiError(res, 409, "VEHICLE_CATEGORY_DUPLICATE", "A vehicle category with this Make/Model already exists.");
+      }
+      const id = nanoid();
+      const ts = nowIso();
+      await db.insert(vehicleCategories).values({
+        id,
+        name,
+        capacityKg,
+        manufacturerCompany,
+        status,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+      const [row] = await db.select().from(vehicleCategories).where(eq(vehicleCategories.id, id)).limit(1);
+      if (row) {
+        writeAuditLog(req, { module: "Fleet", action: "Create", recordId: id, afterValue: row }).catch((e) =>
+          console.error("Audit log failed:", e),
+        );
+      }
+      res.status(201).json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to create vehicle category");
+    }
+  });
+
+  app.put("/api/ioms/fleet/vehicle-categories/:id", async (req, res) => {
+    try {
+      if (!hasPermission(req.user, "M-07", "Update")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-07 Update required");
+      }
+      const id = routeParamString(req.params.id);
+      const [existing] = await db.select().from(vehicleCategories).where(eq(vehicleCategories.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "VEHICLE_CATEGORY_NOT_FOUND", "Vehicle category not found");
+      const body = req.body ?? {};
+      const updates: Record<string, unknown> = { updatedAt: nowIso() };
+      if (body.name !== undefined || body.makeModel !== undefined) {
+        const name = String(body.name ?? body.makeModel ?? "").trim();
+        if (!name) {
+          return sendApiError(res, 400, "VEHICLE_CATEGORY_NAME_REQUIRED", "Vehicle Category (Make/Model) is required.");
+        }
+        const dup = await db
+          .select({ id: vehicleCategories.id })
+          .from(vehicleCategories)
+          .where(
+            and(
+              sql`lower(trim(${vehicleCategories.name})) = ${name.toLowerCase()}`,
+              ne(vehicleCategories.id, id),
+            ),
+          )
+          .limit(1);
+        if (dup[0]) {
+          return sendApiError(res, 409, "VEHICLE_CATEGORY_DUPLICATE", "A vehicle category with this Make/Model already exists.");
+        }
+        updates.name = name;
+      }
+      if (body.capacityKg !== undefined || body.capacity !== undefined) {
+        const capacityRaw = body.capacityKg ?? body.capacity;
+        const capacityKg =
+          capacityRaw == null || String(capacityRaw).trim() === "" ? null : Number(capacityRaw);
+        if (capacityKg != null && (!Number.isFinite(capacityKg) || capacityKg < 0)) {
+          return sendApiError(res, 400, "VEHICLE_CATEGORY_CAPACITY", "Capacity (Kg) must be a non-negative number.");
+        }
+        updates.capacityKg = capacityKg;
+      }
+      if (body.manufacturerCompany !== undefined) {
+        updates.manufacturerCompany =
+          body.manufacturerCompany == null || String(body.manufacturerCompany).trim() === ""
+            ? null
+            : String(body.manufacturerCompany).trim();
+      }
+      if (body.status !== undefined) {
+        updates.status = String(body.status).trim() === "Inactive" ? "Inactive" : "Active";
+      }
+      await db.update(vehicleCategories).set(updates as Partial<typeof vehicleCategories.$inferInsert>).where(eq(vehicleCategories.id, id));
+      const [row] = await db.select().from(vehicleCategories).where(eq(vehicleCategories.id, id)).limit(1);
+      if (!row) return sendApiError(res, 404, "VEHICLE_CATEGORY_NOT_FOUND", "Not found");
+      writeAuditLog(req, { module: "Fleet", action: "Update", recordId: id, beforeValue: existing, afterValue: row }).catch((e) =>
+        console.error("Audit log failed:", e),
+      );
+      res.json(row);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to update vehicle category");
+    }
+  });
+
   app.get("/api/ioms/fleet/reports/summary", async (req, res) => {
     try {
       const from = String(req.query.from ?? "").slice(0, 10);

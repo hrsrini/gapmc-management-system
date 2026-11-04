@@ -51,10 +51,63 @@ interface Inward {
   status: string;
   yardId?: string | null;
   fromAddress?: string | null;
+  /** Location Master id when received from Yard / Checkpost / HO. */
+  fromLocationId?: string | null;
   receivedBy?: string | null;
   assignedTo?: string | null;
   deadline?: string | null;
   fileRef?: string | null;
+}
+
+/** Resolve Received-From location for edit: prefer stored id, else address/party match. */
+function resolveFromLocationId(
+  inward: Inward,
+  yards: Yard[],
+): string | null {
+  const stored = String(inward.fromLocationId ?? "").trim();
+  if (stored && yards.some((y) => y.id === stored)) return stored;
+
+  const party = String(inward.fromParty ?? "").trim().toLowerCase();
+  const addr = String(inward.fromAddress ?? "").trim().toLowerCase();
+  if (!party && !addr) return null;
+
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+  const addrN = norm(addr);
+  const partyN = norm(party);
+
+  const byAddress = addrN
+    ? yards.filter((y) => {
+        const ya = norm(String(y.address ?? ""));
+        return ya && (ya === addrN || addrN.includes(ya) || ya.includes(addrN));
+      })
+    : [];
+  if (byAddress.length === 1) return byAddress[0]!.id;
+  if (byAddress.length > 1 && partyN) {
+    const partyHit = byAddress.find((y) => {
+      const pn = norm(String(y.partyName ?? ""));
+      const nm = norm(String(y.name ?? ""));
+      return (pn && pn === partyN) || (nm && nm === partyN);
+    });
+    if (partyHit) return partyHit.id;
+    return byAddress[0]!.id;
+  }
+
+  const partyHits = partyN
+    ? yards.filter((y) => {
+        const pn = norm(String(y.partyName ?? ""));
+        const nm = norm(String(y.name ?? ""));
+        return (pn && pn === partyN) || (nm && nm === partyN);
+      })
+    : [];
+  if (partyHits.length === 1) return partyHits[0]!.id;
+  if (partyHits.length > 1 && addrN) {
+    const addrHit = partyHits.find((y) => {
+      const ya = norm(String(y.address ?? ""));
+      return ya && (ya === addrN || addrN.includes(ya) || ya.includes(addrN));
+    });
+    if (addrHit) return addrHit.id;
+  }
+  return null;
 }
 
 const MODES = ["Hand", "Post", "Courier", "Email", "Fax"];
@@ -67,16 +120,6 @@ function isHeadOfficeYard(y: { type?: string | null; name?: string | null; code?
   const name = String(y.name ?? "").toLowerCase();
   const code = String(y.code ?? "").toLowerCase();
   return name.includes("head office") || code === "ho" || code.startsWith("ho-");
-}
-
-function isYardOrCheckPost(y: { type?: string | null } | undefined): boolean {
-  const t = String(y?.type ?? "").trim().toLowerCase();
-  return t === "yard" || t === "checkpost" || t === "check_post" || t === "check-post";
-}
-
-/** Locations that can be selected as Received From (HO, Yard, Checkpost). */
-function isReceivedFromLocation(y: { type?: string | null; name?: string | null; code?: string | null } | undefined): boolean {
-  return isYardOrCheckPost(y) || isHeadOfficeYard(y);
 }
 
 function employeeFullName(e: EmployeeRef): string {
@@ -277,37 +320,42 @@ export default function DakInwardForm() {
   }, [defaultRoId, assignedOptions, defaultRoEmployee, assignedEmployeeId, isEdit]);
 
   useEffect(() => {
-    if (inward) {
-      setDiaryNo(inward.diaryNo ?? "");
-      setReceivedDate(inward.receivedDate ?? localCalendarYmd());
-      setFromParty(inward.fromParty ?? "");
-      setFromAddress(inward.fromAddress ?? "");
-      setSubject(inward.subject ?? "");
-      setModeOfReceipt(inward.modeOfReceipt ?? "Hand");
-      setStatus(inward.status ?? "Pending");
-      setReceivedBy(inward.receivedBy ?? "");
-      setAssignedTo(inward.assignedTo ?? "");
-      setAssignedEmployeeId("");
-      setDeadline(inward.deadline ?? "");
-      setFileRef(inward.fileRef ?? "");
-      if (inward.yardId) {
-        setReceivedYardId(inward.yardId);
-        const y = yardById[inward.yardId];
-        if (y) setReceivedLocationLabel(y.name?.trim() || y.code?.trim() || inward.yardId);
-      }
-      // Heuristic: restore Received From if party/address match Location Master
-      const matchLoc = yards.find((y) => {
-        if (!isReceivedFromLocation(y)) return false;
-        const party = String(inward.fromParty ?? "").trim().toLowerCase();
-        const pn = String(y.partyName ?? "").trim().toLowerCase();
-        const nm = String(y.name ?? "").trim().toLowerCase();
-        return (pn && pn === party) || (nm && nm === party);
-      });
-      if (matchLoc) {
-        setFromYardOrCheckpost("yes");
-        setFromLocationId(matchLoc.id);
-        setPartyLockedFromLocation(true);
-      }
+    if (!inward) return;
+    setDiaryNo(inward.diaryNo ?? "");
+    setReceivedDate(inward.receivedDate ?? localCalendarYmd());
+    setFromParty(inward.fromParty ?? "");
+    setFromAddress(inward.fromAddress ?? "");
+    setSubject(inward.subject ?? "");
+    setModeOfReceipt(inward.modeOfReceipt ?? "Hand");
+    setStatus(inward.status ?? "Pending");
+    setReceivedBy(inward.receivedBy ?? "");
+    setAssignedTo(inward.assignedTo ?? "");
+    setAssignedEmployeeId("");
+    setDeadline(inward.deadline ?? "");
+    setFileRef(inward.fileRef ?? "");
+    if (inward.yardId) {
+      setReceivedYardId(inward.yardId);
+      const y = yardById[inward.yardId];
+      if (y) setReceivedLocationLabel(y.name?.trim() || y.code?.trim() || inward.yardId);
+    }
+    // Restore Received From Yes + location (stored id, else address/party match).
+    // Wait for yards before deciding "No" so we don't wipe a stored location.
+    const stored = String(inward.fromLocationId ?? "").trim();
+    if (stored && yards.length === 0) {
+      setFromYardOrCheckpost("yes");
+      setFromLocationId(stored);
+      setPartyLockedFromLocation(true);
+      return;
+    }
+    const locId = yards.length > 0 ? resolveFromLocationId(inward, yards) : null;
+    if (locId) {
+      setFromYardOrCheckpost("yes");
+      setFromLocationId(locId);
+      setPartyLockedFromLocation(true);
+    } else if (yards.length > 0) {
+      setFromYardOrCheckpost("no");
+      setFromLocationId("");
+      setPartyLockedFromLocation(false);
     }
   }, [inward, yardById, yards]);
 
@@ -379,6 +427,7 @@ export default function DakInwardForm() {
       receivedDate: receivedDate || undefined,
       fromParty: fromParty || undefined,
       fromAddress: fromAddress || undefined,
+      fromLocationId: fromYardOrCheckpost === "yes" && fromLocationId ? fromLocationId : null,
       subject: subject || undefined,
       modeOfReceipt: modeOfReceipt || undefined,
       status: status || undefined,

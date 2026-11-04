@@ -32,6 +32,9 @@ export type LocalSearchSelectProps = {
   triggerClassName?: string
   allowClear?: boolean
   clearLabel?: string
+  /** Allow confirming typed text as a new value (not in options). */
+  allowCustom?: boolean
+  customLabel?: (query: string) => string
   id?: string
   required?: boolean
 }
@@ -49,16 +52,34 @@ export function LocalSearchSelect({
   triggerClassName,
   allowClear = false,
   clearLabel = "Clear selection",
+  allowCustom = false,
+  customLabel = (q) => `Use “${q}”`,
   id,
   required,
 }: LocalSearchSelectProps) {
   const [open, setOpen] = React.useState(false)
+  const [search, setSearch] = React.useState("")
 
   const selected = options.find((opt) => opt.value === value)
-  const display = selected?.label ?? null
+  const display = selected?.label ?? (allowCustom && value ? value : null)
+  const trimmedSearch = search.trim()
+  const showCustom =
+    allowCustom &&
+    trimmedSearch.length > 0 &&
+    !options.some(
+      (opt) =>
+        opt.label.trim().toLowerCase() === trimmedSearch.toLowerCase() ||
+        opt.value.trim().toLowerCase() === trimmedSearch.toLowerCase(),
+    )
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setSearch("")
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           id={id}
@@ -79,7 +100,11 @@ export function LocalSearchSelect({
       </PopoverTrigger>
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
         <Command>
-          <CommandInput placeholder={searchPlaceholder} />
+          <CommandInput
+            placeholder={searchPlaceholder}
+            value={search}
+            onValueChange={setSearch}
+          />
           <CommandList>
             <CommandEmpty>{emptyMessage}</CommandEmpty>
             <CommandGroup>
@@ -89,9 +114,22 @@ export function LocalSearchSelect({
                   onSelect={() => {
                     onValueChange("")
                     setOpen(false)
+                    setSearch("")
                   }}
                 >
                   {clearLabel}
+                </CommandItem>
+              ) : null}
+              {showCustom ? (
+                <CommandItem
+                  value={`__custom__ ${trimmedSearch}`}
+                  onSelect={() => {
+                    onValueChange(trimmedSearch)
+                    setOpen(false)
+                    setSearch("")
+                  }}
+                >
+                  {customLabel(trimmedSearch)}
                 </CommandItem>
               ) : null}
               {options.map((opt) => (
@@ -101,6 +139,7 @@ export function LocalSearchSelect({
                   onSelect={() => {
                     onValueChange(opt.value)
                     setOpen(false)
+                    setSearch("")
                   }}
                 >
                   <Check

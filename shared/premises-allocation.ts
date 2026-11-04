@@ -104,7 +104,27 @@ export function todayYmdUtc(): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
-/** Local calendar YYYY-MM-DD (runtime default timezone). */
+/** Application business calendar timezone (Goa / India). */
+export const APP_TIME_ZONE = "Asia/Kolkata";
+
+/**
+ * Calendar YYYY-MM-DD in IST (Asia/Kolkata).
+ * Use for "today" / future-date guards so midnight–05:29 IST is not treated as the previous UTC day.
+ */
+export function todayYmdIst(d = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const y = parts.find((p) => p.type === "year")?.value ?? "0000";
+  const m = parts.find((p) => p.type === "month")?.value ?? "01";
+  const day = parts.find((p) => p.type === "day")?.value ?? "01";
+  return `${y}-${m}-${day}`;
+}
+
+/** Local calendar YYYY-MM-DD (runtime default timezone). Prefer todayYmdIst for server business rules. */
 export function localCalendarYmd(d = new Date()): string {
   const y = d.getFullYear();
   return `${y}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;

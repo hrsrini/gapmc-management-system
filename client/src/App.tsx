@@ -111,6 +111,7 @@ import FleetVehicles from "@/pages/fleet/FleetVehicles";
 import FleetVehicleForm from "@/pages/fleet/FleetVehicleForm";
 import FleetVehicleDetail from "@/pages/fleet/FleetVehicleDetail";
 import FleetReports from "@/pages/fleet/FleetReports";
+import VehicleCategoryMaster from "@/pages/fleet/VehicleCategoryMaster";
 import ConstructionWorks from "@/pages/construction/ConstructionWorks";
 import WorkForm from "@/pages/construction/WorkForm";
 import WorkDetail from "@/pages/construction/WorkDetail";
@@ -322,6 +323,9 @@ function Router() {
       <Route path="/fleet">
         <ProtectedRoute><FleetVehicles /></ProtectedRoute>
       </Route>
+      <Route path="/fleet/vehicle-categories">
+        <ProtectedRoute><RequirePermission module="M-07" action="Read"><VehicleCategoryMaster /></RequirePermission></ProtectedRoute>
+      </Route>
       <Route path="/fleet/vehicles/new">
         <ProtectedRoute><RequirePermission module="M-07" action="Create"><FleetVehicleForm /></RequirePermission></ProtectedRoute>
       </Route>
@@ -399,6 +403,9 @@ function Router() {
       </Route>
       <Route path="/correspondence/outward/new">
         <ProtectedRoute><RequirePermission module="M-09" action="Create"><DakOutwardForm /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/correspondence/outward/:id/edit">
+        <ProtectedRoute><RequirePermission module="M-09" action="Update"><DakOutwardForm /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/correspondence/outward/:id">
         <ProtectedRoute><DakOutwardDetail /></ProtectedRoute>

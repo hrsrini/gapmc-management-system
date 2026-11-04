@@ -256,6 +256,9 @@ export default function IomsRentInvoiceForm() {
     }
   }, [billingType, rentResolve?.defaultOccupancy]);
 
+  const gstExemptPreview =
+    (selectedEntity != null && selectedEntity.gstApplicable === false) || (!isEntitySelection && isGovtEntity);
+
   const {
     data: billingCalc,
     isFetching: billingCalcFetching,
@@ -269,6 +272,7 @@ export default function IomsRentInvoiceForm() {
       billingType,
       occupancyFrom,
       occupancyTo,
+      gstExemptPreview,
     ],
     enabled:
       Boolean(selectedAllotmentId) &&
@@ -286,6 +290,8 @@ export default function IomsRentInvoiceForm() {
           billingType,
           occupancyFrom: occupancyFrom || undefined,
           occupancyTo: occupancyTo || undefined,
+          gstExempt: gstExemptPreview,
+          isGovtEntity: gstExemptPreview,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -321,9 +327,6 @@ export default function IomsRentInvoiceForm() {
   const rentNum = Number(rentAmount) || 0;
   const nonGstNum = Number(nonGstAmount) || 0;
 
-  const gstExemptPreview =
-    (selectedEntity != null && selectedEntity.gstApplicable === false) || (!isEntitySelection && isGovtEntity);
-
   const rentCgstPct = (() => {
     const n = parseFloat(String(sysCfg?.rent_invoice_cgst_percent ?? ""));
     return Number.isFinite(n) && n >= 0 ? n : parseFloat(SYSTEM_CONFIG_DEFAULTS.rent_invoice_cgst_percent);
@@ -340,7 +343,7 @@ export default function IomsRentInvoiceForm() {
     return computeRentInvoiceGstInr(rentNum, gstExemptPreview, rentCgstPct, rentSgstPct);
   }, [rentNum, gstExemptPreview, rentCgstPct, rentSgstPct, rentOverride, billingCalc]);
   const totalAmount =
-    !rentOverride && billingCalc && nonGstNum <= 0
+    !rentOverride && billingCalc && nonGstNum <= 0 && !gstExemptPreview
       ? billingCalc.totalAmount
       : rentInvoiceTotalInr(rentNum, nonGstNum, cgstNum, sgstNum);
 
@@ -768,11 +771,11 @@ export default function IomsRentInvoiceForm() {
                   ))}
                   <div className="flex justify-between gap-2 sm:col-span-2 border-t pt-2">
                     <span className="text-muted-foreground">GST total</span>
-                    <span className="font-medium">{formatInr(billingCalc.cgst + billingCalc.sgst)}</span>
+                    <span className="font-medium">{formatInr(cgstNum + sgstNum)}</span>
                   </div>
                   <div className="flex justify-between gap-2 sm:col-span-2">
                     <span className="font-medium">Invoice total</span>
-                    <span className="font-semibold">{formatInr(billingCalc.totalAmount)}</span>
+                    <span className="font-semibold">{formatInr(totalAmount)}</span>
                   </div>
                 </div>
               </div>

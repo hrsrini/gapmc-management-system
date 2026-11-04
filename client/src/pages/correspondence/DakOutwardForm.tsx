@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useParams } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,7 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { localCalendarYmd } from "@shared/premises-allocation";
 import type { DakRecipientRow } from "@shared/dak-recipients";
-import { Send, Loader2, Plus, Trash2 } from "lucide-react";
+import { Send, Loader2, Plus, Trash2, AlertCircle } from "lucide-react";
 
 interface Yard {
   id: string;
@@ -63,6 +63,90 @@ function recipientsFromLocationIds(ids: string[], yardById: Record<string, Yard>
     });
   }
   return out;
+}
+
+interface OutwardRecord {
+  id: string;
+  despatchNo?: string | null;
+  despatchDate: string;
+  subject: string;
+  modeOfDespatch: string;
+  yardId?: string | null;
+  fileRef?: string | null;
+  despatchedBy?: string | null;
+  toRecipientsJson?: DakRecipientRow[] | null;
+  copyToJson?: DakRecipientRow[] | null;
+  toParty?: string | null;
+  toAddress?: string | null;
+}
+
+function normText(s: string): string {
+  return s.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Match a freeform recipient row back to Location Master when locationId was not stored. */
+function matchRecipientToYard(r: DakRecipientRow, yards: Yard[]): string | null {
+  const party = normText(r.name ?? "");
+  const addr = normText(r.address ?? "");
+  if (!party && !addr) return null;
+  const byAddress = addr
+    ? yards.filter((y) => {
+        const ya = normText(String(y.address ?? ""));
+        return ya && (ya === addr || addr.includes(ya) || ya.includes(addr));
+      })
+    : [];
+  if (byAddress.length === 1) return byAddress[0]!.id;
+  if (byAddress.length > 1 && party) {
+    const hit = byAddress.find((y) => {
+      const pn = normText(String(y.partyName ?? ""));
+      const nm = normText(String(y.name ?? ""));
+      return (pn && pn === party) || (nm && nm === party);
+    });
+    if (hit) return hit.id;
+  }
+  const partyHits = party
+    ? yards.filter((y) => {
+        const pn = normText(String(y.partyName ?? ""));
+        const nm = normText(String(y.name ?? ""));
+        return (pn && pn === party) || (nm && nm === party);
+      })
+    : [];
+  if (partyHits.length === 1) return partyHits[0]!.id;
+  return null;
+}
+
+/** Split saved To/Copy-To rows into location checkbox ids + freeform Name/Address rows. */
+function splitRecipientsForEdit(
+  rows: DakRecipientRow[] | null | undefined,
+  yards: Yard[],
+): { locationIds: string[]; external: DakRecipientRow[]; mode: "yes" | "no" } {
+  const list = Array.isArray(rows) ? rows : [];
+  const locationIds: string[] = [];
+  const external: DakRecipientRow[] = [];
+  const seen = new Set<string>();
+  for (const r of list) {
+    let locId = String(r.locationId ?? "").trim();
+    if (!locId && yards.length > 0) {
+      locId = matchRecipientToYard(r, yards) ?? "";
+    }
+    if (locId && !seen.has(locId) && (yards.length === 0 || yards.some((y) => y.id === locId))) {
+      seen.add(locId);
+      locationIds.push(locId);
+      continue;
+    }
+    if (String(r.name ?? "").trim()) {
+      external.push({
+        name: String(r.name ?? "").trim(),
+        address: String(r.address ?? "").trim(),
+        locationId: null,
+      });
+    }
+  }
+  return {
+    locationIds,
+    external: external.length > 0 ? external : [emptyExternalRow()],
+    mode: locationIds.length > 0 ? "yes" : "no",
+  };
 }
 
 type RecipientBlockProps = {
@@ -251,6 +335,8 @@ function RecipientBlock({
 }
 
 export default function DakOutwardForm() {
+  const { id } = useParams<{ id: string }>();
+  const isEdit = !!id;
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { user } = useAuth();
@@ -281,6 +367,11 @@ export default function DakOutwardForm() {
       if (!res.ok) throw new Error("Failed to load locations");
       return res.json();
     },
+  });
+
+  const { data: outward, isError: outwardError } = useQuery<OutwardRecord>({
+    queryKey: ["/api/ioms/dak/outward", id],
+    enabled: isEdit,
   });
 
   const { data: selfEmployee } = useQuery<EmployeeRef>({
@@ -314,19 +405,62 @@ export default function DakOutwardForm() {
   }, [toLocationIds]);
 
   useEffect(() => {
+    if (isEdit) return;
     const name = user?.name?.trim() || "";
     if (name) setDespatchedBy(name);
-  }, [user?.name]);
+  }, [user?.name, isEdit]);
 
   useEffect(() => {
     if (!selfEmployee) return;
+    if (isEdit && outward) {
+      // Keep original despatch location / by on edit; only fill label if missing.
+      const yid = outward.yardId ?? selfEmployee.yardId ?? null;
+      setOutwardYardId(yid);
+      const y = yid ? yardById[yid] : undefined;
+      setOutwardLocationLabel(y?.name?.trim() || y?.code?.trim() || yid || "—");
+      if (outward.despatchedBy) setDespatchedBy(outward.despatchedBy);
+      return;
+    }
+    if (isEdit) return;
     const yid = selfEmployee.yardId ?? null;
     setOutwardYardId(yid);
     const y = yid ? yardById[yid] : undefined;
     setOutwardLocationLabel(y?.name?.trim() || y?.code?.trim() || yid || "—");
     const empName = employeeFullName(selfEmployee);
     if (empName) setDespatchedBy(empName);
-  }, [selfEmployee, yardById]);
+  }, [selfEmployee, yardById, isEdit, outward]);
+
+  // Prefill edit form including To / Copy To location checkboxes.
+  useEffect(() => {
+    if (!outward) return;
+    setDespatchNo(outward.despatchNo ?? "");
+    setDespatchDate(outward.despatchDate ?? localCalendarYmd());
+    setFileRef(outward.fileRef ?? "");
+    setModeOfDespatch(outward.modeOfDespatch || "Post");
+    setSubject(outward.subject ?? "");
+    if (outward.despatchedBy) setDespatchedBy(outward.despatchedBy);
+    if (outward.yardId) {
+      setOutwardYardId(outward.yardId);
+      const y = yardById[outward.yardId];
+      if (y) setOutwardLocationLabel(y.name?.trim() || y.code?.trim() || outward.yardId);
+    }
+
+    const toRows =
+      outward.toRecipientsJson && outward.toRecipientsJson.length > 0
+        ? outward.toRecipientsJson
+        : outward.toParty
+          ? [{ name: outward.toParty, address: outward.toAddress ?? "", locationId: null }]
+          : [];
+    const toSplit = splitRecipientsForEdit(toRows, yards);
+    setToInternal(toSplit.mode);
+    setToLocationIds(toSplit.locationIds);
+    setToExternalRows(toSplit.external);
+
+    const copySplit = splitRecipientsForEdit(outward.copyToJson, yards);
+    setCopyInternal(copySplit.mode);
+    setCopyLocationIds(copySplit.locationIds);
+    setCopyExternalRows(copySplit.external);
+  }, [outward, yards, yardById]);
 
   const manualRows = (rows: DakRecipientRow[]) =>
     rows
@@ -374,6 +508,29 @@ export default function DakOutwardForm() {
     onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
 
+  const updateMutation = useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await fetch(`/api/ioms/dak/outward/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/dak/outward"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/dak/outward", id] });
+      toast({ title: "Outward updated" });
+      setLocation(`/correspondence/outward/${id}`);
+    },
+    onError: (e: Error) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
+  });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!despatchDate) {
@@ -395,7 +552,7 @@ export default function DakOutwardForm() {
       toast({ title: "Subject required", variant: "destructive" });
       return;
     }
-    createMutation.mutate({
+    const payload = {
       despatchNo: despatchNo || undefined,
       despatchDate,
       toRecipients,
@@ -405,19 +562,55 @@ export default function DakOutwardForm() {
       yardId: outwardYardId || undefined,
       fileRef: fileRef || undefined,
       despatchedBy: despatchedBy || undefined,
-    });
+    };
+    if (isEdit) updateMutation.mutate(payload);
+    else createMutation.mutate(payload);
   };
 
+  const saving = createMutation.isPending || updateMutation.isPending;
   const canSubmit =
-    Boolean(despatchDate) && toRecipients.length > 0 && Boolean(subject.trim()) && !createMutation.isPending;
+    Boolean(despatchDate) && toRecipients.length > 0 && Boolean(subject.trim()) && !saving;
+
+  const loading = isEdit && outward === undefined && !outwardError;
+  if (isEdit && outwardError) {
+    return (
+      <AppShell breadcrumbs={[{ label: "Tapal Outward", href: "/correspondence/outward" }, { label: "Edit" }]}>
+        <Card className="bg-destructive/10 border-destructive/20">
+          <CardContent className="p-6 flex items-center gap-3">
+            <AlertCircle className="h-5 w-5 text-destructive" />
+            <span className="text-destructive">Outward not found.</span>
+            <Button variant="outline" size="sm" onClick={() => setLocation("/correspondence/outward")}>
+              Back to list
+            </Button>
+          </CardContent>
+        </Card>
+      </AppShell>
+    );
+  }
+  if (loading) {
+    return (
+      <AppShell breadcrumbs={[{ label: "Tapal Outward", href: "/correspondence/outward" }, { label: "Edit" }]}>
+        <Card>
+          <CardContent className="p-6 flex items-center gap-2 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading outward…
+          </CardContent>
+        </Card>
+      </AppShell>
+    );
+  }
 
   return (
-    <AppShell breadcrumbs={[{ label: "Tapal Outward", href: "/correspondence/outward" }, { label: "Add outward" }]}>
+    <AppShell
+      breadcrumbs={[
+        { label: "Tapal Outward", href: "/correspondence/outward" },
+        { label: isEdit ? "Edit outward" : "Add outward" },
+      ]}
+    >
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Send className="h-5 w-5" />
-            Add outward
+            {isEdit ? "Edit outward" : "Add outward"}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -429,6 +622,8 @@ export default function DakOutwardForm() {
                   value={despatchNo}
                   onChange={(e) => setDespatchNo(e.target.value)}
                   placeholder="Leave blank for auto"
+                  readOnly={isEdit && !!outward?.despatchNo}
+                  className={isEdit && outward?.despatchNo ? "bg-muted/40" : undefined}
                 />
               </div>
               <div>
@@ -477,9 +672,9 @@ export default function DakOutwardForm() {
               mode={toInternal}
               onModeChange={(v) => {
                 setToInternal(v);
-                // Keep Add-row UI usable for both Yes and No.
                 if (toExternalRows.length === 0) setToExternalRows([emptyExternalRow()]);
-                if (v === "yes") setToLocationIds([]);
+                // Clear location picks only when switching to No (keep selections when Yes).
+                if (v === "no") setToLocationIds([]);
               }}
               externalRows={toExternalRows}
               onExternalRowsChange={setToExternalRows}
@@ -496,7 +691,7 @@ export default function DakOutwardForm() {
               onModeChange={(v) => {
                 setCopyInternal(v);
                 if (copyExternalRows.length === 0) setCopyExternalRows([emptyExternalRow()]);
-                if (v === "yes") setCopyLocationIds([]);
+                if (v === "no") setCopyLocationIds([]);
               }}
               externalRows={copyExternalRows}
               onExternalRowsChange={setCopyExternalRows}
@@ -522,10 +717,14 @@ export default function DakOutwardForm() {
 
             <div className="flex gap-2 pt-2">
               <Button type="submit" disabled={!canSubmit}>
-                {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Create
+                {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                {isEdit ? "Update" : "Create"}
               </Button>
-              <Button type="button" variant="outline" onClick={() => setLocation("/correspondence/outward")}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setLocation(isEdit ? `/correspondence/outward/${id}` : "/correspondence/outward")}
+              >
                 Cancel
               </Button>
             </div>

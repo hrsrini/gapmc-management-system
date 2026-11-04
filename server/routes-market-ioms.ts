@@ -44,6 +44,7 @@ import { HrEmployeeRuleError, normalizeAadhaarMasked, normalizeMobile10 } from "
 import { validateDvReturnToDraft } from "@shared/workflow-rejection";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
+import { todayYmdIst } from "@shared/premises-allocation";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import {
   assertIsoTransactionDate,
@@ -626,7 +627,7 @@ export function registerMarketIomsRoutes(app: Express) {
     return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
   }
   function todayIso(): string {
-    return new Date().toISOString().slice(0, 10);
+    return todayYmdIst();
   }
   function computeModalRupeeRounded(prices: number[]): number {
     const freq = new Map<number, number>();
@@ -1546,7 +1547,30 @@ export function registerMarketIomsRoutes(app: Express) {
   app.post("/api/ioms/farmers", async (req, res) => {
     try {
       const body = req.body;
-      const yardId = String(body.yardId ?? "");
+      const yardId = String(body.yardId ?? "").trim();
+      const name = String(body.name ?? "").trim();
+      const farmerCode =
+        String(body.farmerCode ?? body.farmerId ?? "").trim() ||
+        (body.autoFarmerCode ? `F-${nanoid(8)}` : "");
+      const krishiCardNo = String(body.krishiCardNo ?? "").trim();
+      const address = String(body.address ?? "").trim();
+      const village = String(body.village ?? "").trim();
+      const taluk = String(body.taluk ?? "").trim();
+      const district = String(body.district ?? "").trim();
+      const state = String(body.state ?? "").trim();
+      /** Full Farmer Master UI validates all fields; transaction wizard may create with partials. */
+      const requireFull = body.requireFullMaster === true || body.requireFullMaster === "1";
+      if (!name) return sendApiError(res, 400, "FARMER_NAME_REQUIRED", "Farmer Name is required.");
+      if (!yardId) return sendApiError(res, 400, "FARMER_YARD_REQUIRED", "Yard is required.");
+      if (requireFull) {
+        if (!farmerCode) return sendApiError(res, 400, "FARMER_ID_REQUIRED", "Farmer ID is required.");
+        if (!krishiCardNo) return sendApiError(res, 400, "FARMER_KRISHI_REQUIRED", "Krishi Card No. is required.");
+        if (!address) return sendApiError(res, 400, "FARMER_ADDRESS_REQUIRED", "Address is required.");
+        if (!village) return sendApiError(res, 400, "FARMER_VILLAGE_REQUIRED", "Village/Town is required.");
+        if (!taluk) return sendApiError(res, 400, "FARMER_TALUKA_REQUIRED", "Taluka is required.");
+        if (!district) return sendApiError(res, 400, "FARMER_DISTRICT_REQUIRED", "District is required.");
+        if (!state) return sendApiError(res, 400, "FARMER_STATE_REQUIRED", "State is required.");
+      }
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(yardId)) {
         return sendApiError(res, 403, "IOMS_MARKET_YARD_ACCESS_DENIED", "You do not have access to this yard");
@@ -1560,15 +1584,21 @@ export function registerMarketIomsRoutes(app: Express) {
         if (sendHrRule(res, e)) return;
         throw e;
       }
+      if (requireFull && !mobileNorm) {
+        return sendApiError(res, 400, "FARMER_MOBILE_REQUIRED", "Mobile No. is required (10-digit Indian mobile).");
+      }
       const id = nanoid();
       await db.insert(farmers).values({
         id,
-        name: String(body.name ?? ""),
+        name,
         yardId,
-        krishiCardNo: body.krishiCardNo ? String(body.krishiCardNo) : null,
-        village: body.village ? String(body.village) : null,
-        taluk: body.taluk ? String(body.taluk) : null,
-        district: body.district ? String(body.district) : null,
+        farmerCode: farmerCode || `F-${id.slice(0, 8)}`,
+        krishiCardNo: krishiCardNo || null,
+        address: address || null,
+        village: village || null,
+        taluk: taluk || null,
+        district: district || null,
+        state: state || null,
         mobile: mobileNorm,
         aadhaarToken: aadhaarNorm,
       });
@@ -1592,9 +1622,12 @@ export function registerMarketIomsRoutes(app: Express) {
       }
       const body = req.body;
       const updates: Record<string, unknown> = {};
-      ["name", "yardId", "krishiCardNo", "village", "taluk", "district"].forEach((k) => {
-        if (body[k] !== undefined) updates[k] = body[k] == null ? null : String(body[k]);
+      ["name", "yardId", "farmerCode", "krishiCardNo", "address", "village", "taluk", "district", "state"].forEach((k) => {
+        if (body[k] !== undefined) updates[k] = body[k] == null ? null : String(body[k]).trim();
       });
+      if (body.farmerId !== undefined && body.farmerCode === undefined) {
+        updates.farmerCode = body.farmerId == null ? null : String(body.farmerId).trim();
+      }
       if (body.mobile !== undefined) {
         try {
           updates.mobile = normalizeMobile10(
@@ -1616,6 +1649,36 @@ export function registerMarketIomsRoutes(app: Express) {
           if (sendHrRule(res, e)) return;
           throw e;
         }
+      }
+      const nextName = updates.name !== undefined ? String(updates.name ?? "") : existing.name;
+      const nextYard = updates.yardId !== undefined ? String(updates.yardId ?? "") : existing.yardId;
+      const nextCode =
+        updates.farmerCode !== undefined ? String(updates.farmerCode ?? "") : String(existing.farmerCode ?? "");
+      const nextKrishi =
+        updates.krishiCardNo !== undefined
+          ? String(updates.krishiCardNo ?? "")
+          : String(existing.krishiCardNo ?? "");
+      const nextAddress =
+        updates.address !== undefined ? String(updates.address ?? "") : String(existing.address ?? "");
+      const nextVillage =
+        updates.village !== undefined ? String(updates.village ?? "") : String(existing.village ?? "");
+      const nextTaluk = updates.taluk !== undefined ? String(updates.taluk ?? "") : String(existing.taluk ?? "");
+      const nextDistrict =
+        updates.district !== undefined ? String(updates.district ?? "") : String(existing.district ?? "");
+      const nextState = updates.state !== undefined ? String(updates.state ?? "") : String(existing.state ?? "");
+      const nextMobile =
+        updates.mobile !== undefined ? (updates.mobile as string | null) : existing.mobile;
+      if (!nextName.trim()) return sendApiError(res, 400, "FARMER_NAME_REQUIRED", "Farmer Name is required.");
+      if (!nextYard.trim()) return sendApiError(res, 400, "FARMER_YARD_REQUIRED", "Yard is required.");
+      if (!nextCode.trim()) return sendApiError(res, 400, "FARMER_ID_REQUIRED", "Farmer ID is required.");
+      if (!nextKrishi.trim()) return sendApiError(res, 400, "FARMER_KRISHI_REQUIRED", "Krishi Card No. is required.");
+      if (!nextAddress.trim()) return sendApiError(res, 400, "FARMER_ADDRESS_REQUIRED", "Address is required.");
+      if (!nextVillage.trim()) return sendApiError(res, 400, "FARMER_VILLAGE_REQUIRED", "Village/Town is required.");
+      if (!nextTaluk.trim()) return sendApiError(res, 400, "FARMER_TALUKA_REQUIRED", "Taluka is required.");
+      if (!nextDistrict.trim()) return sendApiError(res, 400, "FARMER_DISTRICT_REQUIRED", "District is required.");
+      if (!nextState.trim()) return sendApiError(res, 400, "FARMER_STATE_REQUIRED", "State is required.");
+      if (!nextMobile) {
+        return sendApiError(res, 400, "FARMER_MOBILE_REQUIRED", "Mobile No. is required (10-digit Indian mobile).");
       }
       if (updates.yardId && scopedIds && scopedIds.length > 0 && !scopedIds.includes(updates.yardId as string)) {
         return sendApiError(res, 403, "IOMS_MARKET_YARD_ACCESS_DENIED", "You do not have access to this yard");
@@ -1805,14 +1868,14 @@ export function registerMarketIomsRoutes(app: Express) {
         if (Number.isNaN(quantity) || quantity <= 0) {
           return sendApiError(res, 400, "PURCHASE_TX_QUANTITY_INVALID", "quantity must be greater than 0");
         }
-        const adjDateRaw = String(body.transactionDate ?? new Date().toISOString().slice(0, 10));
+        const adjDateRaw = String(body.transactionDate ?? todayYmdIst());
         let adjTransactionDate: string;
         try {
           adjTransactionDate = assertIsoTransactionDate(adjDateRaw);
         } catch {
           return sendApiError(res, 400, "PURCHASE_TX_TRANSACTION_DATE_INVALID", "transactionDate must be YYYY-MM-DD");
         }
-        const todayAdj = new Date().toISOString().slice(0, 10);
+        const todayAdj = todayYmdIst();
         if (adjTransactionDate > todayAdj) {
           return sendApiError(res, 400, "PURCHASE_TX_FUTURE_DATE", "Future-dated arrivals are not allowed.");
         }
@@ -1916,8 +1979,8 @@ export function registerMarketIomsRoutes(app: Express) {
       } catch {
         return sendApiError(res, 400, "PURCHASE_TX_TRANSACTION_DATE_INVALID", "transactionDate must be YYYY-MM-DD");
       }
-      // US-M04-003 acceptance: block future-dated arrival entry.
-      const today = new Date().toISOString().slice(0, 10);
+      // US-M04-003 acceptance: block future-dated arrival entry (IST calendar day).
+      const today = todayYmdIst();
       if (transactionDate > today) {
         return sendApiError(res, 400, "PURCHASE_TX_FUTURE_DATE", "Future-dated arrivals are not allowed.");
       }
@@ -2792,8 +2855,8 @@ export function registerMarketIomsRoutes(app: Express) {
       if (!checkPostId || !entryDate) {
         return sendApiError(res, 400, "CHECKPOST_INWARD_FIELDS_REQUIRED", "checkPostId and entryDate are required");
       }
-      // US-M04-003 acceptance: block future-dated arrival entry.
-      const today = new Date().toISOString().slice(0, 10);
+      // US-M04-003 acceptance: block future-dated arrival entry (IST calendar day).
+      const today = todayYmdIst();
       if (String(entryDate) > today) {
         return sendApiError(res, 400, "CHECKPOST_INWARD_FUTURE_DATE", "Future-dated arrivals are not allowed.");
       }

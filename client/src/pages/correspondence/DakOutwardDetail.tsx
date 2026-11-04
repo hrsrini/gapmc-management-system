@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Send, ArrowLeft, Paperclip, Download, Trash2, AlertCircle, Eye, Loader2 } from "lucide-react";
+import { Send, ArrowLeft, Paperclip, Download, Trash2, AlertCircle, Eye, Loader2, Pencil } from "lucide-react";
+import { Link } from "wouter";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
 import { FormFileAttachments } from "@/components/forms/FormFileAttachments";
 import { AuthenticatedBlobPreviewDialog } from "@/components/attachment/AuthenticatedBlobPreviewDialog";
@@ -146,14 +147,23 @@ export default function DakOutwardDetail() {
     <AppShell breadcrumbs={[{ label: "Dak Outward", href: "/correspondence/outward" }, { label: outward.despatchNo ?? outward.id }]}>
       <div className="space-y-4">
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 flex-wrap">
             <CardTitle className="flex items-center gap-2">
               <Send className="h-5 w-5" />
               {outward.despatchNo ?? outward.id}
             </CardTitle>
-            <Button variant="ghost" size="sm" onClick={() => setLocation("/correspondence/outward")}>
-              <ArrowLeft className="h-4 w-4 mr-1" /> Back
-            </Button>
+            <div className="flex items-center gap-2">
+              {canUpdate && (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/correspondence/outward/${id}/edit`}>
+                    <Pencil className="h-4 w-4 mr-1" /> Edit
+                  </Link>
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={() => setLocation("/correspondence/outward")}>
+                <ArrowLeft className="h-4 w-4 mr-1" /> Back
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div>

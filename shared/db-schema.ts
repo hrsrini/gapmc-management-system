@@ -1431,11 +1431,16 @@ export const marketCommodityReportSnapshots = gapmc.table("market_commodity_repo
 export const farmers = gapmc.table("farmers", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
+  /** Business Farmer ID (M-04 Farmer Master). */
+  farmerCode: text("farmer_code"),
   /** Farmer Krishi Card number (M-04 registry; client clarification). */
   krishiCardNo: text("krishi_card_no"),
+  /** Full postal / street address (separate from village/taluka/district/state). */
+  address: text("address"),
   village: text("village"),
   taluk: text("taluk"),
   district: text("district"),
+  state: text("state"),
   mobile: text("mobile"),
   aadhaarToken: text("aadhaar_token"),
   yardId: text("yard_id").notNull(),
@@ -1732,6 +1737,20 @@ export const advanceRequests = gapmc.table("advance_requests", {
 });
 
 // ----- M-07: Vehicle Fleet Management -----
+
+/** Make/Model master for fleet + market transaction vehicle dropdown. */
+export const vehicleCategories = gapmc.table("vehicle_categories", {
+  id: text("id").primaryKey(),
+  /** Display value in Make/Model dropdowns. */
+  name: text("name").notNull(),
+  capacityKg: doublePrecision("capacity_kg"),
+  manufacturerCompany: text("manufacturer_company"),
+  /** Active | Inactive */
+  status: text("status").notNull().default("Active"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
 export const vehicles = gapmc.table("vehicles", {
   id: text("id").primaryKey(),
   registrationNo: text("registration_no").notNull().unique(),
@@ -1740,6 +1759,8 @@ export const vehicles = gapmc.table("vehicles", {
   yardId: text("yard_id").notNull(),
   make: text("make"),
   model: text("model"),
+  /** Optional FK to vehicle_categories (Make/Model master). */
+  vehicleCategoryId: text("vehicle_category_id"),
   yearOfManufacture: integer("year_of_manufacture"),
   fuelType: text("fuel_type"), // Petrol | Diesel | CNG | Electric | Other
   ownershipType: text("ownership_type"), // Owned | Hired
@@ -2067,6 +2088,11 @@ export const dakInward = gapmc.table("dak_inward", {
   receivedDate: text("received_date").notNull(),
   fromParty: text("from_party").notNull(),
   fromAddress: text("from_address"),
+  /**
+   * Location Master id when "Received from Yard / Checkpost / HO" = Yes.
+   * Used to preselect the location dropdown on Edit.
+   */
+  fromLocationId: text("from_location_id"),
   subject: text("subject").notNull(),
   modeOfReceipt: text("mode_of_receipt").notNull(), // Hand | Post | Courier | Email | Fax
   receivedBy: text("received_by"),

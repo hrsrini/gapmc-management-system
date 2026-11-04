@@ -27,6 +27,7 @@ import { resolvePurchaseTransactionTraderRef } from "./market-purchase-trader-re
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
 import { assertLmLicenceAllowsOperation, LmLicenceGuardError } from "@shared/lm-licence-guard";
+import { todayYmdIst } from "@shared/premises-allocation";
 
 export async function generateNextMarketTransactionNo(params: {
   yardId: string;
@@ -134,7 +135,8 @@ export async function validateMarketTransactionWizard(
   } catch {
     return { ok: false, code: "MKT_TX_DATE_INVALID", message: "transactionDate must be YYYY-MM-DD" };
   }
-  const today = new Date().toISOString().slice(0, 10);
+  // Business calendar is IST — UTC "today" is wrong between 00:00–05:29 IST.
+  const today = todayYmdIst();
   if (txDate > today) {
     return { ok: false, code: "MKT_TX_FUTURE_DATE", message: "Future-dated transactions are not allowed" };
   }

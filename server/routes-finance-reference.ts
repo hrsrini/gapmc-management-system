@@ -10,11 +10,27 @@ import {
   iomsRevenueHeadLedgerMap,
   manualReceiptTypes,
   tallyLedgers,
+  vehicleCategories,
 } from "@shared/db-schema";
 import { sendApiError } from "./api-errors";
 import { buildReceiptRevenueHeadOptions } from "@shared/receipt-revenue-head-options";
 
 export function registerFinanceReferenceRoutes(app: Express) {
+  /** Active Vehicle Category (Make/Model) rows for market / fleet dropdowns. */
+  app.get("/api/ioms/reference/vehicle-categories", async (_req, res) => {
+    try {
+      const list = await db
+        .select()
+        .from(vehicleCategories)
+        .where(eq(vehicleCategories.status, "Active"))
+        .orderBy(asc(vehicleCategories.name));
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch vehicle categories");
+    }
+  });
+
   app.get("/api/ioms/reference/govt-gst-exempt-categories", async (_req, res) => {
     try {
       const list = await db.select().from(govtGstExemptCategories).orderBy(asc(govtGstExemptCategories.sortOrder));

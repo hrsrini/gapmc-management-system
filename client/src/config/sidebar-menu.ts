@@ -170,6 +170,12 @@ export const SIDEBAR_MENU_GROUPS: SidebarMenuGroup[] = [
     group: "Fleet (IOMS M-07)",
     items: [
       { title: "Vehicles", icon: Truck, href: "/fleet", requirePermission: { module: "M-07", action: "Read" } },
+      {
+        title: "Vehicle categories",
+        icon: Truck,
+        href: "/fleet/vehicle-categories",
+        requirePermission: { module: "M-07", action: "Read" },
+      },
       { title: "Reports", icon: BarChart3, href: "/fleet/reports", requirePermission: { module: "M-07", action: "Read" } },
     ],
   },
