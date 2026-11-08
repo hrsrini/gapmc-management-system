@@ -2,7 +2,11 @@ import { eq } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { db } from "./db";
 import { iomsReceipts, paymentGatewayLog } from "@shared/db-schema";
-import { applyM03ReceiptToRentDepositLedgerWhenSettled, maybeMarkM03InvoicePaidFromSettledReceipts } from "./receipt-deposit-service";
+import {
+  applyM03ReceiptToRentDepositLedgerWhenSettled,
+  maybeMarkM03InvoicePaidFromSettledReceipts,
+  m03InvoiceIdsCoveredByReceipt,
+} from "./receipt-deposit-service";
 import { initialDepositStatusForPaymentMode } from "@shared/receipt-deposit";
 
 type IomsReceiptRow = InferSelectModel<typeof iomsReceipts>;
@@ -107,8 +111,10 @@ export async function applyPaymentGatewayCallback(params: {
   if (status === "Paid" || status === "Reconciled") {
     try {
       await applyM03ReceiptToRentDepositLedgerWhenSettled(updatedReceipt);
-      if (updatedReceipt.sourceModule === "M-03" && updatedReceipt.sourceRecordId) {
-        await maybeMarkM03InvoicePaidFromSettledReceipts(String(updatedReceipt.sourceRecordId));
+      if (updatedReceipt.sourceModule === "M-03") {
+        for (const invoiceId of m03InvoiceIdsCoveredByReceipt(updatedReceipt)) {
+          await maybeMarkM03InvoicePaidFromSettledReceipts(invoiceId);
+        }
       }
     } catch (e) {
       console.error("[payment-gateway] rent deposit Collection hook failed:", e);

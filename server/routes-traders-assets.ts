@@ -1338,8 +1338,18 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
         return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       }
-      if (String(inv.status) !== "Approved" && String(inv.status) !== "Overdue" && String(inv.status) !== "Paid") {
-        return sendApiError(res, 400, "DUES_PAY_STATUS", "Only Approved, Overdue, or Paid invoices can be paid via counter flow");
+      if (
+        String(inv.status) !== "Approved" &&
+        String(inv.status) !== "Overdue" &&
+        String(inv.status) !== "Paid" &&
+        String(inv.status) !== "Reversed"
+      ) {
+        return sendApiError(
+          res,
+          400,
+          "DUES_PAY_STATUS",
+          "Only Approved, Overdue, Paid, or Reversed invoices can be paid via counter flow",
+        );
       }
 
       const recs = await db
@@ -1446,8 +1456,18 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
           return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
         }
-        if (String(inv.status) !== "Approved" && String(inv.status) !== "Overdue" && String(inv.status) !== "Paid") {
-          return sendApiError(res, 400, "DUES_PAY_STATUS", "Only Approved, Overdue, or Paid invoices can be paid");
+        if (
+          String(inv.status) !== "Approved" &&
+          String(inv.status) !== "Overdue" &&
+          String(inv.status) !== "Paid" &&
+          String(inv.status) !== "Reversed"
+        ) {
+          return sendApiError(
+            res,
+            400,
+            "DUES_PAY_STATUS",
+            "Only Approved, Overdue, Paid, or Reversed invoices can be paid",
+          );
         }
 
         const recs = await db

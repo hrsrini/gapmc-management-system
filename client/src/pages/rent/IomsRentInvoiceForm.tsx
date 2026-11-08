@@ -31,7 +31,8 @@ import {
   yardsWithPremises,
 } from "./rent-allotments-ui";
 import { SYSTEM_CONFIG_DEFAULTS } from "@shared/system-config-defaults";
-import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
+import { computeRentInvoiceGstInr, rentInvoicePayableWithRounding } from "@shared/rent-invoice-gst";
+import { formatInvoiceRoundingOffAmount } from "@shared/invoice-rounding";
 import { MIN_RENT_INVOICE_AMOUNT_INR } from "@shared/rent-invoice-amount-validation";
 
 interface Asset {
@@ -342,10 +343,13 @@ export default function IomsRentInvoiceForm() {
     }
     return computeRentInvoiceGstInr(rentNum, gstExemptPreview, rentCgstPct, rentSgstPct);
   }, [rentNum, gstExemptPreview, rentCgstPct, rentSgstPct, rentOverride, billingCalc]);
-  const totalAmount =
-    !rentOverride && billingCalc && nonGstNum <= 0 && !gstExemptPreview
-      ? billingCalc.totalAmount
-      : rentInvoiceTotalInr(rentNum, nonGstNum, cgstNum, sgstNum);
+  const payableRounding = useMemo(() => {
+    if (!rentOverride && billingCalc && nonGstNum <= 0 && !gstExemptPreview) {
+      return rentInvoicePayableWithRounding(rentNum, 0, billingCalc.cgst, billingCalc.sgst);
+    }
+    return rentInvoicePayableWithRounding(rentNum, nonGstNum, cgstNum, sgstNum);
+  }, [rentOverride, billingCalc, nonGstNum, gstExemptPreview, rentNum, cgstNum, sgstNum]);
+  const totalAmount = payableRounding.finalAmount;
 
   const createMutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -773,8 +777,16 @@ export default function IomsRentInvoiceForm() {
                     <span className="text-muted-foreground">GST total</span>
                     <span className="font-medium">{formatInr(cgstNum + sgstNum)}</span>
                   </div>
+                  {payableRounding.roundingAmount !== 0 ? (
+                    <div className="flex justify-between gap-2 sm:col-span-2">
+                      <span className="text-muted-foreground">Rounding Off</span>
+                      <span className="font-medium tabular-nums">
+                        {formatInvoiceRoundingOffAmount(payableRounding.roundingAmount)}
+                      </span>
+                    </div>
+                  ) : null}
                   <div className="flex justify-between gap-2 sm:col-span-2">
-                    <span className="font-medium">Invoice total</span>
+                    <span className="font-medium">Invoice total (rounded)</span>
                     <span className="font-semibold">{formatInr(totalAmount)}</span>
                   </div>
                 </div>
@@ -818,10 +830,25 @@ export default function IomsRentInvoiceForm() {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label>Total (₹)</Label>
-              <Input type="text" readOnly value={totalAmount.toFixed(2)} className="bg-muted" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Rounding Off (₹)</Label>
+                <Input
+                  type="text"
+                  readOnly
+                  className="bg-muted"
+                  value={formatInvoiceRoundingOffAmount(payableRounding.roundingAmount)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Total payable (₹)</Label>
+                <Input type="text" readOnly value={totalAmount.toFixed(2)} className="bg-muted" />
+              </div>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Final total is rounded to the nearest whole rupee (0.50 and above rounds up). Taxable rent, CGST and SGST are
+              unchanged; Rounding Off is stored separately for audit.
+            </p>
 
             <div className="flex items-center gap-2">
               <Switch

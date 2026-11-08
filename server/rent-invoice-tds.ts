@@ -23,7 +23,7 @@ export function indianFyStartYmForPeriodMonth(periodMonth: string): string {
   return `${fyStartYear}-04`;
 }
 
-/** Sum `rent_amount` for Approved/Paid invoices in the same Indian FY strictly before `periodMonth`. */
+/** Sum `rent_amount` for taxable open/settled invoices in the same Indian FY strictly before `periodMonth`. */
 export async function sumApprovedPaidRentYtdBeforeMonth(args: {
   tenantLicenceId: string;
   fyStartYm: string;
@@ -35,7 +35,7 @@ export async function sumApprovedPaidRentYtdBeforeMonth(args: {
     eq(rentInvoices.tenantLicenceId, args.tenantLicenceId),
     gte(rentInvoices.periodMonth, args.fyStartYm),
     sql`${rentInvoices.periodMonth} < ${args.periodMonthExclusive}`,
-    inArray(rentInvoices.status, ["Approved", "Paid"]),
+    inArray(rentInvoices.status, ["Approved", "Overdue", "Paid", "Reversed"]),
   ];
   if (args.excludeInvoiceId) parts.push(ne(rentInvoices.id, args.excludeInvoiceId));
   const [r] = await db
@@ -76,7 +76,7 @@ export async function sumApprovedPaidRentYtdBeforeMonthForEntity(args: {
     eq(rentInvoices.entityId, args.entityId),
     gte(rentInvoices.periodMonth, args.fyStartYm),
     sql`${rentInvoices.periodMonth} < ${args.periodMonthExclusive}`,
-    inArray(rentInvoices.status, ["Approved", "Paid"]),
+    inArray(rentInvoices.status, ["Approved", "Overdue", "Paid", "Reversed"]),
   ];
   if (args.excludeInvoiceId) parts.push(ne(rentInvoices.id, args.excludeInvoiceId));
   const [r] = await db

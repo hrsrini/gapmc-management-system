@@ -1093,6 +1093,11 @@ export default function MarketTransactionWizard() {
                 <div className="space-y-1"><Label>Destination state</Label><Input value={destinationState} onChange={(e) => setDestinationState(e.target.value)} /></div>
                 <div className="space-y-1"><Label>Security deposit (₹)</Label><Input type="number" value={securityDepositAmount} onChange={(e) => setSecurityDepositAmount(e.target.value)} /></div>
                 <div className="space-y-1"><Label>Admin charges (₹)</Label><Input type="number" value={adminChargesAmount} onChange={(e) => setAdminChargesAmount(e.target.value)} /></div>
+                <p className="text-xs text-muted-foreground sm:col-span-2">
+                  Total payable = Security Deposit (refundable market-fee equivalent) + Administrative Charges. The security
+                  deposit is refunded at the exiting check post within 8 hours via Check Post → Security Deposit Refund,
+                  against this receipt.
+                </p>
               </>
             )}
 

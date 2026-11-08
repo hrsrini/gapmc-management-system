@@ -20,6 +20,8 @@ import {
   maybeMarkM03InvoicePaidFromSettledReceipts,
   handleDepositedChequeNotCleared,
   getReceiptDepositContext,
+  revertM03InvoicesAfterChequeDishonour,
+  m03InvoiceIdsCoveredByReceipt,
 } from "./receipt-deposit-service";
 import { initialDepositStatusForPaymentMode } from "@shared/receipt-deposit";
 import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
@@ -854,8 +856,10 @@ export function registerReceiptsIomsRoutes(app: Express) {
         rentDepositLedgerNotice = coll.messages.filter(Boolean).join(" ");
       }
 
-      if (becomingPaid && row.sourceModule === "M-03" && row.sourceRecordId) {
-        await maybeMarkM03InvoicePaidFromSettledReceipts(String(row.sourceRecordId));
+      if (becomingPaid && row.sourceModule === "M-03") {
+        for (const invoiceId of m03InvoiceIdsCoveredByReceipt(row)) {
+          await maybeMarkM03InvoicePaidFromSettledReceipts(invoiceId);
+        }
       }
 
       let rentRecomputationNote: string | undefined;
@@ -869,6 +873,7 @@ export function registerReceiptsIomsRoutes(app: Express) {
           rentRecomputationNote = [hint, dishonourRes.ledgerMessage].filter(Boolean).join(" ");
         } else {
           const ledgerRes = await recordChequeDishonourLedgerForM03Receipt(existing);
+          await revertM03InvoicesAfterChequeDishonour(existing);
           const hint = await dishonourRecomputationHint(existing);
           rentRecomputationNote = [hint, ledgerRes.message].filter(Boolean).join(" ");
         }

@@ -17,7 +17,8 @@ import { tenantLicenceIsGstExempt } from "./gst-exempt";
 import { resolveRentInvoiceTdsFields } from "./rent-invoice-tds";
 import { isTrackBGovtSubType } from "@shared/track-b-entity";
 import { unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
-import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
+import { computeRentInvoiceGstInr, rentInvoicePayableWithRounding } from "@shared/rent-invoice-gst";
+import { upsertActiveInvoiceRounding } from "./invoice-rounding-persist";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { rentInvoiceAmountsInvalid } from "@shared/rent-invoice-amount-validation";
 import {
@@ -109,13 +110,14 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
     const isGovtEntity = gstExempt;
     let cgst = 0;
     let sgst = 0;
-    let totalAmount = rentAmount;
+    let rounding = rentInvoicePayableWithRounding(rentAmount, 0, 0, 0);
     if (!gstExempt) {
       const g = computeRentInvoiceGstInr(rentAmount, false, rentCgstPct, rentSgstPct);
       cgst = g.cgst;
       sgst = g.sgst;
-      totalAmount = rentInvoiceTotalInr(rentAmount, 0, cgst, sgst);
+      rounding = rentInvoicePayableWithRounding(rentAmount, 0, cgst, sgst);
     }
+    const totalAmount = rounding.finalAmount;
     const tdsRes = await resolveRentInvoiceTdsFields({
       tenantLicenceId: allotment.traderLicenceId,
       rentAmount,
@@ -177,6 +179,14 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
         generatedAt: null,
         approvedAt: null,
       });
+      await upsertActiveInvoiceRounding({
+        invoiceId: id,
+        invoiceModule: "M-03-Rent",
+        invoiceNo,
+        rounding,
+        createdBy: null,
+        tx,
+      });
     });
     existingAllotmentIds.add(allotment.id);
     createdInvoiceIds.push(id);
@@ -234,13 +244,14 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
     const isGovtEntity = !gstApplicableEntity;
     let cgst = 0;
     let sgst = 0;
-    let totalAmount = rentAmount;
+    let rounding = rentInvoicePayableWithRounding(rentAmount, 0, 0, 0);
     if (gstApplicableEntity) {
       const g = computeRentInvoiceGstInr(rentAmount, false, rentCgstPct, rentSgstPct);
       cgst = g.cgst;
       sgst = g.sgst;
-      totalAmount = rentInvoiceTotalInr(rentAmount, 0, cgst, sgst);
+      rounding = rentInvoicePayableWithRounding(rentAmount, 0, cgst, sgst);
     }
+    const totalAmount = rounding.finalAmount;
 
     const gstExempt = !ea.gstApplicable;
     const tdsRes = await resolveRentInvoiceTdsFields({
@@ -305,6 +316,14 @@ export async function generateRentInvoicesForCurrentMonth(options?: {
         daUser: null,
         generatedAt: null,
         approvedAt: null,
+      });
+      await upsertActiveInvoiceRounding({
+        invoiceId: id,
+        invoiceModule: "M-03-Rent",
+        invoiceNo,
+        rounding,
+        createdBy: null,
+        tx,
       });
     });
 

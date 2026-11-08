@@ -2,7 +2,7 @@
  * M-02: Daily alerts for upcoming licence expiry + overdue dues (notify stub).
  * Keeps output lightweight; avoids spamming by writing an audit_log marker once per day.
  */
-import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { auditLog, preReceipts, rentInvoices, traderLicences } from "@shared/db-schema";
 import { sendNotificationStub } from "./notify";
@@ -71,8 +71,11 @@ export async function runM02EntityAlerts(): Promise<{
       ),
     );
 
-  // Overdue dues (best-effort): rent invoices marked Overdue; pre-receipts issued but not settled older than 30 days.
-  const [overdueRent] = await db.select({ c: sql<number>`COUNT(*)` }).from(rentInvoices).where(eq(rentInvoices.status, "Overdue"));
+  // Overdue dues (best-effort): Overdue + Reversed (cheque/DD dishonour) rent invoices; old unsettled pre-receipts.
+  const [overdueRent] = await db
+    .select({ c: sql<number>`COUNT(*)` })
+    .from(rentInvoices)
+    .where(inArray(rentInvoices.status, ["Overdue", "Reversed"]));
 
   const oldLimit = plusDays(-30);
   const [overduePre] = await db

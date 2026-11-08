@@ -31,6 +31,7 @@ const statusColors: Record<string, string> = {
   Paid: 'bg-accent/10 text-accent border-accent/20',
   Pending: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
   Overdue: 'bg-destructive/10 text-destructive border-destructive/20',
+  Reversed: 'bg-destructive/10 text-destructive border-destructive/20',
   Draft: 'bg-muted text-muted-foreground border-muted',
 };
 
@@ -240,6 +241,7 @@ export default function RentInvoiceList() {
                   <SelectItem value="Paid">Paid</SelectItem>
                   <SelectItem value="Pending">Pending</SelectItem>
                   <SelectItem value="Overdue">Overdue</SelectItem>
+                  <SelectItem value="Reversed">Reversed</SelectItem>
                   <SelectItem value="Draft">Draft</SelectItem>
                 </SelectContent>
               </Select>

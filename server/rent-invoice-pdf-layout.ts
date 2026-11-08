@@ -142,7 +142,7 @@ function drawParticularsTable(
     if (line.perLabel) {
       doc.text(pdfSafeText(line.perLabel), perX, rowY, { width: perW, align: "center", lineBreak: false });
     }
-    doc.text(pdfSafeText(formatTaxInvoiceAmountCell(line.amount)), amtX, rowY, {
+    doc.text(pdfSafeText(line.amountDisplay ?? formatTaxInvoiceAmountCell(line.amount)), amtX, rowY, {
       width: amtW - PAD,
       align: "right",
       lineBreak: false,

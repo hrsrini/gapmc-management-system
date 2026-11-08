@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,11 +14,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { TraderLicenceSearchSelect } from "@/components/selects/trader-licence-search-select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -237,15 +233,6 @@ export default function MarketTransactions() {
   const { can } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [createOpen, setCreateOpen] = useState(false);
-  const [yardId, setYardId] = useState("");
-  const [commodityId, setCommodityId] = useState("");
-  const [traderLicenceId, setTraderLicenceId] = useState("");
-  const [quantity, setQuantity] = useState("");
-  const [unit, setUnit] = useState("Quintal");
-  const [declaredValue, setDeclaredValue] = useState("");
-  const [purchaseType, setPurchaseType] = useState("TraderPurchase");
-  const [transactionDate, setTransactionDate] = useState(() => localCalendarYmd());
 
   const canCreate = can("M-04", "Create");
 
@@ -314,148 +301,11 @@ export default function MarketTransactions() {
   const { data: commodities = [] } = useQuery<Array<{ id: string; name: string; unit?: string | null }>>({
     queryKey: ["/api/ioms/commodities"],
   });
-  const yardForLicences = yardId.trim();
   const { data: yards = [] } = useQuery<Array<{ id: string; name: string; code: string }>>({
     queryKey: ["/api/yards"],
   });
   const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y])), [yards]);
-  const singleBoundYard = yards.length === 1 ? yards[0]! : null;
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
-
-  /** Unit is driven by the commodity master (read-only in the create form). */
-  useEffect(() => {
-    const c = commodityId.trim() ? commodityById.get(commodityId.trim()) : undefined;
-    const u = c?.unit != null && String(c.unit).trim() !== "" ? String(c.unit).trim() : "Quintal";
-    setUnit(u);
-  }, [commodityId, commodityById]);
-
-  useEffect(() => {
-    if (singleBoundYard && yardId !== singleBoundYard.id) setYardId(singleBoundYard.id);
-    else if (yardId && yards.length > 0 && !yardById.has(yardId)) setYardId("");
-  }, [singleBoundYard, yards, yardById, yardId]);
-
-  const feePreviewParamsReady =
-    Boolean(yardId.trim() && commodityId.trim()) && /^\d{4}-\d{2}-\d{2}$/.test(transactionDate.trim());
-
-  const {
-    data: feePreview,
-    isPending: feePreviewPending,
-    isError: feePreviewIsError,
-    error: feePreviewError,
-  } = useQuery<{ marketFeePercent: number; source: string; rateId: string | null }>({
-    queryKey: ["/api/ioms/market/fee-preview", yardId.trim(), commodityId.trim(), transactionDate.trim()],
-    queryFn: async ({ queryKey }) => {
-      const [, y, c, d] = queryKey as [string, string, string, string];
-      const u = new URL("/api/ioms/market/fee-preview", window.location.origin);
-      u.searchParams.set("yardId", y);
-      u.searchParams.set("commodityId", c);
-      u.searchParams.set("transactionDate", d);
-      const r = await fetch(u.toString(), { credentials: "include" });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error ?? r.statusText);
-      }
-      return r.json();
-    },
-    enabled: feePreviewParamsReady,
-  });
-
-  const resolvedFeePercent = feePreview?.marketFeePercent ?? null;
-
-  const marketFeeAmount = useMemo(() => {
-    const dv = Number(declaredValue) || 0;
-    const mfp = resolvedFeePercent ?? 0;
-    return Number(((dv * mfp) / 100).toFixed(2));
-  }, [declaredValue, resolvedFeePercent]);
-  const createValidationError = useMemo(() => {
-    if (!yardId.trim()) return "Yard ID is required.";
-    if (!commodityId.trim()) return "Commodity ID is required.";
-    if (!traderLicenceId.trim()) return "Trader licence ID is required.";
-    if (!unit.trim()) return "Unit is required.";
-    if (!purchaseType.trim()) return "Purchase type is required.";
-    if (!transactionDate.trim()) return "Transaction date is required.";
-    if (!yardById.has(yardId.trim())) return "Yard ID is invalid or out of scope.";
-    if (!commodityById.has(commodityId.trim())) return "Commodity ID is invalid.";
-    const q = Number(quantity);
-    if (Number.isNaN(q) || q <= 0) return "Quantity must be greater than 0.";
-    const dv = Number(declaredValue);
-    if (Number.isNaN(dv) || dv < 0) return "Declared value must be a non-negative number.";
-    if (feePreviewParamsReady) {
-      if (feePreviewPending) return "Resolving market fee rate…";
-      if (feePreviewIsError) {
-        return feePreviewError instanceof Error ? feePreviewError.message : "Could not resolve market fee rate.";
-      }
-      if (resolvedFeePercent == null || Number.isNaN(resolvedFeePercent)) return "Could not resolve market fee rate.";
-    }
-    return null;
-  }, [
-    yardId,
-    commodityId,
-    traderLicenceId,
-    unit,
-    purchaseType,
-    transactionDate,
-    yardById,
-    commodityById,
-    quantity,
-    declaredValue,
-    feePreviewParamsReady,
-    feePreviewPending,
-    feePreviewIsError,
-    feePreviewError,
-    resolvedFeePercent,
-    yardForLicences,
-  ]);
-
-  const createMutation = useMutation({
-    mutationFn: async () => {
-      if (createValidationError) {
-        throw new Error(createValidationError);
-      }
-      const body = {
-        yardId: yardId.trim(),
-        commodityId: commodityId.trim(),
-        traderLicenceId: traderLicenceId.trim(),
-        quantity: Number(quantity || 0),
-        unit: unit.trim(),
-        declaredValue: Number(declaredValue || 0),
-        marketFeePercent: resolvedFeePercent ?? 0,
-        marketFeeAmount: Number(marketFeeAmount || 0),
-        purchaseType: purchaseType.trim(),
-        transactionDate: transactionDate.trim(),
-      };
-      const res = await fetch("/api/ioms/market/transactions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const { message, code } = await readApiErrorEnvelope(res);
-        throw new ApiUserError(message, code);
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/ioms/market/transactions"] });
-      queryClient.invalidateQueries({ queryKey: ["m04-market-tx-licence-lookup"] });
-      toast({ title: "Transaction created", description: "Draft market transaction created." });
-      setCreateOpen(false);
-      setYardId("");
-      setCommodityId("");
-      setTraderLicenceId("");
-      setQuantity("");
-      setUnit("Quintal");
-      setDeclaredValue("");
-      setPurchaseType("TraderPurchase");
-      setTransactionDate(localCalendarYmd());
-    },
-    onError: (e: unknown) => {
-      const message = e instanceof Error ? e.message : String(e);
-      const code = e instanceof ApiUserError ? e.code : undefined;
-      toastM04TransactionMutationFailure(toast, code, message, "Create failed");
-    },
-  });
 
   const adjustmentMutation = useMutation({
     mutationFn: async () => {
@@ -674,171 +524,16 @@ export default function MarketTransactions() {
             Purchase Transactions (IOMS M-04)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Purchase entries at yards — recorded and effective immediately on submit (no verification or approval).
-            Use the transaction wizard for cases A–G.
+            Legacy purchase entries and adjustments. New Cases A–G entries are created only through the Transaction Wizard.
           </p>
           </div>
           {canCreate && (
-            <div className="flex gap-2">
-              <Button size="sm" asChild>
-                <Link href="/market/transactions/new">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Transaction wizard
-                </Link>
-              </Button>
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add transaction
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Create market transaction</DialogTitle>
-                </DialogHeader>
-                <div className="space-y-3">
-                  {createValidationError && (
-                    <p className="text-sm text-destructive">{createValidationError}</p>
-                  )}
-                  <div className="space-y-1">
-                    <Label>Yard</Label>
-                    {yards.length === 0 ? (
-                      <p className="text-sm text-destructive">No yard assigned to your login.</p>
-                    ) : singleBoundYard ? (
-                      <Input
-                        readOnly
-                        className="bg-muted"
-                        value={`${singleBoundYard.name} (${singleBoundYard.code})`}
-                      />
-                    ) : (
-                      <Select
-                        value={yardId || undefined}
-                        onValueChange={(v) => {
-                          setYardId(v);
-                          setTraderLicenceId("");
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select your yard" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {yards.map((y) => (
-                            <SelectItem key={y.id} value={y.id}>
-                              {`${y.name} (${y.code})`.slice(0, 64)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Commodity</Label>
-                    <Select
-                      value={commodityId || undefined}
-                      onValueChange={(id) => {
-                        setCommodityId(id);
-                        const c = commodityById.get(id);
-                        const nextUnit =
-                          c?.unit != null && String(c.unit).trim() !== "" ? String(c.unit).trim() : "Quintal";
-                        setUnit(nextUnit);
-                      }}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Select commodity" /></SelectTrigger>
-                      <SelectContent>
-                        {commodities.map((c) => (
-                          <SelectItem key={c.id} value={c.id}>
-                            {(c.name ?? c.id).slice(0, 64)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Trader licence</Label>
-                    <TraderLicenceSearchSelect
-                      yardId={yardForLicences}
-                      status="Active"
-                      value={traderLicenceId}
-                      onValueChange={setTraderLicenceId}
-                      disabled={!yardForLicences}
-                      placeholder={
-                        yardForLicences ? "Select trader licence (Active only)" : "Select yard first"
-                      }
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Only licences with status Active for the selected yard are listed. Pending or inactive licences must be
-                      activated under Traders → Licences before purchases can be recorded.
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label>Quantity</Label>
-                      <Input type="number" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>Unit</Label>
-                      <Input
-                        readOnly
-                        className="bg-muted"
-                        value={commodityId.trim() ? unit : "—"}
-                        title="Taken from the commodity master for the selected commodity"
-                      />
-                      <p className="text-xs text-muted-foreground">Set from commodity; not editable here.</p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label>Declared value (₹)</Label>
-                      <Input type="number" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>Market fee %</Label>
-                      <Input
-                        readOnly
-                        className="bg-muted font-mono"
-                        value={
-                          feePreviewPending && feePreviewParamsReady
-                            ? "…"
-                            : resolvedFeePercent != null && !Number.isNaN(resolvedFeePercent)
-                              ? String(resolvedFeePercent)
-                              : "—"
-                        }
-                      />
-                      {feePreview?.source ? (
-                        <p className="text-xs text-muted-foreground">
-                          From {feePreview.source === "matrix_yard" ? "yard matrix" : feePreview.source === "matrix_global" ? "global matrix" : "system default"}.
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Market fee amount (₹)</Label>
-                    <Input readOnly value={formatInr(marketFeeAmount)} className="bg-muted" />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label>Purchase type</Label>
-                      <Input value={purchaseType} onChange={(e) => setPurchaseType(e.target.value)} />
-                    </div>
-                    <div className="space-y-1">
-                      <Label>Transaction date</Label>
-                      <Input type="date" value={transactionDate} onChange={(e) => setTransactionDate(e.target.value)} />
-                    </div>
-                  </div>
-                  <div className="flex justify-end gap-2 pt-1">
-                    <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createMutation.isPending}>Cancel</Button>
-                    <Button
-                      onClick={() => createMutation.mutate()}
-                      disabled={createMutation.isPending || createValidationError !== null}
-                    >
-                      {createMutation.isPending ? "Creating..." : "Create"}
-                    </Button>
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
-            </div>
+            <Button size="sm" asChild>
+              <Link href="/market/transactions/new">
+                <Plus className="h-4 w-4 mr-2" />
+                Transaction wizard
+              </Link>
+            </Button>
           )}
         </CardHeader>
         <CardContent>

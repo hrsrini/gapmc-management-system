@@ -3,6 +3,10 @@
  */
 import type { InferSelectModel } from "drizzle-orm";
 import type { rentCombinedInvoices, rentInvoices } from "@shared/db-schema";
+import {
+  applyInvoiceNearestRupeeRounding,
+  formatInvoiceRoundingOffAmount,
+} from "@shared/invoice-rounding";
 import { buildRentInvoicePdfContext, type RentInvoicePdfLine } from "./rent-invoice-pdf-context";
 import { getReceiptPdfBranding } from "./receipt-pdf-shared";
 import {
@@ -157,6 +161,20 @@ export function buildCombinedRentInvoicePdfContext(input: BuildCombinedRentInvoi
     `COMBINED RENT TAX INVOICE FOR ${premisesSections.length} PREMISES — RENT FOR THE MONTH OF ${remarksMonth}. TDS COMPUTED PER PREMISES.`;
 
   const totalTax = Math.round((cgstAmount + sgstAmount) * 100) / 100;
+  const preRoundGrand = Math.round(grandTotal * 100) / 100;
+  const roundedGrand = applyInvoiceNearestRupeeRounding(preRoundGrand);
+  if (roundedGrand.roundingAmount !== 0 && premisesSections.length > 0) {
+    const last = premisesSections[premisesSections.length - 1]!;
+    last.lines = [
+      ...last.lines,
+      {
+        label: "Rounding Off",
+        amount: roundedGrand.roundingAmount,
+        amountDisplay: formatInvoiceRoundingOffAmount(roundedGrand.roundingAmount),
+        indent: true,
+      },
+    ];
+  }
 
   return {
     boardBanner,
@@ -181,8 +199,8 @@ export function buildCombinedRentInvoicePdfContext(input: BuildCombinedRentInvoi
     sgstAmount: Math.round(sgstAmount * 100) / 100,
     totalTdsAmount: Math.round(totalTdsAmount * 100) / 100,
     totalTaxAmount: totalTax,
-    grandTotal: Math.round(grandTotal * 100) / 100,
-    chargeableWords: formatTaxInvoiceChargeableWords(Math.round(grandTotal * 100) / 100),
+    grandTotal: roundedGrand.finalAmount,
+    chargeableWords: formatTaxInvoiceChargeableWords(roundedGrand.finalAmount),
     taxWords: formatTaxInvoiceTaxWords(totalTax),
     isGstExempt,
   };

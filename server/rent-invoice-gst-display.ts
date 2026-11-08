@@ -1,6 +1,6 @@
 import type { InferSelectModel } from "drizzle-orm";
 import { rentInvoices } from "@shared/db-schema";
-import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
+import { computeRentInvoiceGstInr, rentInvoicePayableTotalInr } from "@shared/rent-invoice-gst";
 
 type RentInvoiceRow = InferSelectModel<typeof rentInvoices>;
 
@@ -32,6 +32,6 @@ export function withResolvedRentInvoiceGst<T extends RentInvoiceRow>(
   const g = computeRentInvoiceGstInr(rent, false, cgstPercent, sgstPercent);
   if (g.cgst < 0.005 && g.sgst < 0.005) return invoice;
   const nonGst = parseNonGstSum(invoice.nonGstChargesJson);
-  const totalAmount = rentInvoiceTotalInr(rent, nonGst, g.cgst, g.sgst);
+  const totalAmount = rentInvoicePayableTotalInr(rent, nonGst, g.cgst, g.sgst);
   return { ...invoice, cgst: g.cgst, sgst: g.sgst, totalAmount };
 }

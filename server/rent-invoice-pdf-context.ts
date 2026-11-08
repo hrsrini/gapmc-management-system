@@ -1,5 +1,9 @@
 import type { InferSelectModel } from "drizzle-orm";
 import type { rentInvoices } from "@shared/db-schema";
+import {
+  applyInvoiceNearestRupeeRounding,
+  formatInvoiceRoundingOffAmount,
+} from "@shared/invoice-rounding";
 import { buildRentInvoiceBillingBreakdown } from "@shared/rent-invoice-billing-display";
 import { getReceiptPdfBranding } from "./receipt-pdf-shared";
 import {
@@ -20,6 +24,8 @@ type RentInvoiceRow = InferSelectModel<typeof rentInvoices>;
 export type RentInvoicePdfLine = {
   label: string;
   amount: number;
+  /** When set, used in Amount column instead of formatting `amount` (e.g. Rounding Off +0.20). */
+  amountDisplay?: string;
   hsnSac?: string;
   rateLabel?: string;
   perLabel?: string;
@@ -140,10 +146,15 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
 
   const nonGst = parseNonGstCharges(invoice.nonGstChargesJson);
   const nonGstSum = nonGst.reduce((s, c) => s + c.amount, 0);
-  const computed = Math.round((rent + nonGstSum + cgst + sgst) * 100) / 100;
+  const preRound = Math.round((rent + nonGstSum + cgst + sgst) * 100) / 100;
+  const rounded = applyInvoiceNearestRupeeRounding(preRound);
   const storedTotal = Number(invoice.totalAmount ?? 0);
-  const total = isGstExempt ? computed : storedTotal;
-  let roundOff = isGstExempt ? 0 : Math.round((storedTotal - computed) * 100) / 100;
+  // Prefer persisted payable when it already matches rounded final; else apply display rounding from components.
+  const total =
+    Number.isFinite(storedTotal) && Math.abs(storedTotal - rounded.finalAmount) < 0.005
+      ? storedTotal
+      : rounded.finalAmount;
+  let roundOff = Math.round((total - preRound) * 100) / 100;
   if (Math.abs(roundOff) < 0.005) roundOff = 0;
 
   const particularsTitle =
@@ -177,7 +188,12 @@ export function buildRentInvoicePdfContext(input: BuildRentInvoicePdfContextInpu
     nextSerial += 1;
   }
   if (roundOff !== 0) {
-    lines.push({ label: "R. Off", amount: roundOff, indent: true });
+    lines.push({
+      label: "Rounding Off",
+      amount: roundOff,
+      amountDisplay: formatInvoiceRoundingOffAmount(roundOff),
+      indent: true,
+    });
   }
 
   const fy = invoice.periodMonth?.slice(0, 4);

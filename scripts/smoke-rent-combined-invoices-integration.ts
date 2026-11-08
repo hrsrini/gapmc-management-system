@@ -33,7 +33,7 @@ async function main() {
   const rows = await db
     .select()
     .from(rentInvoices)
-    .where(inArray(rentInvoices.status, ["Approved", "Overdue"]));
+    .where(inArray(rentInvoices.status, ["Approved", "Overdue", "Reversed"]));
   const groups = new Map<string, typeof rows>();
   for (const r of rows) {
     if (String(r.combinedBundleId ?? "").trim()) continue;

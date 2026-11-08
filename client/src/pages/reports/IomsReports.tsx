@@ -550,8 +550,9 @@ export default function IomsReports() {
               Rent outstanding ageing (M-03)
             </CardTitle>
             <CardDescription>
-              Past-due Approved/Overdue invoices with positive balance (total minus Paid/Reconciled M-03 receipts). Due date
-              is the last day of the invoice period month. Buckets are days after that due date, as of the date below.
+              Past-due Approved/Overdue/Reversed invoices with positive balance (total minus Paid/Reconciled M-03 receipts).
+              Reversed covers cheque/DD dishonour. Due date is the last day of the invoice period month. Buckets are days
+              after that due date, as of the date below.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

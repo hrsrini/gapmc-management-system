@@ -338,12 +338,13 @@ export default function IomsRentInvoiceDetail() {
   const verified = invoice.status === "Verified";
   const approved = invoice.status === "Approved";
   const overdue = invoice.status === "Overdue";
+  const reversed = invoice.status === "Reversed";
   const cancelled = invoice.status === "Cancelled";
   const canDoVerify = canVerify && draft;
   const canDoApprove = canApprove && verified;
   const canSendBack = canVerify && verified;
-  const canMarkPaid = canApprove && (approved || overdue);
-  const canCancel = canApprove && (approved || overdue);
+  const canMarkPaid = canApprove && (approved || overdue || reversed);
+  const canCancel = canApprove && (approved || overdue || reversed);
   const canVoidDraft =
     draft &&
     (roles.includes("DO") || roles.includes("ADMIN")) &&
@@ -459,7 +460,7 @@ export default function IomsRentInvoiceDetail() {
             <div>
               <span className="text-muted-foreground">Status</span>
               <br />
-              <Badge variant={cancelled || overdue ? "destructive" : "secondary"}>{invoice.status}</Badge>
+              <Badge variant={cancelled || overdue || reversed ? "destructive" : "secondary"}>{invoice.status}</Badge>
             </div>
             <div>
               <span className="text-muted-foreground">Billing type</span>

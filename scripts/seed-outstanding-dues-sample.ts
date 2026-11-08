@@ -93,7 +93,7 @@ async function main(): Promise<void> {
       .where(
         and(
           eq(rentInvoices.tenantLicenceId, licByFirm.id),
-          inArray(rentInvoices.status, ["Approved", "Paid", "Overdue"]),
+          inArray(rentInvoices.status, ["Approved", "Paid", "Overdue", "Reversed"]),
         ),
       );
     for (const inv of invs) {
@@ -287,7 +287,7 @@ async function main(): Promise<void> {
       and(
         eq(rentInvoices.assetId, assetPk),
         eq(rentInvoices.periodMonth, SAMPLE_PERIOD),
-        inArray(rentInvoices.status, ["Draft", "Verified", "Approved", "Paid", "Overdue"]),
+        inArray(rentInvoices.status, ["Draft", "Verified", "Approved", "Paid", "Overdue", "Reversed"]),
       ),
     )
     .limit(1);

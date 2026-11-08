@@ -60,7 +60,8 @@ async function main() {
   function findEligibleGroup(rows: typeof invoices) {
     const eligible = rows.filter(
       (i) =>
-        (i.status === "Approved" || i.status === "Overdue") && !String(i.combinedBundleId ?? "").trim(),
+        (i.status === "Approved" || i.status === "Overdue" || i.status === "Reversed") &&
+        !String(i.combinedBundleId ?? "").trim(),
     );
     const byKey = new Map<string, typeof eligible>();
     for (const inv of eligible) {

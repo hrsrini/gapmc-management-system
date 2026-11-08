@@ -95,6 +95,7 @@ import MarketDailyPrices from "@/pages/market/MarketDailyPrices";
 import MarketAdvanceLedger from "@/pages/market/MarketAdvanceLedger";
 import MarketCommodityReports from "@/pages/market/MarketCommodityReports";
 import TraderTransactionReport from "@/pages/market/TraderTransactionReport";
+import MarketWizardTransactionReport from "@/pages/market/MarketWizardTransactionReport";
 import TraderVoiceSessions from "@/pages/market/TraderVoiceSessions";
 import TraderVoiceTranscriptScript from "@/pages/market/TraderVoiceTranscriptScript";
 import CheckPostInward from "@/pages/checkpost/CheckPostInward";
@@ -102,6 +103,8 @@ import CheckPostOutward from "@/pages/checkpost/CheckPostOutward";
 import ExitPermitsList from "@/pages/checkpost/ExitPermitsList";
 import BankDepositsList from "@/pages/checkpost/BankDepositsList";
 import CheckPostStockReturns from "@/pages/checkpost/CheckPostStockReturns";
+import CheckPostCaseESdRefund from "@/pages/checkpost/CheckPostCaseESdRefund";
+import CheckPostCaseESdRefundReport from "@/pages/checkpost/CheckPostCaseESdRefundReport";
 import VouchersList from "@/pages/vouchers/VouchersList";
 import VoucherCreate from "@/pages/vouchers/VoucherCreate";
 import VoucherDetail from "@/pages/vouchers/VoucherDetail";
@@ -269,6 +272,9 @@ function Router() {
       <Route path="/market/trader-transaction-report">
         <ProtectedRoute><RequirePermission module="M-04" action="Read"><TraderTransactionReport /></RequirePermission></ProtectedRoute>
       </Route>
+      <Route path="/market/transaction-reports">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><MarketWizardTransactionReport /></RequirePermission></ProtectedRoute>
+      </Route>
       <Route path="/market/voice-sessions">
         <ProtectedRoute><RequirePermission module="M-04" action="Read"><TraderVoiceSessions /></RequirePermission></ProtectedRoute>
       </Route>
@@ -304,6 +310,12 @@ function Router() {
       </Route>
       <Route path="/checkpost/stock-returns">
         <ProtectedRoute><RequirePermission module="M-04" action="Read"><CheckPostStockReturns /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/checkpost/case-e-sd-refund">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><CheckPostCaseESdRefund /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/checkpost/case-e-sd-refund-report">
+        <ProtectedRoute><RequirePermission module="M-04" action="Read"><CheckPostCaseESdRefundReport /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/vouchers">
         <ProtectedRoute><VouchersList /></ProtectedRoute>

@@ -66,7 +66,13 @@ import {
   splitM03RentPaymentGst,
   stringifyM03ReceiptBreakdown,
 } from "@shared/m03-receipt-breakdown";
-import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
+import {
+  computeRentInvoiceGstInr,
+  rentInvoicePayableTotalInr,
+  rentInvoicePayableWithRounding,
+  rentInvoiceTotalInr,
+} from "@shared/rent-invoice-gst";
+import { upsertActiveInvoiceRounding } from "./invoice-rounding-persist";
 import {
   MIN_RENT_INVOICE_AMOUNT_INR,
   rentInvoiceValidationErrorMessage,
@@ -453,7 +459,9 @@ export function registerRentIomsRoutes(app: Express) {
         gstExempt,
         cgst: g.cgst,
         sgst: g.sgst,
-        totalAmount: rentInvoiceTotalInr(built.calculation.rentAmount, 0, g.cgst, g.sgst),
+        totalAmount: rentInvoicePayableTotalInr(built.calculation.rentAmount, 0, g.cgst, g.sgst),
+        componentTotal: rentInvoiceTotalInr(built.calculation.rentAmount, 0, g.cgst, g.sgst),
+        rounding: rentInvoicePayableWithRounding(built.calculation.rentAmount, 0, g.cgst, g.sgst),
         overlappingInvoice: overlap,
       });
     } catch (e) {
@@ -618,17 +626,20 @@ export function registerRentIomsRoutes(app: Express) {
         return sendApiError(res, 400, "RENT_INVOICE_TDS", tdsRes.error);
       }
       const mergedCfg = await getMergedSystemConfig();
+      let createRounding = rentInvoicePayableWithRounding(rentAmount, nonGst.sum, 0, 0);
       if (gstExempt) {
         cgst = 0;
         sgst = 0;
-        totalAmount = rentInvoiceTotalInr(rentAmount, nonGst.sum, 0, 0);
+        createRounding = rentInvoicePayableWithRounding(rentAmount, nonGst.sum, 0, 0);
+        totalAmount = createRounding.finalAmount;
       } else {
         const cgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_cgst_percent");
         const sgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_sgst_percent");
         const g = computeRentInvoiceGstInr(rentAmount, false, cgstPct, sgstPct);
         cgst = g.cgst;
         sgst = g.sgst;
-        totalAmount = rentInvoiceTotalInr(rentAmount, nonGst.sum, cgst, sgst);
+        createRounding = rentInvoicePayableWithRounding(rentAmount, nonGst.sum, cgst, sgst);
+        totalAmount = createRounding.finalAmount;
       }
       const zeroMsg = rentInvoiceValidationErrorMessage(rentAmount, totalAmount);
       if (zeroMsg) {
@@ -698,6 +709,14 @@ export function registerRentIomsRoutes(app: Express) {
           daUser: null,
           generatedAt: null,
           approvedAt: null,
+        });
+        await upsertActiveInvoiceRounding({
+          invoiceId: id,
+          invoiceModule: "M-03-Rent",
+          invoiceNo,
+          rounding: createRounding,
+          createdBy: req.user?.id ?? null,
+          tx,
         });
         return tx.select().from(rentInvoices).where(eq(rentInvoices.id, id));
       });
@@ -1214,7 +1233,7 @@ export function registerRentIomsRoutes(app: Express) {
         if (gstExemptDraft) {
           updates.cgst = 0;
           updates.sgst = 0;
-          updates.totalAmount = rentInvoiceTotalInr(finalRent, nonGstSum, 0, 0);
+          updates.totalAmount = rentInvoicePayableTotalInr(finalRent, nonGstSum, 0, 0);
           if (trackAExempt) updates.isGovtEntity = true;
         } else {
           const mergedPatch = await getMergedSystemConfig();
@@ -1223,7 +1242,7 @@ export function registerRentIomsRoutes(app: Express) {
           const g = computeRentInvoiceGstInr(finalRent, false, cgstPct, sgstPct);
           updates.cgst = g.cgst;
           updates.sgst = g.sgst;
-          updates.totalAmount = rentInvoiceTotalInr(finalRent, nonGstSum, g.cgst, g.sgst);
+          updates.totalAmount = rentInvoicePayableTotalInr(finalRent, nonGstSum, g.cgst, g.sgst);
         }
       }
 
@@ -1303,6 +1322,22 @@ export function registerRentIomsRoutes(app: Express) {
       await db.update(rentInvoices).set(updates as Record<string, string | number | boolean | null>).where(eq(rentInvoices.id, id));
       const [row] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, id));
       if (!row) return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Not found");
+
+      if (updates.totalAmount != null) {
+        const r = rentInvoicePayableWithRounding(
+          Number(row.rentAmount ?? 0),
+          nonGstSum,
+          Number(row.cgst ?? 0),
+          Number(row.sgst ?? 0),
+        );
+        await upsertActiveInvoiceRounding({
+          invoiceId: id,
+          invoiceModule: "M-03-Rent",
+          invoiceNo: row.invoiceNo,
+          rounding: r,
+          createdBy: req.user?.id ?? null,
+        }).catch((e) => console.error("Invoice rounding persist failed:", e));
+      }
 
       // Phase-1 linkage: when a rent invoice becomes Approved/Paid, ensure a matching IOMS receipt exists.
       // Note: current UI doesn't expose a "Mark Paid" flow for M-03 yet; this keeps receipts ready for later payment wiring.
@@ -1546,8 +1581,18 @@ export function registerRentIomsRoutes(app: Express) {
       if (scopedIds && scopedIds.length > 0 && !scopedIds.includes(inv.yardId)) {
         return sendApiError(res, 404, "RENT_INVOICE_NOT_FOUND", "Rent invoice not found");
       }
-      if (String(inv.status) !== "Approved" && String(inv.status) !== "Overdue" && String(inv.status) !== "Paid") {
-        return sendApiError(res, 400, "LEDGER_PAY_INVOICE_STATUS", "Invoice must be Approved, Overdue, or Paid to record payment");
+      if (
+        String(inv.status) !== "Approved" &&
+        String(inv.status) !== "Overdue" &&
+        String(inv.status) !== "Paid" &&
+        String(inv.status) !== "Reversed"
+      ) {
+        return sendApiError(
+          res,
+          400,
+          "LEDGER_PAY_INVOICE_STATUS",
+          "Invoice must be Approved, Overdue, Paid, or Reversed to record payment",
+        );
       }
 
       const idsRaw = body.interestLedgerEntryIds;
@@ -1762,7 +1807,7 @@ export function registerRentIomsRoutes(app: Express) {
       const asOfDate = asOfRaw ? normalizeAgeingAsOfDate(asOfRaw) : new Date().toISOString().slice(0, 10);
       const yardQ = String(req.query.yardId ?? "").trim();
       const format = String(req.query.format ?? "").toLowerCase();
-      const conditions = [inArray(rentInvoices.status, ["Approved", "Overdue"])];
+      const conditions = [inArray(rentInvoices.status, ["Approved", "Overdue", "Reversed"])];
       const scopedIds = req.scopedLocationIds;
       if (scopedIds && scopedIds.length > 0) conditions.push(inArray(rentInvoices.yardId, scopedIds));
       if (yardQ && yardQ !== "all") conditions.push(eq(rentInvoices.yardId, yardQ));
@@ -1908,7 +1953,7 @@ export function registerRentIomsRoutes(app: Express) {
       }
       const scopedIds = req.scopedLocationIds;
       const conditions = [
-        inArray(rentInvoices.status, ["Approved", "Paid"]),
+        inArray(rentInvoices.status, ["Approved", "Overdue", "Paid", "Reversed"]),
         gte(rentInvoices.periodMonth, fromMonth),
         lte(rentInvoices.periodMonth, toMonth),
         eq(rentInvoices.isGovtEntity, false),

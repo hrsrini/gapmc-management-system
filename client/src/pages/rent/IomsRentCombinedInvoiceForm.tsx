@@ -47,7 +47,7 @@ export default function IomsRentCombinedInvoiceForm() {
     return invoices.filter(
       (inv) =>
         inv.periodMonth === pm &&
-        (inv.status === "Approved" || inv.status === "Overdue") &&
+        (inv.status === "Approved" || inv.status === "Overdue" || inv.status === "Reversed") &&
         !String(inv.combinedBundleId ?? "").trim(),
     );
   }, [invoices, periodMonth]);

@@ -28,6 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { formatInr } from "@/lib/formatInr";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { formatUnifiedEntityOptionLabel } from "@shared/unified-entity-display";
 import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
 import {
@@ -436,7 +437,14 @@ export default function OutstandingDues() {
         _paid: `${formatInr(Number(d.paidAmount ?? 0))}`,
         _outstanding: `${formatInr(Number(d.outstandingRentAmount ?? d.outstandingAmount ?? 0))}`,
         _interestDue: `${formatInr(Number(d.outstandingInterestAmount ?? 0))}`,
-        _status: <span>{d.status}</span>,
+        _status:
+          d.status === "Reversed" ? (
+            <Badge variant="destructive" title="Payment reversed due to cheque/DD dishonour">
+              Reversed
+            </Badge>
+          ) : (
+            <span>{d.status}</span>
+          ),
         _actions: (
           <Button
             size="sm"

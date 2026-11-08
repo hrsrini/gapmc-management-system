@@ -1248,7 +1248,7 @@ export const rentInvoices = gapmc.table("rent_invoices", {
   /** TDS on rent component for this period (INR); excludes GST components. */
   tdsAmount: doublePrecision("tds_amount").default(0),
   isGovtEntity: boolean("is_govt_entity").default(false),
-  status: text("status").notNull(), // Draft | Verified | Approved | Overdue | Paid | Cancelled
+  status: text("status").notNull(), // Draft | Verified | Approved | Overdue | Paid | Reversed (cheque/DD dishonour) | Cancelled
   doUser: text("do_user"),
   dvUser: text("dv_user"),
   daUser: text("da_user"),
@@ -1284,6 +1284,29 @@ export const rentInvoicePaymentAllocations = gapmc.table("rent_invoice_payment_a
   invoiceId: text("invoice_id").notNull(),
   amountInr: doublePrecision("amount_inr").notNull(),
   createdAt: text("created_at"),
+});
+
+/**
+ * Invoice final-total rounding audit (nearest whole rupee).
+ * One Active row per invoice; do not merge into rent/CGST/SGST.
+ */
+export const invoiceRoundingDetails = gapmc.table("invoice_rounding_details", {
+  id: text("id").primaryKey(),
+  /** rent_invoices.id or rent_combined_invoices.id */
+  invoiceId: text("invoice_id").notNull(),
+  /** M-03-Rent | M-03-Combined */
+  invoiceModule: text("invoice_module").notNull(),
+  invoiceNo: text("invoice_no"),
+  originalInvoiceAmount: doublePrecision("original_invoice_amount").notNull(),
+  roundingAmount: doublePrecision("rounding_amount").notNull(),
+  /** Addition | Discount | NoRounding */
+  roundingType: text("rounding_type").notNull(),
+  finalInvoiceAmount: doublePrecision("final_invoice_amount").notNull(),
+  roundingDate: text("rounding_date").notNull(),
+  createdBy: text("created_by"),
+  createdOn: text("created_on").notNull(),
+  /** Active | Superseded | Cancelled */
+  recordStatus: text("record_status").notNull().default("Active"),
 });
 
 /** M-03: Effective-dated prorata / overstay billing configuration. */
@@ -1554,6 +1577,16 @@ export const marketTransactions = gapmc.table("market_transactions", {
   paymentDetailJson: text("payment_detail_json"),
   status: text("status").notNull().default("Draft"),
   receiptId: text("receipt_id"),
+  /** Case E: check post (yard) where security deposit was refunded. */
+  sdRefundCheckPostId: text("sd_refund_check_post_id"),
+  /** Case E: refund transaction / exit permit reference linked to the original transit txn. */
+  sdRefundTxnRef: text("sd_refund_txn_ref"),
+  /** Case E: IOMS refund receipt id (PAYMENT-REFUND MKT FEE / SD outflow). */
+  sdRefundReceiptId: text("sd_refund_receipt_id"),
+  sdRefundDate: text("sd_refund_date"),
+  sdRefundAmount: doublePrecision("sd_refund_amount"),
+  sdRefundRecordedAt: text("sd_refund_recorded_at"),
+  sdRefundRecordedBy: text("sd_refund_recorded_by"),
   createdBy: text("created_by"),
   createdAt: text("created_at"),
   finalizedAt: text("finalized_at"),

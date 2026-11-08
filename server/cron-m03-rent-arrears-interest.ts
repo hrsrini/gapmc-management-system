@@ -81,7 +81,7 @@ export async function runM03RentArrearsInterest(): Promise<{
   const candidates = await db
     .select()
     .from(rentInvoices)
-    .where(inArray(rentInvoices.status, ["Approved", "Overdue"]));
+    .where(inArray(rentInvoices.status, ["Approved", "Overdue", "Reversed"]));
 
   let markedOverdue = 0;
   let interestPosted = 0;

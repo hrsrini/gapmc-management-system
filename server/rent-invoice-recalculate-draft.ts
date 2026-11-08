@@ -9,7 +9,8 @@ import {
   inferBillingTypeForMonth,
   type RentBillingType,
 } from "@shared/rent-invoice-billing";
-import { computeRentInvoiceGstInr, rentInvoiceTotalInr } from "@shared/rent-invoice-gst";
+import { computeRentInvoiceGstInr, rentInvoicePayableWithRounding } from "@shared/rent-invoice-gst";
+import { upsertActiveInvoiceRounding } from "./invoice-rounding-persist";
 import { rentInvoiceValidationErrorMessage } from "@shared/rent-invoice-amount-validation";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import { tenantLicenceIsGstExempt } from "./gst-exempt";
@@ -106,7 +107,7 @@ export async function recalculateDraftRentInvoiceBilling(args: {
 
   let cgst = 0;
   let sgst = 0;
-  let totalAmount = rentAmount;
+  let rounding = rentInvoicePayableWithRounding(rentAmount, nonGstSum, 0, 0);
   if (!gstExempt) {
     const mergedCfg = await getMergedSystemConfig();
     const cgstPct = parseSystemConfigNumber(mergedCfg, "rent_invoice_cgst_percent");
@@ -114,10 +115,9 @@ export async function recalculateDraftRentInvoiceBilling(args: {
     const g = computeRentInvoiceGstInr(rentAmount, false, cgstPct, sgstPct);
     cgst = g.cgst;
     sgst = g.sgst;
-    totalAmount = rentInvoiceTotalInr(rentAmount, nonGstSum, cgst, sgst);
-  } else {
-    totalAmount = rentInvoiceTotalInr(rentAmount, nonGstSum, 0, 0);
+    rounding = rentInvoicePayableWithRounding(rentAmount, nonGstSum, cgst, sgst);
   }
+  const totalAmount = rounding.finalAmount;
 
   const zeroMsg = rentInvoiceValidationErrorMessage(rentAmount, totalAmount);
   if (zeroMsg) return { ok: false, error: zeroMsg, code: "RENT_INVOICE_ZERO_AMOUNT" };
@@ -150,6 +150,14 @@ export async function recalculateDraftRentInvoiceBilling(args: {
       tdsAmount: tdsRes.tdsAmount,
     })
     .where(eq(rentInvoices.id, existing.id));
+
+  await upsertActiveInvoiceRounding({
+    invoiceId: existing.id,
+    invoiceModule: "M-03-Rent",
+    invoiceNo: existing.invoiceNo,
+    rounding,
+    createdBy: null,
+  }).catch((e) => console.error("Invoice rounding persist failed:", e));
 
   const [row] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, existing.id)).limit(1);
   if (!row) return { ok: false, error: "Rent invoice not found after update.", code: "RENT_INVOICE_NOT_FOUND" };

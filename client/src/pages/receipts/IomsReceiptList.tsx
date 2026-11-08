@@ -112,7 +112,15 @@ export default function IomsReceiptList() {
       _total: `${formatInr(Number(r.totalAmount))}`,
       paymentMode: r.paymentMode,
       status: r.status,
-      _status: <Badge variant={r.status === "Paid" ? "default" : "secondary"}>{r.status}</Badge>,
+      _status: (
+        <Badge
+          variant={
+            r.status === "Paid" ? "default" : r.status === "Reversed" || r.status === "Failed" ? "destructive" : "secondary"
+          }
+        >
+          {r.status}
+        </Badge>
+      ),
       createdAt: r.createdAt,
       _verify: (
         <a

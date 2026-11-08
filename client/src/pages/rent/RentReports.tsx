@@ -137,7 +137,7 @@ export default function RentReports() {
           _status: (
             <span
               className={`px-2 py-1 rounded text-xs ${
-                inv.status === "Overdue"
+                inv.status === "Overdue" || String(inv.status) === "Reversed"
                   ? "bg-destructive/10 text-destructive"
                   : "bg-amber-500/10 text-amber-600"
               }`}

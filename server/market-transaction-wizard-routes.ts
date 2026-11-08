@@ -8,17 +8,26 @@ import { sendApiError } from "./api-errors";
 import { canCreatePurchaseTransaction } from "./workflow";
 import { writeAuditLog } from "./audit";
 import {
+  buildCaseESdRefundReconciliation,
+  buildWizardTransactionReport,
   calculateMarketTransactionWizard,
   createMarketTransactionDraft,
   finalizeMarketTransaction,
+  getCaseESdRefundAudit,
+  getCaseESdRefundDashboard,
+  listCaseESecurityDepositRefunds,
+  listEligibleCaseEForRefund,
   listMarketTransactions,
   loadMarketTransactionWithLines,
+  recordSecurityDepositRefund,
   submitMarketTransactionWizard,
   validateMarketTransactionWizard,
 } from "./market-transaction-wizard";
 import type { MarketTransactionWizardInput } from "@shared/market-transaction-cases";
 import { isMarketTransactionCaseId } from "@shared/market-transaction-cases";
 import { ensureM04ImmediateCommodityBackfill } from "./m04-immediate-transaction-backfill";
+import { hasPermission } from "./auth";
+import { todayYmdIst } from "@shared/premises-allocation";
 
 let ensureMarketTransactionTablesPromise: Promise<void> | null = null;
 
@@ -89,6 +98,16 @@ function ensureMarketTransactionTables(): Promise<void> {
     await db.execute(sql`
       CREATE INDEX IF NOT EXISTS market_transaction_commodities_tx_idx
       ON gapmc.market_transaction_commodities (transaction_id)
+    `);
+    await db.execute(sql`
+      ALTER TABLE gapmc.market_transactions
+        ADD COLUMN IF NOT EXISTS sd_refund_check_post_id text,
+        ADD COLUMN IF NOT EXISTS sd_refund_txn_ref text,
+        ADD COLUMN IF NOT EXISTS sd_refund_receipt_id text,
+        ADD COLUMN IF NOT EXISTS sd_refund_date text,
+        ADD COLUMN IF NOT EXISTS sd_refund_amount double precision,
+        ADD COLUMN IF NOT EXISTS sd_refund_recorded_at text,
+        ADD COLUMN IF NOT EXISTS sd_refund_recorded_by text
     `);
   })();
   return ensureMarketTransactionTablesPromise;
@@ -300,6 +319,340 @@ export function registerMarketTransactionWizardRoutes(app: Express) {
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to list wizard transactions");
+    }
+  });
+
+  app.get("/api/ioms/market/transaction-wizard/report", async (req, res) => {
+    try {
+      if (!req.user || !hasPermission(req.user, "M-04", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-04 Read required", { required: "M-04:Read" });
+      }
+      await ensureMarketTransactionTables();
+      const from = String(req.query.from ?? "").trim();
+      const to = String(req.query.to ?? "").trim();
+      const iso = /^\d{4}-\d{2}-\d{2}$/;
+      if (!from || !iso.test(from) || !to || !iso.test(to)) {
+        return sendApiError(res, 400, "REPORT_DATE_RANGE_REQUIRED", "from and to (YYYY-MM-DD) are required");
+      }
+      if (from > to) {
+        return sendApiError(res, 400, "REPORT_DATE_RANGE_INVALID", "from must be on or before to");
+      }
+      const caseType = String(req.query.caseType ?? "all").trim();
+      const status = String(req.query.status ?? "all").trim();
+      const commodityId = String(req.query.commodityId ?? "").trim();
+      const format = String(req.query.format ?? "").trim().toLowerCase();
+      const report = await buildWizardTransactionReport({
+        from,
+        to,
+        scopedYardIds: req.scopedLocationIds,
+        caseType,
+        status,
+        commodityId: commodityId || undefined,
+      });
+
+      if (format === "csv") {
+        const headers = [
+          "S.No.",
+          "Txn No",
+          "Case",
+          "Date",
+          "Time",
+          "Location",
+          "Status",
+          "Trader",
+          "Licence No",
+          "Seller Type",
+          "Farmer",
+          "Commodity Source",
+          "Place of Origin",
+          "Origin State",
+          "Destination State",
+          "Exit Check Posts",
+          "Vehicle",
+          "Commodity",
+          "Quantity",
+          "Unit",
+          "Rate",
+          "Commodity Value",
+          "Market Fee %",
+          "Line Market Fee",
+          "Total Commodity Value",
+          "Total Market Fee",
+          "Fine",
+          "Security Deposit",
+          "Admin Charges",
+          "Total Payable",
+          "Payment Mode",
+          "SD Refund Check Post",
+          "SD Refund Txn Ref",
+          "SD Refund Date",
+          "SD Refund Amount",
+        ];
+        const esc = (v: unknown) => {
+          const s = v == null ? "" : String(v);
+          return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        };
+        const lines = [headers.join(",")];
+        for (const r of report.rows) {
+          lines.push(
+            [
+              r.sNo,
+              r.transactionNo,
+              r.caseLabel,
+              r.transactionDate,
+              r.transactionTime ?? "",
+              r.entryLocationName,
+              r.status,
+              r.traderName,
+              r.licenceNo,
+              r.sellerType ?? "",
+              r.farmerName ?? "",
+              r.commoditySource ?? "",
+              r.placeOfOrigin ?? "",
+              r.originatingState ?? "",
+              r.destinationState ?? "",
+              r.exitCheckposts,
+              r.vehicleNumber ?? "",
+              r.commodityName,
+              r.quantity ?? "",
+              r.unit ?? "",
+              r.ratePerUnit ?? "",
+              r.commodityValue ?? "",
+              r.marketFeePercent ?? "",
+              r.lineMarketFee ?? "",
+              r.totalCommodityValue,
+              r.totalMarketFee,
+              r.fineAmount,
+              r.securityDepositAmount,
+              r.adminChargesAmount,
+              r.totalPayable,
+              r.paymentMode ?? "",
+              r.sdRefundCheckPostName ?? "",
+              r.sdRefundTxnRef ?? "",
+              r.sdRefundDate ?? "",
+              r.sdRefundAmount ?? "",
+            ]
+              .map(esc)
+              .join(","),
+          );
+        }
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename=wizard-transactions-${from}_${to}.csv`);
+        return res.send(lines.join("\n"));
+      }
+
+      res.json(report);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to build transaction report");
+    }
+  });
+
+  app.get("/api/ioms/market/transaction-wizard/case-e/refundable", async (req, res) => {
+    try {
+      if (!req.user || !hasPermission(req.user, "M-04", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-04 Read required", { required: "M-04:Read" });
+      }
+      await ensureMarketTransactionTables();
+      const q = String(req.query.q ?? "").trim();
+      const vehicleNumber = String(req.query.vehicleNumber ?? "").trim();
+      const paymentMode = String(req.query.paymentMode ?? "").trim();
+      const rows = await listEligibleCaseEForRefund({
+        q: q || undefined,
+        vehicleNumber: vehicleNumber || undefined,
+        paymentMode: paymentMode || undefined,
+      });
+      res.json({ count: rows.length, refundWindowHours: 8, rows });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to list eligible Case E receipts");
+    }
+  });
+
+  app.get("/api/ioms/market/transaction-wizard/case-e/dashboard", async (req, res) => {
+    try {
+      if (!req.user || !hasPermission(req.user, "M-04", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-04 Read required", { required: "M-04:Read" });
+      }
+      await ensureMarketTransactionTables();
+      const checkPostId = String(req.query.checkPostId ?? "").trim();
+      if (checkPostId && !assertYardScope(req, checkPostId)) {
+        return sendApiError(res, 403, "MKT_TX_YARD_ACCESS_DENIED", "You do not have access to this check post");
+      }
+      const dash = await getCaseESdRefundDashboard({
+        checkPostId: checkPostId || undefined,
+        todayYmd: todayYmdIst(),
+      });
+      res.json(dash);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load Case E SD refund dashboard");
+    }
+  });
+
+  app.get("/api/ioms/market/transaction-wizard/case-e/reconciliation", async (req, res) => {
+    try {
+      if (!req.user || !hasPermission(req.user, "M-04", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-04 Read required", { required: "M-04:Read" });
+      }
+      await ensureMarketTransactionTables();
+      const from = String(req.query.from ?? "").trim();
+      const to = String(req.query.to ?? "").trim();
+      const iso = /^\d{4}-\d{2}-\d{2}$/;
+      if (!from || !iso.test(from) || !to || !iso.test(to) || from > to) {
+        return sendApiError(res, 400, "REPORT_DATE_RANGE_REQUIRED", "Valid from/to (YYYY-MM-DD) required");
+      }
+      const report = await buildCaseESdRefundReconciliation({
+        from,
+        to,
+        scopedYardIds: req.scopedLocationIds,
+      });
+      res.json(report);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to build Case E SD reconciliation");
+    }
+  });
+
+  app.get("/api/ioms/market/transaction-wizard/case-e/refunds/:id/audit", async (req, res) => {
+    try {
+      if (!req.user || !hasPermission(req.user, "M-04", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-04 Read required", { required: "M-04:Read" });
+      }
+      await ensureMarketTransactionTables();
+      const audit = await getCaseESdRefundAudit(req.params.id);
+      if (!audit) return sendApiError(res, 404, "MKT_TX_NOT_FOUND", "Transaction not found");
+      res.json(audit);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to load refund audit record");
+    }
+  });
+
+  app.get("/api/ioms/market/transaction-wizard/case-e/refunds", async (req, res) => {
+    try {
+      if (!req.user || !hasPermission(req.user, "M-04", "Read")) {
+        return sendApiError(res, 403, "AUTH_PERMISSION_DENIED", "M-04 Read required", { required: "M-04:Read" });
+      }
+      await ensureMarketTransactionTables();
+      const from = String(req.query.from ?? "").trim();
+      const to = String(req.query.to ?? "").trim();
+      const iso = /^\d{4}-\d{2}-\d{2}$/;
+      if (!from || !iso.test(from) || !to || !iso.test(to)) {
+        return sendApiError(res, 400, "REPORT_DATE_RANGE_REQUIRED", "from and to (YYYY-MM-DD) are required");
+      }
+      if (from > to) {
+        return sendApiError(res, 400, "REPORT_DATE_RANGE_INVALID", "from must be on or before to");
+      }
+      const checkPostId = String(req.query.checkPostId ?? "").trim();
+      const processedBy = String(req.query.processedBy ?? "").trim();
+      const q = String(req.query.q ?? "").trim();
+      const format = String(req.query.format ?? "").trim().toLowerCase();
+      const rows = await listCaseESecurityDepositRefunds({
+        from,
+        to,
+        checkPostId: checkPostId || undefined,
+        scopedYardIds: req.scopedLocationIds,
+        processedBy: processedBy || undefined,
+        q: q || undefined,
+      });
+      if (format === "csv") {
+        const headers = [
+          "S.No.",
+          "Refund Receipt",
+          "Original Receipt",
+          "Txn No",
+          "Vehicle",
+          "Trader",
+          "Payment Mode",
+          "Entry Check Post",
+          "Refund Check Post",
+          "Refund Date",
+          "Refund Time",
+          "SD Collected",
+          "Amount Refunded",
+          "Processed By",
+          "Status",
+        ];
+        const esc = (v: unknown) => {
+          const s = v == null ? "" : String(v);
+          return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        };
+        const lines = [headers.join(",")];
+        for (const r of rows) {
+          lines.push(
+            [
+              r.sNo,
+              r.refundReceiptNo ?? "",
+              r.originalReceiptNo ?? "",
+              r.transactionNo,
+              r.vehicleNumber ?? "",
+              r.traderName,
+              r.paymentMode ?? "",
+              r.entryLocationName,
+              r.refundCheckPostName,
+              r.refundDate,
+              r.recordedAt ?? "",
+              r.securityDepositAmount,
+              r.refundAmount,
+              r.processedByName,
+              r.status,
+            ]
+              .map(esc)
+              .join(","),
+          );
+        }
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename=case-e-sd-refunds-${from}_${to}.csv`);
+        return res.send(lines.join("\n"));
+      }
+      res.json({ from, to, count: rows.length, rows });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to list Case E SD refunds");
+    }
+  });
+
+  app.post("/api/ioms/market/transaction-wizard/:id/security-deposit-refund", async (req, res) => {
+    try {
+      if (!canCreatePurchaseTransaction(req.user)) {
+        return sendApiError(res, 403, "MKT_TX_SD_REFUND_DENIED", "Only Data Originator or Admin can record SD refunds");
+      }
+      await ensureMarketTransactionTables();
+      const existing = await loadMarketTransactionWithLines(req.params.id);
+      if (!existing) return sendApiError(res, 404, "MKT_TX_NOT_FOUND", "Transaction not found");
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const checkPostId = String(body.checkPostId ?? "").trim();
+      const refundDate = String(body.refundDate ?? "").trim();
+      const refundTxnRef = String(body.refundTxnRef ?? "").trim();
+      if (!checkPostId) return sendApiError(res, 400, "MKT_TX_SD_REFUND_CHECKPOST", "Exit check post is required");
+      if (!assertYardScope(req, checkPostId)) {
+        return sendApiError(res, 403, "MKT_TX_YARD_ACCESS_DENIED", "You do not have access to this exit check post");
+      }
+      if (!refundDate) return sendApiError(res, 400, "MKT_TX_SD_REFUND_DATE", "Refund date is required");
+      const result = await recordSecurityDepositRefund({
+        transactionId: req.params.id,
+        checkPostId,
+        refundTxnRef: refundTxnRef || undefined,
+        refundDate,
+        refundAmount: body.refundAmount != null ? Number(body.refundAmount) : undefined,
+        paymentMode: body.paymentMode != null ? String(body.paymentMode) : "Cash",
+        recordedBy: req.user?.id ?? "system",
+      });
+      writeAuditLog(req, {
+        module: "M-04",
+        action: "Update",
+        recordId: req.params.id,
+        afterValue: { securityDepositRefund: result },
+      }).catch((err) => console.error("Audit log failed:", err));
+      res.status(201).json(result);
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      const msg = e instanceof Error ? e.message : "Failed to record security deposit refund";
+      if (code === "MKT_TX_NOT_FOUND") return sendApiError(res, 404, code, msg);
+      if (code) return sendApiError(res, 400, code, msg);
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", msg);
     }
   });
 

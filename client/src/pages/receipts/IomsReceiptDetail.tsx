@@ -420,8 +420,11 @@ export default function IomsReceiptDetail() {
               </DialogHeader>
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">
-                  This will set receipt status to <span className="font-medium text-foreground">Reversed</span> and, for rent receipts,
-                  post a <span className="font-medium text-foreground">ChequeDishonour</span> entry in the rent deposit ledger (if a prior collection exists).
+                  This will set receipt status to <span className="font-medium text-foreground">Reversed</span> and, for rent
+                  receipts, flip linked Paid invoices to <span className="font-medium text-foreground">Reversed</span> on
+                  Outstanding dues, and post a{" "}
+                  <span className="font-medium text-foreground">ChequeDishonour</span> entry in the rent deposit ledger (if
+                  a prior collection exists).
                 </p>
                 <div className="space-y-1">
                   <Label>Reason *</Label>
@@ -540,7 +543,21 @@ export default function IomsReceiptDetail() {
                 </div>
               </>
             )}
-            <div><span className="text-muted-foreground">Status</span><br /><Badge variant={receipt.status === "Paid" ? "default" : "secondary"}>{receipt.status}</Badge></div>
+            <div>
+              <span className="text-muted-foreground">Status</span>
+              <br />
+              <Badge
+                variant={
+                  receipt.status === "Paid"
+                    ? "default"
+                    : receipt.status === "Reversed" || receipt.status === "Failed"
+                      ? "destructive"
+                      : "secondary"
+                }
+              >
+                {receipt.status}
+              </Badge>
+            </div>
             {(receipt.depositStatus || receipt.paymentMode === "Cash" || receipt.paymentMode === "Cheque" || receipt.paymentMode === "DD") && (
               <div>
                 <span className="text-muted-foreground">Bank deposit</span>

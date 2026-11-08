@@ -24,7 +24,7 @@ export type M03RentInvoiceDueRow = {
   status: string;
 };
 
-const OPEN_INVOICE_STATUSES = ["Approved", "Overdue", "Paid"] as const;
+const OPEN_INVOICE_STATUSES = ["Approved", "Overdue", "Paid", "Reversed"] as const;
 
 function paidPrincipalByInvoice(
   recs: Array<{
@@ -72,6 +72,69 @@ async function unpaidInterestByInvoice(
     result[invId].amount = Math.round(result[invId].amount * 100) / 100;
   }
   return result;
+}
+
+/**
+ * Self-heal open invoice status from counter receipts:
+ * - Fully collected → Paid
+ * - Still marked Paid but unpaid (typically after cheque/DD Reversed) → Reversed when a
+ *   dishonoured Cheque/DD receipt exists for the invoice; otherwise reopen Approved/Overdue
+ */
+async function syncOpenInvoiceStatusesFromReceipts(
+  invs: Array<{
+    id: string;
+    periodMonth: string;
+    totalAmount: number | null;
+    status: string | null;
+  }>,
+  recs: Array<{
+    sourceRecordId: string | null;
+    status: string | null;
+    paymentMode?: string | null;
+    m03BreakdownJson?: string | null;
+  }>,
+  paidByInvoice: Record<string, number>,
+): Promise<void> {
+  const { maybeMarkM03InvoicePaidFromSettledReceipts, m03InvoiceIdsCoveredByReceipt } = await import(
+    "./receipt-deposit-service"
+  );
+  for (const inv of invs) {
+    const paid = Number(paidByInvoice[inv.id] ?? 0);
+    const total = Number(inv.totalAmount ?? 0);
+    const st = String(inv.status ?? "");
+    try {
+      if (st !== "Paid") {
+        await maybeMarkM03InvoicePaidFromSettledReceipts(inv.id);
+        if (paid >= total - 0.01 && total > 0) inv.status = "Paid";
+        continue;
+      }
+      if (paid >= total - 0.01) continue;
+      const hasDishonouredCheque = recs.some((r) => {
+        if (String(r.status ?? "") !== "Reversed") return false;
+        const mode = String(r.paymentMode ?? "");
+        if (mode !== "Cheque" && mode !== "DD") return false;
+        return m03InvoiceIdsCoveredByReceipt({
+          sourceModule: "M-03",
+          sourceRecordId: r.sourceRecordId,
+          m03BreakdownJson: r.m03BreakdownJson,
+        }).includes(inv.id);
+      });
+      const nextStatus = hasDishonouredCheque
+        ? "Reversed"
+        : (() => {
+            const today = new Date().toISOString().slice(0, 10);
+            const periodEnd = String(inv.periodMonth ?? "").trim();
+            const overdue =
+              /^\d{4}-\d{2}$/.test(periodEnd) &&
+              `${periodEnd}-01`.slice(0, 7) < today.slice(0, 7);
+            return overdue ? "Overdue" : "Approved";
+          })();
+      await db.update(rentInvoices).set({ status: nextStatus }).where(eq(rentInvoices.id, inv.id));
+      inv.status = nextStatus;
+    } catch (e) {
+      console.warn("[m03-dues] invoice status sync failed:", inv.id, e);
+    }
+  }
 }
 
 async function invoiceRowsToDues(
@@ -140,19 +203,7 @@ export async function listM03RentInvoiceDuesForTraderLicence(
           .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
 
   const paidBy = paidPrincipalByInvoice(recs);
-  const { maybeMarkM03InvoicePaidFromSettledReceipts } = await import("./receipt-deposit-service");
-  for (const inv of invs) {
-    if (String(inv.status ?? "") === "Paid") continue;
-    try {
-      await maybeMarkM03InvoicePaidFromSettledReceipts(inv.id);
-      const paid = Number(paidBy[inv.id] ?? 0);
-      const total = Number(inv.totalAmount ?? 0);
-      if (paid >= total - 0.01 && total > 0) inv.status = "Paid";
-    } catch (e) {
-      console.warn("[m03-dues] invoice Paid sync failed:", inv.id, e);
-    }
-  }
-
+  await syncOpenInvoiceStatusesFromReceipts(invs, recs, paidBy);
   return await invoiceRowsToDues(invs, paidBy);
 }
 
@@ -182,21 +233,9 @@ export async function listM03RentInvoiceDuesForTrackBEntity(
           .from(iomsReceipts)
           .where(and(eq(iomsReceipts.sourceModule, "M-03"), inArray(iomsReceipts.sourceRecordId, invoiceIds)));
 
-  // Self-heal: counter Paid receipts should flip Approved → Paid even before bank deposit.
-  const { maybeMarkM03InvoicePaidFromSettledReceipts } = await import("./receipt-deposit-service");
-  for (const inv of invs) {
-    if (String(inv.status ?? "") === "Paid") continue;
-    try {
-      await maybeMarkM03InvoicePaidFromSettledReceipts(inv.id);
-      const paid = Number(paidPrincipalByInvoice(recs)[inv.id] ?? 0);
-      const total = Number(inv.totalAmount ?? 0);
-      if (paid >= total - 0.01 && total > 0) inv.status = "Paid";
-    } catch (e) {
-      console.warn("[m03-dues] invoice Paid sync failed:", inv.id, e);
-    }
-  }
-
-  return await invoiceRowsToDues(invs, paidPrincipalByInvoice(recs));
+  const paidBy = paidPrincipalByInvoice(recs);
+  await syncOpenInvoiceStatusesFromReceipts(invs, recs, paidBy);
+  return await invoiceRowsToDues(invs, paidBy);
 }
 
 /** Explain why Track B Commercial/Ad-hoc dues are empty when invoices exist but are fully collected. */

@@ -56,13 +56,14 @@ export function assertRecordDoDvDaSeparation(
   return { ok: true };
 }
 
-/** Rent invoice status flow: Draft → Verified → Approved (then Paid/Cancelled/Overdue) */
+/** Rent invoice status flow: Draft → Verified → Approved (then Paid/Cancelled/Overdue/Reversed) */
 const RENT_INVOICE_FLOW = {
   Draft: ["Verified", "Cancelled"], // DV verifies; DO/Admin may void draft
   Verified: ["Approved", "Draft", "Cancelled"], // DA may void before approval
   Approved: ["Paid", "Cancelled", "Overdue"], // DA can settle; Overdue also set by arrears cron
   Overdue: ["Paid", "Cancelled"], // DA settles overdue invoices
-  Paid: [],
+  Paid: ["Reversed"], // Cheque/DD dishonour restores outstanding as Reversed
+  Reversed: ["Paid", "Cancelled", "Overdue", "Approved"], // Re-collection after dishonour
   Cancelled: [],
 } as const;
 
@@ -83,7 +84,8 @@ export function canTransitionRentInvoice(
         newStatus === "Approved" ||
         newStatus === "Paid" ||
         newStatus === "Cancelled" ||
-        newStatus === "Overdue",
+        newStatus === "Overdue" ||
+        newStatus === "Reversed",
     };
   }
   const allowed = RENT_INVOICE_FLOW[currentStatus as RentInvoiceStatus];
@@ -113,6 +115,16 @@ export function canTransitionRentInvoice(
       : { allowed: false };
   }
   if (currentStatus === "Overdue" && (newStatus === "Paid" || newStatus === "Cancelled")) {
+    return hasRole(user, DA) ? { allowed: true, setDaUser: true } : { allowed: false };
+  }
+  // Paid → Reversed is system-driven (cheque/DD dishonour), not a manual DA transition.
+  if (currentStatus === "Paid" && newStatus === "Reversed") {
+    return { allowed: false };
+  }
+  if (
+    currentStatus === "Reversed" &&
+    (newStatus === "Paid" || newStatus === "Cancelled" || newStatus === "Overdue" || newStatus === "Approved")
+  ) {
     return hasRole(user, DA) ? { allowed: true, setDaUser: true } : { allowed: false };
   }
   return { allowed: false };

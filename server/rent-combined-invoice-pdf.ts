@@ -77,7 +77,7 @@ function toSinglePageContext(combined: CombinedRentInvoicePdfContext): RentInvoi
     sgstAmount: combined.sgstAmount,
     totalTaxAmount: combined.totalTaxAmount,
     grandTotal: combined.grandTotal,
-    roundOff: 0,
+    roundOff: 0, // Rounding Off lines are already embedded in particulars from child / combined context
     chargeableWords: combined.chargeableWords,
     taxWords: combined.taxWords,
     remarks,

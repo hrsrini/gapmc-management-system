@@ -70,10 +70,14 @@ export async function maybeMarkM03InvoicePaidFromSettledReceipts(invoiceId: stri
   }
 }
 
-/** Restore invoice outstanding after a settled receipt is dishonoured or deposit reversed. */
+/**
+ * Restore invoice outstanding after a receipt is dishonoured or deposit reversed.
+ * Cheque/DD dishonour uses unpaidStatus "Reversed" so Outstanding dues shows Reversed (not Paid).
+ */
 export async function revertM03InvoicePaidAfterReceiptUnsettled(
   invoiceId: string,
   excludeReceiptId?: string,
+  opts?: { unpaidStatus?: "Reversed" | "reopen" },
 ): Promise<void> {
   const [inv] = await db.select().from(rentInvoices).where(eq(rentInvoices.id, invoiceId)).limit(1);
   if (!inv || String(inv.status ?? "") !== "Paid") return;
@@ -82,15 +86,56 @@ export async function revertM03InvoicePaidAfterReceiptUnsettled(
 
   const total = Number(inv.totalAmount ?? 0);
   if (paidSum < total - 0.01) {
-    const today = new Date().toISOString().slice(0, 10);
-    const periodEnd = String(inv.periodMonth ?? "").trim();
-    const overdue =
-      /^\d{4}-\d{2}$/.test(periodEnd) &&
-      `${periodEnd}-01`.slice(0, 7) < today.slice(0, 7);
+    const unpaidStatus = opts?.unpaidStatus ?? "reopen";
+    let nextStatus: string;
+    if (unpaidStatus === "Reversed") {
+      nextStatus = "Reversed";
+    } else {
+      const today = new Date().toISOString().slice(0, 10);
+      const periodEnd = String(inv.periodMonth ?? "").trim();
+      const overdue =
+        /^\d{4}-\d{2}$/.test(periodEnd) &&
+        `${periodEnd}-01`.slice(0, 7) < today.slice(0, 7);
+      nextStatus = overdue ? "Overdue" : "Approved";
+    }
     await db
       .update(rentInvoices)
-      .set({ status: overdue ? "Overdue" : "Approved" })
+      .set({ status: nextStatus })
       .where(eq(rentInvoices.id, invoiceId));
+  }
+}
+
+/** Invoice ids covered by an M-03 receipt (direct source + combined allocations). */
+export function m03InvoiceIdsCoveredByReceipt(receipt: {
+  sourceModule: string | null;
+  sourceRecordId: string | null;
+  m03BreakdownJson?: string | null;
+}): string[] {
+  const ids = new Set<string>();
+  if (String(receipt.sourceModule ?? "") === "M-03" && receipt.sourceRecordId) {
+    ids.add(String(receipt.sourceRecordId));
+  }
+  const combined = parseM03CombinedBundleBreakdown(receipt.m03BreakdownJson);
+  for (const a of combined?.invoiceAllocations ?? []) {
+    const id = String(a.invoiceId ?? "").trim();
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+/** After cheque/DD dishonour: flip covered Paid invoices to Reversed when outstanding again. */
+export async function revertM03InvoicesAfterChequeDishonour(
+  receipt: {
+    id: string;
+    sourceModule: string | null;
+    sourceRecordId: string | null;
+    m03BreakdownJson?: string | null;
+  },
+): Promise<void> {
+  for (const invoiceId of m03InvoiceIdsCoveredByReceipt(receipt)) {
+    await revertM03InvoicePaidAfterReceiptUnsettled(invoiceId, receipt.id, {
+      unpaidStatus: "Reversed",
+    });
   }
 }
 
@@ -670,9 +715,7 @@ export async function handleDepositedChequeNotCleared(
       .where(eq(receiptDeposits.id, receipt.depositId));
   }
   const ledgerRes = await recordChequeDishonourLedgerForM03Receipt(receipt);
-  if (receipt.sourceModule === "M-03" && receipt.sourceRecordId) {
-    await revertM03InvoicePaidAfterReceiptUnsettled(String(receipt.sourceRecordId), receipt.id);
-  }
+  await revertM03InvoicesAfterChequeDishonour(receipt);
   return { ledgerMessage: ledgerRes.message };
 }
 

@@ -86,11 +86,12 @@ export async function createCombinedRentInvoice(args: {
   const periodMonth = String(rows[0]!.periodMonth ?? "").trim();
 
   for (const inv of rows) {
-    if (String(inv.status ?? "") !== "Approved" && String(inv.status ?? "") !== "Overdue") {
+    const st = String(inv.status ?? "");
+    if (st !== "Approved" && st !== "Overdue" && st !== "Reversed") {
       return {
         ok: false,
         code: "COMBINED_INVOICE_STATUS",
-        message: "All selected invoices must be Approved (or Overdue) before combining.",
+        message: "All selected invoices must be Approved, Overdue, or Reversed before combining.",
       };
     }
     if (String(inv.tenantLicenceId ?? "") !== tenant) {

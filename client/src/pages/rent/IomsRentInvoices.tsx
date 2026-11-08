@@ -217,7 +217,11 @@ export default function IomsRentInvoices() {
       _total: formatInr(r.totalAmount),
       status: r.status,
       _status: (
-        <Badge variant={r.status === "Cancelled" ? "destructive" : "secondary"}>{r.status}</Badge>
+        <Badge
+          variant={r.status === "Cancelled" || r.status === "Overdue" || r.status === "Reversed" ? "destructive" : "secondary"}
+        >
+          {r.status}
+        </Badge>
       ),
       _actions: (
         <div className="flex flex-wrap items-center gap-2">
