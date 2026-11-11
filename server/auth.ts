@@ -6,7 +6,7 @@ import type { Request, Response, NextFunction } from "express";
 import { sendApiError } from "./api-errors";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { users, employees, userRoles, roles, userYards, rolePermissions, permissions } from "@shared/db-schema";
+import { users, employees, userRoles, roles, userYards, rolePermissions, permissions, yards } from "@shared/db-schema";
 import { ensureEmployeeRecordForUser } from "./ensure-user-employee";
 import { getMergedSystemConfig } from "./system-config";
 
@@ -33,6 +33,11 @@ declare global {
     interface Request {
       user?: AuthUser;
       scopedLocationIds?: string[];
+      /**
+       * Check-post operators may view/use any trader licence for M-04/checkpost work
+       * even when the licence registration yard is outside their assigned locations.
+       */
+      checkPostLicenceBypass?: boolean;
     }
   }
 }
@@ -195,6 +200,15 @@ export async function requireAuthApi(req: Request, res: Response, next: NextFunc
     }
     req.user = user;
     req.scopedLocationIds = user.yardIds;
+    req.checkPostLicenceBypass = false;
+    if (user.yardIds.length > 0 && !user.isAdmin) {
+      const locTypes = await db
+        .select({ type: yards.type })
+        .from(yards)
+        .where(inArray(yards.id, user.yardIds));
+      // Any CheckPost assignment → organisation-wide trader-licence access for M-04/checkpost ops.
+      req.checkPostLicenceBypass = locTypes.some((r) => String(r.type) === "CheckPost");
+    }
 
     // Mandatory password change: block all APIs except me / logout / change-password.
     if (user.forcePasswordChange) {
@@ -291,6 +305,15 @@ export function getModuleForPath(path: string): string | null {
     path.startsWith("/api/ioms/asset-allotments") ||
     path.startsWith("/api/ioms/entities") ||
     path.startsWith("/api/ioms/entity-allotments") ||
+    path.startsWith("/api/ioms/premises-agreements") ||
+    path.startsWith("/api/ioms/premises-agreements-approvals") ||
+    path.startsWith("/api/ioms/premises-agreements-mis") ||
+    path.startsWith("/api/ioms/agreement-renewals") ||
+    path.startsWith("/api/ioms/renewal-notices") ||
+    path.startsWith("/api/ioms/rent-revision-batches") ||
+    path.startsWith("/api/ioms/delay-penalties") ||
+    path.startsWith("/api/ioms/full-final-settlements") ||
+    path.startsWith("/api/ioms/final-demand-notices") ||
     path.startsWith("/api/ioms/unified-entities") ||
     path.startsWith("/api/ioms/pre-receipts") ||
     path.startsWith("/api/ioms/msp-settings")

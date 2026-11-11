@@ -35,6 +35,7 @@ import ReceiptDepositEntry from "@/pages/receipts/ReceiptDepositEntry";
 import ReceiptDepositRegister from "@/pages/receipts/ReceiptDepositRegister";
 import AdminBankAccounts from "@/pages/receipts/AdminBankAccounts";
 import IomsManualReceiptForm from "@/pages/receipts/IomsManualReceiptForm";
+import IomsConsolidatedManualReceiptForm from "@/pages/receipts/IomsConsolidatedManualReceiptForm";
 import VerifyReceipt from "@/pages/VerifyReceipt";
 import Health from "@/pages/Health";
 import AdminRoles from "@/pages/admin/AdminRoles";
@@ -72,6 +73,16 @@ import TraderBlockingLog from "@/pages/traders/TraderBlockingLog";
 import PremisesRegister from "@/pages/assets/PremisesRegister";
 import PremisesMasterReport from "@/pages/assets/PremisesMasterReport";
 import AssetAllotments from "@/pages/assets/AssetAllotments";
+import PremisesAgreementsList from "@/pages/assets/PremisesAgreementsList";
+import PremisesAgreementForm from "@/pages/assets/PremisesAgreementForm";
+import PremisesAgreementDetail from "@/pages/assets/PremisesAgreementDetail";
+import PremisesAgreementRenew from "@/pages/assets/PremisesAgreementRenew";
+import PremisesAgreementNotice from "@/pages/assets/PremisesAgreementNotice";
+import PremisesAgreementRevision from "@/pages/assets/PremisesAgreementRevision";
+import PremisesAgreementApprovals from "@/pages/assets/PremisesAgreementApprovals";
+import PremisesAgreementHistory from "@/pages/assets/PremisesAgreementHistory";
+import PremisesAgreementMis from "@/pages/assets/PremisesAgreementMis";
+import PremisesAgreementVacation from "@/pages/assets/PremisesAgreementVacation";
 import AssetForm from "@/pages/assets/AssetForm";
 import IomsRentInvoices from "@/pages/rent/IomsRentInvoices";
 import IomsRentInvoiceDetail from "@/pages/rent/IomsRentInvoiceDetail";
@@ -431,6 +442,13 @@ function Router() {
       <Route path="/receipts/new">
         <ProtectedRoute><RequirePermission module="M-05" action="Create"><ReceiptForm /></RequirePermission></ProtectedRoute>
       </Route>
+      <Route path="/receipts/ioms/new/consolidated">
+        <ProtectedRoute>
+          <RequirePermission module="M-05" action="Create">
+            <IomsConsolidatedManualReceiptForm />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
       <Route path="/receipts/ioms/new">
         <ProtectedRoute><RequirePermission module="M-05" action="Create"><IomsManualReceiptForm /></RequirePermission></ProtectedRoute>
       </Route>
@@ -617,6 +635,76 @@ function Router() {
       </Route>
       <Route path="/assets/allotments">
         <ProtectedRoute><AssetAllotments /></ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/new">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Create">
+            <PremisesAgreementForm />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/approvals">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Update">
+            <PremisesAgreementApprovals />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/mis">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Read">
+            <PremisesAgreementMis />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/:id/lines/:lineId/vacation">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Update">
+            <PremisesAgreementVacation />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/:id/renew">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Update">
+            <PremisesAgreementRenew />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/:id/notice">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Update">
+            <PremisesAgreementNotice />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/:id/revision">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Update">
+            <PremisesAgreementRevision />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/:id/history">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Read">
+            <PremisesAgreementHistory />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/:id">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Read">
+            <PremisesAgreementDetail />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Read">
+            <PremisesAgreementsList />
+          </RequirePermission>
+        </ProtectedRoute>
       </Route>
       <Route path="/assets/premises-master-report">
         <ProtectedRoute>

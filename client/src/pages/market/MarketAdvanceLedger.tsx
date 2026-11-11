@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle, Wallet, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { Link } from "wouter";
+import { Link, useSearchParams } from "wouter";
 import { formatInr, formatInrSigned } from "@/lib/formatInr";
 import { useAuth } from "@/context/AuthContext";
 
@@ -52,11 +52,17 @@ export default function MarketAdvanceLedger() {
   const canCreate = can("M-04", "Create");
   const { toast } = useToast();
   const qc = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const traderFromUrl = searchParams.get("traderLicenceId")?.trim() ?? "";
 
-  const [traderLicenceId, setTraderLicenceId] = useState("");
+  const [traderLicenceId, setTraderLicenceId] = useState(traderFromUrl);
   const [depositAmount, setDepositAmount] = useState("");
   const [paymentMode, setPaymentMode] = useState("Cash");
   const [refundAmount, setRefundAmount] = useState("");
+
+  useEffect(() => {
+    if (traderFromUrl) setTraderLicenceId(traderFromUrl);
+  }, [traderFromUrl]);
 
   const url = useMemo(() => {
     if (!traderLicenceId.trim()) return null;

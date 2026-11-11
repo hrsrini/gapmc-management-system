@@ -22,12 +22,20 @@ export type TraderLicenceScopeResult =
   | { ok: true }
   | { ok: false; status: number; code: string; message: string };
 
+export function requestHasCheckPostLicenceBypass(req: Request): boolean {
+  return Boolean((req as Request & { checkPostLicenceBypass?: boolean }).checkPostLicenceBypass);
+}
+
 export async function assertTraderLicenceAccessibleInUserScope(db: Db, req: Request, lic: LicRow): Promise<TraderLicenceScopeResult> {
   const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
   if (!scopedIds || scopedIds.length === 0) {
     return { ok: true };
   }
   if (req.user?.roles.some((r) => r.tier === "ADMIN")) {
+    return { ok: true };
+  }
+  // Check-post operators may transact against any active licence (org-wide).
+  if (requestHasCheckPostLicenceBypass(req)) {
     return { ok: true };
   }
   if (scopedIds.includes(lic.yardId)) {

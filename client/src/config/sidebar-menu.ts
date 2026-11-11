@@ -108,6 +108,9 @@ export const SIDEBAR_MENU_GROUPS: SidebarMenuGroup[] = [
       { title: "Premises Master Report", icon: FileSpreadsheet, href: "/assets/premises-master-report", requirePermission: { module: "M-02", action: "Read" } },
       { title: "Premises Master Registration", icon: PlusCircle, href: "/assets/new", requirePermission: { module: "M-02", action: "Create" } },
       { title: "Shop Allotments", icon: KeyRound, href: "/assets/allotments", requirePermission: { module: "M-02", action: "Read" } },
+      { title: "Premises allocations", icon: KeyRound, href: "/assets/agreements", requirePermission: { module: "M-02", action: "Read" } },
+      { title: "Allotment approvals", icon: FileCheck, href: "/assets/agreements/approvals", requirePermission: { module: "M-02", action: "Update" } },
+      { title: "Allotment MIS", icon: FileSpreadsheet, href: "/assets/agreements/mis", requirePermission: { module: "M-02", action: "Read" } },
     ],
   },
   {

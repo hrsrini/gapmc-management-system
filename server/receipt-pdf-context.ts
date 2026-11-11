@@ -3,6 +3,7 @@ import type { InferSelectModel } from "drizzle-orm";
 import { iomsReceipts, manualReceiptTypes, rentInvoices, users, yards } from "@shared/db-schema";
 import { isStandardRevenueHead, manualReceiptPostingHead } from "@shared/manual-receipt-types";
 import { parseM03ReceiptBreakdown, resolveM03ReceiptGstAmounts } from "@shared/m03-receipt-breakdown";
+import { parseM05ConsolidatedBreakdown } from "@shared/manual-consolidated-receipt";
 import { invoiceGstSnapshot } from "./m03-receipt-gst-display";
 import { db } from "./db";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
@@ -72,6 +73,14 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
   const mode = String(receipt.paymentMode ?? "").trim();
   const payWord = mode === "Cash" ? "Cash" : mode === "Cheque" || mode === "DD" ? "Cheque" : mode || "payment";
   if (isManualReceipt(receipt)) {
+    const consolidated = parseM05ConsolidatedBreakdown(
+      (receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson,
+    );
+    if (consolidated?.lines?.length) {
+      const names = consolidated.lines.map((l) => l.ledgerName).join(", ");
+      const narr = String(receipt.narration ?? "").trim();
+      return narr || `Consolidated payment: ${names}.`;
+    }
     const ledger = await resolveManualLedgerLabel(receipt);
     if (ledger) return `${ledger}.`;
   }
@@ -108,6 +117,29 @@ async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParti
   const rows: Omit<ReceiptPdfParticularRow, "sn">[] = [];
 
   if (isManualReceipt(receipt)) {
+    const consolidated = parseM05ConsolidatedBreakdown(
+      (receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson,
+    );
+    if (consolidated?.lines?.length) {
+      for (const line of consolidated.lines) {
+        const premises =
+          line.premisesLabels && line.premisesLabels.length
+            ? ` (${line.premisesLabels.join(", ")})`
+            : "";
+        const remark = line.remarks ? ` — ${line.remarks}` : "";
+        rows.push({
+          label: `${line.ledgerName}${premises}${remark}`,
+          amount: Number(line.amount) || 0,
+        });
+        if ((Number(line.cgst) || 0) > 0.005) {
+          rows.push({ label: `CGST on ${line.ledgerName}`, amount: Number(line.cgst) });
+        }
+        if ((Number(line.sgst) || 0) > 0.005) {
+          rows.push({ label: `SGST on ${line.ledgerName}`, amount: Number(line.sgst) });
+        }
+      }
+      return rows.map((r, i) => ({ sn: i + 1, ...r }));
+    }
     const ledger =
       (await resolveManualLedgerLabel(receipt)) ||
       (isStandardRevenueHead(rh) ? null : rh) ||

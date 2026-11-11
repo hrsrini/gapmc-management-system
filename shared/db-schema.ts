@@ -2227,3 +2227,237 @@ export const bugComments = gapmc.table("bug_comments", {
   body: text("body").notNull(),
   createdAt: text("created_at").notNull(),
 });
+
+// ----- Multi-premises agreements / renewal / notices (M-02) -----
+
+/** One agreement covering one or more premises in a single yard. */
+export const premisesAgreements = gapmc.table("premises_agreements", {
+  id: text("id").primaryKey(),
+  /** Human-readable unique agreement ref (AGR-…). */
+  agreementNo: text("agreement_no").notNull().unique(),
+  /** TrackA | TrackB */
+  track: text("track").notNull(),
+  traderLicenceId: text("trader_licence_id"),
+  entityId: text("entity_id"),
+  yardId: text("yard_id").notNull(),
+  allotteeName: text("allottee_name").notNull(),
+  allotmentDate: text("allotment_date"),
+  fromDate: text("from_date").notNull(),
+  toDate: text("to_date").notNull(),
+  agreementType: text("agreement_type").notNull().default("RentalAgreement"),
+  agreementRef: text("agreement_ref"),
+  rentRevisionMode: text("rent_revision_mode").notNull().default("StandardConsecutiveRenewal"),
+  /** Starts at 1 for new agreements; +1 on each successful renewal. */
+  agreementPeriodNumber: integer("agreement_period_number").notNull().default(1),
+  /** Revision due at period frequency+1, then every frequency periods. */
+  rentRevisionFrequency: integer("rent_revision_frequency").notNull().default(3),
+  renewalTenureMonths: integer("renewal_tenure_months"),
+  penaltyClauseRef: text("penalty_clause_ref"),
+  penaltyMethod: text("penalty_method"),
+  penaltyRate: doublePrecision("penalty_rate"),
+  totalSecurityDeposit: doublePrecision("total_security_deposit").notNull().default(0),
+  /** Draft | Verified | Approved | Rejected */
+  approvalStatus: text("approval_status").notNull().default("Draft"),
+  /** One of 9 renewal statuses (see shared/premises-agreement). */
+  renewalStatus: text("renewal_status").notNull().default("Active"),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  verifiedAt: text("verified_at"),
+  approvedAt: text("approved_at"),
+  dvReturnRemarks: text("dv_return_remarks"),
+  rejectionRemarks: text("rejection_remarks"),
+  agreementDocFile: text("agreement_doc_file"),
+  agreementDocUploadedAt: text("agreement_doc_uploaded_at"),
+  gstApplicable: boolean("gst_applicable").notNull().default(true),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const agreementPremisesLines = gapmc.table("agreement_premises_lines", {
+  id: text("id").primaryKey(),
+  agreementId: text("agreement_id").notNull(),
+  assetId: text("asset_id").notNull(),
+  monthlyRent: doublePrecision("monthly_rent").notNull().default(0),
+  depositShare: doublePrecision("deposit_share").notNull().default(0),
+  areaSqm: doublePrecision("area_sqm"),
+  /** Pending | Active | Vacating | Vacated */
+  tenancyStatus: text("tenancy_status").notNull().default("Pending"),
+  vacatedOn: text("vacated_on"),
+  /** Bridge to legacy single-row allotments for rent billing. */
+  legacyAssetAllotmentId: text("legacy_asset_allotment_id"),
+  legacyEntityAllotmentId: text("legacy_entity_allotment_id"),
+  rentRevisionModeOverride: text("rent_revision_mode_override"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const agreementRenewals = gapmc.table("agreement_renewals", {
+  id: text("id").primaryKey(),
+  agreementId: text("agreement_id").notNull(),
+  renewalDate: text("renewal_date").notNull(),
+  priorFromDate: text("prior_from_date").notNull(),
+  priorToDate: text("prior_to_date").notNull(),
+  renewalFromDate: text("renewal_from_date").notNull(),
+  renewalToDate: text("renewal_to_date").notNull(),
+  priorPeriodNumber: integer("prior_period_number").notNull(),
+  newPeriodNumber: integer("new_period_number").notNull(),
+  /** Draft | Initiated | PendingRevision | PendingPenalty | Completed | Cancelled */
+  status: text("status").notNull().default("Draft"),
+  revisionBatchId: text("revision_batch_id"),
+  penaltyId: text("penalty_id"),
+  remarks: text("remarks"),
+  completedAt: text("completed_at"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const renewalNotices = gapmc.table("renewal_notices", {
+  id: text("id").primaryKey(),
+  agreementId: text("agreement_id").notNull(),
+  noticeNo: text("notice_no").notNull().unique(),
+  versionNo: integer("version_no").notNull().default(1),
+  noticeDate: text("notice_date").notNull(),
+  lastDateToRenew: text("last_date_to_renew"),
+  pdfFile: text("pdf_file"),
+  generatedBy: text("generated_by"),
+  generatedAt: text("generated_at").notNull(),
+  dispatchDate: text("dispatch_date"),
+  dispatchRemarks: text("dispatch_remarks"),
+  isReprint: boolean("is_reprint").notNull().default(false),
+});
+
+export const rentRevisionBatches = gapmc.table("rent_revision_batches", {
+  id: text("id").primaryKey(),
+  agreementId: text("agreement_id").notNull(),
+  renewalId: text("renewal_id"),
+  effectiveDate: text("effective_date").notNull(),
+  revisionBasis: text("revision_basis").notNull().default("FixedMonthlyRent"),
+  /** Draft | Verified | Approved | Returned | Rejected */
+  status: text("status").notNull().default("Draft"),
+  remarks: text("remarks"),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  verifiedAt: text("verified_at"),
+  approvedAt: text("approved_at"),
+  returnRemarks: text("return_remarks"),
+  rejectionRemarks: text("rejection_remarks"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const rentRevisionLines = gapmc.table("rent_revision_lines", {
+  id: text("id").primaryKey(),
+  batchId: text("batch_id").notNull(),
+  agreementLineId: text("agreement_line_id").notNull(),
+  assetId: text("asset_id").notNull(),
+  existingRent: doublePrecision("existing_rent").notNull(),
+  revisedRent: doublePrecision("revised_rent").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const delayPenalties = gapmc.table("delay_penalties", {
+  id: text("id").primaryKey(),
+  agreementId: text("agreement_id").notNull(),
+  renewalId: text("renewal_id"),
+  expiryDate: text("expiry_date").notNull(),
+  regularisationDate: text("regularisation_date").notNull(),
+  daysOfDelay: integer("days_of_delay").notNull(),
+  method: text("method").notNull(),
+  rate: doublePrecision("rate").notNull(),
+  calculatedAmount: doublePrecision("calculated_amount").notNull(),
+  /** Draft | Verified | Approved | Returned | Rejected */
+  status: text("status").notNull().default("Draft"),
+  remarks: text("remarks"),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  verifiedAt: text("verified_at"),
+  approvedAt: text("approved_at"),
+  returnRemarks: text("return_remarks"),
+  rejectionRemarks: text("rejection_remarks"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const vacationEvictionEvents = gapmc.table("vacation_eviction_events", {
+  id: text("id").primaryKey(),
+  agreementId: text("agreement_id").notNull(),
+  agreementLineId: text("agreement_line_id").notNull(),
+  /** PrematureIntimation | EndDateVacation | EvictionByOrder */
+  caseType: text("case_type").notNull(),
+  intimationDate: text("intimation_date"),
+  proposedVacationDate: text("proposed_vacation_date"),
+  actualVacationDate: text("actual_vacation_date"),
+  orderType: text("order_type"),
+  orderRefNo: text("order_ref_no"),
+  orderDate: text("order_date"),
+  orderDocFile: text("order_doc_file"),
+  remarks: text("remarks"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const fullFinalSettlements = gapmc.table("full_final_settlements", {
+  id: text("id").primaryKey(),
+  agreementId: text("agreement_id").notNull(),
+  agreementLineId: text("agreement_line_id").notNull(),
+  vacationEventId: text("vacation_event_id").notNull(),
+  revisionNo: integer("revision_no").notNull().default(1),
+  outstandingRent: doublePrecision("outstanding_rent").notNull().default(0),
+  interestAmount: doublePrecision("interest_amount").notNull().default(0),
+  otherDues: doublePrecision("other_dues").notNull().default(0),
+  additionalReceivable: doublePrecision("additional_receivable").notNull().default(0),
+  depositHeld: doublePrecision("deposit_held").notNull().default(0),
+  deductions: doublePrecision("deductions").notNull().default(0),
+  systemCalculatedNet: doublePrecision("system_calculated_net").notNull().default(0),
+  proposedAdjustmentsJson: text("proposed_adjustments_json"),
+  approvedAdjustmentsJson: text("approved_adjustments_json"),
+  finalApprovedNet: doublePrecision("final_approved_net"),
+  /** Draft | Verified | Approved | Returned | Rejected */
+  status: text("status").notNull().default("Draft"),
+  remarks: text("remarks"),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  verifiedAt: text("verified_at"),
+  approvedAt: text("approved_at"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const finalDemandNotices = gapmc.table("final_demand_notices", {
+  id: text("id").primaryKey(),
+  settlementId: text("settlement_id").notNull(),
+  agreementId: text("agreement_id").notNull(),
+  noticeNo: text("notice_no").notNull().unique(),
+  versionNo: integer("version_no").notNull().default(1),
+  noticeDate: text("notice_date").notNull(),
+  paymentDueDate: text("payment_due_date"),
+  totalPayable: doublePrecision("total_payable").notNull(),
+  pdfFile: text("pdf_file"),
+  generatedBy: text("generated_by"),
+  generatedAt: text("generated_at").notNull(),
+});
+
+export const premisesAgreementSeq = gapmc.table("premises_agreement_seq", {
+  yearKey: text("year_key").primaryKey(),
+  lastSeq: integer("last_seq").notNull().default(0),
+});
+
+export const renewalNoticeSeq = gapmc.table("renewal_notice_seq", {
+  yearKey: text("year_key").primaryKey(),
+  lastSeq: integer("last_seq").notNull().default(0),
+});
+
+export const finalDemandNoticeSeq = gapmc.table("final_demand_notice_seq", {
+  yearKey: text("year_key").primaryKey(),
+  lastSeq: integer("last_seq").notNull().default(0),
+});

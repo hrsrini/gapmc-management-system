@@ -2830,7 +2830,33 @@ export function registerMarketIomsRoutes(app: Express) {
       const conditions = [];
       if (scopedIds && scopedIds.length > 0) conditions.push(inArray(checkPostInward.checkPostId, scopedIds));
       if (checkPostId) conditions.push(eq(checkPostInward.checkPostId, checkPostId));
-      const base = db.select().from(checkPostInward).orderBy(desc(checkPostInward.entryDate));
+      const base = db
+        .select({
+          id: checkPostInward.id,
+          entryNo: checkPostInward.entryNo,
+          checkPostId: checkPostInward.checkPostId,
+          traderLicenceId: checkPostInward.traderLicenceId,
+          invoiceNumber: checkPostInward.invoiceNumber,
+          vehicleNumber: checkPostInward.vehicleNumber,
+          transactionType: checkPostInward.transactionType,
+          fromFirm: checkPostInward.fromFirm,
+          toFirm: checkPostInward.toFirm,
+          fromState: checkPostInward.fromState,
+          toState: checkPostInward.toState,
+          totalCharges: checkPostInward.totalCharges,
+          receiptId: checkPostInward.receiptId,
+          encodedData: checkPostInward.encodedData,
+          entryDate: checkPostInward.entryDate,
+          isGracePeriod: checkPostInward.isGracePeriod,
+          officerId: checkPostInward.officerId,
+          status: checkPostInward.status,
+          traderFirmName: traderLicences.firmName,
+          traderLicenceNo: traderLicences.licenceNo,
+          traderProvisionalNo: traderLicences.provisionalLicenceNo,
+        })
+        .from(checkPostInward)
+        .leftJoin(traderLicences, eq(traderLicences.id, checkPostInward.traderLicenceId))
+        .orderBy(desc(checkPostInward.entryDate));
       let list = conditions.length > 0 ? await base.where(and(...conditions)) : await base;
       if (checkPostId) list = list.filter((r) => r.checkPostId === checkPostId);
       res.json(list);

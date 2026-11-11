@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -104,11 +105,17 @@ export default function MarketReturns() {
   const queryClient = useQueryClient();
   const { can } = useAuth();
   const canCreate = can("M-04", "Create") || can("M-04", "Update");
+  const [searchParams] = useSearchParams();
+  const traderFromUrl = searchParams.get("traderLicenceId")?.trim() ?? "";
 
-  const [traderLicenceId, setTraderLicenceId] = useState("");
+  const [traderLicenceId, setTraderLicenceId] = useState(traderFromUrl);
   const [period, setPeriod] = useState(monthDefault());
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [salesByCommodity, setSalesByCommodity] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (traderFromUrl) setTraderLicenceId(traderFromUrl);
+  }, [traderFromUrl]);
 
   const { data: licences = [] } = useQuery<TraderLicenceRef[]>({
     queryKey: ["/api/ioms/traders/licences"],

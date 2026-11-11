@@ -21,6 +21,9 @@ interface InwardEntry {
   entryNo?: string | null;
   checkPostId: string;
   traderLicenceId?: string | null;
+  traderFirmName?: string | null;
+  traderLicenceNo?: string | null;
+  traderProvisionalNo?: string | null;
   transactionType: string;
   entryDate: string;
   vehicleNumber?: string | null;
@@ -74,9 +77,6 @@ export default function CheckPostInward() {
   const { data: commodities = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ["/api/ioms/commodities"],
   });
-  const { data: licences = [] } = useQuery<Array<{ id: string; firmName: string; licenceNo?: string | null }>>({
-    queryKey: ["/api/ioms/traders/licences"],
-  });
   const {
     data: commodityLines = [],
     isLoading: commodityLinesLoading,
@@ -93,10 +93,6 @@ export default function CheckPostInward() {
   const checkPostById = useMemo(() => new Map(checkposts.map((c) => [c.id, c])), [checkposts]);
   const commodityIds = useMemo(() => new Set(commodities.map((c) => c.id)), [commodities]);
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
-  const licenceLabelById = useMemo(
-    () => new Map(licences.map((l) => [l.id, formatTraderLicenceSelectLabel(l)])),
-    [licences],
-  );
   const inwardCreateError = useMemo(() => {
     if (!checkPostId.trim()) return "Check post ID is required.";
     if (!entryDate.trim()) return "Entry date is required.";
@@ -255,7 +251,14 @@ export default function CheckPostInward() {
       entryDate: e.entryDate.slice(0, 10),
       vehicleNumber: e.vehicleNumber ?? "—",
       totalCharges: e.totalCharges != null ? e.totalCharges : "—",
-      trader: e.traderLicenceId ? (licenceLabelById.get(e.traderLicenceId) ?? e.traderLicenceId) : "—",
+      trader: e.traderLicenceId
+        ? formatTraderLicenceSelectLabel({
+            id: e.traderLicenceId,
+            firmName: e.traderFirmName ?? "",
+            licenceNo: e.traderLicenceNo,
+            provisionalLicenceNo: e.traderProvisionalNo,
+          })
+        : "—",
       receipt: e.receiptId ? (
         <a className="text-primary hover:underline text-sm font-mono" href={`/receipts/ioms/${e.receiptId}`}>
           View
@@ -284,7 +287,7 @@ export default function CheckPostInward() {
         </div>
       ),
     }));
-  }, [filteredList, checkPostById, canVerify, statusMutation, openCommodities, licenceLabelById]);
+  }, [filteredList, checkPostById, canVerify, statusMutation, openCommodities]);
 
   const commodityLineColumns = useMemo(
     (): ReportTableColumn[] => [

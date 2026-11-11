@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useSearchParams } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -71,14 +71,26 @@ const PARTY_LABELS: Record<ManualReceiptPartyType, string> = {
 
 export default function IomsManualReceiptForm() {
   const [, setLocation] = useLocation();
+  const [searchParams] = useSearchParams();
   const { toast } = useToast();
   const { user } = useAuth();
   const { data: yards = [] } = useScopedActiveYards();
 
-  const [yardId, setYardId] = useState("");
+  const yardFromUrl = searchParams.get("yardId")?.trim() ?? "";
+  const partyFromUrl = searchParams.get("partyType")?.trim() ?? "";
+  const unifiedFromUrl = searchParams.get("unifiedEntityId")?.trim() ?? "";
+
+  const [yardId, setYardId] = useState(yardFromUrl);
   const [manualReceiptTypeId, setManualReceiptTypeId] = useState("");
-  const [partyType, setPartyType] = useState<ManualReceiptPartyType | "">("");
-  const [unifiedEntityId, setUnifiedEntityId] = useState("");
+  const [partyType, setPartyType] = useState<ManualReceiptPartyType | "">(
+    partyFromUrl === "Trader" ||
+      partyFromUrl === "Entity" ||
+      partyFromUrl === "Assistant" ||
+      partyFromUrl === "NewParty"
+      ? (partyFromUrl as ManualReceiptPartyType)
+      : "",
+  );
+  const [unifiedEntityId, setUnifiedEntityId] = useState(unifiedFromUrl);
   const [assistantId, setAssistantId] = useState("");
   const [newPartyName, setNewPartyName] = useState("");
   const [newPartyAddress, setNewPartyAddress] = useState("");
@@ -89,6 +101,21 @@ export default function IomsManualReceiptForm() {
   const [amount, setAmount] = useState("");
   const [narration, setNarration] = useState("");
   const [paymentPref, setPaymentPref] = useState<PaymentPreferenceValue>(() => defaultPaymentPreferenceValue());
+
+  const preserveDeepLinkPartyRef = useRef(Boolean(unifiedFromUrl || partyFromUrl));
+
+  useEffect(() => {
+    if (yardFromUrl) setYardId(yardFromUrl);
+    if (
+      partyFromUrl === "Trader" ||
+      partyFromUrl === "Entity" ||
+      partyFromUrl === "Assistant" ||
+      partyFromUrl === "NewParty"
+    ) {
+      setPartyType(partyFromUrl);
+    }
+    if (unifiedFromUrl) setUnifiedEntityId(unifiedFromUrl);
+  }, [yardFromUrl, partyFromUrl, unifiedFromUrl]);
 
   const { data: types = [], isLoading: typesLoading } = useQuery<ManualReceiptTypeRow[]>({
     queryKey: ["/api/ioms/manual-receipt-types?dropdown=1"],
@@ -130,16 +157,18 @@ export default function IomsManualReceiptForm() {
   const allowedPartyTypes = selectedType?.allowedPartyTypes ?? [];
 
   useEffect(() => {
-    if (allowedPartyTypes.length === 0) {
-      setPartyType("");
-      return;
-    }
+    // Wait until a receipt type is chosen — do not wipe a deep-linked partyType.
+    if (allowedPartyTypes.length === 0) return;
     if (!partyType || !allowedPartyTypes.includes(partyType)) {
       setPartyType(allowedPartyTypes[0]);
     }
   }, [allowedPartyTypes, partyType]);
 
   useEffect(() => {
+    if (preserveDeepLinkPartyRef.current) {
+      preserveDeepLinkPartyRef.current = false;
+      return;
+    }
     setUnifiedEntityId("");
     setAssistantId("");
     setNewPartyName("");

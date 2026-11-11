@@ -109,6 +109,7 @@ import {
   SecurityDepositReceiptError,
 } from "./allotment-security-deposit-receipt";
 import { premisesRefNoTaken, registerEntityAllotmentRoutes } from "./entity-allotment-routes";
+import { registerPremisesAgreementRoutes } from "./routes-premises-agreements";
 import { assertPremisesNotAlreadyAllocatedActive, isPremisesAllocatable } from "./premises-allocation-guard";
 import { syncPremisesStatusFromTenancy } from "./premises-status-sync";
 import { fetchPremisesRegister } from "./premises-register";
@@ -366,9 +367,10 @@ function yardInScope(req: Request, yardId: string): boolean {
   return !scopedIds || scopedIds.length === 0 || scopedIds.includes(yardId);
 }
 
-/** ADMIN may access trader-licence rows across yards (e.g. list with allYards=1, cross-yard support). */
+/** ADMIN / check-post operators may access trader-licence rows across yards. */
 function licenceYardAccessible(req: Request, yardId: string): boolean {
   if (req.user?.roles.some((r) => r.tier === "ADMIN")) return true;
+  if ((req as Request & { checkPostLicenceBypass?: boolean }).checkPostLicenceBypass) return true;
   return yardInScope(req, yardId);
 }
 
@@ -423,6 +425,7 @@ async function resolvedCommodityUnitLabel(commodityId: string): Promise<string |
 
 export function registerTradersAssetsRoutes(app: Express) {
   registerEntityAllotmentRoutes(app);
+  registerPremisesAgreementRoutes(app);
   const now = () => new Date().toISOString();
 
   const bmFormUpload = multer({
@@ -2305,9 +2308,13 @@ export function registerTradersAssetsRoutes(app: Express) {
       const paged = req.query.paged === "1";
       const allYards = String(req.query.allYards ?? "").trim() === "1";
       const isAdmin = Boolean(req.user?.roles.some((r) => r.tier === "ADMIN"));
+      const checkPostBypass = Boolean(
+        (req as Request & { checkPostLicenceBypass?: boolean }).checkPostLicenceBypass,
+      );
       const scopedIds = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
       const conditions = [];
-      if (!(allYards && isAdmin) && scopedIds && scopedIds.length > 0) {
+      // Admin allYards=1 or check-post operators: list licences org-wide (not limited to home yard).
+      if (!(allYards && isAdmin) && !checkPostBypass && scopedIds && scopedIds.length > 0) {
         conditions.push(inArray(traderLicences.yardId, scopedIds));
       }
       if (yardId) conditions.push(eq(traderLicences.yardId, yardId));
@@ -2396,7 +2403,13 @@ export function registerTradersAssetsRoutes(app: Express) {
         );
       }
       const wc = searchConditions.length ? and(...searchConditions) : undefined;
-      const limited = limitRaw > 0 ? Math.min(Math.max(limitRaw, 1), 100) : undefined;
+      // Org-wide check-post bypass: never dump the full licence table unpaged without an explicit limit.
+      const limited =
+        limitRaw > 0
+          ? Math.min(Math.max(limitRaw, 1), 100)
+          : checkPostBypass && !id
+            ? 100
+            : undefined;
       const filtered = wc
         ? db.select().from(traderLicences).where(wc).orderBy(desc(traderLicences.createdAt))
         : db.select().from(traderLicences).orderBy(desc(traderLicences.createdAt));

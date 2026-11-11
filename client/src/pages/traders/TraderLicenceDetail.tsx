@@ -9,7 +9,7 @@ import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
-import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert, Loader2, Trash2, Package, Pencil, MessageSquareWarning, Wallet, BookOpen, Plus, ArrowRightLeft } from "lucide-react";
+import { FileCheck, ArrowLeft, AlertCircle, ShieldAlert, Loader2, Trash2, Package, Pencil, MessageSquareWarning, Wallet, BookOpen, Plus, ArrowRightLeft, Receipt, ClipboardList, Landmark } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -228,6 +228,9 @@ export default function TraderLicenceDetail() {
   const canUpdateLicence = can("M-02", "Update");
   const canCreateAllotment = can("M-02", "Create");
   const canCreateMarketTx = can("M-04", "Create");
+  const canReadMarket = can("M-04", "Read");
+  const canReadRent = can("M-03", "Read");
+  const canCreateIomsReceipt = can("M-05", "Create");
   const [exemptCategoryId, setExemptCategoryId] = useState<string>("__none__");
   const [nonGst, setNonGst] = useState(false);
   const [stockCommodityId, setStockCommodityId] = useState<string>("");
@@ -778,6 +781,52 @@ export default function TraderLicenceDetail() {
               {licence.licenceNo ?? licence.id} — {licence.firmName}
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2">
+              {canReadRent ? (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/rent/ioms/ledger?unifiedEntityId=${encodeURIComponent(`TA:${licence.id}`)}`}>
+                    <Landmark className="h-4 w-4 mr-1" />
+                    Advance Rent Deposit
+                  </Link>
+                </Button>
+              ) : null}
+              {canReadMarket ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  asChild
+                  className="border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/15"
+                >
+                  <Link href={`/market/advance-ledger?traderLicenceId=${encodeURIComponent(licence.id)}`}>
+                    <Wallet className="h-4 w-4 mr-1" />
+                    Market Fee Advance Ledger
+                  </Link>
+                </Button>
+              ) : null}
+              {canReadMarket ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  asChild
+                  className="border-sky-500/50 bg-sky-500/10 hover:bg-sky-500/15"
+                >
+                  <Link href={`/market/returns?traderLicenceId=${encodeURIComponent(licence.id)}`}>
+                    <ClipboardList className="h-4 w-4 mr-1" />
+                    Monthly Returns
+                  </Link>
+                </Button>
+              ) : null}
+              {canCreateIomsReceipt ? (
+                <Button variant="outline" size="sm" asChild>
+                  <Link
+                    href={`/receipts/ioms/new/consolidated?partyType=Trader&unifiedEntityId=${encodeURIComponent(`TA:${licence.id}`)}${
+                      licence.yardId ? `&yardId=${encodeURIComponent(licence.yardId)}` : ""
+                    }`}
+                  >
+                    <Receipt className="h-4 w-4 mr-1" />
+                    Create Manual Receipt (IOMS)
+                  </Link>
+                </Button>
+              ) : null}
               {marketTxHref ? (
                 <Button size="sm" asChild>
                   <Link href={marketTxHref}>
@@ -797,7 +846,12 @@ export default function TraderLicenceDetail() {
                   Outstanding dues
                 </Link>
               </Button>
-              <Button variant="outline" size="sm" asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                asChild
+                className="border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/15"
+              >
                 <Link href={`/rent/ioms/ledger?unifiedEntityId=${encodeURIComponent(`TA:${licence.id}`)}`}>
                   <BookOpen className="h-4 w-4 mr-1" />
                   Ledger
