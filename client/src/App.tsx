@@ -92,6 +92,9 @@ import IomsRentCombinedInvoiceForm from "@/pages/rent/IomsRentCombinedInvoiceFor
 import IomsRentCombinedInvoiceDetail from "@/pages/rent/IomsRentCombinedInvoiceDetail";
 import IomsCreditNotes from "@/pages/rent/IomsCreditNotes";
 import RentLedger from "@/pages/rent/RentLedger";
+import AdvanceRentDeposits from "@/pages/rent/AdvanceRentDeposits";
+import AdvanceRentDepositLedger from "@/pages/rent/AdvanceRentDepositLedger";
+import PaymentAdjustments from "@/pages/traders/PaymentAdjustments";
 import RentRevisions from "@/pages/rent/RentRevisions";
 import CommoditiesList from "@/pages/market/CommoditiesList";
 import MarketTransactions from "@/pages/market/MarketTransactions";
@@ -227,6 +230,12 @@ function Router() {
       </Route>
       <Route path="/rent/ioms/ledger">
         <ProtectedRoute><RequirePermission module="M-03" action="Read"><RentLedger /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/rent/ioms/advance-deposits">
+        <ProtectedRoute><RequirePermission module="M-03" action="Read"><AdvanceRentDeposits /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/rent/ioms/advance-deposits/:id">
+        <ProtectedRoute><RequirePermission module="M-03" action="Read"><AdvanceRentDepositLedger /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/rent/ioms/revisions">
         <ProtectedRoute><RequirePermission module="M-03" action="Read"><RentRevisions /></RequirePermission></ProtectedRoute>
@@ -623,6 +632,9 @@ function Router() {
       </Route>
       <Route path="/traders/dues">
         <ProtectedRoute><RequirePermission module="M-02" action="Read"><OutstandingDues /></RequirePermission></ProtectedRoute>
+      </Route>
+      <Route path="/traders/payment-adjustments">
+        <ProtectedRoute><RequirePermission module="M-03" action="Read"><PaymentAdjustments /></RequirePermission></ProtectedRoute>
       </Route>
       <Route path="/traders/unified-entities">
         <ProtectedRoute><RequirePermission module="M-02" action="Read"><UnifiedEntities /></RequirePermission></ProtectedRoute>

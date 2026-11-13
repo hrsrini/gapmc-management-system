@@ -49,6 +49,7 @@ import {
 } from "./dues-counter-payment";
 import { assertTraderLicenceAccessibleInUserScope } from "./trader-licence-market-scope";
 import { applyM03ReceiptToRentDepositLedgerWhenSettled, maybeMarkM03InvoicePaidFromSettledReceipts } from "./receipt-deposit-service";
+import { registerAdvanceRentDepositRoutes, applyAdvanceRentDepositsOnInvoiceApprove } from "./routes-advance-rent-deposits";
 import { initialDepositStatusForPaymentMode } from "@shared/receipt-deposit";
 import { listRentDepositLedgerEnriched } from "./rent-deposit-ledger-display";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB, unifiedEntityIdFromAdHoc } from "@shared/unified-entity-id";
@@ -166,6 +167,7 @@ async function sumPaidM03ByInvoiceIds(invoiceIds: string[]): Promise<Map<string,
 }
 
 export function registerRentIomsRoutes(app: Express) {
+  registerAdvanceRentDepositRoutes(app);
   const nowIso = () => new Date().toISOString();
   // ----- Rent invoices (IOMS M-03; distinct from gapmc.invoices; scoped by user yards) -----
   app.get("/api/ioms/rent/invoices", async (req, res) => {
@@ -1422,6 +1424,14 @@ export function registerRentIomsRoutes(app: Express) {
             } catch (e) {
               console.error("[rent-invoice] rent deposit Collection hook failed:", e);
             }
+          }
+        }
+
+        if (newStatus === "Approved") {
+          try {
+            await applyAdvanceRentDepositsOnInvoiceApprove({ invoiceId: id, userId: req.user?.id });
+          } catch (e) {
+            console.error("[rent-invoice] advance rent auto-adjust failed:", e);
           }
         }
       }

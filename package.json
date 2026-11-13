@@ -83,6 +83,7 @@
     "db:apply-receipt-deposit-extras": "dotenv -e .env -- tsx scripts/apply-receipt-deposit-extras.ts",
     "db:apply-receipt-deposit-all": "dotenv -e .env -- tsx scripts/apply-receipt-deposit-all.ts",
     "db:apply-premises-agreements": "dotenv -e .env -- tsx scripts/apply-premises-agreements-renewal.ts",
+    "db:apply-advance-rent-deposits": "dotenv -e .env -- tsx scripts/apply-advance-rent-deposits.ts",
     "db:verify-receipt-deposit-schema": "dotenv -e .env -- tsx scripts/verify-receipt-deposit-schema.ts",
     "smoke:receipt-deposit-notify": "dotenv -e .env -- tsx scripts/smoke-receipt-deposit-notify.ts",
     "sit:receipt-deposit-workflow": "dotenv -e .env -- tsx scripts/sit-receipt-deposit-workflow.ts",

@@ -442,6 +442,14 @@ export default function OutstandingDues() {
             <Badge variant="destructive" title="Payment reversed due to cheque/DD dishonour">
               Reversed
             </Badge>
+          ) : Number(d.paidAmount ?? 0) > 0.005 &&
+            Number(d.outstandingRentAmount ?? d.outstandingAmount ?? 0) > 0.005 ? (
+            <div className="flex flex-wrap items-center gap-1">
+              <span>{d.status}</span>
+              <Badge variant="secondary" title="Part settled (includes advance deposit adjustments)">
+                Adjusted
+              </Badge>
+            </div>
           ) : (
             <span>{d.status}</span>
           ),
@@ -487,14 +495,26 @@ export default function OutstandingDues() {
     <AppShell breadcrumbs={[{ label: "Traders", href: "/traders/licences" }, { label: "Outstanding dues" }]}>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Wallet className="h-5 w-5" />
-            Outstanding dues (unified entity)
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Select a unified entity ID (<span className="font-mono">TA:</span>/<span className="font-mono">TB:</span>/<span className="font-mono">AH:</span>). Track A shows M-03 rent invoice dues plus M-04 market fee outstanding. Track B{" "}
-            <span className="font-medium text-foreground">Govt</span> sub-type shows pre-receipt dues; Commercial and Ad-hoc Track B show outstanding M-03 rent / GST tax invoices.
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Wallet className="h-5 w-5" />
+                Outstanding dues
+              </CardTitle>
+              <p className="text-sm text-muted-foreground mt-1">
+                Everything pending for one trader, with interest on late payment. Advance deposits adjust automatically on
+                invoice approval.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link href="/receipts/ioms">Receipts</Link>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link href="/traders/payment-adjustments">Payment adjustments</Link>
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-end">

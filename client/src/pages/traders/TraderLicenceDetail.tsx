@@ -783,7 +783,7 @@ export default function TraderLicenceDetail() {
             <div className="flex flex-wrap items-center gap-2">
               {canReadRent ? (
                 <Button variant="outline" size="sm" asChild>
-                  <Link href={`/rent/ioms/ledger?unifiedEntityId=${encodeURIComponent(`TA:${licence.id}`)}`}>
+                  <Link href={`/rent/ioms/advance-deposits?traderLicenceId=${encodeURIComponent(licence.id)}`}>
                     <Landmark className="h-4 w-4 mr-1" />
                     Advance Rent Deposit
                   </Link>

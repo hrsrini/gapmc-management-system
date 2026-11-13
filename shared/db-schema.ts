@@ -1287,6 +1287,92 @@ export const rentInvoicePaymentAllocations = gapmc.table("rent_invoice_payment_a
 });
 
 /**
+ * Advance rent deposits (prepaid against future rent invoices for a premises).
+ * Distinct from rent_deposit_ledger (liability / collection ledger).
+ */
+export const advanceRentDeposits = gapmc.table("advance_rent_deposits", {
+  id: text("id").primaryKey(),
+  depositReceiptNo: text("deposit_receipt_no").notNull().unique(),
+  yardId: text("yard_id").notNull(),
+  traderLicenceId: text("trader_licence_id").notNull(),
+  unifiedEntityId: text("unified_entity_id"),
+  assetId: text("asset_id").notNull(),
+  allotmentId: text("allotment_id"),
+  depositDate: text("deposit_date").notNull(),
+  periodFrom: text("period_from"),
+  periodTo: text("period_to"),
+  depositAmount: doublePrecision("deposit_amount").notNull(),
+  adjustedAmount: doublePrecision("adjusted_amount").notNull().default(0),
+  balanceAmount: doublePrecision("balance_amount").notNull(),
+  /** Active | FullyAdjusted | Refunded | Forfeited */
+  status: text("status").notNull().default("Active"),
+  receiptId: text("receipt_id"),
+  paymentMode: text("payment_mode"),
+  paymentRef: text("payment_ref"),
+  receivedBy: text("received_by"),
+  remarks: text("remarks"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+/** Running statement against each advance rent deposit receipt. */
+export const advanceRentDepositEntries = gapmc.table("advance_rent_deposit_entries", {
+  id: text("id").primaryKey(),
+  depositId: text("deposit_id").notNull(),
+  entryDate: text("entry_date").notNull(),
+  /** Deposit | Adjustment | Refund | Forfeiture */
+  entryType: text("entry_type").notNull(),
+  /** +ve credit (deposit), -ve (adjustment / refund / forfeiture). */
+  amountInr: doublePrecision("amount_inr").notNull(),
+  balanceAfter: doublePrecision("balance_after").notNull(),
+  invoiceId: text("invoice_id"),
+  invoiceNo: text("invoice_no"),
+  adjustmentRef: text("adjustment_ref"),
+  rentReceiptId: text("rent_receipt_id"),
+  rentReceiptNo: text("rent_receipt_no"),
+  remarks: text("remarks"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at"),
+});
+
+/**
+ * Payment adjustments (interest waiver, GST rate revision, deposit refund/forfeiture, etc.).
+ * Separate from the counter Pay panel (mockup Screen 14).
+ */
+export const paymentAdjustments = gapmc.table("payment_adjustments", {
+  id: text("id").primaryKey(),
+  adjustmentNo: text("adjustment_no").notNull().unique(),
+  yardId: text("yard_id").notNull(),
+  traderLicenceId: text("trader_licence_id"),
+  unifiedEntityId: text("unified_entity_id"),
+  againstInvoiceId: text("against_invoice_id"),
+  againstReceiptId: text("against_receipt_id"),
+  advanceDepositId: text("advance_deposit_id"),
+  /**
+   * AdvanceDepositAutomatic | AdvanceDepositRefund | AdvanceDepositForfeiture |
+   * ExcessPaymentCarryForward | InterestWaiver | GstRateRevision | Correction
+   */
+  adjustmentType: text("adjustment_type").notNull(),
+  amountInr: doublePrecision("amount_inr").notNull(),
+  reason: text("reason"),
+  /** Draft | PendingApproval | Applied | Rejected */
+  status: text("status").notNull().default("Draft"),
+  dueBefore: doublePrecision("due_before"),
+  dueAfter: doublePrecision("due_after"),
+  createdBy: text("created_by"),
+  approvedBy: text("approved_by"),
+  createdAt: text("created_at"),
+  approvedAt: text("approved_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const paymentAdjustmentSeq = gapmc.table("payment_adjustment_seq", {
+  yearMonthKey: text("year_month_key").primaryKey(),
+  lastSeq: integer("last_seq").notNull().default(0),
+});
+
+/**
  * Invoice final-total rounding audit (nearest whole rupee).
  * One Active row per invoice; do not merge into rent/CGST/SGST.
  */

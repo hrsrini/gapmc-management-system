@@ -111,10 +111,44 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
   return `${rh || "payment"}.`;
 }
 
+async function loadAdvanceAdjustmentRows(invoiceId: string): Promise<Omit<ReceiptPdfParticularRow, "sn">[]> {
+  const { listAdvanceAdjustmentsForInvoice, getAdvanceRentDepositDetail } = await import(
+    "./advance-rent-deposit-service"
+  );
+  const adjustments = await listAdvanceAdjustmentsForInvoice(invoiceId);
+  const out: Omit<ReceiptPdfParticularRow, "sn">[] = [];
+  for (const adj of adjustments) {
+    const amt = Math.abs(Number(adj.amountInr ?? 0));
+    if (amt <= 0.005) continue;
+    const detail = await getAdvanceRentDepositDetail(adj.depositId);
+    const depNo = detail?.depositReceiptNo ?? "—";
+    const depDate = detail?.depositDate
+      ? formatReceiptDateDmYyyy(`${detail.depositDate}T00:00:00.000Z`)
+      : "—";
+    const ref = adj.adjustmentRef ? ` · ${adj.adjustmentRef}` : "";
+    const bal =
+      detail?.balanceAmount != null
+        ? ` · Deposit balance after adjustment INR ${Number(detail.balanceAmount).toFixed(2)}`
+        : "";
+    out.push({
+      label: `Less: Advance deposit adjusted — ${depNo} dated ${depDate}${ref}${bal}`,
+      amount: -amt,
+    });
+  }
+  return out;
+}
+
 async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParticularRow[]> {
   const rh = String(receipt.revenueHead ?? "").trim();
+  const sourceModule = String(receipt.sourceModule ?? "").trim();
   const m03Br = parseM03ReceiptBreakdown((receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson);
   const rows: Omit<ReceiptPdfParticularRow, "sn">[] = [];
+
+  // Advance rent deposit collection receipt face.
+  if (sourceModule === "M-03-ADV-DEPOSIT") {
+    rows.push({ label: "Advance rent deposit received", amount: Number(receipt.totalAmount ?? receipt.amount ?? 0) });
+    return rows.map((r, i) => ({ sn: i + 1, ...r }));
+  }
 
   if (isManualReceipt(receipt)) {
     const consolidated = parseM05ConsolidatedBreakdown(
@@ -161,13 +195,10 @@ async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParti
     let rentBase = Number(receipt.amount ?? 0);
     let cgst = Number(receipt.cgst ?? 0);
     let sgst = Number(receipt.sgst ?? 0);
+    let advanceLess: Omit<ReceiptPdfParticularRow, "sn">[] = [];
 
-    if (
-      cgst < 0.005 &&
-      sgst < 0.005 &&
-      String(receipt.sourceModule ?? "") === "M-03" &&
-      receipt.sourceRecordId
-    ) {
+    if (String(receipt.sourceModule ?? "") === "M-03" && receipt.sourceRecordId) {
+      advanceLess = await loadAdvanceAdjustmentRows(String(receipt.sourceRecordId));
       const [inv] = await db
         .select({
           rentAmount: rentInvoices.rentAmount,
@@ -178,10 +209,17 @@ async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParti
         .from(rentInvoices)
         .where(eq(rentInvoices.id, receipt.sourceRecordId))
         .limit(1);
-      const parts = resolveM03ReceiptGstAmounts(receipt, inv ? invoiceGstSnapshot(inv) : null);
-      rentBase = parts.amount;
-      cgst = parts.cgst;
-      sgst = parts.sgst;
+      // When advance was applied, show full invoice face then Less: deposit (mockup Screen 8).
+      if (advanceLess.length > 0 && inv) {
+        rentBase = Number(inv.rentAmount ?? 0);
+        cgst = Number(inv.cgst ?? 0);
+        sgst = Number(inv.sgst ?? 0);
+      } else if (cgst < 0.005 && sgst < 0.005) {
+        const parts = resolveM03ReceiptGstAmounts(receipt, inv ? invoiceGstSnapshot(inv) : null);
+        rentBase = parts.amount;
+        cgst = parts.cgst;
+        sgst = parts.sgst;
+      }
     }
 
     if (rentBase > 0.005) rows.push({ label: "Rent", amount: rentBase });
@@ -191,6 +229,7 @@ async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParti
     if (tds > 0.005) rows.push({ label: "TDS", amount: -tds });
     const interest = m03Br?.interestAmount != null ? Number(m03Br.interestAmount) : 0;
     if (interest > 0.005) rows.push({ label: "Interest on Rent", amount: interest });
+    rows.push(...advanceLess);
   }
 
   if (rows.length === 0) {
@@ -201,6 +240,9 @@ async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParti
 }
 
 function receiptTitle(receipt: ReceiptRow, yardCode: string | null, yardName: string | null): string {
+  if (String(receipt.sourceModule ?? "").trim() === "M-03-ADV-DEPOSIT") {
+    return "ADVANCE RENT DEPOSIT RECEIPT";
+  }
   const rh = String(receipt.revenueHead ?? "").trim();
   if (rh === "MarketFee") return marketFeeReceiptTitleForYard(yardCode);
   if (rh === "Rent" || rh === "GSTInvoice" || rh === "RentArrearsInterest") {
@@ -241,7 +283,10 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     if (contact) newPartyContactLine = `Contact No. : ${contact}`;
   }
 
-  const remarks = await buildRemarks(receipt);
+  let remarks = await buildRemarks(receipt);
+  if (String(receipt.sourceModule ?? "").trim() === "M-03-ADV-DEPOSIT") {
+    remarks = "Advance rent deposit. Adjustable against rent invoices for the premises.";
+  }
   const totalAmount = Number(receipt.totalAmount ?? 0);
   const branding = getReceiptPdfBranding(yard?.address ?? null, yard?.name ?? null);
 
@@ -277,6 +322,16 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     if (u?.name?.trim()) generatedByUsername = u.name.trim();
   }
 
+  let paymentDetailLine = formatReceiptPaymentDetailLine(receipt);
+  if (String(receipt.sourceModule ?? "").trim() === "M-03" && receipt.sourceRecordId) {
+    const advanceLess = await loadAdvanceAdjustmentRows(String(receipt.sourceRecordId));
+    const adjTotal = advanceLess.reduce((s, r) => s + Math.abs(Number(r.amount ?? 0)), 0);
+    if (adjTotal > 0.005) {
+      const mode = String(receipt.paymentMode ?? "Cash").trim() || "Cash";
+      paymentDetailLine = `${mode}, after adjustment of INR ${adjTotal.toFixed(2)} from advance deposit`;
+    }
+  }
+
   return {
     payerDisplayName,
     receivedFromLine,
@@ -289,7 +344,7 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     receiptTitle: receiptTitle(receipt, yard?.code ?? null, yard?.name ?? null),
     receiptNo: receipt.receiptNo,
     dateLabel: formatReceiptDateDmYyyy(receipt.createdAt),
-    paymentDetailLine: formatReceiptPaymentDetailLine(receipt),
+    paymentDetailLine,
     remarks,
     amountWords: formatInrAmountWordsReceiptFace(totalAmount),
     rows: await buildParticularRows(receipt),
