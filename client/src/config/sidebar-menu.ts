@@ -113,6 +113,7 @@ export const SIDEBAR_MENU_GROUPS: SidebarMenuGroup[] = [
       { title: "Premises allocations", icon: KeyRound, href: "/assets/agreements", requirePermission: { module: "M-02", action: "Read" } },
       { title: "Allotment approvals", icon: FileCheck, href: "/assets/agreements/approvals", requirePermission: { module: "M-02", action: "Update" } },
       { title: "Allotment MIS", icon: FileSpreadsheet, href: "/assets/agreements/mis", requirePermission: { module: "M-02", action: "Read" } },
+      { title: "Rent Agreement Generator", icon: FileText, href: "/assets/agreements", requirePermission: { module: "M-02", action: "Update" } },
     ],
   },
   {

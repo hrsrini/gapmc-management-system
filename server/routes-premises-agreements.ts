@@ -37,6 +37,7 @@ import {
 } from "./asset-allotment-agreement-storage";
 import { buildRenewalNoticePdf } from "./renewal-notice-pdf";
 import { buildFinalDemandNoticePdf } from "./final-demand-notice-pdf";
+import { registerLeaveLicenceAgreementRoutes } from "./routes-leave-licence-agreements";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
@@ -46,6 +47,7 @@ function routeParam(req: Request, name: string): string {
 }
 
 export function registerPremisesAgreementRoutes(app: Express) {
+  registerLeaveLicenceAgreementRoutes(app);
   app.get("/api/ioms/premises-agreements/summary", async (_req, res) => {
     try {
       res.json(await summaryCards());

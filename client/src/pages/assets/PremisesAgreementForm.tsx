@@ -282,6 +282,7 @@ export default function PremisesAgreementForm() {
                   <SelectItem value="auto">Auto from dates</SelectItem>
                   <SelectItem value="RentalAgreement">RentalAgreement</SelectItem>
                   <SelectItem value="LeaseAgreement">LeaseAgreement</SelectItem>
+                  <SelectItem value="LeaveAndLicence">LeaveAndLicence</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -161,6 +161,13 @@ export default function PremisesAgreementDetail() {
                     </a>
                   </Button>
                 ) : null}
+                {approval === "Approved" && (
+                  <Button asChild variant="default" size="sm">
+                    <Link href={`/assets/agreements/leave-licence/new?premisesAgreementId=${id}`}>
+                      Leave &amp; Licence
+                    </Link>
+                  </Button>
+                )}
                 <Button asChild variant="outline" size="sm">
                   <Link href={`/assets/agreements/${id}/renew`}>Renew</Link>
                 </Button>

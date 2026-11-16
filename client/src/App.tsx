@@ -83,6 +83,7 @@ import PremisesAgreementApprovals from "@/pages/assets/PremisesAgreementApproval
 import PremisesAgreementHistory from "@/pages/assets/PremisesAgreementHistory";
 import PremisesAgreementMis from "@/pages/assets/PremisesAgreementMis";
 import PremisesAgreementVacation from "@/pages/assets/PremisesAgreementVacation";
+import LeaveLicenceAgreementGenerator from "@/pages/assets/LeaveLicenceAgreementGenerator";
 import AssetForm from "@/pages/assets/AssetForm";
 import IomsRentInvoices from "@/pages/rent/IomsRentInvoices";
 import IomsRentInvoiceDetail from "@/pages/rent/IomsRentInvoiceDetail";
@@ -647,6 +648,20 @@ function Router() {
       </Route>
       <Route path="/assets/allotments">
         <ProtectedRoute><AssetAllotments /></ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/leave-licence/new">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Update">
+            <LeaveLicenceAgreementGenerator />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/agreements/leave-licence/:id">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Read">
+            <LeaveLicenceAgreementGenerator />
+          </RequirePermission>
+        </ProtectedRoute>
       </Route>
       <Route path="/assets/agreements/new">
         <ProtectedRoute>

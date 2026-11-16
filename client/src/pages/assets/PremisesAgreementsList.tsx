@@ -190,6 +190,11 @@ export default function PremisesAgreementsList() {
         ),
         _actions: (
           <div className="flex flex-wrap gap-1">
+            {r.approvalStatus === "Approved" && (
+              <Button asChild size="sm" variant="secondary">
+                <Link href={`/assets/agreements/leave-licence/new?premisesAgreementId=${r.id}`}>L&amp;L</Link>
+              </Button>
+            )}
             <Button asChild size="sm" disabled={!renewOk}>
               <Link href={`/assets/agreements/${r.id}/renew`}>{inProgress ? "Continue" : "Renew"}</Link>
             </Button>

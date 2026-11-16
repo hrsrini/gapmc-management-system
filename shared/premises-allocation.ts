@@ -2,7 +2,7 @@
 
 import { isTrackBGovtSubType } from "./track-b-entity";
 
-export const AGREEMENT_TYPES = ["RentalAgreement", "LeaseAgreement"] as const;
+export const AGREEMENT_TYPES = ["RentalAgreement", "LeaseAgreement", "LeaveAndLicence"] as const;
 export type AgreementType = (typeof AGREEMENT_TYPES)[number];
 
 export const RENT_REVISION_MODES = ["StandardConsecutiveRenewal", "PwdCertificate"] as const;
@@ -50,7 +50,7 @@ export type EntityTenancyStatus = (typeof ENTITY_TENANCY_STATUS)[number];
 
 export function normalizeAgreementType(v: unknown): AgreementType | null {
   const s = String(v ?? "").trim();
-  if (s === "RentalAgreement" || s === "LeaseAgreement") return s;
+  if (s === "RentalAgreement" || s === "LeaseAgreement" || s === "LeaveAndLicence") return s;
   return null;
 }
 

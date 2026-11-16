@@ -2547,3 +2547,49 @@ export const finalDemandNoticeSeq = gapmc.table("final_demand_notice_seq", {
   yearKey: text("year_key").primaryKey(),
   lastSeq: integer("last_seq").notNull().default(0),
 });
+
+// ----- Leave and Licence Agreement Generator -----
+
+/** One Leave & Licence agreement linked to a premises allotment/renewal. */
+export const leaveLicenceAgreements = gapmc.table("leave_licence_agreements", {
+  id: text("id").primaryKey(),
+  premisesAgreementId: text("premises_agreement_id").notNull(),
+  allotmentRef: text("allotment_ref").notNull(),
+  /** New | Renewal */
+  basis: text("basis").notNull().default("New"),
+  licenceOrEntityNo: text("licence_or_entity_no"),
+  renewalNo: integer("renewal_no").notNull().default(1),
+  /** Draft | Final | Executed | Cancelled */
+  status: text("status").notNull().default("Draft"),
+  currentVersionNo: integer("current_version_no").notNull().default(0),
+  supersededById: text("superseded_by_id"),
+  cancelledFromId: text("cancelled_from_id"),
+  cancelReason: text("cancel_reason"),
+  cancelEffectiveDate: text("cancel_effective_date"),
+  cancelOrderRef: text("cancel_order_ref"),
+  cancelOrderFile: text("cancel_order_file"),
+  cancelledAt: text("cancelled_at"),
+  cancelledBy: text("cancelled_by"),
+  executedAt: text("executed_at"),
+  executedBy: text("executed_by"),
+  signedScanFile: text("signed_scan_file"),
+  signedScanUploadedAt: text("signed_scan_uploaded_at"),
+  createdBy: text("created_by"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const leaveLicenceAgreementVersions = gapmc.table("leave_licence_agreement_versions", {
+  id: text("id").primaryKey(),
+  leaveLicenceAgreementId: text("leave_licence_agreement_id").notNull(),
+  versionNo: integer("version_no").notNull(),
+  /** Draft | Final | Voided | Executed */
+  kind: text("kind").notNull().default("Draft"),
+  snapshotJson: text("snapshot_json").notNull(),
+  contentSha256: text("content_sha256"),
+  pdfFile: text("pdf_file"),
+  pdfPageCount: integer("pdf_page_count"),
+  generatedBy: text("generated_by"),
+  generatedAt: text("generated_at").notNull(),
+  voidedAt: text("voided_at"),
+});
