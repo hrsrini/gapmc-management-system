@@ -20,6 +20,7 @@ import {
 } from "./report-order";
 import { getMergedSystemConfig } from "./system-config";
 import { buildGapmcTallyInterchangeXmlV1, type TallyExportFlatRow } from "./tally-export-xml";
+import { expandReceiptRowsForTallyExport } from "./tally-export-consolidated";
 import { mapDepositRefByReceiptIds } from "./receipt-deposit-service";
 import {
   rentInvoices,
@@ -745,6 +746,9 @@ export function registerReportsRoutes(app: Express) {
           tallyLedgerName: sql<string>`coalesce(${manualTallyLedgers.ledgerName}, ${rhTallyLedgers.ledgerName})`,
           tallyLedgerId: sql<string>`coalesce(${manualTallyLedgers.id}, ${rhTallyLedgers.id})`,
           tallyGroup: sql<string>`coalesce(${manualTallyLedgers.primaryGroup}, ${rhTallyLedgers.primaryGroup})`,
+          m03BreakdownJson: iomsReceipts.m03BreakdownJson,
+          sourceRecordId: iomsReceipts.sourceRecordId,
+          sourceModule: iomsReceipts.sourceModule,
         })
         .from(iomsReceipts)
         .leftJoin(manualReceiptTypes, eq(iomsReceipts.manualReceiptTypeId, manualReceiptTypes.id))
@@ -753,8 +757,10 @@ export function registerReportsRoutes(app: Express) {
         .leftJoin(rhTallyLedgers, eq(iomsRevenueHeadLedgerMap.tallyLedgerId, rhTallyLedgers.id))
         .orderBy(desc(iomsReceipts.createdAt));
 
-      const receiptRows =
+      const receiptRowsRaw =
         receiptConditions.length > 0 ? await receiptBase.where(and(...receiptConditions)) : await receiptBase;
+      // One CONS receipt → N ledger postings (same receipt no, head-wise amounts).
+      const receiptRows = await expandReceiptRowsForTallyExport(receiptRowsRaw);
 
       const depositRefByReceiptId = await mapDepositRefByReceiptIds(
         receiptRows.map((r) => r.receiptId).filter(Boolean),
@@ -872,9 +878,10 @@ export function registerReportsRoutes(app: Express) {
               const cr = isReceipt ? "" : String(total);
               const vt = (r as { voucherType?: string | null }).voucherType;
               const uid = String((r as { unifiedEntityId?: string | null }).unifiedEntityId ?? "").trim();
+              const consLedger = String((r as { consolidatedLedgerName?: string }).consolidatedLedgerName ?? "").trim();
               const narration = (
                 isReceipt
-                  ? `IOMS receipt ${r.docNo} ${r.revenueHead ?? ""}`.trim()
+                  ? `IOMS receipt ${r.docNo}${consLedger ? ` — ${consLedger}` : r.revenueHead ? ` ${r.revenueHead}` : ""}`.trim()
                   : `IOMS payment ${r.docNo} ${[r.revenueHead, vt].filter(Boolean).join(" · ")}`.trim()
               )
                 .concat(uid ? ` · ${uid}` : "")

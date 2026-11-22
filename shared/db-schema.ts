@@ -802,6 +802,11 @@ export const leaveRequests = gapmc.table("leave_requests", {
   appliedAt: text("applied_at"),
   /** YYYY-MM-DD sanction order date fixed at DA approval (stable on re-download). */
   orderDate: text("order_date"),
+  /**
+   * Leave balance (days) after debit at DA approval — frozen into the Sanction Order certificate.
+   * View/download must not recompute from live employee_leave_balances.
+   */
+  balanceAfterSanctionDays: doublePrecision("balance_after_sanction_days"),
 });
 
 /** M-01: per-employee leave-type balance (opening set at go-live; debited on DA approval when row exists). */

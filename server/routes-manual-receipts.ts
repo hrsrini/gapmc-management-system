@@ -513,7 +513,8 @@ export function registerManualReceiptRoutes(app: Express) {
       const createdBy = req.user?.id ?? "system";
       const created = await createIomsReceipt({
         yardId,
-        revenueHead: "Miscellaneous",
+        // Multi-head collections use the CONS series (GAPLMB/…/CONS/NNNN), not MISC/MFEE.
+        revenueHead: "Consolidated",
         payerName: payer.payerName,
         payerType: payer.payerType,
         payerRefId: payer.payerRefId ?? undefined,
@@ -527,6 +528,7 @@ export function registerManualReceiptRoutes(app: Express) {
         m03BreakdownJson: breakdownJson,
         createdBy,
         ...counterPaymentCreateParams(counterPay),
+        // Keep first line type for premises/payee metadata only — accounting uses breakdown lines.
         manualReceiptTypeId: primaryTypeId,
         payerPartyType: partyType,
         payerAddress: payer.payerAddress,

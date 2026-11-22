@@ -355,14 +355,14 @@ async function linkSanctionOrderToEmployeeDocuments(
   leaveId: string,
   fileNo: string,
   buffer: Buffer,
-  opts?: { superseded?: boolean },
+  opts?: { superseded?: boolean; overwrite?: boolean },
 ): Promise<void> {
   // Stored name must match isAllowedEmployeeDocumentFileName (8–32 chars before ext).
   const stored = `lsn-${leaveId}.pdf`;
   if (!isAllowedEmployeeDocumentFileName(stored)) return;
-  await writeEmployeeDocumentBuffer(employeeId, stored, buffer);
   const blobKey = `employees/${employeeId}/${stored}`;
   const superseded = opts?.superseded === true;
+  const overwrite = opts?.overwrite === true;
   // ASCII-only display name: Node rejects non-ASCII Content-Disposition (em dash → 500 on View/Download).
   const displayName = superseded
     ? `Leave Sanction Order - Superseded (${fileNo}).pdf`
@@ -375,6 +375,17 @@ async function linkSanctionOrderToEmployeeDocuments(
     .where(and(eq(employeeDocuments.employeeId, employeeId), eq(employeeDocuments.blobKey, blobKey)))
     .limit(1);
   if (existing) {
+    // Approved / historical orders are immutable: viewing must not rewrite the Documents copy.
+    if (!overwrite) {
+      if (superseded && (existing.docType !== docType || existing.fileName !== displayName)) {
+        await db
+          .update(employeeDocuments)
+          .set({ docType, fileName: displayName })
+          .where(eq(employeeDocuments.id, existing.id));
+      }
+      return;
+    }
+    await writeEmployeeDocumentBuffer(employeeId, stored, buffer);
     await db
       .update(employeeDocuments)
       .set({
@@ -389,6 +400,7 @@ async function linkSanctionOrderToEmployeeDocuments(
       .where(eq(employeeDocuments.id, existing.id));
     return;
   }
+  await writeEmployeeDocumentBuffer(employeeId, stored, buffer);
   await db.insert(employeeDocuments).values({
     id: nanoid(),
     employeeId,
@@ -421,22 +433,37 @@ async function ensureSanctionOrderInEmployeeDocuments(
   let buffer = await store.get(blobKey);
   let fileNo = String(lr.fileNo ?? "").trim();
 
-  if (!buffer || !fileNo) {
-    const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
-    const gen = await generateSanctionOrderPdf(leaveId);
-    buffer = gen.buffer;
-    fileNo = gen.fileNo;
-    await store.put(blobKey, buffer, "application/pdf");
-    if (!lr.orderPdfUrl) {
-      await db
-        .update(leaveRequests)
-        .set({ orderPdfUrl: `/api/hr/leaves/${leaveId}/sanction-order`, fileNo })
-        .where(eq(leaveRequests.id, leaveId));
+  // Prefer existing leave blob, else Documents copy; regenerate only if both missing.
+  if (!buffer) {
+    const docsCopy = await readEmployeeDocumentBuffer(lr.employeeId, `lsn-${leaveId}.pdf`).catch(() => null);
+    if (docsCopy && docsCopy.length > 0) {
+      buffer = docsCopy;
+      await store.put(blobKey, buffer, "application/pdf");
+    } else {
+      const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
+      const gen = await generateSanctionOrderPdf(leaveId);
+      buffer = gen.buffer;
+      fileNo = gen.fileNo || fileNo;
+      await store.put(blobKey, buffer, "application/pdf");
+      if (!lr.orderPdfUrl || !lr.fileNo?.trim()) {
+        await db
+          .update(leaveRequests)
+          .set({
+            orderPdfUrl: `/api/hr/leaves/${leaveId}/sanction-order`,
+            ...(fileNo ? { fileNo } : {}),
+          })
+          .where(eq(leaveRequests.id, leaveId));
+      }
     }
   }
+  if (!fileNo) fileNo = leaveId;
 
   const superseded = opts?.superseded === true || lr.status === "Superseded";
-  await linkSanctionOrderToEmployeeDocuments(lr.employeeId, leaveId, fileNo, buffer, { superseded });
+  // First-time link only — never overwrite an existing Approved Documents copy from heal/view.
+  await linkSanctionOrderToEmployeeDocuments(lr.employeeId, leaveId, fileNo, buffer, {
+    superseded,
+    overwrite: false,
+  });
 }
 
 async function generateAndEmailSanctionOrder(leaveId: string, employeeId: string): Promise<void> {
@@ -449,7 +476,7 @@ async function generateAndEmailSanctionOrder(leaveId: string, employeeId: string
     await db.update(leaveRequests).set({ orderPdfUrl: `/api/hr/leaves/${leaveId}/sanction-order`, fileNo }).where(eq(leaveRequests.id, leaveId));
     const [lr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveId)).limit(1);
     if (!lr) return;
-    await linkSanctionOrderToEmployeeDocuments(employeeId, leaveId, fileNo, buffer).catch((e) =>
+    await linkSanctionOrderToEmployeeDocuments(employeeId, leaveId, fileNo, buffer, { overwrite: true }).catch((e) =>
       console.error("Link sanction order to employee documents failed:", e),
     );
     // Keep the prior (superseded) sanction order in Documents for audit / record-keeping.
@@ -3099,6 +3126,22 @@ export function registerHrRoutes(app: Express) {
               updates.debitFromBalanceDays = 0;
             }
 
+            // Freeze certificate balance at approval (Sanction Order must not use live balances later).
+            {
+              const balLeaveType = balanceLeaveTypeFor(existing.leaveType);
+              const [balRow] = await tx
+                .select()
+                .from(employeeLeaveBalances)
+                .where(
+                  and(
+                    eq(employeeLeaveBalances.employeeId, existing.employeeId),
+                    eq(employeeLeaveBalances.leaveType, balLeaveType),
+                  ),
+                )
+                .limit(1);
+              updates.balanceAfterSanctionDays = balRow ? Number(balRow.balanceDays ?? 0) : 0;
+            }
+
             // Handle DA override of prefix/suffix
             if (body.prefixSuffixDisallowed === true) {
               updates.prefixSuffixDisallowed = true;
@@ -4080,20 +4123,41 @@ export function registerHrRoutes(app: Express) {
       const blobKey = sanctionOrderBlobKey(id);
       const store = getUploadBlobStore();
       const isSuperseded = lr.status === "Superseded";
-      // Prefer the stored PDF for superseded orders so the historical text is preserved.
-      let buffer: Buffer | null = isSuperseded ? await store.get(blobKey) : null;
+      // Approved and Superseded orders are historical: always prefer the stored PDF.
+      // Regenerating on view recalculates live balances and overwrites Documents.
+      let buffer: Buffer | null = await store.get(blobKey);
       let fileNo = String(lr.fileNo ?? "").trim();
       if (!buffer) {
-        const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
-        const gen = await generateSanctionOrderPdf(id);
-        buffer = gen.buffer;
-        fileNo = gen.fileNo;
-        await store.put(blobKey, buffer, "application/pdf");
-        await db.update(leaveRequests).set({ orderPdfUrl: `/api/hr/leaves/${id}/sanction-order` }).where(eq(leaveRequests.id, id));
+        // Prefer the historical Documents copy over regenerating (live balances / heal).
+        const docsCopy = await readEmployeeDocumentBuffer(lr.employeeId, `lsn-${id}.pdf`).catch(() => null);
+        if (docsCopy && docsCopy.length > 0) {
+          buffer = docsCopy;
+          await store.put(blobKey, buffer, "application/pdf");
+          await db
+            .update(leaveRequests)
+            .set({ orderPdfUrl: `/api/hr/leaves/${id}/sanction-order` })
+            .where(eq(leaveRequests.id, id));
+        } else {
+          // Last-resort heal when both leave blob and Documents copy are missing.
+          const { generateSanctionOrderPdf } = await import("./hr-leave-sanction-order-pdf");
+          const gen = await generateSanctionOrderPdf(id);
+          buffer = gen.buffer;
+          fileNo = gen.fileNo || fileNo;
+          await store.put(blobKey, buffer, "application/pdf");
+          await db
+            .update(leaveRequests)
+            .set({
+              orderPdfUrl: `/api/hr/leaves/${id}/sanction-order`,
+              ...(fileNo && !lr.fileNo?.trim() ? { fileNo } : {}),
+            })
+            .where(eq(leaveRequests.id, id));
+        }
       }
       if (!fileNo) fileNo = String(lr.fileNo ?? id);
+      // View/heal: create Documents row if missing; never rewrite an existing Approved copy.
       await linkSanctionOrderToEmployeeDocuments(lr.employeeId, id, fileNo, buffer, {
         superseded: isSuperseded,
+        overwrite: false,
       }).catch((e) => console.error("Link sanction order to employee documents failed:", e));
       // When opening a revised (current) order, also keep the prior order in Documents.
       const parentId = lr.revisedFromLeaveId ? String(lr.revisedFromLeaveId).trim() : "";

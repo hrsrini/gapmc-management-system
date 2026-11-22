@@ -6,6 +6,7 @@ import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { iomsReceipts, manualReceiptTypes, yards } from "@shared/db-schema";
 import type { Receipt } from "@shared/schema";
+import { isM05ConsolidatedReceipt } from "@shared/manual-consolidated-receipt";
 import { receiptRevenueHeadDisplayLabel } from "@shared/receipt-revenue-head-options";
 import { attachCreatedByDisplayNames, type WithCreatedByDisplayName } from "./ioms-receipt-created-by-display";
 import { attachPayerDisplayNames, type WithPayerDisplayName } from "./ioms-receipt-payer-display";
@@ -50,6 +51,9 @@ function resolveTallyHeadLabel(
   r: IomsReceiptRow,
   manualLedgerByTypeId: Map<string, string>,
 ): string {
+  if (isM05ConsolidatedReceipt(r)) {
+    return receiptRevenueHeadDisplayLabel("Consolidated");
+  }
   if (String(r.sourceModule ?? "").trim() === "M-05-MANUAL" && r.manualReceiptTypeId) {
     const ledger = manualLedgerByTypeId.get(String(r.manualReceiptTypeId));
     if (ledger?.trim()) return receiptRevenueHeadDisplayLabel(ledger.trim());

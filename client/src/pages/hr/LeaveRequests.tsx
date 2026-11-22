@@ -112,6 +112,8 @@ interface LeaveRequest {
   appliedAt?: string | null;
   /** YYYY-MM-DD fixed at DA approval — sanction order date (stable on re-download). */
   orderDate?: string | null;
+  /** Balance after debit frozen at DA approval (Sanction Order certificate). */
+  balanceAfterSanctionDays?: number | null;
 }
 interface Employee {
   id: string;
@@ -345,8 +347,14 @@ function leaveBalanceAfterDebit(
       b.employeeId === leave.employeeId &&
       String(b.leaveType).trim().toUpperCase() === String(balLeaveType).trim().toUpperCase(),
   );
+  if (approved) {
+    if (leave.balanceAfterSanctionDays != null && Number.isFinite(Number(leave.balanceAfterSanctionDays))) {
+      return Number(leave.balanceAfterSanctionDays);
+    }
+    if (!bal) return null;
+    return Number(bal.balanceDays ?? 0);
+  }
   if (!bal) return null;
-  if (approved) return Number(bal.balanceDays ?? 0);
 
   let available = Number(bal.balanceDays ?? 0);
   const asOf = new Date().toISOString().slice(0, 10);

@@ -77,6 +77,8 @@ export const STANDARD_REVENUE_HEADS = [
   "LicenceFee",
   "SecurityDeposit",
   "Miscellaneous",
+  /** Multi-head consolidated manual receipt series (GAPLMB/…/CONS/NNNN). */
+  "Consolidated",
 ] as const;
 
 export type StandardRevenueHead = (typeof STANDARD_REVENUE_HEADS)[number];
@@ -103,6 +105,7 @@ export function abbreviateReceiptHeadCode(ledgerOrHead: string): string {
       LicenceFee: "LCFEE",
       SecurityDeposit: "SECDEP",
       Miscellaneous: "MISC",
+      Consolidated: "CONS",
     };
     return codes[name] ?? "MISC";
   }

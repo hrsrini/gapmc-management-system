@@ -43,6 +43,17 @@ export function gstForManualLine(args: {
   return computeRentInvoiceGstInr(args.amount, args.gstExempt, args.cgstPercent, args.sgstPercent);
 }
 
+/** True when the receipt is a multi-head M-05 consolidated collection. */
+export function isM05ConsolidatedReceipt(row: {
+  sourceRecordId?: string | null;
+  m03BreakdownJson?: string | null;
+  revenueHead?: string | null;
+}): boolean {
+  if (String(row.revenueHead ?? "").trim() === "Consolidated") return true;
+  if (String(row.sourceRecordId ?? "").startsWith("CONSOLIDATED:")) return true;
+  return parseM05ConsolidatedBreakdown(row.m03BreakdownJson) != null;
+}
+
 export function parseM05ConsolidatedBreakdown(json: string | null | undefined): M05ConsolidatedBreakdown | null {
   if (json == null || String(json).trim() === "") return null;
   try {

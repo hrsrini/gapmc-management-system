@@ -317,10 +317,7 @@ export default function IomsManualReceiptForm() {
             Create manual receipt (IOMS)
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Receipt date defaults to payment date ({format(new Date(), "yyyy-MM-dd")}). Legacy form:{" "}
-            <a href="/receipts/new" className="text-primary hover:underline">
-              /receipts/new
-            </a>
+            Receipt date defaults to payment date ({format(new Date(), "yyyy-MM-dd")}).
           </p>
         </div>
 

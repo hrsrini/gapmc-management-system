@@ -11,17 +11,20 @@ import {
   yards,
 } from "@shared/db-schema";
 import {
+  addMonthsYmd,
   applyDerivedFields,
   calcAgreementEndDate,
   DEFAULT_DAMAGES_MULTIPLIER,
   DEFAULT_GST_NOTE_PCT,
   DEFAULT_INTEREST_RATE_TEXT,
+  DEFAULT_LICENSOR_SECRETARY,
   DEFAULT_NOTICE_DAYS,
   DEFAULT_PLACE_OF_EXECUTION,
   DEFAULT_RENT_DUE_DAY,
   DEFAULT_TERMINATION_MONTHS,
   defaultLicenseeClause,
   defaultLicensorClause,
+  inferLeaveLicenceFormat,
   type LeaveLicenceSnapshot,
   roundMoney2,
   validateLeaveLicenceSnapshot,
@@ -149,18 +152,28 @@ export async function buildPrefillSnapshot(premisesAgreementId: string): Promise
   if (!termMonths) termMonths = 11;
 
   const previousTo = basis === "Renewal" ? addDaysYmd(startDate, -1) : null;
+  // Prior period start ≈ current start − term months (execution date left blank for user).
+  const previousFrom =
+    basis === "Renewal" && startDate ? addMonthsYmd(startDate, -termMonths) : null;
 
   const licensorArgs = {
-    signingOfficer: "SHRI SATYAVAN DESSAI",
+    signingOfficer: DEFAULT_LICENSOR_SECRETARY,
     meetingNo: "33/2021-22",
     meetingDate: "26.10.2021",
     resolutionNo: "3",
-    officeAddress: "Margao Main-Yard, Arlem, Raia, Salcete-Goa",
+    officeAddress: "Margao Main-Yard, Arlem, Raia, Salcete- Goa",
   };
 
+  const agreementFormat = inferLeaveLicenceFormat(premises);
+  const isEntityLicensee = Boolean(detail.entityId) && !detail.traderLicenceId;
   const snap: LeaveLicenceSnapshot = {
     basis,
+    agreementFormat,
     allotmentRef: String(detail.agreementNo ?? premisesAgreementId),
+    purposeOfUse:
+      agreementFormat === "Format1"
+        ? "notified commodities/Agricultural input as a Trader"
+        : "office/Commercial purpose",
     licenceOrEntityNo,
     renewalNo: periodNo,
     traderOrEntityName: holderName,
@@ -169,8 +182,8 @@ export async function buildPrefillSnapshot(premisesAgreementId: string): Promise
     premises,
     totalAreaSqm: totalArea,
     totalRent,
-    previousAgreementDate: basis === "Renewal" ? previousTo : null,
-    previousFromDate: null,
+    previousAgreementDate: null,
+    previousFromDate: previousFrom,
     previousToDate: previousTo,
     previousMonthlyRent: null,
     agreementDate: new Date().toISOString().slice(0, 10),
@@ -204,14 +217,13 @@ export async function buildPrefillSnapshot(premisesAgreementId: string): Promise
     damagesMultiplier: DEFAULT_DAMAGES_MULTIPLIER,
     damagesPerDay: 0,
     gstNotePct: DEFAULT_GST_NOTE_PCT,
-    purposeOfUse: "",
     licensorSigningOfficer: licensorArgs.signingOfficer,
     licensorMeetingNo: licensorArgs.meetingNo,
     licensorMeetingDate: licensorArgs.meetingDate,
     licensorResolutionNo: licensorArgs.resolutionNo,
     licensorOfficeAddress: licensorArgs.officeAddress,
     licensorClause: defaultLicensorClause(licensorArgs),
-    licenseeSignsInPerson: true,
+    licenseeSignsInPerson: !isEntityLicensee,
     representativeName: "",
     representativeParentage: "",
     representativeAge: "",
@@ -222,6 +234,7 @@ export async function buildPrefillSnapshot(premisesAgreementId: string): Promise
       parentage,
       ageYears,
       address,
+      asEntity: isEntityLicensee || agreementFormat === "Format2",
     }),
     stampSerialNo: "",
     stampValue: null,
@@ -340,6 +353,7 @@ export async function saveLeaveLicenceDraft(opts: {
   const pref = await buildPrefillSnapshot(detail.premisesAgreementId);
   const merged = applyDerivedFields({
     ...snap,
+    agreementFormat: snap.agreementFormat || pref.agreementFormat,
     basis: pref.basis,
     allotmentRef: pref.allotmentRef,
     licenceOrEntityNo: pref.licenceOrEntityNo,

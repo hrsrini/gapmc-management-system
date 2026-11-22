@@ -77,6 +77,8 @@ const REVENUE_HEAD_MAP: { revenueHead: string; tallyLedgerId: string }[] = [
   { revenueHead: "LicenceFee", tallyLedgerId: "tl_lic" },
   { revenueHead: "SecurityDeposit", tallyLedgerId: "tl_sec_god" },
   { revenueHead: "Miscellaneous", tallyLedgerId: "tl_misc" },
+  // CONS series parent head — Tally export expands to per-line ledgers; map is fallback only.
+  { revenueHead: "Consolidated", tallyLedgerId: "tl_misc" },
 ];
 
 /** Default M-06 heads with Tally mapping (matches headToLedger below). */

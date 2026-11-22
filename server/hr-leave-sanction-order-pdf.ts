@@ -28,7 +28,7 @@ import {
   resolveLeaveOrderDateFromAudit,
 } from "./hr-leave-pdf-shared";
 import { allocateNextServiceBookNo } from "./hr-employee-rules";
-import { healMissingLeaveDebitIfNeeded } from "./hr-leave-balance-debit";
+import { balanceLeaveTypeFor, healMissingLeaveDebitIfNeeded } from "./hr-leave-balance-debit";
 import { calculateDebitDays } from "./hr-leave-prefix-suffix";
 import { nanoid } from "nanoid";
 
@@ -93,9 +93,16 @@ async function ensureEmployeeServiceBookNo(employeeId: string, current: string |
 }
 
 export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<{ buffer: Buffer; fileNo: string }> {
-  // Apply any missing PL/ML/CCL/EOL debit before reading balances for the certificate.
-  const healed = await healMissingLeaveDebitIfNeeded(leaveRequestId);
-  const lr = healed ?? (await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveRequestId)).limit(1))[0];
+  const [existingLr] = await db.select().from(leaveRequests).where(eq(leaveRequests.id, leaveRequestId)).limit(1);
+  if (!existingLr) throw new Error("Leave request not found");
+
+  // When the certificate balance was frozen at approval, skip debit heal — healing can
+  // mutate live balances and must not rewrite historical Sanction Order figures.
+  const hasFrozenBalance =
+    existingLr.balanceAfterSanctionDays != null &&
+    Number.isFinite(Number(existingLr.balanceAfterSanctionDays));
+  const healed = hasFrozenBalance ? existingLr : await healMissingLeaveDebitIfNeeded(leaveRequestId);
+  const lr = healed ?? existingLr;
   if (!lr) throw new Error("Leave request not found");
 
   const [emp] = await db.select().from(employees).where(eq(employees.id, lr.employeeId)).limit(1);
@@ -202,13 +209,27 @@ export async function generateSanctionOrderPdf(leaveRequestId: string): Promise<
     }
   }
 
-  const balLeaveType = lr.leaveType === "COMMUTED" ? "HPL" : lr.leaveType;
-  const [bal] = await db
-    .select()
-    .from(employeeLeaveBalances)
-    .where(and(eq(employeeLeaveBalances.employeeId, lr.employeeId), eq(employeeLeaveBalances.leaveType, balLeaveType)))
-    .limit(1);
-  const balanceAfter = bal ? Number(bal.balanceDays ?? 0) : 0;
+  // Prefer the balance frozen at DA approval. Live balances change after later leaves
+  // and must not rewrite historical Sanction Orders.
+  let balanceAfter: number;
+  if (lr.balanceAfterSanctionDays != null && Number.isFinite(Number(lr.balanceAfterSanctionDays))) {
+    balanceAfter = Number(lr.balanceAfterSanctionDays);
+  } else {
+    const balLeaveType = balanceLeaveTypeFor(lr.leaveType);
+    const [bal] = await db
+      .select()
+      .from(employeeLeaveBalances)
+      .where(and(eq(employeeLeaveBalances.employeeId, lr.employeeId), eq(employeeLeaveBalances.leaveType, balLeaveType)))
+      .limit(1);
+    balanceAfter = bal ? Number(bal.balanceDays ?? 0) : 0;
+    // Legacy approved/superseded rows: freeze whatever we print so later regenerates stay stable.
+    if (lr.status === "Approved" || lr.status === "Superseded") {
+      await db
+        .update(leaveRequests)
+        .set({ balanceAfterSanctionDays: balanceAfter })
+        .where(eq(leaveRequests.id, leaveRequestId));
+    }
+  }
 
   const defaultCopyTo = buildDefaultSanctionCopyTo({
     gender: emp.gender,

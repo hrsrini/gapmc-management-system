@@ -9,13 +9,33 @@ export type LeaveLicenceStatus = (typeof LEAVE_LICENCE_STATUSES)[number];
 export const LEAVE_LICENCE_VERSION_KINDS = ["Draft", "Final", "Voided", "Executed"] as const;
 export type LeaveLicenceVersionKind = (typeof LEAVE_LICENCE_VERSION_KINDS)[number];
 
+/** Format 1 = Stall & Godowns (trader registration); Format 2 = Office / commercial. */
+export const LEAVE_LICENCE_FORMATS = ["Format1", "Format2"] as const;
+export type LeaveLicenceFormat = (typeof LEAVE_LICENCE_FORMATS)[number];
+
+export const LEAVE_LICENCE_FORMAT_LABELS: Record<LeaveLicenceFormat, string> = {
+  Format1: "Format 1 — Stall & Godowns",
+  Format2: "Format 2 — Office / Commercial",
+};
+
 export const DEFAULT_PLACE_OF_EXECUTION = "Margao";
 export const DEFAULT_TERMINATION_MONTHS = 3;
 export const DEFAULT_NOTICE_DAYS = 10;
 export const DEFAULT_RENT_DUE_DAY = 10;
-export const DEFAULT_INTEREST_RATE_TEXT = "15% per annum compounded on monthly basis";
+export const DEFAULT_INTEREST_RATE_TEXT = "15% p.a.";
 export const DEFAULT_DAMAGES_MULTIPLIER = 2;
 export const DEFAULT_GST_NOTE_PCT = 18;
+export const DEFAULT_LICENSOR_SECRETARY = "Shri. Kirtiraj K. Naik Gaonkar";
+
+/** Infer APMC office format from premises asset types. */
+export function inferLeaveLicenceFormat(premises: Array<{ assetType?: string | null }>): LeaveLicenceFormat {
+  const types = premises.map((p) => String(p.assetType ?? "").toLowerCase());
+  // Format 2 = office / clear commercial occupation. Trader stalls, godowns, shops → Format 1.
+  const format2 =
+    /office|commercial|canteen|bank|atm|kiosk|restaurant|cafe|clinic|pharmacy/;
+  if (types.some((t) => format2.test(t))) return "Format2";
+  return "Format1";
+}
 
 export type LeaveLicenceDepositReceipt = {
   kind: "Original" | "Differential" | "Other";
@@ -37,6 +57,8 @@ export type LeaveLicencePremiseRow = {
 
 export type LeaveLicenceSnapshot = {
   basis: "New" | "Renewal";
+  /** Format 1 Stall/Godown vs Format 2 Office — APMC office templates. */
+  agreementFormat: LeaveLicenceFormat;
   allotmentRef: string;
   licenceOrEntityNo: string;
   renewalNo: number;
@@ -230,21 +252,31 @@ export function defaultLicensorClause(args: {
   resolutionNo: string;
   officeAddress: string;
 }): string {
-  const officer = args.signingOfficer.trim() || "SHRI SATYAVAN DESSAI";
+  const officer = args.signingOfficer.trim() || DEFAULT_LICENSOR_SECRETARY;
   const meetingNo = args.meetingNo.trim() || "33/2021-22";
   const meetingDate = args.meetingDate.trim() || "26.10.2021";
   const resolutionNo = args.resolutionNo.trim() || "3";
-  const office = args.officeAddress.trim() || "Margao Main-Yard, Arlem, Raia, Salcete-Goa";
+  const office = args.officeAddress.trim() || "Margao Main-Yard, Arlem, Raia, Salcete- Goa";
   return (
     `The Goa Agricultural Produce & Livestock Marketing Board, a body corporate ` +
     `established under Section 10 of The Goa Agricultural Produce and Livestock ` +
     `Marketing (Promotion & Facilitation) Act, 2007 ("the said Act"), represented herein ` +
-    `by its Secretary ${officer}, major in age, with office at ${office}, for self and also ` +
+    `by its Secretary ${officer} major in age, with office at ${office}, for self and also ` +
     `on behalf of Chairman of the Marketing Board as resolved in the Marketing Board ` +
     `meeting No. ${meetingNo} dated ${meetingDate} under Resolution No. ${resolutionNo}, ` +
     `hereinafter called "the Licensor" (which expression shall include its successors in ` +
     `interest/business and assigns), of the ONE PART.`
   );
+}
+
+/** Pull registered-office / resident address out of an existing party clause (UI rebuilds). */
+export function extractLicenseeAddressFromClause(clause: string | null | undefined): string {
+  const c = String(clause ?? "");
+  const office = /registered office at\s+(.+?)(?:,\s*represented|,?\s*hereinafter|$)/i.exec(c);
+  if (office?.[1]?.trim()) return office[1].trim().replace(/\s+/g, " ");
+  const resident = /,\s*resident of\s+(.+?)(?:,\s*represented|,?\s*hereinafter|$)/i.exec(c);
+  if (resident?.[1]?.trim()) return resident[1].trim().replace(/\s+/g, " ");
+  return "";
 }
 
 export function defaultLicenseeClause(args: {
@@ -253,8 +285,12 @@ export function defaultLicenseeClause(args: {
   ageYears?: string | number | null;
   maritalStatus?: string;
   address?: string;
+  /** Format 2 entity / commercial party block. */
+  asEntity?: boolean;
+  entityType?: string;
   representative?: {
     name: string;
+    designation?: string;
     parentage?: string;
     ageYears?: string;
     address?: string;
@@ -262,12 +298,27 @@ export function defaultLicenseeClause(args: {
   } | null;
 }): string {
   const name = args.name.trim() || "[LICENSEE NAME]";
-  const parentage = (args.parentage ?? "").trim();
-  const age = args.ageYears != null && String(args.ageYears).trim() ? `${args.ageYears} years of age` : "major in age";
-  const status = (args.maritalStatus ?? "").trim() || "resident";
   const address = (args.address ?? "").trim() || "[address]";
+
+  if (args.asEntity) {
+    const entityType = (args.entityType ?? "").trim() || "a firm / company";
+    const r = args.representative;
+    const repName = r?.name?.trim() || "________";
+    const designation = r?.designation?.trim() || "authorised signatory";
+    const authority = r?.authority?.trim() || "________";
+    return (
+      `${name}, ${entityType}, having its registered office at ${address}, represented herein by its ` +
+      `${designation} ${repName}, major in age, authorised vide ${authority}, ` +
+      `hereinafter called the "Licensee", OF THE OTHER PART.`
+    );
+  }
+
+  const parentage = (args.parentage ?? "").trim();
+  const age = args.ageYears != null && String(args.ageYears).trim() ? `${args.ageYears} years of age` : "major of age";
+  const status = (args.maritalStatus ?? "").trim() || "resident";
   const base =
-    `${name}${parentage ? `, ${parentage}` : ""}, ${age}` +
+    `${name}, Indian citizen, ${age}` +
+    `${parentage ? `, ${parentage}` : ""}` +
     (status && status !== "resident" ? `, ${status}` : "") +
     `, resident of ${address}`;
 
@@ -387,6 +438,10 @@ export function validateLeaveLicenceSnapshot(
 }
 
 export function applyDerivedFields(snap: LeaveLicenceSnapshot): LeaveLicenceSnapshot {
+  const agreementFormat =
+    snap.agreementFormat === "Format1" || snap.agreementFormat === "Format2"
+      ? snap.agreementFormat
+      : inferLeaveLicenceFormat(snap.premises ?? []);
   const totalRent = roundMoney2(
     snap.premises?.reduce((s, p) => s + (Number(p.monthlyRent) || 0), 0) ?? snap.totalRent,
   );
@@ -406,6 +461,7 @@ export function applyDerivedFields(snap: LeaveLicenceSnapshot): LeaveLicenceSnap
   });
   return {
     ...snap,
+    agreementFormat,
     premises,
     totalRent,
     totalAreaSqm: totalArea,

@@ -20,6 +20,7 @@ const STANDARD_REVENUE_HEAD_LABELS: Record<StandardRevenueHead, string> = {
   LicenceFee: "Licence Fee",
   SecurityDeposit: "Security Deposit",
   Miscellaneous: "Miscellaneous",
+  Consolidated: "Consolidated (multi-head)",
 };
 
 /** Human-readable Tally / revenue head for All Receipts Type and Revenue head columns. */

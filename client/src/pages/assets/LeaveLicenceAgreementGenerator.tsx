@@ -20,6 +20,9 @@ import {
   calcRequiredDeposit,
   defaultLicenseeClause,
   defaultLicensorClause,
+  extractLicenseeAddressFromClause,
+  LEAVE_LICENCE_FORMAT_LABELS,
+  type LeaveLicenceFormat,
   type LeaveLicenceSnapshot,
   validateLeaveLicenceSnapshot,
 } from "@shared/leave-licence-agreement";
@@ -148,6 +151,8 @@ export default function LeaveLicenceAgreementGenerator() {
       });
     }
     if (
+      partial.agreementFormat != null ||
+      partial.traderOrEntityName != null ||
       partial.licenseeSignsInPerson != null ||
       partial.representativeName != null ||
       partial.representativeParentage != null ||
@@ -155,17 +160,31 @@ export default function LeaveLicenceAgreementGenerator() {
       partial.representativeAddress != null ||
       partial.representativeAuthority != null
     ) {
+      // Format 2 office template uses the entity party block; Format 1 uses the trader person block.
+      const asEntity = next.agreementFormat === "Format2";
+      const preservedAddress =
+        extractLicenseeAddressFromClause(next.licenseeClause) ||
+        extractLicenseeAddressFromClause(snap.licenseeClause) ||
+        undefined;
       next.licenseeClause = defaultLicenseeClause({
         name: next.traderOrEntityName,
-        representative: next.licenseeSignsInPerson
-          ? null
-          : {
-              name: next.representativeName,
-              parentage: next.representativeParentage,
-              ageYears: next.representativeAge,
-              address: next.representativeAddress,
-              authority: next.representativeAuthority,
-            },
+        asEntity,
+        address: preservedAddress,
+        representative: asEntity
+          ? {
+              name: next.representativeName || "________",
+              designation: "authorised signatory",
+              authority: next.representativeAuthority || "________",
+            }
+          : next.licenseeSignsInPerson
+            ? null
+            : {
+                name: next.representativeName,
+                parentage: next.representativeParentage,
+                ageYears: next.representativeAge,
+                address: next.representativeAddress,
+                authority: next.representativeAuthority,
+              },
       });
     }
     setSnap(applyDerivedFields(next));
@@ -351,6 +370,48 @@ export default function LeaveLicenceAgreementGenerator() {
             <div>Renewal no.: {derived.renewalNo}</div>
             <div>Trader / entity: {derived.traderOrEntityName}</div>
             <div>Yard: {derived.yardName}</div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Agreement format (APMC office)</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Format 1 — Stall &amp; Godowns; Format 2 — Office. PDF page 1 prints on A4 stamp paper; remaining pages on Legal size.
+            </p>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label>Format *</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                disabled={locked}
+                value={derived.agreementFormat ?? "Format1"}
+                onChange={(e) => {
+                  const agreementFormat = e.target.value as LeaveLicenceFormat;
+                  const purposeOfUse =
+                    agreementFormat === "Format1"
+                      ? derived.purposeOfUse?.includes("office")
+                        ? "notified commodities/Agricultural input as a Trader"
+                        : derived.purposeOfUse || "notified commodities/Agricultural input as a Trader"
+                      : derived.purposeOfUse?.includes("commodities")
+                        ? "office/Commercial purpose"
+                        : derived.purposeOfUse || "office/Commercial purpose";
+                  patch({
+                    agreementFormat,
+                    purposeOfUse,
+                    // Format 2 party block is entity-style (registered office + authorised signatory).
+                    licenseeSignsInPerson: agreementFormat === "Format1" ? derived.licenseeSignsInPerson : false,
+                  });
+                }}
+              >
+                {(Object.keys(LEAVE_LICENCE_FORMAT_LABELS) as LeaveLicenceFormat[]).map((k) => (
+                  <option key={k} value={k}>
+                    {LEAVE_LICENCE_FORMAT_LABELS[k]}
+                  </option>
+                ))}
+              </select>
+            </div>
           </CardContent>
         </Card>
 

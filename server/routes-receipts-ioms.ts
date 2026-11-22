@@ -41,27 +41,39 @@ import {
   isStandardRevenueHead,
   manualReceiptPostingHead,
 } from "@shared/manual-receipt-types";
+import { isM05ConsolidatedReceipt } from "@shared/manual-consolidated-receipt";
 
 async function applyManualReceiptPostingHeads<T extends {
   sourceModule?: string | null;
+  sourceRecordId?: string | null;
   manualReceiptTypeId?: string | null;
   revenueHead?: string | null;
+  m03BreakdownJson?: string | null;
 }>(rows: T[]): Promise<T[]> {
   const typeIds = Array.from(
     new Set(
       rows
-        .filter((r) => String(r.sourceModule ?? "").trim() === "M-05-MANUAL" && r.manualReceiptTypeId)
+        .filter(
+          (r) =>
+            String(r.sourceModule ?? "").trim() === "M-05-MANUAL" &&
+            r.manualReceiptTypeId &&
+            !isM05ConsolidatedReceipt(r),
+        )
         .map((r) => String(r.manualReceiptTypeId)),
     ),
   );
-  if (typeIds.length === 0) return rows;
-  const types = await db
-    .select({ id: manualReceiptTypes.id, ledgerName: manualReceiptTypes.ledgerName })
-    .from(manualReceiptTypes)
-    .where(inArray(manualReceiptTypes.id, typeIds));
+  const types =
+    typeIds.length === 0
+      ? []
+      : await db
+          .select({ id: manualReceiptTypes.id, ledgerName: manualReceiptTypes.ledgerName })
+          .from(manualReceiptTypes)
+          .where(inArray(manualReceiptTypes.id, typeIds));
   const headById = new Map(types.map((t) => [t.id, manualReceiptPostingHead(t.ledgerName)]));
   return rows.map((r) => {
-    if (String(r.sourceModule ?? "").trim() !== "M-05-MANUAL" || !r.manualReceiptTypeId) return r;
+    if (String(r.sourceModule ?? "").trim() !== "M-05-MANUAL") return r;
+    if (isM05ConsolidatedReceipt(r)) return { ...r, revenueHead: "Consolidated" };
+    if (!r.manualReceiptTypeId) return r;
     const head = headById.get(String(r.manualReceiptTypeId));
     return head ? { ...r, revenueHead: head } : r;
   });
@@ -170,6 +182,7 @@ const REVENUE_HEAD_CODES: Record<string, string> = {
   LicenceFee: "LCFEE",
   SecurityDeposit: "SECDEP",
   Miscellaneous: "MISC",
+  Consolidated: "CONS",
 };
 
 function getFinancialYear(): string {
@@ -514,7 +527,9 @@ export function registerReceiptsIomsRoutes(app: Express) {
         .where(eq(iomsReceipts.receiptNo, receiptNo));
       if (!row) return sendApiError(res, 404, "RECEIPT_VERIFY_NOT_FOUND", "Receipt not found", { receiptNo });
       let revenueHead = row.revenueHead;
-      if (String(row.sourceModule ?? "").trim() === "M-05-MANUAL" && row.manualReceiptTypeId) {
+      if (isM05ConsolidatedReceipt(row)) {
+        revenueHead = "Consolidated";
+      } else if (String(row.sourceModule ?? "").trim() === "M-05-MANUAL" && row.manualReceiptTypeId) {
         const [mrt] = await db
           .select({ ledgerName: manualReceiptTypes.ledgerName })
           .from(manualReceiptTypes)
@@ -684,16 +699,20 @@ export function registerReceiptsIomsRoutes(app: Express) {
           .limit(1);
         if (mrt) {
           const postingHead = mrt.ledgerName.trim();
+          const consolidated = isM05ConsolidatedReceipt(row);
           payload = {
             ...payload,
             manualReceiptTypeLedgerName: mrt.ledgerName,
             manualReceiptPayeeRule: mrt.payeeRule,
             manualTallyLedgerName: mrt.tallyLedgerName ?? null,
-            ...(String(row.sourceModule ?? "").trim() === "M-05-MANUAL" && postingHead
+            ...(String(row.sourceModule ?? "").trim() === "M-05-MANUAL" && postingHead && !consolidated
               ? { revenueHead: postingHead }
               : {}),
+            ...(consolidated ? { revenueHead: "Consolidated" } : {}),
           };
         }
+      } else if (isM05ConsolidatedReceipt(row)) {
+        payload = { ...payload, revenueHead: "Consolidated" };
       }
       const depositCtx = await getReceiptDepositContext(row);
       payload = {

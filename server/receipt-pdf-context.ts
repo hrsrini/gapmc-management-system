@@ -3,7 +3,7 @@ import type { InferSelectModel } from "drizzle-orm";
 import { iomsReceipts, manualReceiptTypes, rentInvoices, users, yards } from "@shared/db-schema";
 import { isStandardRevenueHead, manualReceiptPostingHead } from "@shared/manual-receipt-types";
 import { parseM03ReceiptBreakdown, resolveM03ReceiptGstAmounts } from "@shared/m03-receipt-breakdown";
-import { parseM05ConsolidatedBreakdown } from "@shared/manual-consolidated-receipt";
+import { isM05ConsolidatedReceipt, parseM05ConsolidatedBreakdown } from "@shared/manual-consolidated-receipt";
 import { invoiceGstSnapshot } from "./m03-receipt-gst-display";
 import { db } from "./db";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
@@ -350,9 +350,11 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     rows: await buildParticularRows(receipt),
     totalAmount,
     isGracePeriod: Boolean((receipt as { isGracePeriod?: boolean | null }).isGracePeriod),
-    revenueHead: isManualReceipt(receipt)
-      ? (await resolveManualLedgerLabel(receipt)) ?? String(receipt.revenueHead ?? "")
-      : String(receipt.revenueHead ?? ""),
+    revenueHead: isM05ConsolidatedReceipt(receipt)
+      ? "Consolidated"
+      : isManualReceipt(receipt)
+        ? (await resolveManualLedgerLabel(receipt)) ?? String(receipt.revenueHead ?? "")
+        : String(receipt.revenueHead ?? ""),
     generatedByUsername,
   };
 }
