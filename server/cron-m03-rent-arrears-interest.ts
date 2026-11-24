@@ -42,7 +42,7 @@ async function sumInterestPostedForInvoice(invoiceId: string): Promise<number> {
     })
     .from(rentDepositLedger)
     .where(and(eq(rentDepositLedger.invoiceId, invoiceId), eq(rentDepositLedger.entryType, "Interest")));
-  return Number(r?.s ?? 0);
+  return Math.round(Number(r?.s ?? 0) * 100) / 100;
 }
 
 /** GAPLMB interest base = monthly rent only (not GST); capped by outstanding. */
@@ -115,7 +115,7 @@ export async function runM03RentArrearsInterest(): Promise<{
     });
     const cumulativeInterest = computed.interestRounded;
 
-    const already = await sumInterestPostedForInvoice(inv.id);
+    const already = Math.round(Number(await sumInterestPostedForInvoice(inv.id)) * 100) / 100;
     const delta = Math.round((cumulativeInterest - already) * 100) / 100;
     if (Math.abs(delta) < 0.01) {
       skipped += 1;
@@ -124,11 +124,13 @@ export async function runM03RentArrearsInterest(): Promise<{
 
     const prev = await latestRentDepositLedgerRowForInvoice(inv);
     const prevBal = prev != null ? Number(prev.balance ?? 0) : 0;
-    const balance = prevBal + delta;
+    const balance = Math.round((prevBal + delta) * 100) / 100;
     const id = nanoid();
     const intScope = rentInvoiceLedgerScope(inv);
 
     const isCorrection = delta < 0;
+    const debit = isCorrection ? 0 : delta;
+    const credit = isCorrection ? Math.round((-delta) * 100) / 100 : 0;
     await db.insert(rentDepositLedger).values({
       id,
       tenantLicenceId: intScope.ledgerTenantLicenceId,
@@ -136,8 +138,8 @@ export async function runM03RentArrearsInterest(): Promise<{
       assetId: inv.assetId,
       entryDate: asOfDate,
       entryType: "Interest",
-      debit: isCorrection ? 0 : delta,
-      credit: isCorrection ? -delta : 0,
+      debit,
+      credit,
       balance,
       invoiceId: inv.id,
       receiptId: null,
@@ -145,7 +147,7 @@ export async function runM03RentArrearsInterest(): Promise<{
       settledReceiptId: null,
     });
 
-    interestPosted += delta;
+    interestPosted = Math.round((interestPosted + delta) * 100) / 100;
     interestRows += 1;
 
     writeAuditLogSystem({
@@ -172,5 +174,11 @@ export async function runM03RentArrearsInterest(): Promise<{
     }).catch((e) => console.error("Audit log failed:", e));
   }
 
-  return { asOfDate, markedOverdue, interestPosted, interestRows, skipped };
+  return {
+    asOfDate,
+    markedOverdue,
+    interestPosted: Math.round(interestPosted * 100) / 100,
+    interestRows,
+    skipped,
+  };
 }
