@@ -57,7 +57,7 @@ import { ledgerRowMatchesUnifiedEntityFilter } from "./rent-ledger-scope";
 import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
 import { normalizeRentRevisionBasis, yearMonthMinusOne } from "@shared/rent-revision-basis";
 import { resolveRentForAllotmentPeriodMonth } from "./rent-allotment-rent-resolve";
-import { rentPeriodMonthEndIso } from "./rent-interest";
+import { rentInterestDueDateIso, todayIsoLocal } from "./rent-interest";
 import { allocateRentInvoiceNo, allocateRentInvoiceNoInTx } from "./rent-invoice-number";
 import { registerRentCombinedInvoiceRoutes } from "./rent-combined-invoice-routes";
 import { sumAllPaidForInvoiceIds } from "./m03-invoice-payment-sum";
@@ -1807,14 +1807,14 @@ export function registerRentIomsRoutes(app: Express) {
     const dmy = /^(\d{2})-(\d{2})-(\d{4})$/.exec(t);
     if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
     if (/^\d{4}-\d{2}-\d{2}$/.test(t.slice(0, 10))) return t.slice(0, 10);
-    return new Date().toISOString().slice(0, 10);
+    return todayIsoLocal();
   }
 
-  /** US-M03-006: past-due outstanding rent with simple ageing buckets (days after period-month end). */
+  /** US-M03-006: past-due outstanding rent with ageing buckets (days after due = 10th after period). */
   app.get("/api/ioms/rent/reports/ageing", async (req, res) => {
     try {
       const asOfRaw = String(req.query.asOf ?? "").trim();
-      const asOfDate = asOfRaw ? normalizeAgeingAsOfDate(asOfRaw) : new Date().toISOString().slice(0, 10);
+      const asOfDate = asOfRaw ? normalizeAgeingAsOfDate(asOfRaw) : todayIsoLocal();
       const yardQ = String(req.query.yardId ?? "").trim();
       const format = String(req.query.format ?? "").toLowerCase();
       const conditions = [inArray(rentInvoices.status, ["Approved", "Overdue", "Reversed"])];
@@ -1841,7 +1841,7 @@ export function registerRentIomsRoutes(app: Express) {
       }[] = [];
 
       for (const inv of list) {
-        const due = rentPeriodMonthEndIso(inv.periodMonth);
+        const due = rentInterestDueDateIso(inv.periodMonth);
         if (!due) continue;
         const paid = paidMap.get(inv.id) ?? 0;
         const outstanding = Number(inv.totalAmount ?? 0) - paid;

@@ -23,20 +23,29 @@ export function formatInrAmountWordsReceiptFace(amountInr: number): string {
   return words;
 }
 
-/** Table / total amount column (Indian grouping, no currency prefix). */
-export function formatReceiptAmountCell(amountInr: number): string {
+/** Indian-grouped amount without currency (internal). */
+export function formatReceiptAmountNumber(amountInr: number): string {
   const rounded = Math.round(amountInr * 100) / 100;
-  const hasPaise = Math.abs(rounded - Math.floor(rounded)) > 0.001;
   return rounded.toLocaleString("en-IN", {
-    minimumFractionDigits: hasPaise ? 2 : 2,
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
 }
 
+/** Table amount cell with Rupee symbol (₹). */
+export function formatReceiptAmountCell(amountInr: number): string {
+  return `₹ ${formatReceiptAmountNumber(amountInr)}`;
+}
+
 export function formatReceiptTotalLine(amountInr: number): string {
-  const rounded = Math.round(amountInr * 100) / 100;
-  const num = rounded.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `₹ ${num}`;
+  return `₹ ${formatReceiptAmountNumber(amountInr)}`;
+}
+
+/** Ensure bank/NEFT line ends with the word "branch". */
+export function appendBranchWord(bankOrPlace: string): string {
+  const s = String(bankOrPlace ?? "").trim() || "—";
+  if (/\bbranch\b/i.test(s)) return s;
+  return `${s} branch`;
 }
 
 export function mapReceiptPaymentModeLabel(mode: string | null | undefined): string {
@@ -65,14 +74,14 @@ export function formatReceiptPaymentDetailLine(receipt: ReceiptPaymentInstrument
     const instrument = mode === "DD" ? "DD" : "Cheque";
     const no = String(receipt.chequeNo ?? "").trim() || "—";
     const dt = formatReceiptDateDmYyyy(receipt.chequeDate ?? receipt.createdAt);
-    const bank = String(receipt.bankName ?? "").trim() || "—";
+    const bank = appendBranchWord(String(receipt.bankName ?? "").trim() || "—");
     return `${instrument} No. ${no} dated ${dt} drawn on ${bank}`;
   }
 
   if (mode === "Online") {
     const utr = String(receipt.gatewayRef ?? "").trim() || "—";
     const dt = formatReceiptDateDmYyyy(receipt.createdAt);
-    const bank = String(receipt.bankName ?? "").trim() || "—";
+    const bank = appendBranchWord(String(receipt.bankName ?? "").trim() || "—");
     return `Payment received through RTGS/NEFT vide UTR No. ${utr} dated ${dt} from ${bank}`;
   }
 

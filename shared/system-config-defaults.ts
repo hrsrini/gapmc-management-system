@@ -21,8 +21,8 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   rent_deposit_migration_cutoff: "2026-03-31",
   /** M-09: `per_yard` (default) or `central` (single HO-wide diary sequence). */
   dak_diary_sequence_scope: "per_yard",
-  /** M-03: simple daily arrears interest after due (e.g. cheque dishonour hint); SRS default 18% p.a. */
-  rent_arrears_interest_percent_per_annum: "18",
+  /** M-03: delayed rent interest % p.a. (simple; monthly 50%/100% slabs; default 15%). */
+  rent_arrears_interest_percent_per_annum: "15",
   /** M-03: annual rent (monthly × 12) above this INR threshold triggers TDS when PAN is valid on licence (194-I style). */
   rent_tds_annual_threshold_inr: "240000",
   /** M-03: TDS % applied to monthly rent (pre-GST) when threshold exceeded and PAN valid. */
@@ -235,7 +235,8 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   licence_fee: "Licence Fee",
   rent_deposit_migration_cutoff: "Rent deposit migration cut-off (ISO date)",
   dak_diary_sequence_scope: "Dak diary numbering (per_yard only; central disabled per policy)",
-  rent_arrears_interest_percent_per_annum: "Rent arrears interest % p.a. (simple daily; dishonour hint)",
+  rent_arrears_interest_percent_per_annum:
+    "Rent arrears interest % p.a. (simple; monthly 50%/100% slabs; round once; default 15)",
   rent_tds_annual_threshold_inr: "Rent TDS: annual threshold (INR; monthly rent × 12 vs this)",
   rent_tds_rate_percent: "Rent TDS: % on monthly rent when above threshold + valid PAN",
   rent_invoice_cgst_percent: "M-03 Rent invoice: CGST % on taxable rent (pre-GST base; default 9)",

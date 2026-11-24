@@ -32,7 +32,7 @@ import { tenantLicenceIsGstExempt } from "./gst-exempt";
 import { applyPaymentGatewayCallback } from "./payment-gateway-callback";
 import { isPaymentWebhookHmacMandatory, verifyPaymentWebhookHmac } from "./payment-webhook-hmac";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
-import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-interest";
+import { computeDelayedRentInterest, rentInterestDueDateIso, todayIsoLocal } from "./rent-interest";
 import { getM03RentReceiptArrearsDisclosure, type RentReceiptArrearsDisclosure } from "./rent-receipt-arrears";
 import { resolveRentFormalAllotmentRefNo } from "./rent-allotment-reference";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
@@ -82,9 +82,10 @@ async function applyManualReceiptPostingHeads<T extends {
 async function dishonourRecomputationHint(
   existing: typeof iomsReceipts.$inferSelect,
 ): Promise<string> {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIsoLocal();
   const cfg = await getMergedSystemConfig();
-  const rate = parseSystemConfigNumber(cfg, "rent_arrears_interest_percent_per_annum");
+  const rateRaw = parseSystemConfigNumber(cfg, "rent_arrears_interest_percent_per_annum");
+  const rate = rateRaw > 0 ? rateRaw : 15;
   const bankHint = String(cfg.rent_dishonour_bank_charge_hint ?? "").trim();
   const bankChargeInr = parseSystemConfigNumber(cfg, "rent_dishonour_bank_charge_inr");
 
@@ -97,7 +98,7 @@ async function dishonourRecomputationHint(
     if (!inv) {
       return `Rent receipt reversed; linked invoice ${existing.sourceRecordId} not found. Adjust ledger per finance.`;
     }
-    const due = rentPeriodMonthEndIso(inv.periodMonth);
+    const due = rentInterestDueDateIso(inv.periodMonth);
     const principal =
       Number(inv.rentAmount ?? 0) ||
       Number(inv.totalAmount ?? 0) ||
@@ -105,13 +106,13 @@ async function dishonourRecomputationHint(
     if (!due) {
       return `Rent receipt reversed; invoice periodMonth "${inv.periodMonth}" is not YYYY-MM — set due date manually. Principal reference ₹${principal.toFixed(2)}. Adjust deposit / re-bill per finance.`;
     }
-    const { days, interest } = computeRentArrearsSimpleInterest({
-      principal,
-      percentPerAnnum: rate,
-      dueDateIso: due,
+    const computed = computeDelayedRentInterest({
+      rentAmount: principal,
+      periodMonth: String(inv.periodMonth),
       asOfDateIso: today,
+      percentPerAnnum: rate,
     });
-    let msg = `Rent dishonour: simple interest from invoice period end (${due}) to ${today}: ${days} day(s) at ${rate}% p.a. on ₹${principal.toFixed(2)} (rent base) → approx ₹${interest.toFixed(2)} (ongoing accrual posts to rent deposit ledger via M-03 arrears cron when configured).`;
+    let msg = `Rent dishonour: delayed-rent interest (due ${due}) as of ${today}: N=${computed.nMonths} month(s) at ${rate}% p.a. on ₹${principal.toFixed(2)} (rent base) → ₹${computed.interestRounded.toFixed(0)} rounded (exact ₹${computed.interestExact.toFixed(4)}; ongoing accrual posts via M-03 arrears cron when configured).`;
     if (bankChargeInr > 0) msg += ` Reference bank charge (config): ₹${bankChargeInr.toFixed(2)} (not posted).`;
     if (bankHint) msg += ` ${bankHint}`;
     return msg;

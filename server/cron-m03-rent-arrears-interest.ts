@@ -1,7 +1,9 @@
 /**
- * M-03 US-M03-002: Overdue rent + simple interest accrual on `rent_deposit_ledger`.
- * - Marks Approved invoices as Overdue when past period-month end and still outstanding.
- * - Posts incremental Interest debits: cumulative interest(due→today) minus sum of prior Interest debits for that invoice.
+ * M-03 US-M03-002: Overdue rent + delayed-rent interest accrual on `rent_deposit_ledger`.
+ * - Marks Approved invoices as Overdue when past due (10th of month after period) and still outstanding.
+ * - Posts incremental Interest debits: cumulative slab interest(as-of today) minus prior Interest debits.
+ * - If prior (e.g. daily) accruals exceed the slab total, posts a correcting Interest credit.
+ * - Interest = ROUND(R × rate × N / 1200, 0) on rent amount R (GAPLMB slabs; see rent-interest.ts).
  */
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
@@ -10,28 +12,11 @@ import { db } from "./db";
 import { iomsReceipts, rentDepositLedger, rentInvoices } from "@shared/db-schema";
 import { writeAuditLogSystem } from "./audit";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
-import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-interest";
+import { computeDelayedRentInterest, rentInterestDueDateIso, todayIsoLocal } from "./rent-interest";
 import { latestRentDepositLedgerRowForInvoice, rentInvoiceLedgerScope } from "./rent-ledger-scope";
 import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
 
 type RentInvoiceRow = InferSelectModel<typeof rentInvoices>;
-
-function nonGstChargesSum(json: string | null | undefined): number {
-  if (json == null || String(json).trim() === "") return 0;
-  try {
-    const arr = JSON.parse(String(json)) as unknown;
-    if (!Array.isArray(arr)) return 0;
-    let s = 0;
-    for (const o of arr) {
-      const x = o as { amount?: unknown };
-      const a = Number(x?.amount);
-      if (Number.isFinite(a) && a > 0) s += a;
-    }
-    return Math.round(s * 100) / 100;
-  } catch {
-    return 0;
-  }
-}
 
 async function sumPaidOrReconciledOnInvoice(invoiceId: string): Promise<number> {
   const recs = await db
@@ -53,18 +38,19 @@ async function sumPaidOrReconciledOnInvoice(invoiceId: string): Promise<number> 
 async function sumInterestPostedForInvoice(invoiceId: string): Promise<number> {
   const [r] = await db
     .select({
-      s: sql<number>`coalesce(sum(${rentDepositLedger.debit}), 0)::double precision`,
+      s: sql<number>`coalesce(sum(${rentDepositLedger.debit}) - sum(${rentDepositLedger.credit}), 0)::double precision`,
     })
     .from(rentDepositLedger)
     .where(and(eq(rentDepositLedger.invoiceId, invoiceId), eq(rentDepositLedger.entryType, "Interest")));
   return Number(r?.s ?? 0);
 }
 
+/** GAPLMB interest base = monthly rent only (not GST); capped by outstanding. */
 function interestPrincipal(inv: RentInvoiceRow, outstanding: number): number {
-  const rentLike = Number(inv.rentAmount ?? 0) + nonGstChargesSum(inv.nonGstChargesJson);
+  const rent = Number(inv.rentAmount ?? 0);
   const out = Math.max(0, outstanding);
-  if (rentLike > 0 && out > 0) return Math.min(rentLike, out);
-  return out;
+  if (rent > 0 && out > 0) return Math.min(rent, out);
+  return 0;
 }
 
 export async function runM03RentArrearsInterest(): Promise<{
@@ -74,14 +60,16 @@ export async function runM03RentArrearsInterest(): Promise<{
   interestRows: number;
   skipped: number;
 }> {
-  const asOfDate = new Date().toISOString().slice(0, 10);
+  const asOfDate = todayIsoLocal();
   const cfg = await getMergedSystemConfig();
-  const rate = parseSystemConfigNumber(cfg, "rent_arrears_interest_percent_per_annum");
+  const rateRaw = parseSystemConfigNumber(cfg, "rent_arrears_interest_percent_per_annum");
+  const rate = rateRaw > 0 ? rateRaw : 15;
 
+  // Do not accrue on Reversed/Cancelled — only live receivables.
   const candidates = await db
     .select()
     .from(rentInvoices)
-    .where(inArray(rentInvoices.status, ["Approved", "Overdue", "Reversed"]));
+    .where(inArray(rentInvoices.status, ["Approved", "Overdue"]));
 
   let markedOverdue = 0;
   let interestPosted = 0;
@@ -89,7 +77,7 @@ export async function runM03RentArrearsInterest(): Promise<{
   let skipped = 0;
 
   for (const inv of candidates) {
-    const due = rentPeriodMonthEndIso(inv.periodMonth);
+    const due = rentInterestDueDateIso(inv.periodMonth);
     if (!due || due >= asOfDate) {
       skipped += 1;
       continue;
@@ -109,7 +97,7 @@ export async function runM03RentArrearsInterest(): Promise<{
         module: "Rent/Tax",
         action: "RentInvoiceMarkedOverdue",
         recordId: inv.id,
-        afterValue: { asOfDate, periodMonth: inv.periodMonth, outstanding },
+        afterValue: { asOfDate, periodMonth: inv.periodMonth, dueDateIso: due, outstanding },
       }).catch((e) => console.error("Audit log failed:", e));
     }
 
@@ -119,16 +107,17 @@ export async function runM03RentArrearsInterest(): Promise<{
       continue;
     }
 
-    const { interest: cumulativeInterest } = computeRentArrearsSimpleInterest({
-      principal,
-      percentPerAnnum: rate,
-      dueDateIso: due,
+    const computed = computeDelayedRentInterest({
+      rentAmount: principal,
+      periodMonth: String(inv.periodMonth),
       asOfDateIso: asOfDate,
+      percentPerAnnum: rate,
     });
+    const cumulativeInterest = computed.interestRounded;
 
     const already = await sumInterestPostedForInvoice(inv.id);
     const delta = Math.round((cumulativeInterest - already) * 100) / 100;
-    if (delta < 0.01) {
+    if (Math.abs(delta) < 0.01) {
       skipped += 1;
       continue;
     }
@@ -137,8 +126,9 @@ export async function runM03RentArrearsInterest(): Promise<{
     const prevBal = prev != null ? Number(prev.balance ?? 0) : 0;
     const balance = prevBal + delta;
     const id = nanoid();
-
     const intScope = rentInvoiceLedgerScope(inv);
+
+    const isCorrection = delta < 0;
     await db.insert(rentDepositLedger).values({
       id,
       tenantLicenceId: intScope.ledgerTenantLicenceId,
@@ -146,8 +136,8 @@ export async function runM03RentArrearsInterest(): Promise<{
       assetId: inv.assetId,
       entryDate: asOfDate,
       entryType: "Interest",
-      debit: delta,
-      credit: 0,
+      debit: isCorrection ? 0 : delta,
+      credit: isCorrection ? -delta : 0,
       balance,
       invoiceId: inv.id,
       receiptId: null,
@@ -160,7 +150,7 @@ export async function runM03RentArrearsInterest(): Promise<{
 
     writeAuditLogSystem({
       module: "Rent/Tax",
-      action: "RentArrearsInterestAccrued",
+      action: isCorrection ? "RentArrearsInterestCorrected" : "RentArrearsInterestAccrued",
       recordId: id,
       afterValue: {
         asOfDate,
@@ -170,9 +160,14 @@ export async function runM03RentArrearsInterest(): Promise<{
         dueDateIso: due,
         principal,
         ratePercentPerAnnum: rate,
+        nMonths: computed.nMonths,
+        interestExact: computed.interestExact,
+        interestRounded: cumulativeInterest,
         delta,
+        already,
         cumulativeAfter: already + delta,
         balance,
+        correction: isCorrection,
       },
     }).catch((e) => console.error("Audit log failed:", e));
   }

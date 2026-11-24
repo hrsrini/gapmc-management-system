@@ -50,10 +50,18 @@ export type LicenceDisplayMaps = {
       licenceNo: string | null;
       entityPublicCode: string | null;
       provisionalLicenceNo: string | null;
+      lmLicenseClass: string | null;
     }
   >;
   entityCodeById: Map<string, string | null>;
   adHocCodeById: Map<string, string | null>;
+};
+
+/** Label + value for receipt face (same line as payer name). Null = omit entirely. */
+export type ReceiptPartyIdLine = {
+  kind: "licence" | "entity";
+  /** e.g. `Licence No: 9314/A` or `Entity No: ENT-2026-00001` */
+  label: string;
 };
 
 function emptyRefs(): ReceiptLicenceLookupRefs {
@@ -132,6 +140,7 @@ export async function loadLicenceDisplayMaps(refs: ReceiptLicenceLookupRefs): Pr
       licenceNo: string | null;
       entityPublicCode: string | null;
       provisionalLicenceNo: string | null;
+      lmLicenseClass: string | null;
     }
   >();
   const entityCodeById = new Map<string, string | null>();
@@ -145,6 +154,7 @@ export async function loadLicenceDisplayMaps(refs: ReceiptLicenceLookupRefs): Pr
         licenceNo: traderLicences.licenceNo,
         entityPublicCode: traderLicences.entityPublicCode,
         provisionalLicenceNo: traderLicences.provisionalLicenceNo,
+        lmLicenseClass: traderLicences.lmLicenseClass,
       })
       .from(traderLicences)
       .where(inArray(traderLicences.id, traderIds));
@@ -153,6 +163,7 @@ export async function loadLicenceDisplayMaps(refs: ReceiptLicenceLookupRefs): Pr
         licenceNo: row.licenceNo,
         entityPublicCode: row.entityPublicCode,
         provisionalLicenceNo: row.provisionalLicenceNo,
+        lmLicenseClass: row.lmLicenseClass,
       });
     }
   }
@@ -215,7 +226,51 @@ export function resolveLicenceDisplayFromRefs(
   return null;
 }
 
-export async function resolveReceiptLicenceNo(receipt: ReceiptLicenceFields): Promise<string | null> {
+function normalizeLicenceClass(raw: string | null | undefined): string {
+  const c = String(raw ?? "").trim().toUpperCase();
+  if (!c) return "";
+  const letter = c.replace(/^CLASS\s*/i, "").replace(/^\//, "").charAt(0);
+  return letter === "A" || letter === "B" || letter === "C" ? letter : "";
+}
+
+/** Resolve Licence No. (with /A|/B|/C) or Entity No. for receipt face — omit when absent. */
+export function resolvePartyIdLineFromRefs(
+  refs: ReceiptLicenceLookupRefs,
+  maps: LicenceDisplayMaps,
+): ReceiptPartyIdLine | null {
+  for (const id of refs.traderIds) {
+    const row = maps.traderById.get(id);
+    if (!row) continue;
+    const lic = String(row.licenceNo ?? "").trim();
+    if (lic) {
+      const cls = normalizeLicenceClass(row.lmLicenseClass);
+      const no = cls && !lic.includes("/") ? `${lic}/${cls}` : lic;
+      return { kind: "licence", label: `Licence No: ${no}` };
+    }
+    const entityCode = String(row.entityPublicCode ?? row.provisionalLicenceNo ?? "").trim();
+    if (entityCode) {
+      return { kind: "entity", label: `Entity No: ${entityCode}` };
+    }
+  }
+
+  for (const id of refs.entityIds) {
+    const code = maps.entityCodeById.get(id);
+    const display = formatLicenceOrEntityIdDisplay("TrackB", { publicEntityCode: code });
+    if (display === "—") continue;
+    return { kind: "entity", label: `Entity No: ${display}` };
+  }
+
+  for (const id of refs.adHocIds) {
+    const code = maps.adHocCodeById.get(id);
+    const display = formatLicenceOrEntityIdDisplay("AdHoc", { publicEntityCode: code });
+    if (display === "—") continue;
+    return { kind: "entity", label: `Entity No: ${display}` };
+  }
+
+  return null;
+}
+
+async function loadRefsAndMapsForReceipt(receipt: ReceiptLicenceFields) {
   const refs = collectReceiptLicenceLookupRefs(receipt);
   if (String(receipt.sourceModule ?? "").trim() === "M-03" && receipt.sourceRecordId) {
     const [inv] = await db
@@ -229,7 +284,20 @@ export async function resolveReceiptLicenceNo(receipt: ReceiptLicenceFields): Pr
     if (inv) addInvoiceTenantLicenceRefs(inv.tenantLicenceId, inv.entityId, refs);
   }
   const maps = await loadLicenceDisplayMaps(refs);
+  return { refs, maps };
+}
+
+export async function resolveReceiptLicenceNo(receipt: ReceiptLicenceFields): Promise<string | null> {
+  const { refs, maps } = await loadRefsAndMapsForReceipt(receipt);
   return resolveLicenceDisplayFromRefs(refs, maps);
+}
+
+export async function resolveReceiptPartyIdLine(
+  receipt: ReceiptLicenceFields,
+): Promise<ReceiptPartyIdLine | null> {
+  if (String(receipt.payerPartyType ?? "").trim() === "NewParty") return null;
+  const { refs, maps } = await loadRefsAndMapsForReceipt(receipt);
+  return resolvePartyIdLineFromRefs(refs, maps);
 }
 
 export async function attachReceiptLicenceNos<T extends ReceiptLicenceFields>(

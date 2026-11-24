@@ -7,7 +7,7 @@ import { isM05ConsolidatedReceipt, parseM05ConsolidatedBreakdown } from "@shared
 import { invoiceGstSnapshot } from "./m03-receipt-gst-display";
 import { db } from "./db";
 import { attachPayerDisplayNames } from "./ioms-receipt-payer-display";
-import { isReceiptTrackAForPdf, resolveReceiptLicenceNo } from "./ioms-receipt-licence-display";
+import { resolveReceiptPartyIdLine } from "./ioms-receipt-licence-display";
 import { resolveRentReceiptPremisesPrint } from "./rent-allotment-reference";
 import { formatBillingMonthLabel } from "./pre-receipt-pdf";
 import {
@@ -32,8 +32,14 @@ export type ReceiptPdfLayoutContext = {
   payerDisplayName: string;
   /** Payer / lessee name on receipt face. */
   receivedFromLine: string;
+  /**
+   * Licence No. / Entity No. shown on the same line as the payer name.
+   * Null when New Party or no identifier — do not print a blank placeholder.
+   */
+  partyIdLine: string | null;
+  /** @deprecated Prefer partyIdLine; kept for call-site compatibility. */
   licenceNo: string | null;
-  /** Track A only — hide licence label/value for Track B, New Party, and unlinked manual payers. */
+  /** @deprecated Prefer partyIdLine. */
   showLicenceNo: boolean;
   /** New Party only; omitted when blank. */
   newPartyAddressLine: string | null;
@@ -49,7 +55,7 @@ export type ReceiptPdfLayoutContext = {
   totalAmount: number;
   isGracePeriod: boolean;
   revenueHead: string;
-  /** M-03 rent: formal allotment ref line below payer (e.g. VAL/SHOP-S5-Y-VAL-01). */
+  /** Always null — Allotment Ref. No. removed from receipt face. */
   allotmentReferenceLine: string | null;
   generatedByUsername: string;
 };
@@ -77,9 +83,14 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
       (receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson,
     );
     if (consolidated?.lines?.length) {
-      const names = consolidated.lines.map((l) => l.ledgerName).join(", ");
       const narr = String(receipt.narration ?? "").trim();
-      return narr || `Consolidated payment: ${names}.`;
+      // Keep face remarks short — listing every Tally head here caused slip overflow/overwrite;
+      // heads are printed in the Particulars table (and CONTINUED A5 pages when needed).
+      if (narr) return narr.length > 100 ? `${narr.slice(0, 97)}...` : narr;
+      const n = consolidated.lines.length;
+      return n === 1
+        ? `Consolidated payment: ${consolidated.lines[0].ledgerName}.`
+        : `Consolidated payment (${n} heads of account) as detailed below.`;
     }
     const ledger = await resolveManualLedgerLabel(receipt);
     if (ledger) return `${ledger}.`;
@@ -271,8 +282,9 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     /* use fallback */
   }
 
-  const showLicenceNo = isReceiptTrackAForPdf(receipt);
-  const licenceNo = showLicenceNo ? await resolveReceiptLicenceNo(receipt) : null;
+  const partyId = await resolveReceiptPartyIdLine(receipt);
+  const partyIdLine = partyId?.label?.trim() || null;
+  const licenceNo = partyId?.kind === "licence" ? partyId.label.replace(/^Licence No:\s*/i, "") : null;
 
   let newPartyAddressLine: string | null = null;
   let newPartyContactLine: string | null = null;
@@ -290,25 +302,8 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
   const totalAmount = Number(receipt.totalAmount ?? 0);
   const branding = getReceiptPdfBranding(yard?.address ?? null, yard?.name ?? null);
 
-  let allotmentReferenceLine: string | null = null;
-  if (String(receipt.sourceModule ?? "").trim() === "M-03" && receipt.sourceRecordId) {
-    const rh = String(receipt.revenueHead ?? "").trim();
-    if (rh === "Rent" || rh === "GSTInvoice" || rh === "RentArrearsInterest") {
-      const [inv] = await db
-        .select({
-          allotmentId: rentInvoices.allotmentId,
-          allotmentKind: rentInvoices.allotmentKind,
-          assetId: rentInvoices.assetId,
-        })
-        .from(rentInvoices)
-        .where(eq(rentInvoices.id, receipt.sourceRecordId))
-        .limit(1);
-      if (inv) {
-        const premises = await resolveRentReceiptPremisesPrint(inv);
-        allotmentReferenceLine = `Allotment Ref. No. : ${premises.allotmentReferenceNo}`;
-      }
-    }
-  }
+  /** Allotment Ref. No. removed from receipt face per format revision. */
+  const allotmentReferenceLine: string | null = null;
 
   const receivedFromLine = `Received with thanks From : ${payerDisplayName}`;
 
@@ -336,8 +331,9 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     payerDisplayName,
     receivedFromLine,
     allotmentReferenceLine,
+    partyIdLine,
     licenceNo,
-    showLicenceNo: showLicenceNo && Boolean(licenceNo?.trim()),
+    showLicenceNo: Boolean(partyIdLine),
     newPartyAddressLine,
     newPartyContactLine,
     branding,

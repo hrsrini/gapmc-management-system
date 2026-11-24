@@ -1,17 +1,21 @@
 /**
  * M-03: after a cheque/DD dishonour (prior Reversed receipt for the same invoice), the replacement
- * receipt may show simple arrears interest from invoice period end to receipt date (disclosure only).
+ * receipt may show delayed-rent slab interest to receipt date (disclosure only).
  */
 import { and, eq, ne, sql, type InferSelectModel } from "drizzle-orm";
 import { db } from "./db";
 import { iomsReceipts, rentInvoices } from "@shared/db-schema";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
-import { computeRentArrearsSimpleInterest, rentPeriodMonthEndIso } from "./rent-interest";
+import {
+  computeDelayedRentInterest,
+  rentInterestDueDateIso,
+  todayIsoLocal,
+} from "./rent-interest";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
 
 export type RentReceiptArrearsDisclosure = {
-  /** Simple interest from invoice period end to receipt date (INR, not added to receipt total). */
+  /** Rounded delayed-rent interest to receipt date (INR, not added to receipt total). */
   approxInterestInr: number;
   overdueDays: number;
   dueDateIso: string;
@@ -53,28 +57,36 @@ export async function getM03RentReceiptArrearsDisclosure(
   if (!inv) return null;
 
   const cfg = await getMergedSystemConfig();
-  const rate = parseSystemConfigNumber(cfg, "rent_arrears_interest_percent_per_annum");
-  const due = rentPeriodMonthEndIso(inv.periodMonth);
+  const rateRaw = parseSystemConfigNumber(cfg, "rent_arrears_interest_percent_per_annum");
+  const rate = rateRaw > 0 ? rateRaw : 15;
+  const due = rentInterestDueDateIso(inv.periodMonth);
+  // Interest base = rent only (GAPLMB); fall back only if rent missing.
   const principal =
     Number(inv.rentAmount ?? 0) || Number(inv.totalAmount ?? 0) || Number(receipt.totalAmount ?? 0);
   if (!due || principal <= 0) return null;
 
-  const asOfIso = String(receipt.createdAt ?? "").trim().slice(0, 10) || new Date().toISOString().slice(0, 10);
-  const { days, interest } = computeRentArrearsSimpleInterest({
-    principal,
-    percentPerAnnum: rate,
-    dueDateIso: due,
+  const asOfIso =
+    String(receipt.createdAt ?? "").trim().slice(0, 10) || todayIsoLocal();
+  const computed = computeDelayedRentInterest({
+    rentAmount: principal,
+    periodMonth: String(inv.periodMonth),
     asOfDateIso: asOfIso,
+    percentPerAnnum: rate,
   });
+  const dueMs = Date.parse(`${due}T00:00:00.000Z`);
+  const asMs = Date.parse(`${asOfIso}T00:00:00.000Z`);
+  const days =
+    Number.isFinite(dueMs) && Number.isFinite(asMs)
+      ? Math.max(0, Math.floor((asMs - dueMs) / 86_400_000))
+      : 0;
 
   return {
-    approxInterestInr: interest,
+    approxInterestInr: computed.interestRounded,
     overdueDays: days,
     dueDateIso: due,
     asOfIso,
     principalInr: principal,
     ratePercentPerAnnum: rate,
-    note:
-      "Arrears interest (simple daily, after prior cheque/DD dishonour for this invoice): indicative only — not included in receipt total; post per finance.",
+    note: `Arrears interest (${rate}% p.a. simple, monthly 50%/100% slabs; rounded once — after prior cheque/DD dishonour): indicative only — not included in receipt total; post per finance.`,
   };
 }
