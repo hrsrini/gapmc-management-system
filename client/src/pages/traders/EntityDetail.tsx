@@ -43,15 +43,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { LocalSearchSelect } from "@/components/ui/local-search-select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { formatInr } from "@/lib/formatInr";
-import {
-  inferAgreementTypeFromDates,
-  defaultGstApplicableTrackBEntity,
-  localCalendarYmd,
-  RENT_REVISION_MODES,
-} from "@shared/premises-allocation";
+import { localCalendarYmd, RENT_REVISION_MODES } from "@shared/premises-allocation";
 import { buildAssetDisplayByRowId, formatPremisesAssetLabel } from "@/lib/asset-premises-display";
 import {
   PREMISES_ALLOCATION_COLUMNS,
@@ -64,14 +57,6 @@ import {
   TenancyVacateConfirmDialog,
   tenancyStatusChangeNeedsConfirm,
 } from "@/components/premises/TenancyVacateConfirmDialog";
-import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
-import {
-  buildCounterDuesPaymentApiBody,
-  defaultPaymentPreferenceValue,
-  validatePaymentPreference,
-  type PaymentPreferenceValue,
-} from "@/lib/duesCounterPayment";
-import { downloadIomsReceiptPdf } from "@/lib/downloadIomsReceiptPdf";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
 import { useYardLabels } from "@/hooks/useYardLabels";
 import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
@@ -110,15 +95,6 @@ interface AssetRef {
   id: string;
   assetId: string;
 }
-interface VacantAssetRow {
-  asset: AssetRef & {
-    assetType?: string | null;
-    complexName?: string | null;
-    premisesStatus?: string | null;
-    area?: string | null;
-    plinthAreaSqft?: number | null;
-  };
-}
 interface Allotment {
   id: string;
   assetId: string;
@@ -138,12 +114,6 @@ interface Allotment {
   gstApplicable?: boolean | null;
   consecutiveRenewalCount?: number | null;
   doUser?: string | null;
-}
-
-function agreementTypeLabel(code: string | null | undefined): string {
-  if (code === "RentalAgreement") return "Rental (≤11 mo approx.)";
-  if (code === "LeaseAgreement") return "Lease (>11 mo)";
-  return "—";
 }
 
 function userTierSet(user: AuthUser | null): Set<string> {
@@ -215,67 +185,15 @@ export default function EntityDetail() {
     },
   });
 
-  const [allotmentYardId, setAllotmentYardId] = useState("");
   const [mapYardIds, setMapYardIds] = useState<string[]>([]);
   const [unmapTarget, setUnmapTarget] = useState<MappedYard | null>(null);
   const [unmapReason, setUnmapReason] = useState("");
   const [unmapEffectiveTo, setUnmapEffectiveTo] = useState(() => localCalendarYmd());
 
-  const [open, setOpen] = useState(false);
-  const [assetId, setAssetId] = useState("");
-
-  useEffect(() => {
-    if (!open) return;
-    const preferred =
-      (allotmentYardId && activeMappedYards.some((m) => m.yardId === allotmentYardId) && allotmentYardId) ||
-      activeMappedYards.find((m) => m.yardId === entity?.yardId)?.yardId ||
-      activeMappedYards[0]?.yardId ||
-      "";
-    setAllotmentYardId(preferred);
-    setAssetId("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, entity?.yardId, activeMappedYards]);
-
-  const vacantUrl = allotmentYardId
-    ? `/api/ioms/assets/vacant?yardId=${encodeURIComponent(allotmentYardId)}`
-    : "";
-  const { data: vacantRows = [] } = useQuery<VacantAssetRow[]>({
-    queryKey: [vacantUrl],
-    enabled: !!allotmentYardId && open,
-    queryFn: async () => {
-      const res = await fetch(vacantUrl, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load vacant premises");
-      return res.json();
-    },
-  });
-  const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
-  const vacantPremiseOptions = useMemo(
-    () =>
-      vacantAssets.map((a) => ({
-        value: a.id,
-        label: [a.assetId, a.assetType || null].filter(Boolean).join(" · "),
-      })),
-    [vacantAssets],
-  );
   const { data: allPremisesAssets = [] } = useQuery<AssetRef[]>({
     queryKey: ["/api/ioms/assets"],
   });
   const assetDisplayById = useMemo(() => buildAssetDisplayByRowId(allPremisesAssets), [allPremisesAssets]);
-  const vacantByAssetPk = useMemo(() => Object.fromEntries(vacantRows.map((r) => [r.asset.id, r])), [vacantRows]);
-
-  const [allotmentDate, setAllotmentDate] = useState("");
-  const [allotmentRefNo, setAllotmentRefNo] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [monthlyRent, setMonthlyRent] = useState("");
-  const [rentRevisionMode, setRentRevisionMode] = useState<string>("StandardConsecutiveRenewal");
-  const [agreementTypeOverride, setAgreementTypeOverride] = useState<string>("__auto__");
-  const [consecutiveRenewalCount, setConsecutiveRenewalCount] = useState("0");
-  const [gstApplicableDraft, setGstApplicableDraft] = useState(true);
-  const [securityDeposit, setSecurityDeposit] = useState("");
-  const [securityDepositPayment, setSecurityDepositPayment] = useState<PaymentPreferenceValue>(() =>
-    defaultPaymentPreferenceValue(),
-  );
 
   const [manageRow, setManageRow] = useState<Allotment | null>(null);
   const [mAllotmentDate, setMAllotmentDate] = useState("");
@@ -331,32 +249,6 @@ export default function EntityDetail() {
     setTenancyVacateOn(localCalendarYmd());
     setAgreementFile(null);
   }, [manageRow]);
-
-  useEffect(() => {
-    if (!entity?.subType) return;
-    setGstApplicableDraft(defaultGstApplicableTrackBEntity(entity.subType));
-  }, [entity?.subType, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    setAllotmentDate((prev) => prev || localCalendarYmd());
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    setSecurityDepositPayment(defaultPaymentPreferenceValue());
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const n = Number(securityDeposit);
-    if (!Number.isFinite(n) || n <= 0) return;
-    setSecurityDepositPayment((p) => ({ ...p, paidAmount: String(Math.round(n * 100) / 100) }));
-  }, [securityDeposit, open]);
-
-  const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
-  const secDepAmount = securityDeposit.trim() ? Number(securityDeposit) : 0;
-  const showSecDepPayment = Number.isFinite(secDepAmount) && secDepAmount > 0;
 
   const updateEntityMutation = useMutation({
     mutationFn: async () => {
@@ -501,56 +393,8 @@ export default function EntityDetail() {
     onError: (e: Error) => toast({ title: "Delete not allowed", description: e.message, variant: "destructive" }),
   });
 
-  const createMutation = useMutation({
-    mutationFn: async (body: Record<string, unknown>) => {
-      const res = await fetch("/api/ioms/entity-allotments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { error?: string }).error ?? res.statusText);
-      }
-      return res.json();
-    },
-    onSuccess: async (data) => {
-      queryClient.invalidateQueries({ queryKey: [`/api/ioms/entity-allotments?entityId=${encodeURIComponent(id!)}`] });
-      queryClient.invalidateQueries({ queryKey: [vacantUrl] });
-      queryClient.invalidateQueries({ queryKey: ["/api/ioms/receipts"] });
-
-      const receipt = data?.securityDepositReceipt as { receiptId?: string; receiptNo?: string } | null | undefined;
-      let description = "Upload the agreement copy (PDF), then DV verifies and DA approves.";
-      if (receipt?.receiptId && receipt?.receiptNo) {
-        try {
-          await downloadIomsReceiptPdf(receipt.receiptId, receipt.receiptNo);
-          description = `Security deposit receipt ${receipt.receiptNo} issued and downloaded. ${description}`;
-        } catch {
-          description = `Security deposit receipt ${receipt.receiptNo} issued. Open Receipts to download the PDF if needed. ${description}`;
-        }
-      }
-
-      toast({
-        title: "Draft allocation created",
-        description,
-      });
-      setOpen(false);
-      setSecurityDeposit("");
-      setSecurityDepositPayment(defaultPaymentPreferenceValue());
-      setMonthlyRent("");
-      setAssetId("");
-      setAllotmentDate("");
-      setAllotmentRefNo("");
-      setAgreementTypeOverride("__auto__");
-      setConsecutiveRenewalCount("0");
-    },
-    onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
-  });
-
   const invalidateAllocs = () => {
     queryClient.invalidateQueries({ queryKey: [`/api/ioms/entity-allotments?entityId=${encodeURIComponent(id!)}`] });
-    if (vacantUrl) queryClient.invalidateQueries({ queryKey: [vacantUrl] });
   };
 
   const patchAllotMutation = useMutation({
@@ -598,22 +442,6 @@ export default function EntityDetail() {
     },
     onError: (e: Error) => toast({ title: "Upload failed", description: e.message, variant: "destructive" }),
   });
-
-  const selectedVacant = assetId ? vacantByAssetPk[assetId] : undefined;
-  const premisesAreaDisplay = useMemo(() => {
-    const a = selectedVacant?.asset;
-    if (!a) return "—";
-    const textArea = a.area?.trim();
-    if (textArea) return textArea;
-    if (a.plinthAreaSqft != null && Number.isFinite(Number(a.plinthAreaSqft))) {
-      return String(Math.round(Number(a.plinthAreaSqft) * 0.092903 * 100) / 100);
-    }
-    return "—";
-  }, [selectedVacant]);
-  const inferredAgType =
-    fromDate && toDate && /^\d{4}-\d{2}-\d{2}$/.test(fromDate) && /^\d{4}-\d{2}-\d{2}$/.test(toDate)
-      ? inferAgreementTypeFromDates(fromDate, toDate)
-      : null;
 
   const allotmentRows = useMemo((): Record<string, unknown>[] => {
     return allotments.map((a) => {
@@ -998,12 +826,23 @@ export default function EntityDetail() {
               <div>
                 <CardTitle>Premises allocations ({allotments.length})</CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  DO drafts an allocation with rent and dates; DV verifies once the agreement copy (PDF) is uploaded; DA approves and assigns the premises reference.
+                  <strong>Add allotment</strong> opens the New Premises Allotment workflow so several vacant premises can
+                  share one agreement. DO drafts with rent and dates; DV verifies once the agreement copy (PDF) is
+                  uploaded; DA approves and assigns the premises reference.
                 </p>
               </div>
               {canCreate && entity.status === "Active" && activeMappedYards.length > 0 && (
-                <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-                  <Plus className="h-4 w-4 mr-1" /> Add allotment
+                <Button size="sm" variant="outline" asChild>
+                  <Link
+                    href={`/assets/agreements/new?track=TrackB&refId=${encodeURIComponent(id!)}&yardId=${encodeURIComponent(
+                      activeMappedYards.find((m) => m.yardId === entity.yardId)?.yardId ||
+                        activeMappedYards[0]?.yardId ||
+                        "",
+                    )}&returnTo=${encodeURIComponent(`/traders/entities/${id!}`)}`}
+                    title="Open New Premises Allotment (multi-premises under one agreement)"
+                  >
+                    <Plus className="h-4 w-4 mr-1" /> Add allotment
+                  </Link>
                 </Button>
               )}
             </CardHeader>
@@ -1022,218 +861,6 @@ export default function EntityDetail() {
           </Card>
         </>
       )}
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>New premises allocation (draft)</DialogTitle>
-            <p className="text-sm text-muted-foreground">
-              Agreement must start today or later. Tenancy becomes Active only after DA approval.
-            </p>
-          </DialogHeader>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="md:col-span-2 space-y-1">
-              <Label>Location *</Label>
-              <Select
-                value={allotmentYardId || "__pick__"}
-                onValueChange={(v) => {
-                  setAllotmentYardId(v === "__pick__" ? "" : v);
-                  setAssetId("");
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select mapped location" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__pick__">Select…</SelectItem>
-                  {activeMappedYards.map((m) => (
-                    <SelectItem key={m.yardId} value={m.yardId}>
-                      {m.yardName || m.yardCode || getYardName(m.yardId)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Only locations mapped to this Entity are listed.
-              </p>
-            </div>
-            <div className="md:col-span-2 space-y-1">
-              <Label>Vacant premises at selected location *</Label>
-              <LocalSearchSelect
-                value={assetId}
-                onValueChange={setAssetId}
-                options={vacantPremiseOptions}
-                placeholder={allotmentYardId ? "Select premises" : "Select a location first"}
-                searchPlaceholder="Type premises id or type…"
-                emptyMessage="No matching vacant premises."
-                required
-                disabled={!allotmentYardId}
-              />
-              {selectedVacant?.asset ? (
-                <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-0.5">
-                  <div>
-                    <span className="font-medium text-foreground">Premises type:</span>{" "}
-                    {selectedVacant.asset.assetType?.trim() || "—"}
-                  </div>
-                  <div>
-                    <span className="font-medium text-foreground">Area (sq. meters):</span> {premisesAreaDisplay}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-            <div className="md:col-span-2 space-y-1">
-              <Label>Allottee name</Label>
-              <Input value={entity?.name ?? ""} readOnly className="bg-muted/50" />
-              <p className="text-xs text-muted-foreground">Taken from the entity record.</p>
-            </div>
-            <div className="space-y-1">
-              <Label>Allotment date *</Label>
-              <Input type="date" value={allotmentDate} onChange={(e) => setAllotmentDate(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label>Allotment reference no.</Label>
-              <Input
-                value={allotmentRefNo}
-                onChange={(e) => setAllotmentRefNo(e.target.value)}
-                placeholder="Optional"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label>Agreement from *</Label>
-              <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label>Agreement to *</Label>
-              <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-            </div>
-            <div className="md:col-span-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
-              <span className="text-muted-foreground">Inferred agreement kind from period: </span>
-              <span className="font-medium text-foreground">
-                {inferredAgType ? agreementTypeLabel(inferredAgType) : "Pick both dates"}
-              </span>
-              <span className="text-muted-foreground"> · Override below if counsel classifies differently.</span>
-            </div>
-            <div className="space-y-1">
-              <Label>Agreement type override</Label>
-              <Select value={agreementTypeOverride} onValueChange={setAgreementTypeOverride}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__auto__">Auto from dates</SelectItem>
-                  <SelectItem value="RentalAgreement">Rental agreement</SelectItem>
-                  <SelectItem value="LeaseAgreement">Lease agreement</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label>Monthly Rent (Rs.) *</Label>
-              <Input value={monthlyRent} onChange={(e) => setMonthlyRent(e.target.value)} inputMode="decimal" placeholder="> 0" />
-            </div>
-            <div className="space-y-1 md:col-span-2">
-              <Label>Rent revision mode *</Label>
-              <Select value={rentRevisionMode} onValueChange={setRentRevisionMode}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {RENT_REVISION_MODES.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m === "StandardConsecutiveRenewal" ? "Standard consecutive renewal" : "PWD certificate basis"}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label>Consecutive renewal count</Label>
-              <Input value={consecutiveRenewalCount} onChange={(e) => setConsecutiveRenewalCount(e.target.value)} inputMode="numeric" />
-            </div>
-            <div className="space-y-1">
-              <Label>Security deposit (₹)</Label>
-              <Input value={securityDeposit} onChange={(e) => setSecurityDeposit(e.target.value)} inputMode="decimal" />
-            </div>
-            {showSecDepPayment ? (
-              <div className="md:col-span-2 rounded-md border p-3 bg-muted/20">
-                <p className="text-sm font-medium mb-2">Security deposit payment</p>
-                <p className="text-xs text-muted-foreground mb-3">
-                  Record how the deposit was received. A paid receipt is issued immediately when you create the draft.
-                </p>
-                <PaymentPreferenceForm
-                  value={securityDepositPayment}
-                  onChange={setSecurityDepositPayment}
-                  receivedByLabel={receivedByLabel}
-                  receivedAtLabel={yardDisplayName}
-                  summaryAmount={String(secDepAmount)}
-                />
-              </div>
-            ) : null}
-            {entity?.subType === "AdHocOccupant" ? (
-              <div className="md:col-span-2 flex items-start gap-3 rounded-md border p-3">
-                <Checkbox
-                  id="gst-draft"
-                  checked={gstApplicableDraft}
-                  onCheckedChange={(c) => setGstApplicableDraft(c === true)}
-                />
-                <div>
-                  <Label htmlFor="gst-draft" className="cursor-pointer">
-                    GST applicable (Ad hoc)
-                  </Label>
-                  <p className="text-xs text-muted-foreground">Government and most commercial profiles follow fixed rules on the server; only Ad hoc can toggle here.</p>
-                </div>
-              </div>
-            ) : null}
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={
-                createMutation.isPending ||
-                !assetId ||
-                !entity?.name?.trim() ||
-                !allotmentDate ||
-                !fromDate ||
-                !toDate ||
-                !Number.isFinite(Number(monthlyRent)) ||
-                Number(monthlyRent) <= 0
-              }
-              onClick={() => {
-                const mr = Number(monthlyRent);
-                const body: Record<string, unknown> = {
-                  assetId,
-                  entityId: id,
-                  allotmentDate,
-                  fromDate,
-                  toDate,
-                  monthlyRent: mr,
-                  rentRevisionMode,
-                  consecutiveRenewalCount: Number(consecutiveRenewalCount) || 0,
-                  securityDeposit: securityDeposit.trim() ? Number(securityDeposit) : null,
-                };
-                if (agreementTypeOverride !== "__auto__") body.agreementType = agreementTypeOverride;
-                if (allotmentRefNo.trim()) body.premisesRefNo = allotmentRefNo.trim();
-                if (entity?.subType === "AdHocOccupant") body.gstApplicable = gstApplicableDraft;
-                const secAmt = securityDeposit.trim() ? Number(securityDeposit) : 0;
-                if (Number.isFinite(secAmt) && secAmt > 0) {
-                  const pref = { ...securityDepositPayment, paidAmount: securityDeposit };
-                  const prefErr = validatePaymentPreference(pref);
-                  if (prefErr) {
-                    toast({ title: "Security deposit payment", description: prefErr, variant: "destructive" });
-                    return;
-                  }
-                  Object.assign(body, buildCounterDuesPaymentApiBody(pref, secAmt));
-                }
-                createMutation.mutate(body);
-              }}
-            >
-              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create draft"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog
         open={Boolean(manageRow)}

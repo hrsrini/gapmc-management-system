@@ -316,6 +316,9 @@ export function registerEntityAllotmentRoutes(app: Express) {
             payerRefId: entityId,
             unifiedEntityId: unifiedEntityIdFromTrackB(entityId),
             premisesAssetId: assetRow.assetId,
+            assetPk: assetRow.id,
+            premisesLabel: assetRow.assetId,
+            track: "Entity",
             paymentBody: body,
           });
         } catch (err) {

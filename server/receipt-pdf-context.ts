@@ -123,6 +123,9 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
   if (rh === "SecurityDeposit") {
     return "Security Deposit.";
   }
+  if (rh === "SecurityDepositRefund") {
+    return "Refund of Security Deposit of Premises.";
+  }
   return `${rh || "payment"}.`;
 }
 
@@ -203,7 +206,46 @@ async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParti
     // Placeholder; Market Fee face uses marketFeeDetail + dedicated drawer.
     rows.push({ label: "Market Fee", amount: Number(receipt.amount ?? 0) });
   } else if (rh === "SecurityDeposit") {
-    rows.push({ label: "Security Deposit", amount: Number(receipt.totalAmount ?? receipt.amount ?? 0) });
+    const { parseM02SecdepBreakdown } = await import("@shared/premises-security-deposit");
+    const secLines = parseM02SecdepBreakdown(
+      (receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson,
+    );
+    if (secLines?.lines?.length) {
+      for (const line of secLines.lines) {
+        rows.push({
+          label: `Security Deposit : ${line.premisesLabel}`,
+          amount: Number(line.amount) || 0,
+        });
+      }
+    } else {
+      rows.push({ label: "Security Deposit", amount: Number(receipt.totalAmount ?? receipt.amount ?? 0) });
+    }
+  } else if (rh === "SecurityDepositRefund") {
+    const { parseM02SecrefBreakdown } = await import("@shared/premises-security-deposit");
+    const ref = parseM02SecrefBreakdown(
+      (receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson,
+    );
+    if (ref) {
+      for (const d of ref.deposits) {
+        const rec =
+          d.depositReceiptNo != null
+            ? ` (receipt ${d.depositReceiptNo}${d.depositReceiptDate ? ` dated ${d.depositReceiptDate}` : ""})`
+            : "";
+        rows.push({
+          label: `Security Deposit : ${d.premisesLabel}${rec}`,
+          amount: Number(d.amount) || 0,
+        });
+      }
+      for (const ded of ref.deductions) {
+        rows.push({ label: `Less: ${ded.reason}`, amount: -(Number(ded.amount) || 0) });
+      }
+      rows.push({ label: "Net refund paid", amount: Number(ref.netPayable) || 0 });
+    } else {
+      rows.push({
+        label: "Security Deposit Refund",
+        amount: Number(receipt.totalAmount ?? receipt.amount ?? 0),
+      });
+    }
   } else if (rh === "RentArrearsInterest") {
     const interest = Number(receipt.amount ?? 0);
     if (interest > 0.005) rows.push({ label: "Interest on Rent", amount: interest });

@@ -36,6 +36,10 @@ export async function issueSecurityDepositReceiptOnAllotmentDraft(opts: {
   payerRefId: string;
   unifiedEntityId: string;
   premisesAssetId?: string | null;
+  /** Assets table primary key for premises_security_deposits.asset_id */
+  assetPk?: string | null;
+  premisesLabel?: string | null;
+  track?: "TraderLicence" | "Entity";
   paymentBody: Record<string, unknown>;
 }): Promise<{ receiptId: string; receiptNo: string } | null> {
   const amount = roundedMoney2(opts.securityDepositAmount);
@@ -128,6 +132,32 @@ export async function issueSecurityDepositReceiptOnAllotmentDraft(opts: {
       recordId: paidRow.id,
       afterValue: paidRow,
     }).catch((e) => console.error("Audit log failed:", e));
+  }
+
+  const assetPk = String(opts.assetPk ?? "").trim();
+  if (assetPk) {
+    try {
+      const { syncDepositAfterAllotmentReceipt } = await import("./premises-security-deposit");
+      const track =
+        opts.track ??
+        (String(opts.payerType).toLowerCase().includes("entity") ? "Entity" : "TraderLicence");
+      await syncDepositAfterAllotmentReceipt({
+        yardId: opts.yardId,
+        assetId: assetPk,
+        premisesLabel: opts.premisesLabel ?? opts.premisesAssetId ?? assetPk,
+        payerType: track,
+        payerRefId: opts.payerRefId,
+        payerName: opts.payerName,
+        unifiedEntityId: opts.unifiedEntityId,
+        assetAllotmentId: track === "TraderLicence" ? opts.allotmentId : null,
+        entityAllotmentId: track === "Entity" ? opts.allotmentId : null,
+        amount,
+        receiptId: created.id,
+        receiptNo: created.receiptNo,
+      });
+    } catch (e) {
+      console.error("[sd] sync premises_security_deposits failed:", e);
+    }
   }
 
   return { receiptId: created.id, receiptNo: created.receiptNo };

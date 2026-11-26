@@ -77,6 +77,7 @@
     "db:apply-m02-trackb-entities": "dotenv -e .env -- tsx scripts/apply-m02-trackb-entities.ts",
     "db:apply-entity-location-mappings": "dotenv -e .env -- tsx scripts/apply-entity-location-mappings.ts",
     "db:apply-trader-licence-location-mappings": "dotenv -e .env -- tsx scripts/apply-trader-licence-location-mappings.ts",
+    "db:apply-premises-security-deposit-refund": "dotenv -e .env -- tsx scripts/apply-premises-security-deposit-refund.ts",
     "db:apply-users-force-password-change": "dotenv -e .env -- tsx scripts/apply-users-force-password-change.ts",
     "db:apply-m02-pre-receipts": "dotenv -e .env -- tsx scripts/apply-m02-pre-receipts.ts",
     "db:apply-pre-receipt-print-fields": "dotenv -e .env -- tsx scripts/apply-pre-receipt-print-fields.ts",

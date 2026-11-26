@@ -20,7 +20,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { LocalSearchSelect } from "@/components/ui/local-search-select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useYardLabels } from "@/hooks/useYardLabels";
@@ -44,17 +43,7 @@ import {
 } from "@/components/assets/AssetAllotmentManageDialog";
 import { formatInr } from "@/lib/formatInr";
 import { govtGstCategoriesForSelect } from "@/lib/govtGstExemptSelect";
-import { invalidateAssetAllotmentQueries } from "@/lib/invalidate-asset-allotments";
-import { invalidatePremisesRegisterQueries } from "@/lib/premisesRegisterCache";
-import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
-import {
-  buildCounterDuesPaymentApiBody,
-  defaultPaymentPreferenceValue,
-  validatePaymentPreference,
-  type PaymentPreferenceValue,
-} from "@/lib/duesCounterPayment";
-import { downloadIomsReceiptPdf } from "@/lib/downloadIomsReceiptPdf";
-import { inferAgreementTypeFromDates, localCalendarYmd, RENT_REVISION_MODES } from "@shared/premises-allocation";
+import { localCalendarYmd } from "@shared/premises-allocation";
 import { buildAssetDisplayByRowId, formatPremisesAssetLabel } from "@/lib/asset-premises-display";
 import {
   PREMISES_ALLOCATION_COLUMNS,
@@ -195,16 +184,7 @@ interface AssetRef {
   assetType?: string | null;
   area?: string | null;
 }
-interface VacantAssetRow {
-  asset: AssetRef;
-}
 type AssetAllotmentRow = ManagedAssetAllotment;
-
-function agreementTypeLabel(code: string | null | undefined): string {
-  if (code === "RentalAgreement") return "Rental (≤11 mo approx.)";
-  if (code === "LeaseAgreement") return "Lease (>11 mo)";
-  return "—";
-}
 
 const stockColumns: ReportTableColumn[] = [
   { key: "commodityName", header: "Commodity" },
@@ -235,7 +215,7 @@ interface RenewPreview {
 export default function TraderLicenceDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
-  const { can, user } = useAuth();
+  const { can } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canUpdateLicence = can("M-02", "Update");
@@ -258,21 +238,6 @@ export default function TraderLicenceDetail() {
   const [renewValidFrom, setRenewValidFrom] = useState("");
   const [renewValidTo, setRenewValidTo] = useState("");
   const [manageAllotment, setManageAllotment] = useState<AssetAllotmentRow | null>(null);
-  const [allotDialogOpen, setAllotDialogOpen] = useState(false);
-  const [allotmentYardId, setAllotmentYardId] = useState("");
-  const [allotAssetId, setAllotAssetId] = useState("");
-  const [allotAllotmentDate, setAllotAllotmentDate] = useState("");
-  const [allotRefNo, setAllotRefNo] = useState("");
-  const [allotFromDate, setAllotFromDate] = useState("");
-  const [allotToDate, setAllotToDate] = useState("");
-  const [allotMonthlyRent, setAllotMonthlyRent] = useState("");
-  const [allotRentRevisionMode, setAllotRentRevisionMode] = useState("StandardConsecutiveRenewal");
-  const [allotConsecutiveRenewalCount, setAllotConsecutiveRenewalCount] = useState("0");
-  const [allotSecurityDeposit, setAllotSecurityDeposit] = useState("");
-  const [allotSecurityDepositPayment, setAllotSecurityDepositPayment] = useState<PaymentPreferenceValue>(() =>
-    defaultPaymentPreferenceValue(),
-  );
-  const [allotAgreementTypeOverride, setAllotAgreementTypeOverride] = useState("__auto__");
   const [mapYardIds, setMapYardIds] = useState<string[]>([]);
   const [unmapTarget, setUnmapTarget] = useState<MappedYard | null>(null);
   const [unmapReason, setUnmapReason] = useState("");
@@ -354,56 +319,6 @@ export default function TraderLicenceDetail() {
       return res.json();
     },
   });
-  const vacantUrl = allotmentYardId
-    ? `/api/ioms/assets/vacant?yardId=${encodeURIComponent(allotmentYardId)}`
-    : "";
-  const { data: vacantRows = [] } = useQuery<VacantAssetRow[]>({
-    queryKey: [vacantUrl],
-    enabled: !!allotmentYardId && allotDialogOpen,
-    queryFn: async () => {
-      const res = await fetch(vacantUrl, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load vacant premises");
-      return res.json();
-    },
-  });
-  const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
-  const vacantByAssetPk = useMemo(() => Object.fromEntries(vacantRows.map((r) => [r.asset.id, r])), [vacantRows]);
-
-  useEffect(() => {
-    if (!allotDialogOpen) return;
-    const preferred =
-      (allotmentYardId && activeMappedYards.some((m) => m.yardId === allotmentYardId) && allotmentYardId) ||
-      activeMappedYards.find((m) => m.yardId === licence?.yardId)?.yardId ||
-      activeMappedYards[0]?.yardId ||
-      "";
-    setAllotmentYardId(preferred);
-    setAllotAssetId("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allotDialogOpen, licence?.yardId, activeMappedYards]);
-
-  useEffect(() => {
-    if (!allotDialogOpen) return;
-    setAllotAllotmentDate((prev) => prev || localCalendarYmd());
-  }, [allotDialogOpen]);
-
-  useEffect(() => {
-    if (!allotDialogOpen) return;
-    setAllotSecurityDepositPayment(defaultPaymentPreferenceValue());
-  }, [allotDialogOpen]);
-
-  useEffect(() => {
-    if (!allotDialogOpen) return;
-    const n = Number(allotSecurityDeposit);
-    if (!Number.isFinite(n) || n <= 0) return;
-    setAllotSecurityDepositPayment((p) => ({ ...p, paidAmount: String(Math.round(n * 100) / 100) }));
-  }, [allotSecurityDeposit, allotDialogOpen]);
-
-  const selectedVacant = allotAssetId ? vacantByAssetPk[allotAssetId] : undefined;
-  const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
-  const allotSecDepAmount = allotSecurityDeposit.trim() ? Number(allotSecurityDeposit) : 0;
-  const showAllotSecDepPayment = Number.isFinite(allotSecDepAmount) && allotSecDepAmount > 0;
-  const inferredAgType =
-    allotFromDate && allotToDate ? inferAgreementTypeFromDates(allotFromDate, allotToDate) : null;
   const licenceCanReceiveAllotment = Boolean(
     licence && licence.status === "Active" && !licence.isBlocked,
   );
@@ -418,19 +333,6 @@ export default function TraderLicenceDetail() {
       return res.json();
     },
   });
-  const vacantPremiseOptions = useMemo(
-    () =>
-      vacantAssets.map((a) => ({
-        value: a.id,
-        label: [a.assetId, a.assetType || null].filter(Boolean).join(" · "),
-      })),
-    [vacantAssets],
-  );
-  const allotReceivedAtLabel = useMemo(() => {
-    const yardId = selectedVacant?.asset?.yardId;
-    if (!yardId) return "—";
-    return getYardName(yardId);
-  }, [selectedVacant?.asset?.yardId, getYardName]);
   const receiptById = Object.fromEntries(receipts.map((r) => [r.id, r.receiptNo]));
   const assetDisplayById = useMemo(() => buildAssetDisplayByRowId(assets), [assets]);
   const gstCategoriesForSelect = useMemo(
@@ -599,60 +501,6 @@ export default function TraderLicenceDetail() {
       toast({ title: "Location unmapped", description: "Existing allotments at that location remain valid." });
     },
     onError: (e: Error) => toast({ title: "Unmap failed", description: e.message, variant: "destructive" }),
-  });
-
-  const createAllotmentMutation = useMutation({
-    mutationFn: async (body: Record<string, unknown>) => {
-      const res = await fetch("/api/ioms/asset-allotments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { message?: string; error?: string }).message ?? (err as { error?: string }).error ?? res.statusText);
-      }
-      return res.json();
-    },
-    onSuccess: async (data) => {
-      invalidateAssetAllotmentQueries(queryClient);
-      invalidatePremisesRegisterQueries(queryClient);
-      queryClient.invalidateQueries({ queryKey: ["/api/ioms/receipts"] });
-      if (id) {
-        queryClient.invalidateQueries({
-          queryKey: [`/api/ioms/asset-allotments?traderLicenceId=${encodeURIComponent(id)}`],
-        });
-      }
-
-      const receipt = data?.securityDepositReceipt as { receiptId?: string; receiptNo?: string } | null | undefined;
-      let description = "Upload the agreement copy (PDF), then DV verifies and DA approves.";
-      if (receipt?.receiptId && receipt?.receiptNo) {
-        try {
-          await downloadIomsReceiptPdf(receipt.receiptId, receipt.receiptNo);
-          description = `Security deposit receipt ${receipt.receiptNo} issued and downloaded. ${description}`;
-        } catch {
-          description = `Security deposit receipt ${receipt.receiptNo} issued. Open Receipts to download the PDF if needed. ${description}`;
-        }
-      }
-
-      toast({
-        title: "Draft allocation created",
-        description,
-      });
-      setAllotDialogOpen(false);
-      setAllotAssetId("");
-      setAllotAllotmentDate("");
-      setAllotRefNo("");
-      setAllotFromDate("");
-      setAllotToDate("");
-      setAllotMonthlyRent("");
-      setAllotSecurityDeposit("");
-      setAllotSecurityDepositPayment(defaultPaymentPreferenceValue());
-      setAllotConsecutiveRenewalCount("0");
-      setAllotAgreementTypeOverride("__auto__");
-    },
-    onError: (e: Error) => toast({ title: "Create failed", description: e.message, variant: "destructive" }),
   });
 
   const addStockMutation = useMutation({
@@ -1488,9 +1336,14 @@ export default function TraderLicenceDetail() {
                 Premises allocations ({allotments.length})
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                Premises allotted to this licence only at Active mapped locations when the licence is Active and the
-                premises is vacant. Use <strong>Edit</strong> to upload the agreement and run DV/DA approval; Approved
-                sets tenancy to Active.
+                <strong>Add allotment</strong> opens the New Premises Allotment workflow so several vacant premises can
+                share one agreement. Allotments are only at Active mapped locations when the licence is Active and the
+                premises is vacant. Security deposit is recorded per premises (see{" "}
+                <Link href="/assets/security-deposits" className="text-primary underline">
+                  Security deposits
+                </Link>
+                ). Use <strong>Edit</strong> to upload the agreement and run DV/DA approval; Approved sets tenancy to
+                Active.
               </p>
             </div>
             {canCreateAllotment && (
@@ -1503,11 +1356,25 @@ export default function TraderLicenceDetail() {
                     ? "Licence must be Active and not blocked to add an allocation"
                     : activeMappedYards.length === 0
                       ? "Map at least one location before adding an allotment"
-                      : "Add a new premises allocation (draft)"
+                      : "Open New Premises Allotment (multi-premises under one agreement)"
                 }
-                onClick={() => setAllotDialogOpen(true)}
+                asChild={licenceCanReceiveAllotment && activeMappedYards.length > 0}
               >
-                <Plus className="h-4 w-4 mr-1" /> Add allotment
+                {licenceCanReceiveAllotment && activeMappedYards.length > 0 ? (
+                  <Link
+                    href={`/assets/agreements/new?track=TrackA&refId=${encodeURIComponent(id!)}&yardId=${encodeURIComponent(
+                      activeMappedYards.find((m) => m.yardId === licence?.yardId)?.yardId ||
+                        activeMappedYards[0]?.yardId ||
+                        "",
+                    )}&returnTo=${encodeURIComponent(`/traders/licences/${id!}`)}`}
+                  >
+                    <Plus className="h-4 w-4 mr-1" /> Add allotment
+                  </Link>
+                ) : (
+                  <>
+                    <Plus className="h-4 w-4 mr-1" /> Add allotment
+                  </>
+                )}
               </Button>
             )}
           </CardHeader>
@@ -1524,243 +1391,6 @@ export default function TraderLicenceDetail() {
             />
           </CardContent>
         </Card>
-
-        <Dialog open={allotDialogOpen} onOpenChange={setAllotDialogOpen}>
-          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>New premises allocation (draft)</DialogTitle>
-              <p className="text-sm text-muted-foreground">
-                Select a mapped location, then vacant premises at that yard. Tenancy becomes Active only after DA
-                approval.
-              </p>
-            </DialogHeader>
-            {!licenceCanReceiveAllotment ? (
-              <Alert variant="destructive">
-                <AlertTitle>Licence not eligible</AlertTitle>
-                <AlertDescription>
-                  Only an <strong>Active</strong>, unblocked trader licence can receive a new premises allocation.
-                </AlertDescription>
-              </Alert>
-            ) : activeMappedYards.length === 0 ? (
-              <Alert variant="destructive">
-                <AlertTitle>No mapped locations</AlertTitle>
-                <AlertDescription>
-                  Map at least one location on this licence before creating a premises allocation.
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="md:col-span-2 space-y-1">
-                  <Label>Location *</Label>
-                  <Select
-                    value={allotmentYardId || "__pick__"}
-                    onValueChange={(v) => {
-                      setAllotmentYardId(v === "__pick__" ? "" : v);
-                      setAllotAssetId("");
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select mapped location" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__pick__">Select…</SelectItem>
-                      {activeMappedYards.map((m) => (
-                        <SelectItem key={m.yardId} value={m.yardId}>
-                          {m.yardName || m.yardCode || getYardName(m.yardId)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">Only locations mapped to this licence are listed.</p>
-                </div>
-                <div className="md:col-span-2 space-y-1">
-                  <Label>Vacant premises at selected location *</Label>
-                  <LocalSearchSelect
-                    value={allotAssetId}
-                    onValueChange={setAllotAssetId}
-                    options={vacantPremiseOptions}
-                    placeholder={allotmentYardId ? "Select premises" : "Select a location first"}
-                    searchPlaceholder="Type premises id or type…"
-                    emptyMessage="No matching vacant premises."
-                    required
-                    disabled={!allotmentYardId}
-                  />
-                  {allotmentYardId && vacantAssets.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No vacant premises at this mapped location.</p>
-                  ) : null}
-                  {selectedVacant?.asset ? (
-                    <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-0.5">
-                      <div>
-                        <span className="font-medium text-foreground">Premises type:</span>{" "}
-                        {selectedVacant.asset.assetType?.trim() || "—"}
-                      </div>
-                      {selectedVacant.asset.area?.trim() ? (
-                        <div>
-                          <span className="font-medium text-foreground">Area:</span> {selectedVacant.asset.area}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="md:col-span-2 space-y-1">
-                  <Label>Allottee name</Label>
-                  <Input
-                    value={(licence?.firmName ?? licence?.contactName ?? "").trim()}
-                    readOnly
-                    className="bg-muted/50"
-                  />
-                  <p className="text-xs text-muted-foreground">Taken from this licence.</p>
-                </div>
-                <div className="space-y-1">
-                  <Label>Allotment date *</Label>
-                  <Input type="date" value={allotAllotmentDate} onChange={(e) => setAllotAllotmentDate(e.target.value)} />
-                </div>
-                <div className="space-y-1">
-                  <Label>Allotment reference no.</Label>
-                  <Input value={allotRefNo} onChange={(e) => setAllotRefNo(e.target.value)} placeholder="Optional" />
-                </div>
-                <div className="space-y-1">
-                  <Label>Agreement from *</Label>
-                  <Input type="date" value={allotFromDate} onChange={(e) => setAllotFromDate(e.target.value)} />
-                </div>
-                <div className="space-y-1">
-                  <Label>Agreement to *</Label>
-                  <Input type="date" value={allotToDate} onChange={(e) => setAllotToDate(e.target.value)} />
-                </div>
-                <div className="md:col-span-2 rounded-md border bg-muted/30 px-3 py-2 text-xs">
-                  <span className="text-muted-foreground">Inferred agreement kind: </span>
-                  <span className="font-medium text-foreground">
-                    {inferredAgType ? agreementTypeLabel(inferredAgType) : "Pick both dates"}
-                  </span>
-                </div>
-                <div className="space-y-1">
-                  <Label>Agreement type override</Label>
-                  <Select value={allotAgreementTypeOverride} onValueChange={setAllotAgreementTypeOverride}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__auto__">Auto from dates</SelectItem>
-                      <SelectItem value="RentalAgreement">Rental agreement</SelectItem>
-                      <SelectItem value="LeaseAgreement">Lease agreement</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <Label>Monthly Rent (Rs.) *</Label>
-                  <Input
-                    value={allotMonthlyRent}
-                    onChange={(e) => setAllotMonthlyRent(e.target.value)}
-                    inputMode="decimal"
-                    placeholder="> 0"
-                  />
-                </div>
-                <div className="space-y-1 md:col-span-2">
-                  <Label>Rent revision mode *</Label>
-                  <Select value={allotRentRevisionMode} onValueChange={setAllotRentRevisionMode}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {RENT_REVISION_MODES.map((m) => (
-                        <SelectItem key={m} value={m}>
-                          {m === "StandardConsecutiveRenewal" ? "Standard consecutive renewal" : "PWD certificate basis"}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <Label>Consecutive renewal count</Label>
-                  <Input
-                    value={allotConsecutiveRenewalCount}
-                    onChange={(e) => setAllotConsecutiveRenewalCount(e.target.value)}
-                    inputMode="numeric"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label>Security deposit (₹)</Label>
-                  <Input
-                    value={allotSecurityDeposit}
-                    onChange={(e) => setAllotSecurityDeposit(e.target.value)}
-                    inputMode="decimal"
-                  />
-                </div>
-                {showAllotSecDepPayment ? (
-                  <div className="md:col-span-2 rounded-md border p-3 bg-muted/20">
-                    <p className="text-sm font-medium mb-2">Security deposit payment</p>
-                    <p className="text-xs text-muted-foreground mb-3">
-                      Record how the deposit was received. A paid receipt is issued immediately when you create the draft.
-                    </p>
-                    <PaymentPreferenceForm
-                      value={allotSecurityDepositPayment}
-                      onChange={setAllotSecurityDepositPayment}
-                      receivedByLabel={receivedByLabel}
-                      receivedAtLabel={allotReceivedAtLabel}
-                      summaryAmount={String(allotSecDepAmount)}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            )}
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setAllotDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                disabled={
-                  !licenceCanReceiveAllotment ||
-                  activeMappedYards.length === 0 ||
-                  createAllotmentMutation.isPending ||
-                  !allotmentYardId ||
-                  !allotAssetId ||
-                  !allotAllotmentDate ||
-                  !allotFromDate ||
-                  !allotToDate ||
-                  !Number.isFinite(Number(allotMonthlyRent)) ||
-                  Number(allotMonthlyRent) <= 0
-                }
-                onClick={() => {
-                  const allotteeName = (licence?.firmName ?? licence?.contactName ?? "").trim();
-                  if (!allotteeName) {
-                    toast({ title: "Allottee name required", variant: "destructive" });
-                    return;
-                  }
-                  const body: Record<string, unknown> = {
-                    assetId: allotAssetId,
-                    traderLicenceId: id,
-                    allotteeName,
-                    allotmentDate: allotAllotmentDate,
-                    fromDate: allotFromDate,
-                    toDate: allotToDate,
-                    status: "Pending",
-                    approvalStatus: "Draft",
-                    monthlyRent: Number(allotMonthlyRent),
-                    rentRevisionMode: allotRentRevisionMode,
-                    consecutiveRenewalCount: Number(allotConsecutiveRenewalCount) || 0,
-                    securityDeposit: allotSecurityDeposit.trim() ? Number(allotSecurityDeposit) : null,
-                  };
-                  if (allotAgreementTypeOverride !== "__auto__") body.agreementType = allotAgreementTypeOverride;
-                  if (allotRefNo.trim()) body.premisesRefNo = allotRefNo.trim();
-                  const secAmt = allotSecurityDeposit.trim() ? Number(allotSecurityDeposit) : 0;
-                  if (Number.isFinite(secAmt) && secAmt > 0) {
-                    const pref = { ...allotSecurityDepositPayment, paidAmount: allotSecurityDeposit };
-                    const prefErr = validatePaymentPreference(pref);
-                    if (prefErr) {
-                      toast({ title: "Security deposit payment", description: prefErr, variant: "destructive" });
-                      return;
-                    }
-                    Object.assign(body, buildCounterDuesPaymentApiBody(pref, secAmt));
-                  }
-                  createAllotmentMutation.mutate(body);
-                }}
-              >
-                {createAllotmentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create draft"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
 
         <Dialog
           open={unmapTarget != null}

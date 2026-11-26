@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearchParams } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,18 +35,40 @@ type VacantPremises = {
   reason?: string;
 };
 
-type UnifiedEntity = { id: string; kind: string; refId: string; displayName?: string; name?: string };
+type UnifiedEntity = { id: string; kind: string; refId: string; displayName?: string; name?: string; status?: string };
+
+type MappedYard = { yardId: string; status: string; yardName?: string | null; yardCode?: string | null };
+
+function safeReturnTo(raw: string): string {
+  const t = raw.trim();
+  if (!t.startsWith("/") || t.startsWith("//") || t.includes("://")) return "/assets/agreements";
+  return t;
+}
 
 export default function PremisesAgreementForm() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
+  const [searchParams] = useSearchParams();
   const { data: yardsRaw = [] } = useScopedActiveYards();
   const { getYardName } = useYardLabels();
-  const yards = useMemo(() => filterYardTypeLocations(yardsRaw), [yardsRaw]);
+  const scopedYards = useMemo(() => filterYardTypeLocations(yardsRaw), [yardsRaw]);
 
-  const [track, setTrack] = useState<"TrackA" | "TrackB">("TrackA");
-  const [entityKey, setEntityKey] = useState("");
-  const [yardId, setYardId] = useState("");
+  const prefillTrack = String(searchParams.get("track") ?? "").trim();
+  const prefillRefId = String(searchParams.get("refId") ?? "").trim();
+  const prefillYardId = String(searchParams.get("yardId") ?? "").trim();
+  const returnTo = safeReturnTo(String(searchParams.get("returnTo") ?? ""));
+  const lockedFromSource =
+    Boolean(prefillRefId) && (prefillTrack === "TrackA" || prefillTrack === "TrackB");
+
+  const [track, setTrack] = useState<"TrackA" | "TrackB">(
+    prefillTrack === "TrackB" ? "TrackB" : "TrackA",
+  );
+  const [entityKey, setEntityKey] = useState(
+    prefillRefId
+      ? `${prefillTrack === "TrackB" ? "TrackB" : "TrackA"}:${prefillRefId}`
+      : "",
+  );
+  const [yardId, setYardId] = useState(prefillYardId);
   const [allotmentDate, setAllotmentDate] = useState(new Date().toISOString().slice(0, 10));
   const [allotmentRef, setAllotmentRef] = useState("");
   const [fromDate, setFromDate] = useState("");
@@ -66,16 +88,18 @@ export default function PremisesAgreementForm() {
   const [premisesSearch, setPremisesSearch] = useState("");
   const [selectorOpen, setSelectorOpen] = useState(false);
 
+  const clearPremisesSelection = () => {
+    setSelected({});
+    setRents({});
+    setSelectorOpen(false);
+  };
+
   const { data: entities = [] } = useQuery<UnifiedEntity[]>({ queryKey: ["/api/ioms/unified-entities"] });
-  const vacantQs = yardId ? `/api/ioms/premises-agreements/vacant-premises?yardId=${encodeURIComponent(yardId)}` : "";
-  const { data: vacant } = useQuery<{ eligible: VacantPremises[]; unavailable: Array<VacantPremises & { reason?: string }> }>({
-    queryKey: [vacantQs],
-    enabled: Boolean(yardId),
-  });
 
   const entityOptions = useMemo(() => {
     return entities
-      .filter((e) => (track === "TrackA" ? e.kind === "TrackA" : e.kind === "TrackB" || e.kind === "AdHoc"))
+      .filter((e) => (track === "TrackA" ? e.kind === "TrackA" : e.kind === "TrackB"))
+      .filter((e) => !e.status || e.status === "Active")
       .map((e) => ({
         value: `${e.kind}:${e.refId}`,
         label: e.displayName || e.name || e.refId,
@@ -83,7 +107,86 @@ export default function PremisesAgreementForm() {
       }));
   }, [entities, track]);
 
-  const selectedEntity = entityOptions.find((e) => e.value === entityKey);
+  useEffect(() => {
+    if (!prefillRefId) return;
+    const kind = prefillTrack === "TrackB" ? "TrackB" : "TrackA";
+    setTrack(kind);
+    setEntityKey(`${kind}:${prefillRefId}`);
+    if (prefillYardId) setYardId(prefillYardId);
+  }, [prefillRefId, prefillTrack, prefillYardId]);
+
+  const selectedEntity =
+    entityOptions.find((e) => e.value === entityKey) ||
+    (prefillRefId ? entityOptions.find((e) => e.refId === prefillRefId) : undefined) ||
+    (lockedFromSource && prefillRefId
+      ? {
+          value: `${prefillTrack === "TrackB" ? "TrackB" : "TrackA"}:${prefillRefId}`,
+          label: prefillRefId,
+          refId: prefillRefId,
+        }
+      : undefined);
+
+  const allotteeRefId = selectedEntity?.refId ?? "";
+
+  const { data: allotteeDetail } = useQuery<{
+    name?: string;
+    firmName?: string;
+    mappedYards?: MappedYard[];
+  }>({
+    queryKey: [
+      track === "TrackA"
+        ? `/api/ioms/traders/licences/${encodeURIComponent(allotteeRefId)}`
+        : `/api/ioms/entities/${encodeURIComponent(allotteeRefId)}`,
+    ],
+    enabled: Boolean(allotteeRefId),
+  });
+
+  const mappedActiveYards = useMemo(() => {
+    const rows = (allotteeDetail?.mappedYards ?? []).filter((m) => m.status === "Active");
+    return rows.map((m) => ({
+      id: m.yardId,
+      name: m.yardName || m.yardCode || getYardName(m.yardId),
+    }));
+  }, [allotteeDetail?.mappedYards, getYardName]);
+
+  /** Yard choices: mapped Active yards for selected allottee ∩ user scope; else all scoped yards. */
+  const yardOptions = useMemo(() => {
+    if (!allotteeRefId) return scopedYards.map((y) => ({ id: y.id, name: y.name ?? y.code }));
+    if (mappedActiveYards.length > 0) {
+      const scopedIds = new Set(scopedYards.map((y) => y.id));
+      const mapped = mappedActiveYards.filter((y) => scopedIds.has(y.id));
+      return mapped.length > 0 ? mapped : mappedActiveYards;
+    }
+    return [];
+  }, [allotteeRefId, mappedActiveYards, scopedYards]);
+
+  useEffect(() => {
+    if (!allotteeRefId) return;
+    if (yardOptions.length === 0) {
+      if (yardId) setYardId("");
+      return;
+    }
+    if (yardId && yardOptions.some((y) => y.id === yardId)) return;
+    const preferred =
+      (prefillYardId && yardOptions.some((y) => y.id === prefillYardId) && prefillYardId) ||
+      yardOptions[0]?.id ||
+      "";
+    if (preferred !== yardId) {
+      setYardId(preferred);
+      clearPremisesSelection();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allotteeRefId, yardOptions, prefillYardId]);
+
+  const vacantQs = yardId ? `/api/ioms/premises-agreements/vacant-premises?yardId=${encodeURIComponent(yardId)}` : "";
+  const { data: vacant } = useQuery<{
+    eligible: VacantPremises[];
+    unavailable: Array<VacantPremises & { reason?: string }>;
+  }>({
+    queryKey: [vacantQs],
+    enabled: Boolean(yardId),
+  });
+
   const selectedPremises = (vacant?.eligible ?? []).filter((p) => selected[p.id]);
   const areas = selectedPremises.map((p) => premisesAreaNumber(p.area));
   const depositShares = splitDepositByArea(Number(deposit) || 0, areas);
@@ -93,11 +196,19 @@ export default function PremisesAgreementForm() {
   const inferredType = fromDate && toDate ? inferAgreementTypeFromDates(fromDate, toDate) : null;
   const canCreate =
     Boolean(selectedEntity && yardId && fromDate && toDate && selectedPremises.length > 0) &&
+    fromDate <= toDate &&
     selectedPremises.every((p) => Number(rents[p.id] || 0) > 0);
+
+  const allotteeLabel =
+    selectedEntity?.label && selectedEntity.label !== selectedEntity.refId
+      ? selectedEntity.label
+      : allotteeDetail?.firmName || allotteeDetail?.name || selectedEntity?.label || "—";
 
   const createMutation = useMutation({
     mutationFn: async () => {
       if (!selectedEntity) throw new Error("Select allottee");
+      if (!yardId) throw new Error("Select location / yard");
+      if (fromDate > toDate) throw new Error("Agreement To must be on or after Agreement From.");
       const agreementType =
         agreementTypeOverride === "auto"
           ? inferredType ?? "RentalAgreement"
@@ -107,7 +218,7 @@ export default function PremisesAgreementForm() {
         traderLicenceId: track === "TrackA" ? selectedEntity.refId : undefined,
         entityId: track === "TrackB" ? selectedEntity.refId : undefined,
         yardId,
-        allotteeName: selectedEntity.label,
+        allotteeName: allotteeLabel,
         allotmentDate,
         agreementRef: allotmentRef || undefined,
         fromDate,
@@ -134,7 +245,13 @@ export default function PremisesAgreementForm() {
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string; message?: string }).error ||
+            (data as { message?: string }).message ||
+            res.statusText,
+        );
+      }
       return data as { id: string };
     },
     onSuccess: (data) => {
@@ -154,11 +271,18 @@ export default function PremisesAgreementForm() {
 
   return (
     <AppShell
-      breadcrumbs={[
-        { label: "Assets", href: "/assets" },
-        { label: "Premises allocations", href: "/assets/agreements" },
-        { label: "New allotment" },
-      ]}
+      breadcrumbs={
+        lockedFromSource
+          ? [
+              { label: track === "TrackA" ? "Licences" : "Entities", href: returnTo },
+              { label: "New premises allotment" },
+            ]
+          : [
+              { label: "Assets", href: "/assets" },
+              { label: "Premises allocations", href: "/assets/agreements" },
+              { label: "New allotment" },
+            ]
+      }
     >
       <div className="space-y-4 max-w-5xl">
         <div className="flex items-start justify-between gap-3">
@@ -170,7 +294,7 @@ export default function PremisesAgreementForm() {
             </p>
           </div>
           <Button asChild variant="ghost" size="icon">
-            <Link href="/assets/agreements">
+            <Link href={returnTo}>
               <X className="h-5 w-5" />
             </Link>
           </Button>
@@ -183,37 +307,65 @@ export default function PremisesAgreementForm() {
           <CardContent className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1">
               <Label>Track</Label>
-              <Select
-                value={track}
-                onValueChange={(v) => {
-                  setTrack(v as "TrackA" | "TrackB");
-                  setEntityKey("");
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="TrackA">Track A (trader licence)</SelectItem>
-                  <SelectItem value="TrackB">Track B (entity)</SelectItem>
-                </SelectContent>
-              </Select>
+              {lockedFromSource ? (
+                <>
+                  <Input
+                    readOnly
+                    value={track === "TrackA" ? "Track A (trader licence)" : "Track B (entity)"}
+                  />
+                  <p className="text-xs text-muted-foreground">Fixed from the source record.</p>
+                </>
+              ) : (
+                <Select
+                  value={track}
+                  onValueChange={(v) => {
+                    setTrack(v as "TrackA" | "TrackB");
+                    setEntityKey("");
+                    setYardId("");
+                    clearPremisesSelection();
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="TrackA">Track A (trader licence)</SelectItem>
+                    <SelectItem value="TrackB">Track B (entity)</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             <div className="space-y-1">
               <Label>Allottee name *</Label>
-              <Select value={entityKey || undefined} onValueChange={setEntityKey}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select allottee" />
-                </SelectTrigger>
-                <SelectContent>
-                  {entityOptions.map((e) => (
-                    <SelectItem key={e.value} value={e.value}>
-                      {e.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">Taken from the licence / entity master.</p>
+              {lockedFromSource ? (
+                <>
+                  <Input readOnly value={allotteeLabel} />
+                  <p className="text-xs text-muted-foreground">Taken from the licence / entity master.</p>
+                </>
+              ) : (
+                <>
+                  <Select
+                    value={entityKey || undefined}
+                    onValueChange={(v) => {
+                      setEntityKey(v);
+                      setYardId("");
+                      clearPremisesSelection();
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select allottee" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {entityOptions.map((e) => (
+                        <SelectItem key={e.value} value={e.value}>
+                          {e.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Taken from the licence / entity master.</p>
+                </>
+              )}
             </div>
             <div className="space-y-1">
               <Label>Location / Yard *</Label>
@@ -229,22 +381,32 @@ export default function PremisesAgreementForm() {
                     return;
                   }
                   setYardId(v);
-                  setSelected({});
-                  setRents({});
+                  clearPremisesSelection();
                 }}
+                disabled={!allotteeRefId || yardOptions.length === 0}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select yard" />
+                  <SelectValue
+                    placeholder={
+                      !allotteeRefId
+                        ? "Select allottee first"
+                        : yardOptions.length === 0
+                          ? "No Active mapped locations"
+                          : "Select yard"
+                    }
+                  />
                 </SelectTrigger>
                 <SelectContent>
-                  {yards.map((y) => (
+                  {yardOptions.map((y) => (
                     <SelectItem key={y.id} value={y.id}>
-                      {y.name ?? y.code}
+                      {y.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">All premises in one agreement must be in the same yard.</p>
+              <p className="text-xs text-muted-foreground">
+                Only Active mapped locations for this allottee. All premises in one agreement must be in the same yard.
+              </p>
             </div>
             <div className="space-y-1">
               <Label>Allotment date *</Label>
@@ -273,6 +435,9 @@ export default function PremisesAgreementForm() {
             </div>
             <div className="rounded-md bg-muted/50 px-3 py-2 text-sm sm:col-span-2">
               Inferred agreement kind: {inferredType ? `from dates (${inferredType})` : "—"}
+              {fromDate && toDate && fromDate > toDate ? (
+                <span className="text-destructive"> — To must be on or after From</span>
+              ) : null}
             </div>
             <div className="space-y-1">
               <Label>Agreement type override</Label>
@@ -456,7 +621,8 @@ export default function PremisesAgreementForm() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              One deposit for the agreement, split by area. If a premises is vacated later, only its share is refunded.
+              One deposit for the agreement, split by area. Collection / SECDEP receipt is handled after draft create
+              via Security deposits. If a premises is vacated later, only its share is refunded.
             </p>
 
             {selectedPremises.length > 0 && (
@@ -512,7 +678,7 @@ export default function PremisesAgreementForm() {
           </p>
           <div className="flex gap-2">
             <Button asChild variant="outline">
-              <Link href="/assets/agreements">Cancel</Link>
+              <Link href={returnTo}>Cancel</Link>
             </Button>
             <Button disabled={!canCreate || createMutation.isPending} onClick={() => createMutation.mutate()}>
               {createMutation.isPending ? "Creating…" : "Create draft"}

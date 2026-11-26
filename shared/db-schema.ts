@@ -2679,3 +2679,118 @@ export const leaveLicenceAgreementVersions = gapmc.table("leave_licence_agreemen
   generatedAt: text("generated_at").notNull(),
   voidedAt: text("voided_at"),
 });
+
+/**
+ * M-02 godown security deposit per premises (Held | Reserved | Refunded).
+ * One row per premises deposit; consolidated SECDEP receipts may cover many rows.
+ */
+export const premisesSecurityDeposits = gapmc.table("premises_security_deposits", {
+  id: text("id").primaryKey(),
+  yardId: text("yard_id").notNull(),
+  assetId: text("asset_id").notNull(),
+  premisesLabel: text("premises_label"),
+  /** TraderLicence | Entity */
+  payerType: text("payer_type").notNull(),
+  payerRefId: text("payer_ref_id").notNull(),
+  payerName: text("payer_name"),
+  unifiedEntityId: text("unified_entity_id"),
+  assetAllotmentId: text("asset_allotment_id"),
+  entityAllotmentId: text("entity_allotment_id"),
+  premisesAgreementId: text("premises_agreement_id"),
+  agreementLineId: text("agreement_line_id"),
+  amount: doublePrecision("amount").notNull(),
+  /** Held | Reserved | Refunded */
+  status: text("status").notNull().default("Held"),
+  depositReceiptId: text("deposit_receipt_id"),
+  depositReceiptNo: text("deposit_receipt_no"),
+  depositReceiptDate: text("deposit_receipt_date"),
+  refundProposalId: text("refund_proposal_id"),
+  refundReceiptId: text("refund_receipt_id"),
+  refundReceiptNo: text("refund_receipt_no"),
+  refundedAt: text("refunded_at"),
+  vacatedOn: text("vacated_on"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+/** Refund of Security Deposit of Premises — DO → DV → DA proposal. */
+export const sdRefundProposals = gapmc.table("sd_refund_proposals", {
+  id: text("id").primaryKey(),
+  proposalNo: text("proposal_no").notNull().unique(),
+  yardId: text("yard_id").notNull(),
+  payerType: text("payer_type").notNull(),
+  payerRefId: text("payer_ref_id").notNull(),
+  payerName: text("payer_name"),
+  unifiedEntityId: text("unified_entity_id"),
+  proposalDate: text("proposal_date").notNull(),
+  selectedDepositTotal: doublePrecision("selected_deposit_total").notNull().default(0),
+  deductionsTotal: doublePrecision("deductions_total").notNull().default(0),
+  netPayable: doublePrecision("net_payable").notNull().default(0),
+  /** Draft | PendingVerification | PendingApproval | Approved | ReturnedToDO | Rejected | Completed */
+  status: text("status").notNull().default("Draft"),
+  paymentMode: text("payment_mode"),
+  paymentDate: text("payment_date"),
+  chequeNo: text("cheque_no"),
+  bankName: text("bank_name"),
+  chequeDate: text("cheque_date"),
+  utrRef: text("utr_ref"),
+  paymentRemarks: text("payment_remarks"),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  daUser: text("da_user"),
+  submittedAt: text("submitted_at"),
+  verifiedAt: text("verified_at"),
+  approvedAt: text("approved_at"),
+  returnedAt: text("returned_at"),
+  rejectedAt: text("rejected_at"),
+  returnOrRejectRemarks: text("return_or_reject_remarks"),
+  refundReceiptId: text("refund_receipt_id"),
+  refundReceiptNo: text("refund_receipt_no"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+export const sdRefundProposalDeposits = gapmc.table("sd_refund_proposal_deposits", {
+  id: text("id").primaryKey(),
+  proposalId: text("proposal_id").notNull(),
+  depositId: text("deposit_id").notNull(),
+  amount: doublePrecision("amount").notNull(),
+});
+
+export const sdRefundProposalDeductions = gapmc.table("sd_refund_proposal_deductions", {
+  id: text("id").primaryKey(),
+  proposalId: text("proposal_id").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  reason: text("reason").notNull(),
+  amount: doublePrecision("amount").notNull(),
+});
+
+/** Request / proposal number sequence for SD refunds (per FY). */
+export const sdRefundProposalSequence = gapmc.table("sd_refund_proposal_sequence", {
+  id: text("id").primaryKey(),
+  financialYear: text("financial_year").notNull().unique(),
+  lastSeq: integer("last_seq").notNull().default(0),
+});
+
+/**
+ * Trader/entity godown SD ledger under Tally head Cash Security Deposit for Godown.
+ * Lines created only by deposit receipt or refund completion.
+ */
+export const premisesSdLedgerEntries = gapmc.table("premises_sd_ledger_entries", {
+  id: text("id").primaryKey(),
+  yardId: text("yard_id").notNull(),
+  payerType: text("payer_type").notNull(),
+  payerRefId: text("payer_ref_id").notNull(),
+  unifiedEntityId: text("unified_entity_id"),
+  entryDate: text("entry_date").notNull(),
+  particulars: text("particulars").notNull(),
+  linkedDocType: text("linked_doc_type"),
+  linkedDocId: text("linked_doc_id"),
+  linkedDocNo: text("linked_doc_no"),
+  premisesLabel: text("premises_label"),
+  assetId: text("asset_id"),
+  creditAmount: doublePrecision("credit_amount").notNull().default(0),
+  debitAmount: doublePrecision("debit_amount").notNull().default(0),
+  createdAt: text("created_at"),
+});

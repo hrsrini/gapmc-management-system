@@ -182,6 +182,7 @@ const REVENUE_HEAD_CODES: Record<string, string> = {
   MarketFee: "MFEE",
   LicenceFee: "LCFEE",
   SecurityDeposit: "SECDEP",
+  SecurityDepositRefund: "SECREF",
   Miscellaneous: "MISC",
   Consolidated: "CONS",
 };

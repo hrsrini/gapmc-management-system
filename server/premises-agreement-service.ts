@@ -7,6 +7,7 @@ import {
   assetAllotments,
   assets,
   delayPenalties,
+  entities,
   entityAllotments,
   finalDemandNotices,
   finalDemandNoticeSeq,
@@ -17,8 +18,15 @@ import {
   renewalNoticeSeq,
   rentRevisionBatches,
   rentRevisionLines,
+  traderLicences,
   vacationEvictionEvents,
 } from "@shared/db-schema";
+import { assertLmLicenceAllowsOperation, LmLicenceGuardError } from "@shared/lm-licence-guard";
+import { entityHasActiveMapping } from "./entity-location-mappings";
+import {
+  ensureLicenceHomeMapping,
+  licenceHasActiveMapping,
+} from "./trader-licence-location-mappings";
 import {
   calculateDelayPenalty,
   daysBetweenYmd,
@@ -31,7 +39,10 @@ import {
   splitDepositByArea,
 } from "@shared/premises-agreement";
 import { inferAgreementTypeFromDates } from "@shared/premises-allocation";
-import { assertPremisesNotAlreadyAllocatedActive } from "./premises-allocation-guard";
+import {
+  assertPremisesFreeForDraftAllotment,
+  isPremisesAllocatable,
+} from "./premises-allocation-guard";
 import { syncPremisesStatusFromTenancy } from "./premises-status-sync";
 
 function nowIso(): string {
@@ -168,20 +179,77 @@ export async function createAgreementDraft(input: {
   createdBy?: string;
 }) {
   if (!input.premises?.length) throw new Error("Select at least one premises.");
+  if (!input.yardId?.trim()) throw new Error("Location / yard is required.");
   if (!input.fromDate || !input.toDate) throw new Error("Agreement from and to dates are required.");
+  if (input.fromDate > input.toDate) throw new Error("Agreement To must be on or after Agreement From.");
   if (input.track === "TrackA" && !input.traderLicenceId) throw new Error("traderLicenceId required for Track A.");
   if (input.track === "TrackB" && !input.entityId) throw new Error("entityId required for Track B.");
+  for (const p of input.premises) {
+    if (!p.assetId?.trim()) throw new Error("Each premises requires an assetId.");
+    if (!Number.isFinite(p.monthlyRent) || p.monthlyRent <= 0) {
+      throw new Error("Monthly rent must be greater than 0 for every premises.");
+    }
+  }
+
+  if (input.track === "TrackA") {
+    const [lic] = await db
+      .select()
+      .from(traderLicences)
+      .where(eq(traderLicences.id, input.traderLicenceId!))
+      .limit(1);
+    if (!lic) throw new Error("Trader licence not found.");
+    if (String(lic.status ?? "").trim() !== "Active" || Boolean(lic.isBlocked)) {
+      throw new Error(
+        lic.isBlocked
+          ? "Trader licence is blocked and cannot receive a premises allocation."
+          : `Trader licence must be Active for allocation (current status: ${lic.status}).`,
+      );
+    }
+    try {
+      assertLmLicenceAllowsOperation(lic);
+    } catch (e) {
+      if (e instanceof LmLicenceGuardError) throw new Error(e.message);
+      throw e;
+    }
+    await ensureLicenceHomeMapping(input.traderLicenceId!, lic.yardId, {
+      createdBy: input.createdBy ?? null,
+    }).catch((e) => {
+      console.error("[licence-map] ensure home mapping on agreement create failed:", e);
+    });
+    const mappedOk = await licenceHasActiveMapping(input.traderLicenceId!, input.yardId);
+    if (!mappedOk) {
+      throw new Error("Premises location is not mapped to this licence. Add the location mapping first.");
+    }
+  } else {
+    const [ent] = await db.select().from(entities).where(eq(entities.id, input.entityId!)).limit(1);
+    if (!ent) throw new Error("Entity not found.");
+    if (String(ent.track ?? "").trim() !== "TrackB") {
+      throw new Error("Premises allocation agreements apply to Track B entities.");
+    }
+    if (String(ent.status ?? "").trim() !== "Active") {
+      throw new Error("Entity must be Active to allocate premises.");
+    }
+    const mappedOk = await entityHasActiveMapping(input.entityId!, input.yardId);
+    if (!mappedOk) {
+      throw new Error("Premises location is not mapped to this Entity. Add the location mapping first.");
+    }
+  }
 
   const assetIds = input.premises.map((p) => p.assetId);
   const assetRows = await db.select().from(assets).where(inArray(assets.id, assetIds));
   if (assetRows.length !== assetIds.length) throw new Error("One or more premises were not found.");
   for (const a of assetRows) {
     if (a.yardId !== input.yardId) throw new Error("All premises must belong to the selected yard.");
-    const st = String(a.premisesStatus ?? "");
-    if (st !== "Vacant" && st !== "Active") throw new Error(`Premises ${a.assetId} is not vacant (${st}).`);
-    const check = await assertPremisesNotAlreadyAllocatedActive({ assetId: a.id });
+    const allocPrem = isPremisesAllocatable({
+      isActive: a.isActive,
+      premisesStatus: a.premisesStatus,
+    });
+    if (!allocPrem.ok) {
+      throw new Error(`Premises ${a.assetId}: ${allocPrem.message}`);
+    }
+    const check = await assertPremisesFreeForDraftAllotment({ assetId: a.id });
     if (!check.ok) {
-      throw new Error(`Premises ${a.assetId} already has an active allotment.`);
+      throw new Error(`Premises ${a.assetId}: ${check.message}`);
     }
   }
 

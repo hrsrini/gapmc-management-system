@@ -76,6 +76,8 @@ export const STANDARD_REVENUE_HEADS = [
   "MarketFee",
   "LicenceFee",
   "SecurityDeposit",
+  /** Godown SD refund payout receipt series (GAPLMB/…/SECREF/NNNN). */
+  "SecurityDepositRefund",
   "Miscellaneous",
   /** Multi-head consolidated manual receipt series (GAPLMB/…/CONS/NNNN). */
   "Consolidated",
@@ -104,6 +106,7 @@ export function abbreviateReceiptHeadCode(ledgerOrHead: string): string {
       MarketFee: "MFEE",
       LicenceFee: "LCFEE",
       SecurityDeposit: "SECDEP",
+      SecurityDepositRefund: "SECREF",
       Miscellaneous: "MISC",
       Consolidated: "CONS",
     };

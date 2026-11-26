@@ -7,6 +7,7 @@ import { assets, renewalNotices } from "@shared/db-schema";
 import { sendApiError } from "./api-errors";
 import { writeAuditLog } from "./audit";
 import { isPremisesVacantForAllotment } from "@shared/premises-allocation";
+import { assetIdsWithOpenAllotmentInYard } from "./premises-allocation-guard";
 import {
   approveSettlement,
   completeRenewal,
@@ -46,6 +47,12 @@ function routeParam(req: Request, name: string): string {
   return Array.isArray(v) ? String(v[0] ?? "") : String(v ?? "");
 }
 
+function yardInScope(req: Request, yardId: string): boolean {
+  const scoped = (req as Request & { scopedLocationIds?: string[] }).scopedLocationIds;
+  if (!scoped || scoped.length === 0) return true;
+  return scoped.includes(yardId);
+}
+
 export function registerPremisesAgreementRoutes(app: Express) {
   registerLeaveLicenceAgreementRoutes(app);
   app.get("/api/ioms/premises-agreements/summary", async (_req, res) => {
@@ -80,19 +87,28 @@ export function registerPremisesAgreementRoutes(app: Express) {
     try {
       const yardId = String(req.query.yardId ?? "").trim();
       if (!yardId) return sendApiError(res, 400, "YARD_REQUIRED", "yardId is required");
+      if (!yardInScope(req, yardId)) {
+        return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
       const rows = await db.select().from(assets).where(eq(assets.yardId, yardId));
+      const openIds = await assetIdsWithOpenAllotmentInYard(yardId);
       const eligible = rows.filter(
-        (a) => a.isActive !== false && isPremisesVacantForAllotment(a.premisesStatus),
+        (a) =>
+          a.isActive !== false &&
+          isPremisesVacantForAllotment(a.premisesStatus) &&
+          !openIds.has(a.id),
       );
       const unavailable = rows
-        .filter((a) => a.isActive !== false && !isPremisesVacantForAllotment(a.premisesStatus))
+        .filter((a) => a.isActive !== false && !eligible.some((e) => e.id === a.id))
         .map((a) => ({
           id: a.id,
           premisesId: a.assetId,
           assetType: a.assetType,
           area: a.plinthAreaSqft ?? a.area,
           location: a.premisesLocation,
-          reason: a.premisesStatus,
+          reason: openIds.has(a.id)
+            ? "Open allotment / draft agreement"
+            : a.premisesStatus,
         }));
       res.json({
         eligible: eligible.map((a) => ({
@@ -115,6 +131,10 @@ export function registerPremisesAgreementRoutes(app: Express) {
     try {
       const body = req.body as Record<string, unknown>;
       const track = String(body.track ?? "TrackA") === "TrackB" ? "TrackB" : "TrackA";
+      const yardId = String(body.yardId ?? "").trim();
+      if (yardId && !yardInScope(req, yardId)) {
+        return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this yard");
+      }
       const premisesRaw = Array.isArray(body.premises) ? body.premises : [];
       const premises = premisesRaw.map((p) => {
         const row = p as Record<string, unknown>;
@@ -128,7 +148,7 @@ export function registerPremisesAgreementRoutes(app: Express) {
         track,
         traderLicenceId: body.traderLicenceId ? String(body.traderLicenceId) : undefined,
         entityId: body.entityId ? String(body.entityId) : undefined,
-        yardId: String(body.yardId ?? ""),
+        yardId,
         allotteeName: String(body.allotteeName ?? ""),
         allotmentDate: body.allotmentDate ? String(body.allotmentDate).slice(0, 10) : undefined,
         fromDate: String(body.fromDate ?? "").slice(0, 10),

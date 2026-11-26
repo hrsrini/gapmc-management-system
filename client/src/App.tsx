@@ -87,6 +87,10 @@ import PremisesAgreementHistory from "@/pages/assets/PremisesAgreementHistory";
 import PremisesAgreementMis from "@/pages/assets/PremisesAgreementMis";
 import PremisesAgreementVacation from "@/pages/assets/PremisesAgreementVacation";
 import LeaveLicenceAgreementGenerator from "@/pages/assets/LeaveLicenceAgreementGenerator";
+import PremisesSecurityDepositRegister from "@/pages/assets/PremisesSecurityDepositRegister";
+import PremisesSecurityDepositCollect from "@/pages/assets/PremisesSecurityDepositCollect";
+import PremisesSdRefundForm from "@/pages/assets/PremisesSdRefundForm";
+import PremisesSdLedger from "@/pages/assets/PremisesSdLedger";
 import AssetForm from "@/pages/assets/AssetForm";
 import IomsRentInvoices from "@/pages/rent/IomsRentInvoices";
 import IomsRentInvoiceDetail from "@/pages/rent/IomsRentInvoiceDetail";
@@ -672,6 +676,41 @@ function Router() {
       </Route>
       <Route path="/assets/allotments">
         <ProtectedRoute><AssetAllotments /></ProtectedRoute>
+      </Route>
+      <Route path="/assets/security-deposits/collect">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Create">
+            <PremisesSecurityDepositCollect />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/security-deposits/refund/:id">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Read">
+            <PremisesSdRefundForm />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/security-deposits/refund">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Create">
+            <PremisesSdRefundForm />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/security-deposits/ledger">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Read">
+            <PremisesSdLedger />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/assets/security-deposits">
+        <ProtectedRoute>
+          <RequirePermission module="M-02" action="Read">
+            <PremisesSecurityDepositRegister />
+          </RequirePermission>
+        </ProtectedRoute>
       </Route>
       <Route path="/assets/agreements/leave-licence/new">
         <ProtectedRoute>

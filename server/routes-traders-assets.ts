@@ -118,6 +118,7 @@ import {
 } from "./allotment-security-deposit-receipt";
 import { premisesRefNoTaken, registerEntityAllotmentRoutes } from "./entity-allotment-routes";
 import { registerPremisesAgreementRoutes } from "./routes-premises-agreements";
+import { registerPremisesSecurityDepositRoutes } from "./routes-premises-security-deposit";
 import { assertPremisesNotAlreadyAllocatedActive, isPremisesAllocatable } from "./premises-allocation-guard";
 import { syncPremisesStatusFromTenancy } from "./premises-status-sync";
 import { fetchPremisesRegister } from "./premises-register";
@@ -434,6 +435,7 @@ async function resolvedCommodityUnitLabel(commodityId: string): Promise<string |
 export function registerTradersAssetsRoutes(app: Express) {
   registerEntityAllotmentRoutes(app);
   registerPremisesAgreementRoutes(app);
+  registerPremisesSecurityDepositRoutes(app);
   const now = () => new Date().toISOString();
 
   const bmFormUpload = multer({
@@ -4366,6 +4368,9 @@ export function registerTradersAssetsRoutes(app: Express) {
             payerRefId: traderLicenceId,
             unifiedEntityId: unifiedEntityIdFromTrackA(traderLicenceId),
             premisesAssetId: assetRow.assetId,
+            assetPk: assetRow.id,
+            premisesLabel: assetRow.assetId,
+            track: "TraderLicence",
             paymentBody: body as Record<string, unknown>,
           });
         } catch (err) {
