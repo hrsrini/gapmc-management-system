@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import {
   Mail,
   ArrowLeft,
@@ -55,10 +56,6 @@ interface ActionLog {
   actionNote?: string | null;
   statusAfter?: string | null;
 }
-interface YardRef {
-  id: string;
-  name: string;
-}
 
 export default function DakInwardDetail() {
   const { id } = useParams<{ id: string }>();
@@ -84,10 +81,7 @@ export default function DakInwardDetail() {
     queryKey: [`/api/ioms/dak/inward/${id}/actions`],
     enabled: !!id,
   });
-  const { data: yards = [] } = useQuery<YardRef[]>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const actionColumns = useMemo(
     (): ReportTableColumn[] => [
@@ -239,7 +233,7 @@ export default function DakInwardDetail() {
             <div><span className="text-muted-foreground">Received date</span><br />{formatYmdToDisplay(inward.receivedDate)}</div>
             <div><span className="text-muted-foreground">From</span><br />{inward.fromParty}</div>
             <div><span className="text-muted-foreground">Mode</span><br />{inward.modeOfReceipt}</div>
-            <div><span className="text-muted-foreground">Received Location</span><br />{inward.yardId ? (yardById[inward.yardId] ?? inward.yardId) : "—"}</div>
+            <div><span className="text-muted-foreground">Received Location</span><br />{inward.yardId ? getYardName(inward.yardId) : "—"}</div>
             <div><span className="text-muted-foreground">Status</span><br /><Badge variant="secondary">{inward.status}</Badge></div>
             <div><span className="text-muted-foreground">Marked To</span><br />{inward.assignedTo ?? "—"}</div>
             <div><span className="text-muted-foreground">Deadline</span><br />{inward.deadline ?? "—"}</div>

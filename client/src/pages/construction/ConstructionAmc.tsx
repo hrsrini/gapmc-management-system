@@ -30,6 +30,7 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 
 interface AmcContract {
   id: string;
@@ -75,7 +76,7 @@ export default function ConstructionAmc() {
 
   const { data: list = [], isLoading, isError } = useQuery<AmcContract[]>({ queryKey: [url] });
   const { data: yards = [] } = useScopedActiveYards();
-  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y.name ?? y.code ?? y.id])), [yards]);
+  const { getYardName } = useYardLabels();
 
   const columns = useMemo(
     (): ReportTableColumn[] => [
@@ -93,7 +94,7 @@ export default function ConstructionAmc() {
   const sourceRows = useMemo((): Record<string, unknown>[] => {
     return list.map((a) => ({
       id: a.id,
-      yardName: yardById.get(a.yardId) ?? a.yardId,
+      yardName: getYardName(a.yardId),
       contractorName: a.contractorName,
       periodType: a.periodType ?? "—",
       contractStart: a.contractStart.slice(0, 10),
@@ -103,7 +104,7 @@ export default function ConstructionAmc() {
       status: a.status,
       _status: <Badge variant="secondary">{a.status}</Badge>,
     }));
-  }, [list, yardById]);
+  }, [list, getYardName]);
 
   const alertsUrl =
     yardId && yardId !== "all"

@@ -21,6 +21,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { useAuth } from "@/context/AuthContext";
 import { Truck, ArrowLeft, Pencil, Route, Fuel, Wrench, AlertCircle, Plus, Loader2 } from "lucide-react";
 import { formatInr } from "@/lib/formatInr";
@@ -184,10 +185,6 @@ interface MaintenanceEntry {
   description?: string | null;
   cost?: number | null;
 }
-interface YardRef {
-  id: string;
-  name: string;
-}
 
 const tripColumns: ReportTableColumn[] = [
   { key: "tripDate", header: "Date" },
@@ -239,10 +236,7 @@ export default function FleetVehicleDetail() {
     queryKey: [`/api/ioms/fleet/vehicles/${id}/maintenance`],
     enabled: !!id && !!vehicle,
   });
-  const { data: yards = [] } = useQuery<YardRef[]>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const tripRows = useMemo((): Record<string, unknown>[] => {
     return trips.map((t) => ({
@@ -394,7 +388,7 @@ export default function FleetVehicleDetail() {
               </CardHeader>
               <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div><span className="text-muted-foreground">Type</span><p className="font-medium">{vehicle.vehicleType}</p></div>
-                <div><span className="text-muted-foreground">Yard</span><p className="font-medium">{yardById[vehicle.yardId] ?? vehicle.yardId}</p></div>
+                <div><span className="text-muted-foreground">Yard</span><p className="font-medium">{getYardName(vehicle.yardId)}</p></div>
                 {vehicle.capacity && <div><span className="text-muted-foreground">Capacity</span><p>{vehicle.capacity}</p></div>}
                 {vehicle.purchaseDate && (
                   <div>

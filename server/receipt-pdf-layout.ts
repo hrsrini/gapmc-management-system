@@ -6,6 +6,7 @@ import {
 } from "./receipt-pdf-shared";
 import type { ReceiptPdfLayoutContext, ReceiptPdfParticularRow } from "./receipt-pdf-context";
 import { drawReceiptAmountText } from "./receipt-pdf-rupee-font";
+import { drawDualA5MarketFeeReceiptCopies } from "./receipt-pdf-market-fee-layout";
 
 type PdfDoc = InstanceType<typeof PDFDocument>;
 
@@ -598,6 +599,23 @@ export function drawDualA5ReceiptCopies(
       needNewPageBeforeNext = true;
     }
   };
+
+  if (ctx.marketFeeDetail) {
+    drawDualA5MarketFeeReceiptCopies(doc, ctx, ctx.marketFeeDetail, {
+      bodyOnly: opts.bodyOnly,
+      signatoryName: opts.signatoryName,
+      logoPng: opts.logoPng,
+      qrPng: opts.qrPng,
+      verifyUrl: opts.verifyUrl,
+      marginLeft,
+      contentWidth,
+      slipHeight,
+      slipGap,
+      firstSlipY,
+      copyBadges,
+    });
+    return;
+  }
 
   for (const badge of copyBadges) {
     const chunks = chunkParticularsForA5(ctx.rows, MAX_TALLY_LINES_PER_A5);

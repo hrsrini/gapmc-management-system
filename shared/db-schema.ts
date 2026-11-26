@@ -843,6 +843,64 @@ export const leaveOrderSequence = gapmc.table("leave_order_sequence", {
   lastSeq: integer("last_seq").notNull().default(0),
 });
 
+/**
+ * M-01: Posting & Reporting Officer Update requests (DO → DV → DA).
+ * Employee yard / additional charge / reporting officer change only on DA approval.
+ */
+export const hrPostingUpdateRequests = gapmc.table("hr_posting_update_requests", {
+  id: text("id").primaryKey(),
+  requestNo: text("request_no").notNull().unique(),
+  employeeId: text("employee_id").notNull(),
+  /** Transfer | AssignAdditionalCharge | WithdrawAdditionalCharge | ChangeReportingOfficer */
+  changeType: text("change_type").notNull(),
+  /** Snapshot before the change. */
+  oldYardId: text("old_yard_id"),
+  oldLocationPosted: text("old_location_posted"),
+  oldSection: text("old_section"),
+  oldReportingOfficerEmployeeId: text("old_reporting_officer_employee_id"),
+  /** Proposed values (interpreted by changeType). */
+  newYardId: text("new_yard_id"),
+  newSection: text("new_section"),
+  newReportingOfficerEmployeeId: text("new_reporting_officer_employee_id"),
+  /** JSON array of yard IDs to assign as additional charges. */
+  additionalYardIds: text("additional_yard_ids"),
+  /** JSON map yardId → HO section (information only for assign/transfer). */
+  hoSectionByYardId: text("ho_section_by_yard_id"),
+  /** JSON array of yard IDs to withdraw from additional charges. */
+  withdrawYardIds: text("withdraw_yard_ids"),
+  effectiveFrom: text("effective_from").notNull(),
+  orderNo: text("order_no"),
+  orderDate: text("order_date"),
+  remarks: text("remarks"),
+  orderCopyBlobKey: text("order_copy_blob_key"),
+  orderCopyFileName: text("order_copy_file_name"),
+  orderCopyMimeType: text("order_copy_mime_type"),
+  orderCopySizeBytes: integer("order_copy_size_bytes"),
+  /** PendingVerification | PendingApproval | Approved | ReturnedToDO | Rejected */
+  status: text("status").notNull(),
+  doUser: text("do_user"),
+  dvUser: text("dv_user"),
+  approvedBy: text("approved_by"),
+  submittedAt: text("submitted_at"),
+  verifiedAt: text("verified_at"),
+  approvedAt: text("approved_at"),
+  returnedAt: text("returned_at"),
+  rejectedAt: text("rejected_at"),
+  returnOrRejectRemarks: text("return_or_reject_remarks"),
+  workflowRevisionCount: integer("workflow_revision_count").default(0),
+  serviceBookEntryId: text("service_book_entry_id"),
+  documentId: text("document_id"),
+  createdAt: text("created_at"),
+  updatedAt: text("updated_at"),
+});
+
+/** Request number sequence for posting updates (reset yearly). */
+export const hrPostingUpdateSequence = gapmc.table("hr_posting_update_sequence", {
+  id: text("id").primaryKey(),
+  year: integer("year").notNull(),
+  lastSeq: integer("last_seq").notNull().default(0),
+});
+
 /** US-M01-006: pre-travel tour programme (must be approved before TA/DA bill submission). */
 export const tourProgrammes = gapmc.table("tour_programmes", {
   id: text("id").primaryKey(),
@@ -1116,6 +1174,29 @@ export const entityLocationMappings = gapmc.table(
     updatedAt: text("updated_at"),
   },
   (t) => [unique("entity_location_mappings_entity_yard").on(t.entityId, t.yardId)],
+);
+
+/**
+ * M-02 Trader licence (Track A) ↔ location mapping — Home is trader_licences.yard_id;
+ * additional Active mappings enable premises allotment at other yards.
+ */
+export const traderLicenceLocationMappings = gapmc.table(
+  "trader_licence_location_mappings",
+  {
+    id: text("id").primaryKey(),
+    traderLicenceId: text("trader_licence_id").notNull(),
+    yardId: text("yard_id").notNull(),
+    /** Active | Inactive */
+    status: text("status").notNull().default("Active"),
+    effectiveFrom: text("effective_from"),
+    effectiveTo: text("effective_to"),
+    unmappedAt: text("unmapped_at"),
+    unmappedReason: text("unmapped_reason"),
+    createdBy: text("created_by"),
+    createdAt: text("created_at"),
+    updatedAt: text("updated_at"),
+  },
+  (t) => [unique("trader_licence_location_mappings_licence_yard").on(t.traderLicenceId, t.yardId)],
 );
 
 /** M-02 Ad-hoc occupants / entities (for unified entity master). */

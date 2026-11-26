@@ -19,6 +19,8 @@ import {
   otherReceiptTitleForYard,
   rentReceiptTitleForYard,
 } from "./receipt-pdf-shared";
+import { loadMarketFeeReceiptPdfDetail } from "./market-fee-receipt-pdf-detail";
+import type { MarketFeeReceiptPdfDetail } from "@shared/market-fee-receipt-pdf";
 
 type ReceiptRow = InferSelectModel<typeof iomsReceipts>;
 
@@ -58,6 +60,8 @@ export type ReceiptPdfLayoutContext = {
   /** Always null — Allotment Ref. No. removed from receipt face. */
   allotmentReferenceLine: string | null;
   generatedByUsername: string;
+  /** Present when revenueHead is MarketFee and source detail was resolved. */
+  marketFeeDetail: MarketFeeReceiptPdfDetail | null;
 };
 
 async function resolveManualLedgerLabel(receipt: ReceiptRow): Promise<string | null> {
@@ -196,6 +200,7 @@ async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParti
   }
 
   if (rh === "MarketFee") {
+    // Placeholder; Market Fee face uses marketFeeDetail + dedicated drawer.
     rows.push({ label: "Market Fee", amount: Number(receipt.amount ?? 0) });
   } else if (rh === "SecurityDeposit") {
     rows.push({ label: "Security Deposit", amount: Number(receipt.totalAmount ?? receipt.amount ?? 0) });
@@ -299,7 +304,15 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
   if (String(receipt.sourceModule ?? "").trim() === "M-03-ADV-DEPOSIT") {
     remarks = "Advance rent deposit. Adjustable against rent invoices for the premises.";
   }
-  const totalAmount = Number(receipt.totalAmount ?? 0);
+
+  const marketFeeDetail =
+    String(receipt.revenueHead ?? "").trim() === "MarketFee"
+      ? await loadMarketFeeReceiptPdfDetail(receipt)
+      : null;
+
+  const totalAmount = marketFeeDetail
+    ? marketFeeDetail.rounding.finalAmount
+    : Number(receipt.totalAmount ?? 0);
   const branding = getReceiptPdfBranding(yard?.address ?? null, yard?.name ?? null);
 
   /** Allotment Ref. No. removed from receipt face per format revision. */
@@ -327,6 +340,16 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     }
   }
 
+  const rows = await buildParticularRows(receipt);
+  if (marketFeeDetail) {
+    // Keep rows coherent for any non-MF drawer fallback.
+    rows.length = 0;
+    rows.push({ sn: 1, label: "Market Fee", amount: marketFeeDetail.totalMarketFee });
+    if (marketFeeDetail.fineAmount > 0.005) {
+      rows.push({ sn: 2, label: "Fine", amount: marketFeeDetail.fineAmount });
+    }
+  }
+
   return {
     payerDisplayName,
     receivedFromLine,
@@ -343,7 +366,7 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
     paymentDetailLine,
     remarks,
     amountWords: formatInrAmountWordsReceiptFace(totalAmount),
-    rows: await buildParticularRows(receipt),
+    rows,
     totalAmount,
     isGracePeriod: Boolean((receipt as { isGracePeriod?: boolean | null }).isGracePeriod),
     revenueHead: isM05ConsolidatedReceipt(receipt)
@@ -352,5 +375,6 @@ export async function loadReceiptPdfLayoutContext(receipt: ReceiptRow): Promise<
         ? (await resolveManualLedgerLabel(receipt)) ?? String(receipt.revenueHead ?? "")
         : String(receipt.revenueHead ?? ""),
     generatedByUsername,
+    marketFeeDetail,
   };
 }

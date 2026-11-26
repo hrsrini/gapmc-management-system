@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { FileText, ArrowLeft, Loader2, AlertCircle } from "lucide-react";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
 import { formatInr } from "@/lib/formatInr";
@@ -136,6 +137,7 @@ export default function IomsRentInvoiceForm() {
   const [isGovtEntity, setIsGovtEntity] = useState(false);
 
   const { data: yards = [] } = useQuery<YardRef[]>({ queryKey: ["/api/yards"] });
+  const { getYardName, yards: yardLabels } = useYardLabels();
   const premiseYards = useMemo(() => yardsWithPremises(yards), [yards]);
   const { data: sysCfg } = useQuery<Record<string, string>>({
     queryKey: ["/api/system/config"],
@@ -374,9 +376,15 @@ export default function IomsRentInvoiceForm() {
   const yardLabel = useMemo(() => {
     const yid = selectedAsset?.yardId;
     if (!yid) return null;
-    const y = yards.find((row) => row.id === yid);
-    return y ? `${y.name} (${y.code})` : null;
-  }, [selectedAsset?.yardId, yards]);
+    const y = yardLabels.find((row) => row.id === yid) ?? yards.find((row) => row.id === yid);
+    if (y) {
+      const name = String(y.name ?? "").trim();
+      const code = String(y.code ?? "").trim();
+      if (name && code) return `${name} (${code})`;
+      return name || code || getYardName(yid);
+    }
+    return getYardName(yid);
+  }, [selectedAsset?.yardId, yardLabels, yards, getYardName]);
 
   const premisesDetailsLine = useMemo(() => {
     if (!selectedTrader && !selectedEntity) return "";

@@ -12,6 +12,7 @@ import { Link } from "wouter";
 import { formatInr } from "@/lib/formatInr";
 import { FileStack, Plus, Download, Loader2, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 
 interface CombinedBundle {
   id: string;
@@ -31,8 +32,7 @@ export default function IomsRentCombinedInvoices() {
   const { toast } = useToast();
   const canCreate = can("M-03", "Create");
   const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({ queryKey: ["/api/yards"] });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
   const { data: list, isLoading, isError } = useQuery<CombinedBundle[]>({
     queryKey: ["/api/ioms/rent/combined-invoices"],
   });
@@ -84,7 +84,7 @@ export default function IomsRentCombinedInvoices() {
       bundleInvoiceNo: b.bundleInvoiceNo,
       tenantName: b.tenantName?.trim() || "—",
       periodMonth: b.periodMonth,
-      yardName: yardById[b.yardId] ?? b.yardId,
+      yardName: getYardName(b.yardId),
       totalAmount: b.totalAmount,
       outstandingTotal: b.outstandingTotal,
       status: b.status,
@@ -105,7 +105,7 @@ export default function IomsRentCombinedInvoices() {
         </div>
       ),
     }));
-  }, [list, yardById, pdfLoadingId]);
+  }, [list, getYardName, pdfLoadingId]);
 
   if (isError) {
     return (

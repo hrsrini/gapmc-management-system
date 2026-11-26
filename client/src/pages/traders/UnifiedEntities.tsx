@@ -28,6 +28,7 @@ import {
 import { Link } from "wouter";
 import { PanInput } from "@/components/inputs/PanInput";
 import { formatLicenceOrEntityIdDisplay } from "@shared/unified-entity-display";
+import { useYardLabels } from "@/hooks/useYardLabels";
 
 interface UnifiedEntityRow {
   id: string; // TA:<id> | TB:<id> | AH:<id> (API linkage only)
@@ -80,19 +81,13 @@ export default function UnifiedEntities() {
   const { data: yards = [] } = useQuery<Array<{ id: string; name: string; code?: string | null; type?: string | null }>>({
     queryKey: ["/api/yards"],
   });
+  const { getYardName } = useYardLabels();
   const yardOptions = useMemo(
     () =>
       yards
         .filter((y) => String(y.type ?? "").toLowerCase() === "yard")
         .slice()
         .sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })),
-    [yards],
-  );
-  const yardById = useMemo(
-    () =>
-      Object.fromEntries(
-        yards.map((y) => [y.id, ((y.name?.trim() || y.code?.trim() || y.id) as string)] as const),
-      ),
     [yards],
   );
 
@@ -132,7 +127,7 @@ export default function UnifiedEntities() {
   const rows = useMemo(() => {
     return (list ?? []).map((r) => ({
       ...r,
-      yardDisplay: yardById[r.yardId] ?? r.yardId ?? "—",
+      yardDisplay: getYardName(r.yardId),
       status: r.status ?? "—",
       mobile: r.mobile ?? "—",
       pan: r.pan ?? "—",
@@ -150,7 +145,7 @@ export default function UnifiedEntities() {
         </Button>
       ),
     })) as Record<string, unknown>[];
-  }, [list, yardById]);
+  }, [list, getYardName]);
 
   if (isError) {
     return (

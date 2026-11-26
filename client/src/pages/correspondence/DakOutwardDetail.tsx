@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { Send, ArrowLeft, Paperclip, Download, Trash2, AlertCircle, Eye, Loader2, Pencil } from "lucide-react";
 import { Link } from "wouter";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
@@ -37,10 +38,6 @@ interface Outward {
   attachments?: string[] | null;
 }
 
-interface YardRef {
-  id: string;
-  name: string;
-}
 
 export default function DakOutwardDetail() {
   const { id } = useParams<{ id: string }>();
@@ -58,10 +55,7 @@ export default function DakOutwardDetail() {
     queryKey: ["/api/ioms/dak/outward", id],
     enabled: !!id,
   });
-  const { data: yards = [] } = useQuery<YardRef[]>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const attachmentMutation = useMutation({
     mutationFn: async (files: FileList | null) => {
@@ -179,7 +173,7 @@ export default function DakOutwardDetail() {
             <div>
               <span className="text-muted-foreground">Outward Location</span>
               <br />
-              {outward.yardId ? (yardById[outward.yardId] ?? outward.yardId) : "—"}
+              {outward.yardId ? getYardName(outward.yardId) : "—"}
             </div>
             {outward.fileRef && (
               <div>

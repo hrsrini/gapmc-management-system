@@ -17,6 +17,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { formatInr } from "@/lib/formatInr";
 import { CalendarDays, Download, AlertCircle } from "lucide-react";
 
@@ -74,7 +75,8 @@ export default function VoucherMonthlyStatement() {
   });
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
-  const yardLabel = (id: string) => yards.find((y) => y.id === id)?.name ?? yards.find((y) => y.id === id)?.code ?? id;
+  const { getYardName } = useYardLabels();
+  const yardLabel = (id: string) => getYardName(id);
 
   const downloadBlob = async (format: "csv" | "xlsx" | "pdf", ext: string) => {
     try {

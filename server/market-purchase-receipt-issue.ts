@@ -8,6 +8,7 @@ import { db } from "./db";
 import { iomsReceipts, marketFeeLedger, purchaseTransactions, traderLicences } from "@shared/db-schema";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
+import { applyInvoiceNearestRupeeRounding } from "@shared/invoice-rounding";
 
 async function getMarketFeeAdvanceBalance(traderLicenceId: string): Promise<number> {
   const rows = await db
@@ -58,6 +59,7 @@ export async function issueMarketFeeReceiptForPurchaseTransaction(args: {
         ? String(responseRow.traderFirmNameSnapshot).trim()
         : null;
 
+    const feeRounded = applyInvoiceNearestRupeeRounding(feeDue).finalAmount;
     const created = await createIomsReceipt({
       yardId: responseRow.yardId,
       revenueHead: "MarketFee",
@@ -65,7 +67,7 @@ export async function issueMarketFeeReceiptForPurchaseTransaction(args: {
       payerType: "TraderLicence",
       payerRefId: responseRow.traderLicenceId,
       isGracePeriod: Boolean((responseRow as { isGracePeriod?: boolean | null }).isGracePeriod),
-      amount: Number(responseRow.marketFeeAmount ?? 0),
+      amount: feeRounded,
       paymentMode: "Cash",
       sourceModule: "M-04",
       sourceRecordId: responseRow.id,
@@ -77,7 +79,7 @@ export async function issueMarketFeeReceiptForPurchaseTransaction(args: {
     const [createdRow] = await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, created.id)).limit(1);
     receiptRow = createdRow ?? null;
 
-    if (feeDue > 0 && advBal >= feeDue - 0.01 && receiptRow?.id) {
+    if (feeRounded > 0 && advBal >= feeRounded - 0.01 && receiptRow?.id) {
       const now = new Date().toISOString();
       await db.insert(marketFeeLedger).values({
         id: nanoid(),
@@ -85,7 +87,7 @@ export async function issueMarketFeeReceiptForPurchaseTransaction(args: {
         yardId: String(responseRow.yardId),
         entryDate: String(responseRow.transactionDate).slice(0, 10),
         entryType: "Adjustment",
-        amountInr: Number((-feeDue).toFixed(2)),
+        amountInr: Number((-feeRounded).toFixed(2)),
         receiptId: receiptRow.id,
         sourceModule: "M-04",
         sourceRecordId: String(responseRow.id),

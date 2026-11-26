@@ -452,6 +452,80 @@ export function canEditLeaveRequest(user: AuthUser | undefined): boolean {
   return hasAnyRole(user, [DO, ADMIN]);
 }
 
+// ----- M-01: Posting & Reporting Officer Update (PendingVerification → PendingApproval → Approved | ReturnedToDO | Rejected) -----
+const POSTING_UPDATE_FLOW: Record<string, string[]> = {
+  PendingVerification: ["PendingApproval", "ReturnedToDO"],
+  PendingApproval: ["Approved", "ReturnedToDO", "Rejected"],
+  ReturnedToDO: ["PendingVerification"],
+  Approved: [],
+  Rejected: [],
+};
+
+export function canCreatePostingUpdate(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, ADMIN]);
+}
+
+export function canEditPostingUpdate(user: AuthUser | undefined): boolean {
+  return hasAnyRole(user, [DO, ADMIN]);
+}
+
+export function canTransitionPostingUpdate(
+  user: AuthUser | undefined,
+  currentStatus: string,
+  newStatus: string,
+): { allowed: boolean; setDvUser?: boolean; setApprovedBy?: boolean } {
+  if (!user) return { allowed: false };
+  if (hasRole(user, ADMIN)) {
+    return {
+      allowed: true,
+      setDvUser: newStatus === "PendingApproval",
+      setApprovedBy: newStatus === "Approved" || newStatus === "Rejected",
+    };
+  }
+  const allowed = POSTING_UPDATE_FLOW[currentStatus];
+  if (!allowed || !allowed.includes(newStatus)) return { allowed: false };
+
+  if (currentStatus === "PendingVerification" && newStatus === "PendingApproval") {
+    return hasRole(user, DV) ? { allowed: true, setDvUser: true } : { allowed: false };
+  }
+  if (currentStatus === "PendingVerification" && newStatus === "ReturnedToDO") {
+    return hasRole(user, DV) ? { allowed: true } : { allowed: false };
+  }
+  if (currentStatus === "PendingApproval" && newStatus === "Approved") {
+    return hasRole(user, DA) ? { allowed: true, setApprovedBy: true } : { allowed: false };
+  }
+  if (currentStatus === "PendingApproval" && (newStatus === "ReturnedToDO" || newStatus === "Rejected")) {
+    return hasRole(user, DA) ? { allowed: true, setApprovedBy: newStatus === "Rejected" } : { allowed: false };
+  }
+  if (currentStatus === "ReturnedToDO" && newStatus === "PendingVerification") {
+    return hasRole(user, DO) ? { allowed: true } : { allowed: false };
+  }
+  return { allowed: false };
+}
+
+/** DV queue: PendingVerification; DA queue: PendingApproval. BR-WF-01 segregation. */
+export function postingUpdateAwaitingMyAction(
+  user: AuthUser | undefined,
+  row: { status: string; doUser?: string | null; dvUser?: string | null },
+): boolean {
+  if (!user?.id) return false;
+  const uid = user.id;
+  const st = row.status;
+  if (hasRole(user, ADMIN)) {
+    return st === "PendingVerification" || st === "PendingApproval";
+  }
+  if (hasRole(user, DV) && st === "PendingVerification") {
+    if (row.doUser && row.doUser === uid) return false;
+    return true;
+  }
+  if (hasRole(user, DA) && st === "PendingApproval") {
+    if (row.doUser && row.doUser === uid) return false;
+    if (row.dvUser && row.dvUser === uid) return false;
+    return true;
+  }
+  return false;
+}
+
 // ----- M-01: TA/DA claims (Pending → Verified → Approved | Rejected; DV may return Verified → Pending) -----
 const TA_DA_CLAIM_FLOW: Record<string, string[]> = {
   Pending: ["Verified"],

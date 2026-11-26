@@ -43,6 +43,7 @@ import { trackBShortBillingLabel } from "@shared/track-b-entity";
 import { sanitizeMobile10Input } from "@shared/india-validation";
 import { PanInput } from "@/components/inputs/PanInput";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
 
 type MappedYard = {
@@ -112,7 +113,7 @@ export default function Entities() {
     queryKey: ["/api/ioms/reference/entity-subtypes"],
   });
   const { data: yards = [] } = useScopedActiveYards();
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
   const yardOptions = useMemo(() => filterYardTypeLocations(yards), [yards]);
 
   const [open, setOpen] = useState(false);
@@ -310,7 +311,7 @@ export default function Entities() {
         subType: e.subType ?? "—",
         billingLabel,
         _billing: <Badge variant="outline">{billingLabel}</Badge>,
-        yardName: yardById[e.yardId] ?? e.yardId,
+        yardName: getYardName(e.yardId),
         mobile: e.mobile ?? "—",
         status: e.status,
         _status: entityStatusBadge(e.status),
@@ -353,7 +354,7 @@ export default function Entities() {
         ),
       };
     });
-  }, [filteredEntities, yardById, canUpdate, canDelete, statusMutation, deleteMutation.isPending]);
+  }, [filteredEntities, getYardName, canUpdate, canDelete, statusMutation, deleteMutation.isPending]);
 
   if (isError) {
     const detail = error instanceof Error ? error.message : String(error);

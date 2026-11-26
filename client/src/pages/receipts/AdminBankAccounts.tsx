@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { Landmark, Loader2, Plus, History, MapPin } from "lucide-react";
 import { formatApiDateOrDateTime } from "@/lib/dateFormat";
 
@@ -66,6 +67,7 @@ export default function AdminBankAccounts() {
     queryKey: ["/api/ioms/receipt-deposits/bank-accounts/all"],
   });
   const { data: yards = [] } = useQuery<YardRef[]>({ queryKey: ["/api/yards"] });
+  const { getYardName, yards: yardLabels } = useYardLabels();
 
   const { data: mappingHistory = [], isLoading: mappingLoading } = useQuery<MappingHistoryRow[]>({
     queryKey: [`/api/ioms/receipt-deposits/bank-accounts/${historyId}/mapping-history`],
@@ -159,12 +161,32 @@ export default function AdminBankAccounts() {
     onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
   });
 
-  const yardLabel = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, `${y.name} (${y.code})`])), [yards]);
-  const yardCode = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, y.code])), [yards]);
+  const yardLabel = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const y of yardLabels) {
+      const name = String(y.name ?? "").trim();
+      const code = String(y.code ?? "").trim();
+      if (y.id && (name || code)) m[y.id] = name && code ? `${name} (${code})` : name || code;
+    }
+    for (const y of yards) {
+      if (m[y.id]) continue;
+      const name = String(y.name ?? "").trim();
+      const code = String(y.code ?? "").trim();
+      if (y.id && (name || code)) m[y.id] = name && code ? `${name} (${code})` : name || code;
+    }
+    return m;
+  }, [yardLabels, yards]);
+  const yardCode = useMemo(
+    () =>
+      Object.fromEntries(
+        [...yardLabels, ...yards].map((y) => [y.id, String(y.code ?? "").trim()]).filter(([, c]) => c),
+      ),
+    [yardLabels, yards],
+  );
 
   const formatMappingList = (ids: string[]) => {
     if (ids.length === 0) return "All yards";
-    return ids.map((id) => yardLabel[id] ?? yardCode[id] ?? id).join(", ");
+    return ids.map((id) => yardLabel[id] ?? yardCode[id] ?? getYardName(id)).join(", ");
   };
 
   const columns: ReportTableColumn[] = [
@@ -183,7 +205,7 @@ export default function AdminBankAccounts() {
         bankName: a.bankName,
         accountNumber: a.accountNumber,
         ifscCode: a.ifscCode ?? "—",
-        yardsLabel: a.yardIds.length ? a.yardIds.map((y) => yardLabel[y] ?? y).join(", ") : "All yards",
+        yardsLabel: a.yardIds.length ? a.yardIds.map((y) => yardLabel[y] ?? getYardName(y)).join(", ") : "All yards",
         _active: a.isActive ? "Yes" : "No",
         _actions: (
           <div className="flex flex-wrap gap-1">
@@ -213,7 +235,7 @@ export default function AdminBankAccounts() {
           </div>
         ),
       })),
-    [list, yardLabel, toggleActive],
+    [list, yardLabel, getYardName, toggleActive],
   );
 
   const historyAccount = list.find((a) => a.id === historyId);
@@ -391,7 +413,7 @@ export default function AdminBankAccounts() {
                       <td className="py-2 pr-2">{h.changedByName ?? "—"}</td>
                       <td className="py-2 pr-2 font-medium">
                         {h.actionType}
-                        {h.yardId ? ` (${yardCode[h.yardId] ?? h.yardId})` : ""}
+                        {h.yardId ? ` (${yardCode[h.yardId] || getYardName(h.yardId)})` : ""}
                       </td>
                       <td className="py-2 pr-2 text-muted-foreground">{formatMappingList(h.previousMapping)}</td>
                       <td className="py-2 pr-2">{formatMappingList(h.newMapping)}</td>

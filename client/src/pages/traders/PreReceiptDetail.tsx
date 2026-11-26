@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { fetchApiGet, readApiErrorEnvelope } from "@/lib/queryClient";
 import { AlertCircle, ArrowLeft, Download, FileText, Loader2 } from "lucide-react";
 import { formatInr } from "@/lib/formatInr";
@@ -72,9 +73,7 @@ export default function PreReceiptDetail() {
 
   const { data: entities = [] } = useQuery<EntityRef[]>({ queryKey: ["/api/ioms/entities"] });
   const { data: receipts = [] } = useQuery<ReceiptRef[]>({ queryKey: ["/api/ioms/receipts"] });
-  const { data: yards = [] } = useQuery<Array<{ id: string; name?: string | null; code?: string | null }>>({
-    queryKey: ["/api/yards"],
-  });
+  const { getYardName } = useYardLabels();
 
   const entityLabelById = useMemo(
     () => Object.fromEntries(entities.map((e) => [e.id, formatEntityMasterLabel(e.entityCode, e.name)])),
@@ -94,13 +93,6 @@ export default function PreReceiptDetail() {
     if (!row.settledReceiptId) return null;
     return receipts.find((r) => r.id === row.settledReceiptId)?.receiptNo ?? null;
   }, [row, receipts]);
-  const yardLabelById = useMemo(() => {
-    const m: Record<string, string> = {};
-    for (const y of yards) {
-      m[y.id] = (y.name?.trim() || y.code?.trim() || y.id) as string;
-    }
-    return m;
-  }, [yards]);
 
   const [status, setStatus] = useState<string>("Issued");
   const [settledReceiptId, setSettledReceiptId] = useState<string>("");
@@ -225,7 +217,7 @@ export default function PreReceiptDetail() {
               <span className="text-muted-foreground">Entity:</span> {entityDisplay}
             </div>
             <div>
-              <span className="text-muted-foreground">Yard:</span> {yardLabelById[row.yardId] ?? row.yardId}
+              <span className="text-muted-foreground">Yard:</span> {getYardName(row.yardId)}
             </div>
             <div>
               <span className="text-muted-foreground">Rent amount (₹):</span> {formatInr(Number(row.amount ?? 0))}

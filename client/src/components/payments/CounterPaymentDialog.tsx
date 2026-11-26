@@ -10,7 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
-import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
 import {
   buildCounterDuesPaymentApiBody,
@@ -61,15 +61,12 @@ export function CounterPaymentDialog({
 }: CounterPaymentDialogProps) {
   const { toast } = useToast();
   const { user } = useAuth();
-  const { data: yards = [] } = useScopedActiveYards();
+  const { getYardName } = useYardLabels();
   const [payStep, setPayStep] = useState<"summary" | "payment">(initialStep);
   const [paymentPref, setPaymentPref] = useState<PaymentPreferenceValue>(() => defaultPaymentPreferenceValue());
 
   const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
-  const receivedAtLabel = useMemo(() => {
-    if (!yardId) return "—";
-    return yards.find((y) => y.id === yardId)?.name ?? yardId;
-  }, [yardId, yards]);
+  const receivedAtLabel = useMemo(() => getYardName(yardId), [yardId, getYardName]);
 
   useEffect(() => {
     if (!open) {

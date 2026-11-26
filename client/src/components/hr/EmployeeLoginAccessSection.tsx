@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { useAuth } from "@/context/AuthContext";
 import { KeyRound, Loader2 } from "lucide-react";
 import { ADMIN_403_MESSAGE, fetchApiGet } from "@/lib/queryClient";
@@ -138,6 +139,7 @@ export function EmployeeLoginAccessSection({
     queryKey: ["/api/admin/yards"],
     enabled: canM10Read,
   });
+  const { getYardName } = useYardLabels();
 
   const syncedLocations = useMemo(() => {
     const primary = String(
@@ -152,9 +154,10 @@ export function EmployeeLoginAccessSection({
           );
     const yardName = (id: string) => {
       const fromMaster = yards.find((y) => y.id === id);
-      if (fromMaster) return fromMaster.name;
+      if (fromMaster?.name) return fromMaster.name;
       const fromLogin = linkedUser?.yards?.find((y) => y.id === id);
-      return fromLogin?.name ?? id;
+      if (fromLogin?.name) return fromLogin.name;
+      return getYardName(id);
     };
     const rows: { id: string; name: string; kind: "primary" | "additional" }[] = [];
     if (primary) rows.push({ id: primary, name: yardName(primary), kind: "primary" });
@@ -171,6 +174,7 @@ export function EmployeeLoginAccessSection({
     employeeRow?.locationPosted,
     yards,
     linkedUser?.yards,
+    getYardName,
   ]);
 
   const serverRolesKey = useMemo(

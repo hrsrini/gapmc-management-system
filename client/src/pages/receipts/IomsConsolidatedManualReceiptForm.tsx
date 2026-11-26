@@ -20,6 +20,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
 import {
   buildCounterDuesPaymentApiBody,
@@ -88,6 +89,7 @@ export default function IomsConsolidatedManualReceiptForm() {
   const { toast } = useToast();
   const { user } = useAuth();
   const { data: yards = [] } = useScopedActiveYards();
+  const { getYardName } = useYardLabels();
 
   const unifiedFromUrl = searchParams.get("unifiedEntityId")?.trim() ?? "";
   const yardFromUrl = searchParams.get("yardId")?.trim() ?? "";
@@ -299,7 +301,7 @@ export default function IomsConsolidatedManualReceiptForm() {
     onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
   });
 
-  const yardName = yards.find((y) => y.id === yardId)?.name ?? yardId;
+  const yardName = getYardName(yardId);
   const holderLabel = licence
     ? `${yardName} — ${licence.firmName ?? licence.licenceNo ?? licence.id}`
     : "—";

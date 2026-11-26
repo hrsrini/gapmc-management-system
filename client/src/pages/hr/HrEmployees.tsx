@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { UserCircle, AlertCircle } from "lucide-react";
 import { fetchApiGet } from "@/lib/queryClient";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
@@ -59,10 +60,7 @@ export default function HrEmployees() {
       return fetchApiGet<Employee[]>(`/api/hr/employees?${params.toString()}`);
     },
   });
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const columns = useMemo((): ReportTableColumn[] => {
     const base: ReportTableColumn[] = [
@@ -111,7 +109,7 @@ export default function HrEmployees() {
         designation: e.designation,
         mobile: e.mobile ?? "—",
         workEmail: e.workEmail ?? "—",
-        yardName: yardById[e.yardId] ?? e.yardId,
+        yardName: getYardName(e.yardId),
         employeeType: e.employeeType,
         joiningDate: e.joiningDate,
         status: e.status,
@@ -228,7 +226,7 @@ export default function HrEmployees() {
 
       return row;
     });
-  }, [employees, yardById, canM10Read]);
+  }, [employees, getYardName, canM10Read]);
 
   const searchKeys = useMemo(() => {
     const keys = [

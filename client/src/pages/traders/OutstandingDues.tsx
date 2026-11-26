@@ -37,7 +37,7 @@ import {
   validatePaymentPreference,
   type PaymentPreferenceValue,
 } from "@/lib/duesCounterPayment";
-import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 
 interface UnifiedEntityRow {
   id: string;
@@ -117,7 +117,7 @@ export default function OutstandingDues() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { can, user } = useAuth();
-  const { data: yards = [] } = useScopedActiveYards();
+  const { getYardName } = useYardLabels();
   const canMarkPaid = can("M-03", "Update");
   const canPayMarketFee = can("M-04", "Create") || can("M-04", "Update");
 
@@ -178,10 +178,7 @@ export default function OutstandingDues() {
   const [onlineReceiptHref, setOnlineReceiptHref] = useState<string>("");
 
   const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
-  const receivedAtLabel = useMemo(() => {
-    if (!payYardId) return "—";
-    return yards.find((y) => y.id === payYardId)?.name ?? payYardId;
-  }, [payYardId, yards]);
+  const receivedAtLabel = useMemo(() => getYardName(payYardId), [payYardId, getYardName]);
 
   const openPayDialog = (kind: "rent" | "market", invoice: DueRentInvoice | null, market: DueMarketFeePurchase | null, outstanding: number, yardId: string) => {
     setPayKind(kind);

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
 import { inferAgreementTypeFromDates } from "@shared/premises-allocation";
 import { splitDepositByArea } from "@shared/premises-agreement";
@@ -40,6 +41,7 @@ export default function PremisesAgreementForm() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const { data: yardsRaw = [] } = useScopedActiveYards();
+  const { getYardName } = useYardLabels();
   const yards = useMemo(() => filterYardTypeLocations(yardsRaw), [yardsRaw]);
 
   const [track, setTrack] = useState<"TrackA" | "TrackB">("TrackA");
@@ -148,7 +150,7 @@ export default function PremisesAgreementForm() {
     return p.premisesId.toLowerCase().includes(q) || p.assetType.toLowerCase().includes(q);
   });
 
-  const yardLabel = yards.find((y) => y.id === yardId)?.name ?? yards.find((y) => y.id === yardId)?.code ?? "yard";
+  const yardLabel = getYardName(yardId, "yard");
 
   return (
     <AppShell

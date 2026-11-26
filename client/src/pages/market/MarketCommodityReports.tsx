@@ -11,6 +11,7 @@ import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { AlertCircle, CalendarDays, FileDown } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { formatInr } from "@/lib/formatInr";
 import { useToast } from "@/hooks/use-toast";
 
@@ -80,13 +81,22 @@ export default function MarketCommodityReports() {
   const [to, setTo] = useState(() => iso(new Date()));
 
   const { data: yards = [] } = useQuery<YardRef[]>({ queryKey: ["/api/yards"], enabled: canRead });
+  const { getYardName, yards: yardLabels } = useYardLabels();
   const { data: commodities = [] } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ["/api/ioms/commodities"],
     enabled: canRead,
   });
 
   const yardOptions = yards.filter((y) => String(y.type ?? "") === "Yard");
-  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, `${y.name} (${y.code})`] as const)), [yards]);
+  const yardById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const y of yardLabels) {
+      const name = String(y.name ?? "").trim();
+      const code = String(y.code ?? "").trim();
+      if (y.id && (name || code)) m.set(y.id, name && code ? `${name} (${code})` : name || code);
+    }
+    return m;
+  }, [yardLabels]);
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c.name] as const)), [commodities]);
 
   const url = useMemo(() => {
@@ -142,7 +152,7 @@ export default function MarketCommodityReports() {
   const rows = useMemo(() => {
     return (data?.rows ?? []).map((r) => ({
       id: `${r.yardId}:${r.commodityId}`,
-      yardName: yardById.get(r.yardId) ?? r.yardId,
+      yardName: yardById.get(r.yardId) ?? getYardName(r.yardId),
       commodityName: commodityById.get(r.commodityId) ?? r.commodityId,
       totalQty: r.totalQty,
       _qty: Number(r.totalQty ?? 0).toLocaleString("en-IN"),
@@ -154,7 +164,7 @@ export default function MarketCommodityReports() {
       _max: r.maxPrice == null ? "—" : `${formatInr(Number(r.maxPrice))}`,
       _modal: r.modalPriceAvg == null ? "—" : `${formatInr(Number(r.modalPriceAvg))}`,
     }));
-  }, [data?.rows, yardById, commodityById]);
+  }, [data?.rows, yardById, getYardName, commodityById]);
 
   const setPresetWeekly = () => {
     const now = new Date();

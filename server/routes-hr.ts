@@ -81,6 +81,7 @@ import {
   resolveUserIdForEmployee,
   syncUserYardsFromEmployeeLocations,
 } from "./hr-employee-login";
+import { registerHrPostingUpdateRoutes } from "./routes-hr-posting-update";
 import {
   HrEmployeeRuleError,
   assertJoiningAndDob,
@@ -501,6 +502,7 @@ async function generateAndEmailSanctionOrder(leaveId: string, employeeId: string
 }
 
 export function registerHrRoutes(app: Express) {
+  registerHrPostingUpdateRoutes(app);
   const now = () => new Date().toISOString();
 
   // ----- Employees -----
@@ -1326,12 +1328,13 @@ export function registerHrRoutes(app: Express) {
       const statusTransitionRequested = body.status !== undefined && nextStatusCanon !== beforeCanon;
 
       const updates: Record<string, unknown> = { updatedAt: now() };
+      // Posting fields (yardId, section, locationPosted, reportingOfficerEmployeeId) are
+      // mutable only via Posting & Reporting Officer Update (DO→DV→DA).
       const allowed = [
         "firstName",
         "middleName",
         "surname",
         "photoUrl",
-        "yardId",
         "employeeType",
         "aadhaarToken",
         "pan",
@@ -1349,10 +1352,7 @@ export function registerHrRoutes(app: Express) {
         "correspondenceAddress",
         "emergencyContactName",
         "emergencyContactMobile",
-        "reportingOfficerEmployeeId",
         "serviceBookNo",
-        "section",
-        "locationPosted",
         "payLevel",
         "basicPayInr",
         "bankAccountNumber",
@@ -1409,55 +1409,12 @@ export function registerHrRoutes(app: Express) {
               : normalizeMobile10(body.emergencyContactMobile);
           continue;
         }
-        if (key === "reportingOfficerEmployeeId") {
-          updates.reportingOfficerEmployeeId =
-            body.reportingOfficerEmployeeId === null || String(body.reportingOfficerEmployeeId).trim() === ""
-              ? null
-              : String(body.reportingOfficerEmployeeId).trim();
-          continue;
-        }
         updates[key] = body[key] === null ? null : String(body[key]);
-      }
-
-      {
-        const effectiveYardId = String(
-          updates.yardId !== undefined ? updates.yardId : beforeEmp.yardId ?? "",
-        ).trim();
-        const chargeUpdate = maybeResolveAdditionalChargeLocationPosted(
-          body as Record<string, unknown>,
-          effectiveYardId,
-        );
-        if (chargeUpdate !== undefined) {
-          updates.locationPosted = chargeUpdate;
-        } else if (updates.yardId !== undefined) {
-          // Primary location changed: drop it from any existing additional-charge list.
-          updates.locationPosted = serializeAdditionalChargeYardIds(
-            parseAdditionalChargeYardIds(beforeEmp.locationPosted, effectiveYardId),
-            effectiveYardId,
-          );
-        }
       }
 
       const rawAadhaarForSave = readAadhaarRawFromRequestBody(body as Record<string, unknown>);
       if (rawAadhaarForSave) {
         delete updates.aadhaarToken;
-      }
-      if (
-        updates.reportingOfficerEmployeeId !== undefined &&
-        updates.reportingOfficerEmployeeId &&
-        String(updates.reportingOfficerEmployeeId) === id
-      ) {
-        return sendApiError(res, 400, "HR_EMP_REPORTING_SELF", "Reporting officer cannot be the same employee.");
-      }
-      const roUpd =
-        updates.reportingOfficerEmployeeId !== undefined
-          ? (updates.reportingOfficerEmployeeId as string | null)
-          : undefined;
-      if (roUpd) {
-        const [roEmp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, roUpd)).limit(1);
-        if (!roEmp) {
-          return sendApiError(res, 400, "HR_EMP_REPORTING_NOT_FOUND", "Reporting officer employee id was not found.");
-        }
       }
 
       if (statusTransitionRequested) {
@@ -1535,7 +1492,8 @@ export function registerHrRoutes(app: Express) {
           excludeEmployeeId: id,
         });
         srs411 = parseEmployeeMasterSrs411Fields({
-          locationPosted: (merged as { locationPosted?: string | null }).locationPosted,
+          // Posting locations are locked; keep existing value for validation shape only.
+          locationPosted: beforeEmp.locationPosted,
           payLevel: (merged as { payLevel?: number | string | null }).payLevel,
           bankAccountNumber: (merged as { bankAccountNumber?: string | null }).bankAccountNumber,
           ifscCode: (merged as { ifscCode?: string | null }).ifscCode,
@@ -1556,7 +1514,6 @@ export function registerHrRoutes(app: Express) {
         workEmail: workEmailNorm,
         mobile: mobileNorm,
         emergencyContactMobile: emergencyMobileNorm,
-        locationPosted: srs411.locationPosted,
         payLevel: srs411.payLevel,
         bankAccountNumber: srs411.bankAccountNumber,
         ifscCode: srs411.ifscCode,

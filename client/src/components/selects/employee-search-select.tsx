@@ -19,6 +19,8 @@ export type EmployeeSearchSelectProps = Omit<
   yardId?: string
   includeApp?: boolean
   excludeId?: string
+  /** Extra employee IDs to omit from search results (merged with excludeId). */
+  excludeIds?: string[]
   searchPlaceholder?: string
 }
 
@@ -44,10 +46,20 @@ export function EmployeeSearchSelect({
   yardId,
   includeApp,
   excludeId,
+  excludeIds,
   searchPlaceholder = "Type employee no. or name…",
   placeholder = "Select employee",
   ...props
 }: EmployeeSearchSelectProps) {
+  const blockedIds = React.useMemo(() => {
+    const set = new Set<string>()
+    if (excludeId) set.add(excludeId)
+    for (const id of excludeIds ?? []) {
+      if (id) set.add(id)
+    }
+    return set
+  }, [excludeId, excludeIds])
+
   const onSearch = React.useCallback(
     async (query: string): Promise<AsyncSearchSelectOption[]> => {
       const res = await fetch(
@@ -62,9 +74,9 @@ export function EmployeeSearchSelect({
       if (!res.ok) return []
       const body = await res.json()
       const rows = (Array.isArray(body) ? body : []) as EmployeeSelectFields[]
-      return rows.filter((row) => row?.id && row.id !== excludeId).map(toOption)
+      return rows.filter((row) => row?.id && !blockedIds.has(row.id)).map(toOption)
     },
-    [yardId, includeApp, excludeId],
+    [yardId, includeApp, blockedIds],
   )
 
   const resolveOption = React.useCallback(async (value: string): Promise<AsyncSearchSelectOption | null> => {

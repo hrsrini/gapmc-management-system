@@ -73,6 +73,7 @@ import {
 } from "@/lib/duesCounterPayment";
 import { downloadIomsReceiptPdf } from "@/lib/downloadIomsReceiptPdf";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
 
 type MappedYard = {
@@ -186,17 +187,10 @@ export default function EntityDetail() {
   const { data: subtypes } = useQuery<EntitySubtypeRef>({
     queryKey: ["/api/ioms/reference/entity-subtypes"],
   });
-  const { data: yards = [] } = useQuery<Array<{ id: string; name?: string | null; code?: string | null }>>({
-    queryKey: ["/api/yards"],
-  });
   const { data: scopedYards = [] } = useScopedActiveYards();
+  const { getYardName } = useYardLabels();
   const yardOptions = useMemo(() => filterYardTypeLocations(scopedYards), [scopedYards]);
-  const yardDisplayName = useMemo(() => {
-    if (!entity?.yardId) return "—";
-    const y = yards.find((x) => x.id === entity.yardId);
-    if (!y) return entity.yardId;
-    return (y.name?.trim() || y.code?.trim() || y.id) as string;
-  }, [yards, entity?.yardId]);
+  const yardDisplayName = useMemo(() => getYardName(entity?.yardId), [getYardName, entity?.yardId]);
 
   const activeMappedYards = useMemo(
     () => (entity?.mappedYards ?? []).filter((m) => m.status === "Active"),
@@ -697,7 +691,7 @@ export default function EntityDetail() {
                 <div className="md:col-span-2">
                   <span className="text-muted-foreground">Mapped locations:</span>{" "}
                   {activeMappedYards.length
-                    ? activeMappedYards.map((m) => m.yardName || m.yardCode || m.yardId).join(", ")
+                    ? activeMappedYards.map((m) => m.yardName || m.yardCode || getYardName(m.yardId)).join(", ")
                     : yardDisplayName}
                 </div>
                 <div><span className="text-muted-foreground">Mobile:</span> {entity.mobile ?? "—"}</div>
@@ -923,7 +917,7 @@ export default function EntityDetail() {
                       className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
                     >
                       <div>
-                        <span className="font-medium">{m.yardName || m.yardCode || m.yardId}</span>
+                        <span className="font-medium">{m.yardName || m.yardCode || getYardName(m.yardId)}</span>
                         {m.yardId === entity.yardId ? (
                           <Badge variant="secondary" className="ml-2">
                             Home
@@ -954,7 +948,7 @@ export default function EntityDetail() {
                   <p className="text-xs font-medium text-muted-foreground">Previously unmapped</p>
                   {inactiveMappedYards.map((m) => (
                     <div key={`inact-${m.yardId}`} className="text-xs text-muted-foreground">
-                      {m.yardName || m.yardCode || m.yardId}
+                      {m.yardName || m.yardCode || getYardName(m.yardId)}
                       {m.unmappedReason ? ` — ${m.unmappedReason}` : ""}
                       {m.effectiveTo ? ` (to ${m.effectiveTo})` : ""}
                     </div>
@@ -1054,7 +1048,7 @@ export default function EntityDetail() {
                   <SelectItem value="__pick__">Select…</SelectItem>
                   {activeMappedYards.map((m) => (
                     <SelectItem key={m.yardId} value={m.yardId}>
-                      {m.yardName || m.yardCode || m.yardId}
+                      {m.yardName || m.yardCode || getYardName(m.yardId)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1640,7 +1634,7 @@ export default function EntityDetail() {
             <p className="text-sm text-muted-foreground">
               Unmap{" "}
               <span className="font-medium text-foreground">
-                {unmapTarget?.yardName || unmapTarget?.yardCode || unmapTarget?.yardId}
+                {unmapTarget?.yardName || unmapTarget?.yardCode || getYardName(unmapTarget?.yardId)}
               </span>
               . Existing allotments at this location remain valid; fresh allotment will not be allowed until remapped.
             </p>

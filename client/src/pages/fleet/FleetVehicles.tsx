@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { Truck, AlertCircle, PlusCircle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
@@ -48,10 +49,7 @@ export default function FleetVehicles() {
   const { data: list, isLoading, isError } = useQuery<Vehicle[]>({
     queryKey: ["/api/ioms/fleet/vehicles"],
   });
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const { data: renewalPayload } = useQuery<{ alerts: FleetRenewalAlert[] }>({
     queryKey: ["/api/ioms/fleet/renewal-alerts"],
@@ -69,14 +67,14 @@ export default function FleetVehicles() {
         </Link>
       ),
       vehicleType: v.vehicleType,
-      yardName: yardById[v.yardId] ?? v.yardId,
+      yardName: getYardName(v.yardId),
       insuranceExpiry: v.insuranceExpiry ?? "—",
       fitnessExpiry: v.fitnessExpiry ?? "—",
       pucExpiry: v.pucExpiry ?? "—",
       status: v.status,
       _status: <Badge variant="secondary">{v.status}</Badge>,
     }));
-  }, [list, yardById]);
+  }, [list, getYardName]);
 
   if (isError) {
     return (

@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { Link, useSearchParams } from "wouter";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
 import { formatInr } from "@/lib/formatInr";
@@ -66,10 +67,7 @@ export default function IomsRentInvoices() {
   const { data: assets = [] } = useQuery<AssetRef[]>({
     queryKey: ["/api/ioms/assets"],
   });
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
   const assetLabelById = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
   const statusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
@@ -210,7 +208,7 @@ export default function IomsRentInvoices() {
       tenantName: r.tenantName?.trim() || "—",
       periodMonth: r.periodMonth,
       assetLabel: assetLabelById[r.assetId] ?? r.assetId,
-      yardName: yardById[r.yardId] ?? r.yardId,
+      yardName: getYardName(r.yardId),
       rentAmount: r.rentAmount,
       totalAmount: r.totalAmount,
       _rent: formatInr(r.rentAmount),
@@ -276,7 +274,7 @@ export default function IomsRentInvoices() {
         </div>
       ),
     }));
-  }, [list, assetLabelById, yardById, canVerify, canApprove, statusMutation, downloadInvoicePdf, pdfLoadingId]);
+  }, [list, assetLabelById, getYardName, canVerify, canApprove, statusMutation, downloadInvoicePdf, pdfLoadingId]);
 
   const handleExportGstr1 = async () => {
     const from = gstr1From.trim();

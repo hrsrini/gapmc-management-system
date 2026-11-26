@@ -28,6 +28,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { useAuth } from "@/context/AuthContext";
 import { HardHat, ArrowLeft, Pencil, FileText, AlertCircle, Plus, Loader2, Shield } from "lucide-react";
 import { formatInr } from "@/lib/formatInr";
@@ -89,10 +90,6 @@ interface WorkDoc {
   originalName?: string | null;
   storedName: string;
   createdAt?: string | null;
-}
-interface YardRef {
-  id: string;
-  name: string;
 }
 
 export default function WorkDetail() {
@@ -166,8 +163,7 @@ export default function WorkDetail() {
   const { data: expenditureHeads = [] } = useQuery<{ id: string; code: string; description: string }[]>({
     queryKey: ["/api/ioms/expenditure-heads"],
   });
-  const { data: yards = [] } = useQuery<YardRef[]>({ queryKey: ["/api/yards"] });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
   const { data: vouchers = [] } = useQuery<{ id: string; voucherNo?: string | null }[]>({
     queryKey: ["/api/ioms/vouchers"],
   });
@@ -561,7 +557,7 @@ export default function WorkDetail() {
             <div>
               <span className="text-muted-foreground">Yard</span>
               <br />
-              {yardById[work.yardId] ?? work.yardId}
+              {getYardName(work.yardId)}
             </div>
             <div>
               <span className="text-muted-foreground">Type</span>

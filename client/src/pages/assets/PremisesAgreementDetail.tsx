@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { useAuth } from "@/context/AuthContext";
 import { formatInr } from "@/lib/formatInr";
 import { renewalStatusBadgeClass, renewalStatusLabel, ymdToDmy } from "@/lib/premisesAgreementUi";
@@ -23,6 +24,7 @@ export default function PremisesAgreementDetail() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const { can, user } = useAuth();
+  const { getYardName } = useYardLabels();
   const tiers = (user?.roles ?? []).map((r) => r.tier);
   const canVerify = can("M-02", "Update") && (tiers.includes("DV") || tiers.includes("ADMIN"));
   const canApprove = can("M-02", "Update") && (tiers.includes("DA") || tiers.includes("ADMIN"));
@@ -189,7 +191,10 @@ export default function PremisesAgreementDetail() {
                 <div className="grid gap-2 sm:grid-cols-2">
                   <div>Agreement ID: {String(data.agreementNo)}</div>
                   <div>Allottee: {String(data.allotteeName)}</div>
-                  <div>Location / yard: {String(data.yardName ?? data.yardId ?? "—")}</div>
+                  <div>
+                    Location / yard:{" "}
+                    {String(data.yardName ?? "").trim() || getYardName(data.yardId as string | undefined)}
+                  </div>
                   <div>
                     Validity: {ymdToDmy(String(data.fromDate))} to {ymdToDmy(String(data.toDate))}
                   </div>

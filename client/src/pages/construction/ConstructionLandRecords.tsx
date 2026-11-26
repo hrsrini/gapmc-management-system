@@ -28,6 +28,7 @@ import {
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 
 interface LandRecord {
   id: string;
@@ -69,7 +70,7 @@ export default function ConstructionLandRecords() {
 
   const { data: list = [], isLoading, isError } = useQuery<LandRecord[]>({ queryKey: [url] });
   const { data: yards = [] } = useScopedActiveYards();
-  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y.name ?? y.code ?? y.id])), [yards]);
+  const { getYardName } = useYardLabels();
 
   const columns = useMemo(
     (): ReportTableColumn[] => [
@@ -93,7 +94,7 @@ export default function ConstructionLandRecords() {
       return {
         id: r.id,
         surveyNo: r.surveyNo,
-        yardName: yardById.get(r.yardId) ?? r.yardId,
+        yardName: getYardName(r.yardId),
         village: r.village ?? "—",
         taluk: r.taluk ?? "—",
         areaSqm: r.areaSqm ?? null,
@@ -102,7 +103,7 @@ export default function ConstructionLandRecords() {
         createdAt: r.createdAt,
       };
     });
-  }, [list, yardById]);
+  }, [list, getYardName]);
 
   const resetForm = () => {
     setFormYardId("");

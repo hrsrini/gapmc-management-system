@@ -10,6 +10,7 @@ import { Receipt, ArrowLeft, AlertCircle, ExternalLink, Download, QrCode, Undo2,
 import QRCode from "qrcode";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { formatDisplayDateTime } from "@/lib/dateFormat";
 import { fetchApiGet } from "@/lib/queryClient";
 import { parseUnifiedEntityId } from "@shared/unified-entity-id";
@@ -101,10 +102,6 @@ interface IomsReceipt {
   depositRecordId?: string | null;
   hasDishonouredChequeOnDeposit?: boolean;
 }
-interface YardRef {
-  id: string;
-  name: string;
-}
 
 export default function IomsReceiptDetail() {
   const { id } = useParams<{ id: string }>();
@@ -121,10 +118,7 @@ export default function IomsReceiptDetail() {
     queryKey: ["/api/ioms/receipts", id],
     enabled: !!id,
   });
-  const { data: yards = [] } = useQuery<YardRef[]>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const m03RentReceipt = receipt ? isM03RentReceipt(receipt) : false;
   const linkedInvoiceId = m03RentReceipt ? receipt?.sourceRecordId?.trim() ?? "" : "";
@@ -501,7 +495,7 @@ export default function IomsReceiptDetail() {
             </Alert>
           ) : null}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <div><span className="text-muted-foreground">Yard</span><br />{yardById[receipt.yardId] ?? receipt.yardId}</div>
+            <div><span className="text-muted-foreground">Yard</span><br />{getYardName(receipt.yardId)}</div>
             <div>
               <span className="text-muted-foreground">Revenue head (Tally)</span>
               <br />

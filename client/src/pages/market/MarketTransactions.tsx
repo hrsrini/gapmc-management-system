@@ -18,6 +18,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { ApiUserError, readApiErrorEnvelope, fetchApiGet } from "@/lib/queryClient";
 import { formatInr } from "@/lib/formatInr";
 import { ArrowRightLeft, AlertCircle, Plus } from "lucide-react";
@@ -301,10 +302,7 @@ export default function MarketTransactions() {
   const { data: commodities = [] } = useQuery<Array<{ id: string; name: string; unit?: string | null }>>({
     queryKey: ["/api/ioms/commodities"],
   });
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string; code: string }>>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y])), [yards]);
+  const { getYardName } = useYardLabels();
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c])), [commodities]);
 
   const adjustmentMutation = useMutation({
@@ -398,7 +396,7 @@ export default function MarketTransactions() {
       transactionNo: t.transactionNo ?? "—",
       caseType: t.caseType,
       transactionDate: t.transactionDate,
-      yardName: yardById.get(t.entryLocationId)?.name ?? t.entryLocationId,
+      yardName: getYardName(t.entryLocationId),
       totalPayable: Number(t.totalPayable ?? 0),
       _payable: formatInr(Number(t.totalPayable ?? 0)),
       status: t.status,
@@ -412,11 +410,11 @@ export default function MarketTransactions() {
           "—"
         ),
     }));
-  }, [wizardList, yardById]);
+  }, [wizardList, getYardName]);
 
   const txnRows = useMemo((): Record<string, unknown>[] => {
     return (list ?? []).map((t) => {
-      const yardName = yardById.get(t.yardId)?.name ?? t.yardId;
+      const yardName = getYardName(t.yardId);
       const commodityName = commodityById.get(t.commodityId)?.name ?? t.commodityId;
       const raw = t as unknown as Record<string, unknown>;
       const master = licenceDisplayById.get(String(t.traderLicenceId ?? "").trim());
@@ -494,7 +492,7 @@ export default function MarketTransactions() {
     });
   }, [
     list,
-    yardById,
+    getYardName,
     commodityById,
     licenceDisplayById,
     showTxnActions,

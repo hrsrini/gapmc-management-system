@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { formatInr } from "@/lib/formatInr";
 import { AlertCircle, ArrowLeftRight } from "lucide-react";
 
@@ -52,9 +53,18 @@ export default function CheckPostStockReturns() {
   const [checkPostId, setCheckPostId] = useState<string>("all");
 
   const { data: yards = [] } = useQuery<YardRef[]>({ queryKey: ["/api/yards"] });
+  const { getYardName, yards: yardLabels } = useYardLabels();
   const { data: commodities = [] } = useQuery<Array<{ id: string; name: string }>>({ queryKey: ["/api/ioms/commodities"] });
 
-  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, `${y.name} (${y.code})`] as const)), [yards]);
+  const yardById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const y of yardLabels) {
+      const name = String(y.name ?? "").trim();
+      const code = String(y.code ?? "").trim();
+      if (y.id && (name || code)) m.set(y.id, name && code ? `${name} (${code})` : name || code);
+    }
+    return m;
+  }, [yardLabels]);
   const commodityById = useMemo(() => new Map(commodities.map((c) => [c.id, c.name] as const)), [commodities]);
   const checkPosts = yards.filter((y) => String(y.type ?? "") === "CheckPost");
 
@@ -74,26 +84,26 @@ export default function CheckPostStockReturns() {
   const importRows = useMemo((): Record<string, unknown>[] => {
     return (data?.imports ?? []).map((r) => ({
       id: `I:${r.checkPostId}:${r.commodityId}`,
-      checkPostName: yardById.get(r.checkPostId) ?? r.checkPostId,
+      checkPostName: yardById.get(r.checkPostId) ?? getYardName(r.checkPostId),
       commodityName: commodityById.get(r.commodityId) ?? r.commodityId,
       quantity: r.quantity,
       value: r.value,
       _qty: Number(r.quantity ?? 0).toLocaleString("en-IN"),
       _value: `${formatInr(Number(r.value ?? 0))}`,
     }));
-  }, [data?.imports, yardById, commodityById]);
+  }, [data?.imports, yardById, getYardName, commodityById]);
 
   const exportRows = useMemo((): Record<string, unknown>[] => {
     return (data?.exports ?? []).map((r) => ({
       id: `E:${r.checkPostId}:${r.commodityId}`,
-      checkPostName: yardById.get(r.checkPostId) ?? r.checkPostId,
+      checkPostName: yardById.get(r.checkPostId) ?? getYardName(r.checkPostId),
       commodityName: commodityById.get(r.commodityId) ?? r.commodityId,
       quantity: r.quantity,
       value: r.value,
       _qty: Number(r.quantity ?? 0).toLocaleString("en-IN"),
       _value: `${formatInr(Number(r.value ?? 0))}`,
     }));
-  }, [data?.exports, yardById, commodityById]);
+  }, [data?.exports, yardById, getYardName, commodityById]);
 
   if (!canRead) {
     return (

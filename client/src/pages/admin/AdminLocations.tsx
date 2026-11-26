@@ -178,6 +178,7 @@ export default function AdminLocations() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/yards"] });
       queryClient.invalidateQueries({ queryKey: ["/api/yards"] });
       queryClient.invalidateQueries({ queryKey: ["/api/yards/for-reports"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/yards/for-labels"] });
       toast({ title: "Location created" });
       setOpen(false);
     },
@@ -218,6 +219,7 @@ export default function AdminLocations() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/yards"] });
       queryClient.invalidateQueries({ queryKey: ["/api/yards"] });
       queryClient.invalidateQueries({ queryKey: ["/api/yards/for-reports"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/yards/for-labels"] });
       toast({ title: "Location updated" });
       setOpen(false);
       setEditing(null);

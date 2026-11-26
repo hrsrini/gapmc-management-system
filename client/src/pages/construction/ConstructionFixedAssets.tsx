@@ -30,6 +30,7 @@ import { useAuth } from "@/context/AuthContext";
 import { formatInr } from "@/lib/formatInr";
 import { useToast } from "@/hooks/use-toast";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 
 interface FixedAsset {
   id: string;
@@ -76,7 +77,7 @@ export default function ConstructionFixedAssets() {
 
   const { data: list = [], isLoading, isError } = useQuery<FixedAsset[]>({ queryKey: [url] });
   const { data: yards = [] } = useScopedActiveYards();
-  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y.name ?? y.code ?? y.id])), [yards]);
+  const { getYardName } = useYardLabels();
 
   const columns = useMemo((): ReportTableColumn[] => {
     const base: ReportTableColumn[] = [
@@ -97,7 +98,7 @@ export default function ConstructionFixedAssets() {
     return list.map((a) => ({
       id: a.id,
       assetType: a.assetType,
-      yardName: yardById.get(a.yardId) ?? a.yardId,
+      yardName: getYardName(a.yardId),
       acquisitionDate: a.acquisitionDate.slice(0, 10),
       acquisitionValue: a.acquisitionValue,
       _acquisitionValue: `${formatInr(a.acquisitionValue)}`,
@@ -124,7 +125,7 @@ export default function ConstructionFixedAssets() {
           </Button>
         ) : null,
     }));
-  }, [list, yardById, canDispose]);
+  }, [list, getYardName, canDispose]);
 
   const resetCreateForm = () => {
     setFormYardId("");

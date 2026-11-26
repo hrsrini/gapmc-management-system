@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { Truck, AlertCircle, Plus, Pencil } from "lucide-react";
 interface OutwardEntry {
   id: string;
@@ -46,6 +47,7 @@ export default function CheckPostOutward() {
   const { data: inwards = [] } = useQuery<Array<{ id: string; entryNo?: string | null }>>({
     queryKey: ["/api/ioms/checkpost/inward"],
   });
+  const { getYardName } = useYardLabels();
   const checkPostIds = useMemo(() => new Set(checkposts.map((c) => c.id)), [checkposts]);
   const checkPostById = useMemo(() => new Map(checkposts.map((c) => [c.id, c])), [checkposts]);
   const inwardIds = useMemo(() => new Set(inwards.map((i) => i.id)), [inwards]);
@@ -131,7 +133,7 @@ export default function CheckPostOutward() {
     return (list ?? []).map((r) => ({
       id: r.id,
       entryDate: r.entryDate.slice(0, 10),
-      checkPostName: checkPostById.get(r.checkPostId)?.name ?? r.checkPostId,
+      checkPostName: checkPostById.get(r.checkPostId)?.name ?? getYardName(r.checkPostId),
       inwardLabel: inwardById.get(r.inwardRefId)?.entryNo ?? r.inwardRefId,
       vehicleNumber: r.vehicleNumber ?? "—",
       receiptNumber: r.receiptNumber ?? "—",
@@ -141,7 +143,7 @@ export default function CheckPostOutward() {
         </Button>
       ) : null,
     }));
-  }, [list, checkPostById, inwardById, canUpdate, openEdit]);
+  }, [list, checkPostById, getYardName, inwardById, canUpdate, openEdit]);
 
   if (isError) {
     return (

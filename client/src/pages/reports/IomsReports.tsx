@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { FileText, Receipt, Banknote, Download, UserCircle, BarChart3, Table2, Truck, Clock } from "lucide-react";
 import {
   formatYearMonthLabel,
@@ -208,6 +209,7 @@ export default function IomsReports() {
   );
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards/for-reports"] });
+  const { getYardName } = useYardLabels();
   const ageingUrl = useMemo(() => {
     const p = new URLSearchParams();
     p.set("asOf", ageingAsOf);
@@ -270,23 +272,12 @@ export default function IomsReports() {
 
   const previewColumns = useMemo(() => columnsForKind(previewKind), [previewKind]);
 
-  const yardLabelById = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const y of yards) {
-      m.set(y.id, (y.name?.trim() || y.code?.trim() || y.id) as string);
-    }
-    return m;
-  }, [yards]);
-
   const previewRows = useMemo((): Record<string, unknown>[] => {
     const rows = pagedData?.rows ?? [];
     return rows.map((r) => {
       const raw = r.yardId;
       const id = raw != null && raw !== "" ? String(raw) : "";
-      const yardName =
-        previewKind === "rent"
-          ? String(r.yardName ?? "").trim() || (id ? (yardLabelById.get(id) ?? id) : "—")
-          : String(r.yardName ?? "").trim() || (id ? (yardLabelById.get(id) ?? id) : "—");
+      const yardName = String(r.yardName ?? "").trim() || (id ? getYardName(id) : "—");
       const out: Record<string, unknown> = { ...r, yardName };
       if (previewKind === "receipt") {
         const pr = r as {
@@ -317,7 +308,7 @@ export default function IomsReports() {
       }
       return out;
     });
-  }, [pagedData?.rows, yardLabelById, previewKind]);
+  }, [pagedData?.rows, getYardName, previewKind]);
 
   const downloadTallyExportCsv = async (layout: "legacy" | "srs") => {
     try {

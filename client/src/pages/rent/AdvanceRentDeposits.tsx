@@ -27,6 +27,7 @@ import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { TraderLicenceSearchSelect } from "@/components/selects/trader-licence-search-select";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
 import { formatInr } from "@/lib/formatInr";
 import { AlertCircle, Plus, Wallet } from "lucide-react";
@@ -99,6 +100,7 @@ export default function AdvanceRentDeposits() {
     };
   }>({ queryKey: [listUrl] });
 
+  const { getYardName } = useYardLabels();
   const { data: yards = [] } = useScopedActiveYards();
   const allotmentsUrl = traderLicenceId
     ? `/api/ioms/asset-allotments?traderLicenceId=${encodeURIComponent(traderLicenceId)}`
@@ -119,7 +121,7 @@ export default function AdvanceRentDeposits() {
       .map((a) => {
         const asset = assetById.get(a.assetId);
         const code = asset?.assetId ?? a.assetId;
-        const yardName = yards.find((y) => y.id === asset?.yardId)?.name;
+        const yardName = getYardName(asset?.yardId, "");
         return {
           id: a.assetId,
           assetId: code,
@@ -128,7 +130,7 @@ export default function AdvanceRentDeposits() {
         };
       })
       .filter((p, i, arr) => p.id && arr.findIndex((x) => x.id === p.id) === i);
-  }, [allotments, assetById, yards]);
+  }, [allotments, assetById, getYardName]);
 
   const selectedPremises = premisesOpts.find((p) => p.id === assetId);
 
@@ -378,7 +380,7 @@ export default function AdvanceRentDeposits() {
               onChange={setPaymentPref}
               summaryAmount={String(Number(amount) || 0)}
               receivedByLabel={user?.name ?? "Counter"}
-              receivedAtLabel={yards.find((y) => y.id === selectedPremises?.yardId)?.name ?? "Yard"}
+              receivedAtLabel={getYardName(selectedPremises?.yardId, "Yard")}
             />
           )}
           {step === 3 && (

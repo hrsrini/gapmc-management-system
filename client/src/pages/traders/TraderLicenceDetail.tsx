@@ -23,6 +23,9 @@ import {
 import { LocalSearchSelect } from "@/components/ui/local-search-select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
+import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { filterYardTypeLocations } from "@/lib/legacyYardMatch";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -132,8 +135,22 @@ interface Licence {
   lmLicenseClass?: string | null;
   lmSyncedAt?: string | null;
   lmProfile?: LmApplicationProfile | null;
+  mappedYards?: MappedYard[];
   createdAt?: string | null;
   updatedAt?: string | null;
+}
+
+interface MappedYard {
+  mappingId: string;
+  id: string;
+  yardId: string;
+  yardCode?: string | null;
+  yardName?: string | null;
+  status: string;
+  effectiveFrom?: string | null;
+  effectiveTo?: string | null;
+  unmappedAt?: string | null;
+  unmappedReason?: string | null;
 }
 
 interface StockOpeningRow {
@@ -165,10 +182,6 @@ interface BlockingLogEntry {
   reason: string;
   actionedBy: string;
   actionedAt: string;
-}
-interface YardRef {
-  id: string;
-  name: string;
 }
 interface ReceiptRef {
   id: string;
@@ -246,6 +259,7 @@ export default function TraderLicenceDetail() {
   const [renewValidTo, setRenewValidTo] = useState("");
   const [manageAllotment, setManageAllotment] = useState<AssetAllotmentRow | null>(null);
   const [allotDialogOpen, setAllotDialogOpen] = useState(false);
+  const [allotmentYardId, setAllotmentYardId] = useState("");
   const [allotAssetId, setAllotAssetId] = useState("");
   const [allotAllotmentDate, setAllotAllotmentDate] = useState("");
   const [allotRefNo, setAllotRefNo] = useState("");
@@ -259,11 +273,29 @@ export default function TraderLicenceDetail() {
     defaultPaymentPreferenceValue(),
   );
   const [allotAgreementTypeOverride, setAllotAgreementTypeOverride] = useState("__auto__");
+  const [mapYardIds, setMapYardIds] = useState<string[]>([]);
+  const [unmapTarget, setUnmapTarget] = useState<MappedYard | null>(null);
+  const [unmapReason, setUnmapReason] = useState("");
+  const [unmapEffectiveTo, setUnmapEffectiveTo] = useState(() => localCalendarYmd());
 
   const { data: licence, isLoading, isError } = useQuery<Licence>({
     queryKey: ["/api/ioms/traders/licences", id],
     enabled: !!id,
   });
+  const { data: scopedYards = [] } = useScopedActiveYards();
+  const yardOptions = useMemo(() => filterYardTypeLocations(scopedYards), [scopedYards]);
+  const activeMappedYards = useMemo(
+    () => (licence?.mappedYards ?? []).filter((m) => m.status === "Active"),
+    [licence?.mappedYards],
+  );
+  const inactiveMappedYards = useMemo(
+    () => (licence?.mappedYards ?? []).filter((m) => m.status !== "Active"),
+    [licence?.mappedYards],
+  );
+  const addableYards = useMemo(() => {
+    const activeIds = new Set(activeMappedYards.map((m) => m.yardId));
+    return yardOptions.filter((y) => !activeIds.has(y.id));
+  }, [yardOptions, activeMappedYards]);
   const licenceIssued = Boolean(licence?.licenceNo && String(licence.licenceNo).trim());
   const renewPreviewEnabled = Boolean(
     renewDialogOpen && id && licence && licenceIssued && !licence.isBlocked && canUpdateLicence,
@@ -298,9 +330,7 @@ export default function TraderLicenceDetail() {
       return res.json();
     },
   });
-  const { data: yards = [] } = useQuery<YardRef[]>({
-    queryKey: ["/api/yards"],
-  });
+  const { getYardName } = useYardLabels();
   const { data: receipts = [] } = useQuery<ReceiptRef[]>({
     queryKey: ["/api/ioms/receipts"],
   });
@@ -324,17 +354,32 @@ export default function TraderLicenceDetail() {
       return res.json();
     },
   });
+  const vacantUrl = allotmentYardId
+    ? `/api/ioms/assets/vacant?yardId=${encodeURIComponent(allotmentYardId)}`
+    : "";
   const { data: vacantRows = [] } = useQuery<VacantAssetRow[]>({
-    queryKey: ["/api/ioms/assets/vacant"],
-    enabled: allotDialogOpen,
+    queryKey: [vacantUrl],
+    enabled: !!allotmentYardId && allotDialogOpen,
     queryFn: async () => {
-      const res = await fetch("/api/ioms/assets/vacant", { credentials: "include" });
+      const res = await fetch(vacantUrl, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load vacant premises");
       return res.json();
     },
   });
   const vacantAssets = useMemo(() => vacantRows.map((r) => r.asset), [vacantRows]);
   const vacantByAssetPk = useMemo(() => Object.fromEntries(vacantRows.map((r) => [r.asset.id, r])), [vacantRows]);
+
+  useEffect(() => {
+    if (!allotDialogOpen) return;
+    const preferred =
+      (allotmentYardId && activeMappedYards.some((m) => m.yardId === allotmentYardId) && allotmentYardId) ||
+      activeMappedYards.find((m) => m.yardId === licence?.yardId)?.yardId ||
+      activeMappedYards[0]?.yardId ||
+      "";
+    setAllotmentYardId(preferred);
+    setAllotAssetId("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allotDialogOpen, licence?.yardId, activeMappedYards]);
 
   useEffect(() => {
     if (!allotDialogOpen) return;
@@ -373,26 +418,19 @@ export default function TraderLicenceDetail() {
       return res.json();
     },
   });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
   const vacantPremiseOptions = useMemo(
     () =>
       vacantAssets.map((a) => ({
         value: a.id,
-        label: [
-          a.assetId,
-          a.yardId && yardById[a.yardId] ? yardById[a.yardId] : null,
-          a.assetType || null,
-        ]
-          .filter(Boolean)
-          .join(" · "),
+        label: [a.assetId, a.assetType || null].filter(Boolean).join(" · "),
       })),
-    [vacantAssets, yardById],
+    [vacantAssets],
   );
   const allotReceivedAtLabel = useMemo(() => {
     const yardId = selectedVacant?.asset?.yardId;
     if (!yardId) return "—";
-    return yardById[yardId] ?? yardId;
-  }, [selectedVacant?.asset?.yardId, yardById]);
+    return getYardName(yardId);
+  }, [selectedVacant?.asset?.yardId, getYardName]);
   const receiptById = Object.fromEntries(receipts.map((r) => [r.id, r.receiptNo]));
   const assetDisplayById = useMemo(() => buildAssetDisplayByRowId(assets), [assets]);
   const gstCategoriesForSelect = useMemo(
@@ -507,6 +545,60 @@ export default function TraderLicenceDetail() {
     },
     onError: (e: Error) =>
       toast({ title: "Update failed", description: e.message, variant: "destructive" }),
+  });
+
+  const mapLocationsMutation = useMutation({
+    mutationFn: async (yardIdsToAdd: string[]) => {
+      const res = await fetch(`/api/ioms/traders/licences/${encodeURIComponent(id!)}/location-mappings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ yardIds: yardIdsToAdd }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return (await res.json()) as Licence;
+    },
+    onSuccess: (row) => {
+      queryClient.setQueryData<Licence>(["/api/ioms/traders/licences", id], (prev) =>
+        prev ? { ...prev, ...row, lmProfile: prev.lmProfile, mappedYards: row.mappedYards } : row,
+      );
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/traders/licences"] });
+      setMapYardIds([]);
+      toast({ title: "Locations mapped" });
+    },
+    onError: (e: Error) => toast({ title: "Map failed", description: e.message, variant: "destructive" }),
+  });
+
+  const unmapLocationMutation = useMutation({
+    mutationFn: async (vars: { yardId: string; reason: string; effectiveTo: string }) => {
+      const res = await fetch(
+        `/api/ioms/traders/licences/${encodeURIComponent(id!)}/location-mappings/${encodeURIComponent(vars.yardId)}/unmap`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ reason: vars.reason, effectiveTo: vars.effectiveTo || null }),
+        },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? res.statusText);
+      }
+      return (await res.json()) as Licence;
+    },
+    onSuccess: (row) => {
+      queryClient.setQueryData<Licence>(["/api/ioms/traders/licences", id], (prev) =>
+        prev ? { ...prev, ...row, lmProfile: prev.lmProfile, mappedYards: row.mappedYards } : row,
+      );
+      queryClient.invalidateQueries({ queryKey: ["/api/ioms/traders/licences"] });
+      setUnmapTarget(null);
+      setUnmapReason("");
+      toast({ title: "Location unmapped", description: "Existing allotments at that location remain valid." });
+    },
+    onError: (e: Error) => toast({ title: "Unmap failed", description: e.message, variant: "destructive" }),
   });
 
   const createAllotmentMutation = useMutation({
@@ -955,7 +1047,7 @@ export default function TraderLicenceDetail() {
               return (
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                    <div><span className="text-muted-foreground">Yard</span><br />{yardById[licence.yardId] ?? licence.yardId}</div>
+                    <div><span className="text-muted-foreground">Yard</span><br />{getYardName(licence.yardId)}</div>
                     <div><span className="text-muted-foreground">Type of Firm</span><br />{typeOfFirm}</div>
                     <div><span className="text-muted-foreground">Trader Name</span><br />{traderName}</div>
                     <div><span className="text-muted-foreground">Mobile</span><br />{licence.mobile}</div>
@@ -1295,6 +1387,100 @@ export default function TraderLicenceDetail() {
         )}
 
         <Card>
+          <CardHeader>
+            <CardTitle>Mapped locations</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Map this licence to one or more locations. Premises allotment is available only for Active mappings.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              {activeMappedYards.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No active location mappings.</p>
+              ) : (
+                activeMappedYards.map((m) => (
+                  <div
+                    key={m.yardId}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
+                  >
+                    <div>
+                      <span className="font-medium">{m.yardName || m.yardCode || getYardName(m.yardId)}</span>
+                      {m.yardId === licence?.yardId ? (
+                        <Badge variant="secondary" className="ml-2">
+                          Home
+                        </Badge>
+                      ) : null}
+                      <Badge className="ml-2">Active</Badge>
+                    </div>
+                    {canUpdateLicence && activeMappedYards.length > 1 ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setUnmapTarget(m);
+                          setUnmapReason("");
+                          setUnmapEffectiveTo(localCalendarYmd());
+                        }}
+                      >
+                        Unmap
+                      </Button>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
+            {inactiveMappedYards.length > 0 ? (
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">Previously unmapped</p>
+                {inactiveMappedYards.map((m) => (
+                  <div key={`inact-${m.yardId}`} className="text-xs text-muted-foreground">
+                    {m.yardName || m.yardCode || getYardName(m.yardId)}
+                    {m.unmappedReason ? ` — ${m.unmappedReason}` : ""}
+                    {m.effectiveTo ? ` (to ${m.effectiveTo})` : ""}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {canUpdateLicence && addableYards.length > 0 ? (
+              <div className="rounded-md border p-3 space-y-2">
+                <p className="text-sm font-medium">Add location mapping</p>
+                <div className="max-h-36 overflow-y-auto space-y-2">
+                  {addableYards.map((y) => {
+                    const checked = mapYardIds.includes(y.id);
+                    return (
+                      <label key={y.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(c) => {
+                            setMapYardIds((prev) =>
+                              c === true ? [...prev, y.id] : prev.filter((x) => x !== y.id),
+                            );
+                          }}
+                        />
+                        <span>{y.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={mapLocationsMutation.isPending || mapYardIds.length === 0}
+                  onClick={() => mapLocationsMutation.mutate(mapYardIds)}
+                >
+                  {mapLocationsMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    "Map selected"
+                  )}
+                </Button>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <Card>
           <CardHeader className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
             <div>
               <CardTitle className="flex items-center gap-2">
@@ -1302,20 +1488,22 @@ export default function TraderLicenceDetail() {
                 Premises allocations ({allotments.length})
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                Premises allotted to this licence. Traders may be allocated at any yard when the licence is Active and
-                the premises is vacant. Use <strong>Edit</strong> to upload the agreement and run DV/DA approval;
-                Approved sets tenancy to Active.
+                Premises allotted to this licence only at Active mapped locations when the licence is Active and the
+                premises is vacant. Use <strong>Edit</strong> to upload the agreement and run DV/DA approval; Approved
+                sets tenancy to Active.
               </p>
             </div>
             {canCreateAllotment && (
               <Button
                 size="sm"
                 variant="outline"
-                disabled={!licenceCanReceiveAllotment}
+                disabled={!licenceCanReceiveAllotment || activeMappedYards.length === 0}
                 title={
-                  licenceCanReceiveAllotment
-                    ? "Add a new premises allocation (draft)"
-                    : "Licence must be Active and not blocked to add an allocation"
+                  !licenceCanReceiveAllotment
+                    ? "Licence must be Active and not blocked to add an allocation"
+                    : activeMappedYards.length === 0
+                      ? "Map at least one location before adding an allotment"
+                      : "Add a new premises allocation (draft)"
                 }
                 onClick={() => setAllotDialogOpen(true)}
               >
@@ -1342,7 +1530,8 @@ export default function TraderLicenceDetail() {
             <DialogHeader>
               <DialogTitle>New premises allocation (draft)</DialogTitle>
               <p className="text-sm text-muted-foreground">
-                Select vacant premises at any yard in your scope. Tenancy becomes Active only after DA approval.
+                Select a mapped location, then vacant premises at that yard. Tenancy becomes Active only after DA
+                approval.
               </p>
             </DialogHeader>
             {!licenceCanReceiveAllotment ? (
@@ -1352,21 +1541,52 @@ export default function TraderLicenceDetail() {
                   Only an <strong>Active</strong>, unblocked trader licence can receive a new premises allocation.
                 </AlertDescription>
               </Alert>
+            ) : activeMappedYards.length === 0 ? (
+              <Alert variant="destructive">
+                <AlertTitle>No mapped locations</AlertTitle>
+                <AlertDescription>
+                  Map at least one location on this licence before creating a premises allocation.
+                </AlertDescription>
+              </Alert>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div className="md:col-span-2 space-y-1">
-                  <Label>Vacant premises *</Label>
+                  <Label>Location *</Label>
+                  <Select
+                    value={allotmentYardId || "__pick__"}
+                    onValueChange={(v) => {
+                      setAllotmentYardId(v === "__pick__" ? "" : v);
+                      setAllotAssetId("");
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select mapped location" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__pick__">Select…</SelectItem>
+                      {activeMappedYards.map((m) => (
+                        <SelectItem key={m.yardId} value={m.yardId}>
+                          {m.yardName || m.yardCode || getYardName(m.yardId)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Only locations mapped to this licence are listed.</p>
+                </div>
+                <div className="md:col-span-2 space-y-1">
+                  <Label>Vacant premises at selected location *</Label>
                   <LocalSearchSelect
                     value={allotAssetId}
                     onValueChange={setAllotAssetId}
                     options={vacantPremiseOptions}
-                    placeholder="Select premises"
-                    searchPlaceholder="Type premises id, yard, or type…"
+                    placeholder={allotmentYardId ? "Select premises" : "Select a location first"}
+                    searchPlaceholder="Type premises id or type…"
                     emptyMessage="No matching vacant premises."
                     required
+                    disabled={!allotmentYardId}
                   />
-                  {vacantAssets.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No vacant premises in your yard scope.</p>
+                  {allotmentYardId && vacantAssets.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No vacant premises at this mapped location.</p>
                   ) : null}
                   {selectedVacant?.asset ? (
                     <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground space-y-0.5">
@@ -1491,7 +1711,9 @@ export default function TraderLicenceDetail() {
                 type="button"
                 disabled={
                   !licenceCanReceiveAllotment ||
+                  activeMappedYards.length === 0 ||
                   createAllotmentMutation.isPending ||
+                  !allotmentYardId ||
                   !allotAssetId ||
                   !allotAllotmentDate ||
                   !allotFromDate ||
@@ -1535,6 +1757,64 @@ export default function TraderLicenceDetail() {
                 }}
               >
                 {createAllotmentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create draft"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={unmapTarget != null}
+          onOpenChange={(o) => {
+            if (!o) setUnmapTarget(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Unmap location</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Unmap{" "}
+                <span className="font-medium text-foreground">
+                  {unmapTarget?.yardName || unmapTarget?.yardCode || getYardName(unmapTarget?.yardId)}
+                </span>
+                . Existing allotments at this location remain valid; fresh allotment will not be allowed until remapped.
+              </p>
+              <div className="space-y-1">
+                <Label>Effective to</Label>
+                <Input
+                  type="date"
+                  value={unmapEffectiveTo}
+                  onChange={(e) => setUnmapEffectiveTo(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Reason *</Label>
+                <Textarea
+                  value={unmapReason}
+                  onChange={(e) => setUnmapReason(e.target.value)}
+                  rows={2}
+                  placeholder="Reason for unmapping"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setUnmapTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={unmapLocationMutation.isPending || !unmapReason.trim() || !unmapTarget}
+                onClick={() => {
+                  if (!unmapTarget) return;
+                  unmapLocationMutation.mutate({
+                    yardId: unmapTarget.yardId,
+                    reason: unmapReason.trim(),
+                    effectiveTo: unmapEffectiveTo,
+                  });
+                }}
+              >
+                {unmapLocationMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Unmap"}
               </Button>
             </DialogFooter>
           </DialogContent>

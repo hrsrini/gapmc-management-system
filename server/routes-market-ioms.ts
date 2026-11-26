@@ -44,6 +44,7 @@ import { HrEmployeeRuleError, normalizeAadhaarMasked, normalizeMobile10 } from "
 import { validateDvReturnToDraft } from "@shared/workflow-rejection";
 import { createIomsReceipt } from "./routes-receipts-ioms";
 import { unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
+import { applyInvoiceNearestRupeeRounding } from "@shared/invoice-rounding";
 import { todayYmdIst } from "@shared/premises-allocation";
 import { getMergedSystemConfig, parseSystemConfigNumber } from "./system-config";
 import {
@@ -3046,7 +3047,7 @@ export function registerMarketIomsRoutes(app: Express) {
               payerType: existing.traderLicenceId ? "TraderLicence" : "Other",
               payerRefId: existing.traderLicenceId ?? undefined,
               isGracePeriod: Boolean((existing as { isGracePeriod?: boolean | null }).isGracePeriod),
-              amount: totalCharges,
+              amount: applyInvoiceNearestRupeeRounding(totalCharges).finalAmount,
               paymentMode: "Cash",
               sourceModule: "M-04",
               sourceRecordId: existing.id,

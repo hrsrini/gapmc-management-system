@@ -18,6 +18,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
 import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
 import {
   buildCounterDuesPaymentApiBody,
@@ -75,6 +76,7 @@ export default function IomsManualReceiptForm() {
   const { toast } = useToast();
   const { user } = useAuth();
   const { data: yards = [] } = useScopedActiveYards();
+  const { getYardName } = useYardLabels();
 
   const yardFromUrl = searchParams.get("yardId")?.trim() ?? "";
   const partyFromUrl = searchParams.get("partyType")?.trim() ?? "";
@@ -222,10 +224,7 @@ export default function IomsManualReceiptForm() {
   }, [assistants, yardId]);
 
   const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
-  const receivedAtLabel = useMemo(() => {
-    if (!yardId) return "—";
-    return yards.find((y) => y.id === yardId)?.name ?? yardId;
-  }, [yardId, yards]);
+  const receivedAtLabel = useMemo(() => getYardName(yardId), [yardId, getYardName]);
 
   const createMutation = useMutation({
     mutationFn: async () => {

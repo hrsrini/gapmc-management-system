@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { HardHat, AlertCircle, PlusCircle } from "lucide-react";
 
 interface Work {
@@ -49,10 +50,7 @@ export default function ConstructionWorks() {
       return res.json();
     },
   });
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const columns = useMemo(
     (): ReportTableColumn[] => [
@@ -81,7 +79,7 @@ export default function ConstructionWorks() {
           </Link>
         ),
         workOrderDate: w.workOrderDate ?? "—",
-        yardName: yardById[w.yardId] ?? w.yardId,
+        yardName: getYardName(w.yardId),
         workType: w.workType,
         contractorName: w.contractorName ?? "—",
         startDate: w.startDate ?? "—",
@@ -95,7 +93,7 @@ export default function ConstructionWorks() {
         ),
       };
     });
-  }, [list, yardById]);
+  }, [list, getYardName]);
 
   if (isError) {
     return (

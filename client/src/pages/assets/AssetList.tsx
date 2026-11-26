@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { Building2, AlertCircle, Plus } from "lucide-react";
 import { premisesStatusLabel } from "@shared/premises-allocation";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
@@ -39,10 +40,7 @@ export default function AssetList() {
   const { data: assets, isLoading, isError } = useQuery<Asset[]>({
     queryKey: ["/api/ioms/assets"],
   });
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const sourceRows = useMemo((): Record<string, unknown>[] => {
     return (assets ?? []).map((a) => {
@@ -58,7 +56,7 @@ export default function AssetList() {
         ) : (
           <span className="font-mono text-sm">{a.assetId}</span>
         ),
-        yardName: yardById[a.yardId] ?? a.yardId,
+        yardName: getYardName(a.yardId),
         assetType: a.assetType,
         premisesLocation: a.premisesLocation ?? "—",
         value: a.value != null ? a.value : "—",
@@ -66,7 +64,7 @@ export default function AssetList() {
         _status: <Badge variant={vacant ? "default" : "secondary"}>{statusLabel}</Badge>,
       };
     });
-  }, [assets, yardById, canUpdate]);
+  }, [assets, getYardName, canUpdate]);
 
   if (isError) {
     return (

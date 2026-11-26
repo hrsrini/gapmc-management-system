@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { Link } from "wouter";
 import { Receipt, AlertCircle, ShieldCheck, CheckCircle, XCircle, Banknote, PlusCircle, SendHorizontal } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
@@ -67,10 +68,7 @@ export default function VouchersList() {
       return res.json() as Promise<Voucher[]>;
     },
   });
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const [rejectVoucherId, setRejectVoucherId] = useState<string | null>(null);
   const [rejectCode, setRejectCode] = useState<string>(REJECTION_REASON_CODES[0]);
@@ -135,7 +133,7 @@ export default function VouchersList() {
         </Link>
       ),
       voucherType: v.voucherType,
-      yardName: yardById[v.yardId] ?? v.yardId,
+      yardName: getYardName(v.yardId),
       payeeName: v.payeeName,
       amount: v.amount,
       status: v.status,
@@ -209,7 +207,7 @@ export default function VouchersList() {
     }));
   }, [
     list,
-    yardById,
+    getYardName,
     canVerify,
     canApprove,
     canReturnSubmittedToDraft,

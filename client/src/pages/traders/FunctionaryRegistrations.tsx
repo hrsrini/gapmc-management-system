@@ -8,6 +8,7 @@ import { FileCheck, AlertCircle, UserPlus } from "lucide-react";
 import { ReportDataTable, type ReportPagedParams } from "@/components/reports/ReportDataTable";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { TRADER_LICENCE_CRUD_DISABLED } from "@shared/trader-licence-crud";
 
 interface Licence {
@@ -60,10 +61,7 @@ export default function FunctionaryRegistrations() {
     return `/api/ioms/traders/licences?${sp}`;
   }, [tableParams]);
 
-  const { data: yards = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, y.name])), [yards]);
+  const { getYardName } = useYardLabels();
 
   const { data, isLoading, isError } = useQuery<PagedResponse>({
     queryKey: [listUrl],
@@ -103,7 +101,7 @@ export default function FunctionaryRegistrations() {
           </Link>
         ),
         licenceType: l.licenceType,
-        yardDisplay: yardById[l.yardId] ?? l.yardId,
+        yardDisplay: getYardName(l.yardId),
         mobile: l.mobile,
         validTo: l.validTo ?? "—",
         _status: (
@@ -118,7 +116,7 @@ export default function FunctionaryRegistrations() {
         ),
       };
     });
-  }, [data?.rows, yardById]);
+  }, [data?.rows, getYardName]);
 
   if (isError) {
     return (

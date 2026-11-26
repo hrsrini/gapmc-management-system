@@ -28,10 +28,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { formatApiDateOrDateTime, formatYmdToDisplay } from "@/lib/dateFormat";
 import { useAuth } from "@/context/AuthContext";
 import { fetchApiGet } from "@/lib/queryClient";
-import { formatAdditionalChargeLabels } from "@shared/hr-additional-charge-locations";
+import { parseAdditionalChargeYardIds } from "@shared/hr-additional-charge-locations";
 import {
   UserCircle,
   ArrowLeft,
@@ -118,11 +119,6 @@ interface Contract {
   startDate: string;
   endDate?: string | null;
 }
-interface YardRef {
-  id: string;
-  name: string;
-}
-
 interface EmployeeDocument {
   id: string;
   employeeId: string;
@@ -147,7 +143,9 @@ export default function HrEmployeeDetail() {
   const { can, user } = useAuth();
   const canUpdate = can("M-01", "Update");
   const canCreate = can("M-01", "Create");
+  const canPostingUpdate = canCreate || canUpdate;
   const canM10Read = can("M-10", "Read");
+  const [sbFilter, setSbFilter] = useState<"all" | "posting" | "leave">("all");
   const canApproveRegistration =
     can("M-01", "Approve") || Boolean(user?.roles?.some((r) => r.tier === "DA" || r.tier === "ADMIN"));
   const [sbOpen, setSbOpen] = useState(false);
@@ -201,10 +199,7 @@ export default function HrEmployeeDetail() {
     queryKey: ["/api/hr/employees", id, "documents"],
     enabled: !!id,
   });
-  const { data: yards = [] } = useQuery<YardRef[]>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   /** Drop rows that do not belong to this page (avoids wrong links when React Query briefly shows cached data from another employee). */
   const docsForEmployee = useMemo(() => {
@@ -286,8 +281,26 @@ export default function HrEmployeeDetail() {
       EOL: "Extraordinary Leave",
       CCL: "Child Care Leave",
     };
-    return serviceBook.map((e) => {
+    const postingTypes = new Set([
+      "posting_transfer",
+      "posting_additional_charge",
+      "posting_charge_withdrawn",
+      "posting_reporting_officer_changed",
+    ]);
+    const filtered = serviceBook.filter((e) => {
       const c = typeof e.content === "object" && e.content ? (e.content as Record<string, unknown>) : null;
+      const type = String(c?.type ?? "");
+      const isLeave =
+        Boolean(c) && ("leaveRequestId" in (c ?? {}) || type.startsWith("leave_"));
+      const isPosting = postingTypes.has(type);
+      if (sbFilter === "leave") return isLeave;
+      if (sbFilter === "posting") return isPosting;
+      return true;
+    });
+    return filtered.map((e) => {
+      const c = typeof e.content === "object" && e.content ? (e.content as Record<string, unknown>) : null;
+      const contentType = String(c?.type ?? "");
+      const isPosting = postingTypes.has(contentType);
       const leaveTypeCode = c?.leaveType != null ? String(c.leaveType).trim().toUpperCase() : "";
       const leaveLabel =
         (c?.leaveTypeLabel != null && String(c.leaveTypeLabel).trim()) ||
@@ -304,6 +317,28 @@ export default function HrEmployeeDetail() {
             ? `Rejoined duty on ${formatYmdToDisplay(String(c.rejoiningDate ?? ""))} after ${leaveLabel} (${fromDisp} to ${toDisp})${fileNoText}`
             : `${leaveLabel} leave sanction for ${fromDisp} to ${toDisp}${fileNoText}`;
       }
+      if (isPosting && c) {
+        const particulars = c.particulars != null ? String(c.particulars) : contentText;
+        const typeLabel = c.changeTypeLabel != null ? String(c.changeTypeLabel) : contentType;
+        const orderBits = [
+          c.orderNo != null && String(c.orderNo).trim() ? `Order ${String(c.orderNo).trim()}` : "",
+          c.orderDateDisplay != null
+            ? String(c.orderDateDisplay)
+            : c.orderDate
+              ? formatYmdToDisplay(String(c.orderDate))
+              : "",
+          c.effectiveFromDisplay != null
+            ? `eff. ${String(c.effectiveFromDisplay)}`
+            : c.effectiveFrom
+              ? `eff. ${formatYmdToDisplay(String(c.effectiveFrom))}`
+              : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        const ro = c.reportingOfficer as { text?: string } | undefined;
+        const roText = ro?.text ? `RO: ${ro.text}` : "";
+        contentText = [typeLabel, particulars, orderBits, roText].filter(Boolean).join(" — ");
+      }
       const isLeaveEntry =
         Boolean(c) &&
         ("leaveRequestId" in (c ?? {}) ||
@@ -312,7 +347,28 @@ export default function HrEmployeeDetail() {
       const approvedName = e.approvedByName?.trim() || null;
       const when = e.approvedAt ? formatApiDateOrDateTime(e.approvedAt) : "";
       let approvedLine = "—";
-      if (isLeaveEntry && (verifiedName || approvedName || when)) {
+      if (isPosting && c) {
+        const entered = c.enteredBy as { name?: string; at?: string } | undefined;
+        const verified = c.verifiedBy as { name?: string; at?: string } | undefined;
+        const approved = c.approvedBy as { name?: string; at?: string } | undefined;
+        const parts: string[] = [];
+        if (entered?.name) {
+          parts.push(
+            `Entered by ${entered.name}${entered.at ? ` (${formatApiDateOrDateTime(entered.at)})` : ""}`,
+          );
+        }
+        if (verified?.name) {
+          parts.push(
+            `Verified by ${verified.name}${verified.at ? ` (${formatApiDateOrDateTime(verified.at)})` : ""}`,
+          );
+        }
+        if (approved?.name) {
+          parts.push(
+            `Approved by ${approved.name}${approved.at ? ` (${formatApiDateOrDateTime(approved.at)})` : ""}`,
+          );
+        }
+        approvedLine = parts.length ? parts.join("; ") : when || "—";
+      } else if (isLeaveEntry && (verifiedName || approvedName || when)) {
         const parts: string[] = [];
         if (verifiedName) parts.push(`Leave Verified by ${verifiedName}`);
         if (approvedName) parts.push(`Leave Approved by ${approvedName}`);
@@ -332,12 +388,18 @@ export default function HrEmployeeDetail() {
         _approved: <span className="text-muted-foreground text-xs whitespace-normal break-words">{approvedLine}</span>,
         _workflow: (
           <span className="text-muted-foreground text-xs">
-            {e.status === "Pending" ? "DV verify → DA approve/reject" : e.status === "Verified" ? "DA approve/reject (or DV return)" : "—"}
+            {isPosting
+              ? "DO enter → DV verify → DA approve"
+              : e.status === "Pending"
+                ? "DV verify → DA approve/reject"
+                : e.status === "Verified"
+                  ? "DA approve/reject (or DV return)"
+                  : "—"}
           </span>
         ),
       };
     });
-  }, [serviceBook]);
+  }, [serviceBook, sbFilter]);
 
   const contractRows = useMemo((): Record<string, unknown>[] => {
     return contracts.map((c) => ({
@@ -353,9 +415,11 @@ export default function HrEmployeeDetail() {
     if (!id) return [];
     return docsForEmployee.map((d) => {
       const downloadUrl = employeeDocumentDownloadPath(id, d.id);
+      const isOrderCopy = String(d.docType ?? "").trim() === "OrderCopy";
       return {
         id: d.id,
         docType: d.docType,
+        source: isOrderCopy ? "Posting update" : "—",
         fileName: d.fileName,
         sizeBytes: d.sizeBytes,
         createdAt: d.createdAt,
@@ -384,6 +448,7 @@ export default function HrEmployeeDetail() {
               </a>
             </Button>
             {(canUpdate || canCreate) &&
+              !isOrderCopy &&
               !String(d.docType ?? "")
                 .trim()
                 .toLowerCase()
@@ -589,6 +654,11 @@ export default function HrEmployeeDetail() {
                 Approve registration (EMP-ID)
               </Button>
             )}
+            {canPostingUpdate && (
+              <Button variant="secondary" size="sm" asChild>
+                <Link href={`/hr/employees/${id}/posting-update`}>Update posting / charge</Link>
+              </Button>
+            )}
             {canUpdate && (
               <Button variant="outline" size="sm" asChild>
                 <Link href={`/hr/employees/${id}/edit`}>Edit</Link>
@@ -613,16 +683,15 @@ export default function HrEmployeeDetail() {
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
             <div><span className="text-muted-foreground">Designation</span><br />{employee.designation}</div>
-            <div><span className="text-muted-foreground">Primary Location Posted</span><br />{yardById[employee.yardId] ?? employee.yardId}</div>
+            <div><span className="text-muted-foreground">Primary Location Posted</span><br />{getYardName(employee.yardId)}</div>
             <div>
               <span className="text-muted-foreground">Additional Charge Locations</span>
               <br />
               {(() => {
-                const labels = formatAdditionalChargeLabels(
+                const labels = parseAdditionalChargeYardIds(
                   employee.locationPosted,
                   employee.yardId,
-                  Object.fromEntries(yards.map((y) => [y.id, y])),
-                );
+                ).map((id) => getYardName(id));
                 return labels.length > 0 ? labels.join("; ") : "—";
               })()}
             </div>
@@ -722,8 +791,27 @@ export default function HrEmployeeDetail() {
               <TabsTrigger value="access"><KeyRound className="h-4 w-4 mr-2" /> Login &amp; roles</TabsTrigger>
             </TabsList>
             <TabsContent value="servicebook" className="pt-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <div className="flex flex-wrap gap-1">
+                  {(
+                    [
+                      { key: "all", label: "All" },
+                      { key: "posting", label: "Posting & charge" },
+                      { key: "leave", label: "Leave" },
+                    ] as const
+                  ).map((chip) => (
+                    <Button
+                      key={chip.key}
+                      type="button"
+                      size="sm"
+                      variant={sbFilter === chip.key ? "default" : "outline"}
+                      onClick={() => setSbFilter(chip.key)}
+                    >
+                      {chip.label}
+                    </Button>
+                  ))}
+                </div>
               {canCreate && (
-              <div className="flex justify-end mb-2">
                 <Dialog open={sbOpen} onOpenChange={setSbOpen}>
                   <DialogTrigger asChild>
                     <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Add entry</Button>
@@ -752,8 +840,8 @@ export default function HrEmployeeDetail() {
                     </form>
                   </DialogContent>
                 </Dialog>
-              </div>
               )}
+              </div>
               {sbLoading ? (
                 <Skeleton className="h-24 w-full" />
               ) : (
@@ -835,7 +923,7 @@ export default function HrEmployeeDetail() {
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {["Photo", "Aadhaar", "PAN", "AppointmentOrder", "JoiningReport", "BankProof", "Other"].map((t) => (
+                              {["Photo", "Aadhaar", "PAN", "AppointmentOrder", "JoiningReport", "BankProof", "OrderCopy", "Other"].map((t) => (
                                 <SelectItem key={t} value={t}>
                                   {t}
                                 </SelectItem>
@@ -892,12 +980,13 @@ export default function HrEmployeeDetail() {
                 <ClientDataGrid
                   columns={[
                     { key: "docType", header: "Type" },
+                    { key: "source", header: "Source" },
                     { key: "_file", header: "File", sortField: "fileName" },
                     { key: "createdAt", header: "Uploaded", sortField: "createdAt" },
                     { key: "_actions", header: "Actions" },
                   ]}
                   sourceRows={documentRows}
-                  searchKeys={["docType", "fileName", "createdAt"]}
+                  searchKeys={["docType", "source", "fileName", "createdAt"]}
                   searchPlaceholder="Search documents…"
                   defaultSortKey="createdAt"
                   defaultSortDir="desc"

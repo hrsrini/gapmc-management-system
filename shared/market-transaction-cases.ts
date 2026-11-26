@@ -1,6 +1,8 @@
 /**
  * M-04 market transaction wizard — cases A–G (client mockups).
  */
+import { applyInvoiceNearestRupeeRounding, roundInr2 } from "./invoice-rounding";
+
 export type MarketTransactionCaseId = "A" | "B" | "C" | "D" | "E" | "F" | "G";
 
 export type MarketTransactionCaptureMode = "Normal" | "FlyingSquad" | "YardInspection";
@@ -251,10 +253,12 @@ export function computeMarketTransactionTotals(
   let totalPayable = 0;
   let receiptRevenueHead: "MarketFee" | "Miscellaneous" = "MarketFee";
   if (meta.usesSecurityDeposit) {
-    totalPayable = Math.round((securityDepositAmount + adminChargesAmount) * 100) / 100;
+    totalPayable = roundInr2(securityDepositAmount + adminChargesAmount);
     receiptRevenueHead = "Miscellaneous";
   } else {
-    totalPayable = Math.round((totalMarketFee + fineAmount) * 100) / 100;
+    // Market Fee receipt: nearest whole rupee (0.50 rounds up) for Total Amount Payable.
+    const before = roundInr2(totalMarketFee + fineAmount);
+    totalPayable = applyInvoiceNearestRupeeRounding(before).finalAmount;
     receiptRevenueHead = "MarketFee";
   }
 

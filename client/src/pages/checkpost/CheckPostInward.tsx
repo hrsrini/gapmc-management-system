@@ -15,6 +15,7 @@ import { formatTraderLicenceSelectLabel } from "@shared/select-display-labels";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { LogIn, AlertCircle, ShieldCheck, Plus } from "lucide-react";
 interface InwardEntry {
   id: string;
@@ -89,6 +90,7 @@ export default function CheckPostInward() {
       return res.json();
     },
   });
+  const { getYardName } = useYardLabels();
   const checkPostIds = useMemo(() => new Set(checkposts.map((c) => c.id)), [checkposts]);
   const checkPostById = useMemo(() => new Map(checkposts.map((c) => [c.id, c])), [checkposts]);
   const commodityIds = useMemo(() => new Set(commodities.map((c) => c.id)), [commodities]);
@@ -246,7 +248,7 @@ export default function CheckPostInward() {
     return filteredList.map((e) => ({
       id: e.id,
       entryNo: e.entryNo ?? "—",
-      checkPostName: checkPostById.get(e.checkPostId)?.name ?? e.checkPostId,
+      checkPostName: checkPostById.get(e.checkPostId)?.name ?? getYardName(e.checkPostId),
       transactionType: e.transactionType,
       entryDate: e.entryDate.slice(0, 10),
       vehicleNumber: e.vehicleNumber ?? "—",
@@ -287,7 +289,7 @@ export default function CheckPostInward() {
         </div>
       ),
     }));
-  }, [filteredList, checkPostById, canVerify, statusMutation, openCommodities]);
+  }, [filteredList, checkPostById, getYardName, canVerify, statusMutation, openCommodities]);
 
   const commodityLineColumns = useMemo(
     (): ReportTableColumn[] => [

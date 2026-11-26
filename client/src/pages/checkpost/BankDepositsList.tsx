@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { formatInr } from "@/lib/formatInr";
 import { Landmark, AlertCircle, Plus, ShieldCheck, Pencil } from "lucide-react";
 interface BankDeposit {
@@ -51,6 +52,7 @@ export default function BankDepositsList() {
   const { data: checkposts = [] } = useQuery<Array<{ id: string; name: string; code: string }>>({
     queryKey: ["/api/yards"],
   });
+  const { getYardName } = useYardLabels();
   const checkPostIds = useMemo(() => new Set(checkposts.map((c) => c.id)), [checkposts]);
   const checkPostById = useMemo(() => new Map(checkposts.map((c) => [c.id, c])), [checkposts]);
   const createError = useMemo(() => {
@@ -176,7 +178,7 @@ export default function BankDepositsList() {
     return (list ?? []).map((d) => ({
       id: d.id,
       depositDate: d.depositDate.slice(0, 10),
-      checkPostName: checkPostById.get(d.checkPostId)?.name ?? d.checkPostId,
+      checkPostName: checkPostById.get(d.checkPostId)?.name ?? getYardName(d.checkPostId),
       bankName: d.bankName,
       amount: d.amount,
       _amount: `${formatInr(d.amount)}`,
@@ -205,7 +207,7 @@ export default function BankDepositsList() {
         </div>
       ) : null,
     }));
-  }, [list, checkPostById, canUpdate, canVerify, openEdit, verifyMutation, updateMutation]);
+  }, [list, checkPostById, getYardName, canUpdate, canVerify, openEdit, verifyMutation, updateMutation]);
 
   if (isError) {
     return (

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import { formatInr } from "@/lib/formatInr";
 import { formatYmdToDisplay } from "@/lib/dateFormat";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { AlertCircle, Store } from "lucide-react";
 
 interface Asset {
@@ -63,7 +64,7 @@ export default function AssetsVacant() {
   const { data: yards = [] } = useQuery<Yard[]>({
     queryKey: ["/api/yards"],
   });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const handleYardChange = (value: string) => {
     const url = new URL(window.location.href);
@@ -84,7 +85,7 @@ export default function AssetsVacant() {
             {row.asset.assetId}
           </Link>
         ),
-        yardName: yardById[row.asset.yardId] ?? row.asset.yardId,
+        yardName: getYardName(row.asset.yardId),
         assetType: row.asset.assetType,
         complexName: row.asset.complexName ?? "—",
         previousAllottee: row.lastAllotment?.allotteeName ?? "—",
@@ -96,7 +97,7 @@ export default function AssetsVacant() {
         _lastRent: row.lastRentAmount != null ? formatInr(row.lastRentAmount) : "—",
       };
     });
-  }, [vacant, yardById]);
+  }, [vacant, getYardName]);
 
   if (isError) {
     return (

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import {
   Select,
   SelectContent,
@@ -76,10 +77,6 @@ interface RentInvoice {
   nonGstChargesJson?: string | null;
   combinedBundleId?: string | null;
 }
-interface YardRef {
-  id: string;
-  name: string;
-}
 interface AssetRef {
   id: string;
   assetId: string;
@@ -113,9 +110,7 @@ export default function IomsRentInvoiceDetail() {
     queryKey: ["/api/ioms/rent/invoices", id],
     enabled: !!id,
   });
-  const { data: yards = [] } = useQuery<YardRef[]>({
-    queryKey: ["/api/yards"],
-  });
+  const { getYardName } = useYardLabels();
   const { data: assets = [] } = useQuery<AssetRef[]>({
     queryKey: ["/api/ioms/assets"],
   });
@@ -158,7 +153,6 @@ export default function IomsRentInvoiceDetail() {
   });
   const creditNotesForInvoice = creditNoteList.filter((c) => c.invoiceId === id);
 
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
   const assetById = Object.fromEntries(assets.map((a) => [a.id, a.assetId]));
   const licenceById = Object.fromEntries(
     licences.map((l) => [l.id, formatTraderLicenceSelectLabel(l)]),
@@ -444,7 +438,7 @@ export default function IomsRentInvoiceDetail() {
             </div>
           ) : null}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <div><span className="text-muted-foreground">Yard</span><br />{yardById[invoice.yardId] ?? invoice.yardId}</div>
+            <div><span className="text-muted-foreground">Yard</span><br />{getYardName(invoice.yardId)}</div>
             <div><span className="text-muted-foreground">Period</span><br />{formatYearMonthToDisplay(invoice.periodMonth)}</div>
             <div><span className="text-muted-foreground">Asset</span><br />{assetById[invoice.assetId] ?? invoice.assetId}</div>
             <div>

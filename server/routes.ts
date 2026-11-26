@@ -325,6 +325,31 @@ export async function registerRoutes(
     }
   });
 
+  /**
+   * Location labels for display (id → name/code) across the whole org.
+   * Not limited by posting location — Checkpost/HO users still see real yard names
+   * on cross-yard lists. Does not replace scoped `/api/yards` for write dropdowns.
+   */
+  app.get("/api/yards/for-labels", async (req, res) => {
+    try {
+      if (!req.user) return sendApiError(res, 401, "AUTH_NOT_AUTHENTICATED", "Not authenticated");
+      const list = await db
+        .select({
+          id: yards.id,
+          name: yards.name,
+          code: yards.code,
+          type: yards.type,
+          isActive: yards.isActive,
+        })
+        .from(yards)
+        .orderBy(yards.name);
+      res.json(list);
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch yard labels");
+    }
+  });
+
   // Yards scoped to current user's assigned locations — active only (dropdowns, filters).
   app.get("/api/yards", async (req, res) => {
     try {

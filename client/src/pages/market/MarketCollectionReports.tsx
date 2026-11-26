@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { AlertCircle, BarChart3 } from "lucide-react";
 import { formatInr } from "@/lib/formatInr";
 import { Link } from "wouter";
@@ -95,7 +96,16 @@ export default function MarketCollectionReports() {
   const [checkPostId, setCheckPostId] = useState<string>("all");
 
   const { data: yards = [] } = useQuery<YardRef[]>({ queryKey: ["/api/yards"] });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, `${y.name} (${y.code})`]));
+  const { getYardName, yards: yardLabels } = useYardLabels();
+  const yardById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const y of yardLabels) {
+      const name = String(y.name ?? "").trim();
+      const code = String(y.code ?? "").trim();
+      if (y.id && (name || code)) m[y.id] = name && code ? `${name} (${code})` : name || code;
+    }
+    return m;
+  }, [yardLabels]);
   const checkPosts = yards.filter((y) => String(y.type ?? "") === "CheckPost");
 
   const collectionsUrl = useMemo(() => {
@@ -137,27 +147,27 @@ export default function MarketCollectionReports() {
         </Link>
       ),
       createdAt: r.createdAt,
-      yardName: yardById[r.yardId] ?? r.yardId,
+      yardName: yardById[r.yardId] ?? getYardName(r.yardId),
       payerName: r.payerName ?? r.payerRefId ?? "—",
       paymentMode: r.paymentMode,
       totalAmount: r.totalAmount,
       _amount: `${formatInr(Number(r.totalAmount ?? 0))}`,
       _grace: r.isGracePeriod ? <Badge variant="outline">Yes</Badge> : <span className="text-muted-foreground">—</span>,
     }));
-  }, [collections?.receipts, yardById]);
+  }, [collections?.receipts, yardById, getYardName]);
 
   const depositRows = useMemo(() => {
     return (deposits?.rows ?? []).map((d) => ({
       id: d.id,
       depositDate: d.depositDate,
-      checkPostName: yardById[d.checkPostId] ?? d.checkPostId,
+      checkPostName: yardById[d.checkPostId] ?? getYardName(d.checkPostId),
       bankName: d.bankName,
       amount: d.amount,
       _amount: `${formatInr(Number(d.amount ?? 0))}`,
       status: d.status,
       _status: <Badge variant={d.status === "Verified" ? "default" : "secondary"}>{d.status}</Badge>,
     }));
-  }, [deposits?.rows, yardById]);
+  }, [deposits?.rows, yardById, getYardName]);
 
   const loading = colLoading || depLoading;
   const anyError = colError || depError;

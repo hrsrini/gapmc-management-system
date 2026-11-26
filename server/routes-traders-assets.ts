@@ -82,6 +82,14 @@ import {
   upsertActiveMappings,
   allYardsInScope,
 } from "./entity-location-mappings";
+import {
+  ensureLicenceHomeMapping,
+  licenceAccessibleViaMappings,
+  licenceHasActiveMapping,
+  listMappedYardsForLicence,
+  unmapLicenceLocation,
+  upsertActiveLicenceMappings,
+} from "./trader-licence-location-mappings";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
 import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
 import {
@@ -2429,15 +2437,141 @@ export function registerTradersAssetsRoutes(app: Express) {
     try {
       const [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, req.params.id)).limit(1);
       if (!row) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
-      if (!licenceYardAccessible(req, row.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      const adminOrBypass =
+        Boolean(req.user?.roles.some((r) => r.tier === "ADMIN")) ||
+        Boolean((req as Request & { checkPostLicenceBypass?: boolean }).checkPostLicenceBypass);
+      if (!adminOrBypass && !(await licenceAccessibleViaMappings(req, row.id, row.yardId))) {
+        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      }
+      await ensureLicenceHomeMapping(row.id, row.yardId, { createdBy: req.user?.id ?? null }).catch((e) => {
+        console.error("[licence-map] ensure home mapping failed:", e);
+      });
+      const mappedYards = await listMappedYardsForLicence(row.id).catch((e) => {
+        console.error("[licence-map] list mapped yards failed:", e);
+        return [] as Awaited<ReturnType<typeof listMappedYardsForLicence>>;
+      });
       const lmProfile = await fetchLmApplicationProfile(row.licenceNo).catch((e) => {
         console.error("[lm] fetch application profile failed:", e);
         return null;
       });
-      res.json({ ...row, lmProfile });
+      res.json({ ...row, lmProfile, mappedYards });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch licence");
+    }
+  });
+
+  app.post("/api/ioms/traders/licences/:id/location-mappings", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const [existing] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      const adminOrBypass =
+        Boolean(req.user?.roles.some((r) => r.tier === "ADMIN")) ||
+        Boolean((req as Request & { checkPostLicenceBypass?: boolean }).checkPostLicenceBypass);
+      if (!adminOrBypass && !(await licenceAccessibleViaMappings(req, existing.id, existing.yardId))) {
+        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      }
+      const body = req.body as { yardIds?: unknown; yardId?: unknown };
+      const yardIdsRaw = Array.isArray(body.yardIds)
+        ? body.yardIds.map((y) => String(y))
+        : body.yardId != null
+          ? [String(body.yardId)]
+          : [];
+      const yardIds = [...new Set(yardIdsRaw.map((y) => y.trim()).filter(Boolean))];
+      if (yardIds.length === 0) {
+        return sendApiError(res, 400, "YARD_REQUIRED", "Select at least one location to map");
+      }
+      if (!allYardsInScope(req, yardIds)) {
+        return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to one or more selected locations");
+      }
+      for (const yid of yardIds) {
+        const yardTypeCheck = await assertPremisesYardLocation(yid);
+        if (!yardTypeCheck.ok) {
+          return sendApiError(res, 400, yardTypeCheck.code, yardTypeCheck.message);
+        }
+      }
+      const ts = now();
+      await ensureLicenceHomeMapping(id, existing.yardId, { createdBy: req.user?.id ?? null, ts });
+      await db.transaction(async (tx) => {
+        await upsertActiveLicenceMappings(tx as any, {
+          traderLicenceId: id,
+          yardIds,
+          createdBy: req.user?.id ?? null,
+          ts,
+          setHomeYard: false,
+        });
+      });
+      writeAuditLog(req, {
+        module: "Traders",
+        action: "MapLicenceLocations",
+        recordId: id,
+        afterValue: { yardIds },
+      }).catch((e) => console.error("Audit log failed:", e));
+      const mappedYards = await listMappedYardsForLicence(id);
+      const [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
+      res.json({ ...row, mappedYards });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to map locations");
+    }
+  });
+
+  app.post("/api/ioms/traders/licences/:id/location-mappings/:yardId/unmap", async (req, res) => {
+    try {
+      const id = routeParamString(req.params.id);
+      const yardId = String(req.params.yardId ?? "").trim();
+      const [existing] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
+      if (!existing) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      const adminOrBypass =
+        Boolean(req.user?.roles.some((r) => r.tier === "ADMIN")) ||
+        Boolean((req as Request & { checkPostLicenceBypass?: boolean }).checkPostLicenceBypass);
+      if (!adminOrBypass && !(await licenceAccessibleViaMappings(req, existing.id, existing.yardId))) {
+        return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      }
+      if (!yardInScope(req, yardId)) {
+        return sendApiError(res, 403, "M02_YARD_ACCESS_DENIED", "You do not have access to this location");
+      }
+      const reason = String((req.body as { reason?: string })?.reason ?? "").trim();
+      if (!reason) {
+        return sendApiError(res, 400, "UNMAP_REASON_REQUIRED", "Reason is required to unmap a location");
+      }
+      const effectiveTo = (req.body as { effectiveTo?: string })?.effectiveTo
+        ? String((req.body as { effectiveTo?: string }).effectiveTo).trim()
+        : null;
+      const result = await unmapLicenceLocation({
+        traderLicenceId: id,
+        yardId,
+        reason,
+        effectiveTo,
+        ts: now(),
+      });
+      if (result === "not_found") {
+        return sendApiError(res, 404, "MAPPING_NOT_FOUND", "Location mapping not found");
+      }
+      if (result === "already_inactive") {
+        return sendApiError(res, 400, "MAPPING_ALREADY_INACTIVE", "Location is already unmapped");
+      }
+      if (result === "last_active") {
+        return sendApiError(
+          res,
+          400,
+          "MAPPING_LAST_ACTIVE",
+          "Cannot unmap the last active location. Map another location first.",
+        );
+      }
+      writeAuditLog(req, {
+        module: "Traders",
+        action: "UnmapLicenceLocation",
+        recordId: id,
+        afterValue: { yardId, reason, effectiveTo },
+      }).catch((e) => console.error("Audit log failed:", e));
+      const mappedYards = await listMappedYardsForLicence(id);
+      const [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
+      res.json({ ...row, mappedYards });
+    } catch (e) {
+      console.error(e);
+      sendApiError(res, 500, "INTERNAL_ERROR", "Failed to unmap location");
     }
   });
 
@@ -2877,6 +3011,13 @@ export function registerTradersAssetsRoutes(app: Express) {
           createdAt: ts,
           updatedAt: ts,
         });
+        await upsertActiveLicenceMappings(tx as any, {
+          traderLicenceId: id,
+          yardIds: [String(body.yardId ?? "")].filter(Boolean),
+          createdBy: req.user?.id ?? null,
+          ts,
+          setHomeYard: false,
+        });
       });
       let [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, id));
       if (row?.receiptId != null && String(row.receiptId).trim() !== "" && !(row.provisionalLicenceNo != null && String(row.provisionalLicenceNo).trim() !== "")) {
@@ -3190,6 +3331,13 @@ export function registerTradersAssetsRoutes(app: Express) {
       const [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, id)).limit(1);
       if (!row) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
 
+      if (body.yardId !== undefined && String(row.yardId) !== String(existing.yardId)) {
+        await ensureLicenceHomeMapping(id, row.yardId, {
+          createdBy: req.user?.id ?? null,
+          ts: now(),
+        }).catch((e) => console.error("[licence-map] ensure home after yard change failed:", e));
+      }
+
       // Phase-1 linkage: when a licence becomes Active and fee is present, auto-create (or reuse) a LicenceFee receipt.
       const shouldCreateReceipt =
         row.status === "Active" &&
@@ -3353,48 +3501,59 @@ export function registerTradersAssetsRoutes(app: Express) {
         }
       }
 
-      await db.insert(traderLicences).values({
-        id: newId,
-        parentLicenceId: existing.id,
-        applicationKind: "Renewal",
-        firmName: existing.firmName,
-        yardId: existing.yardId,
-        mobile: existing.mobile,
-        licenceType: existing.licenceType,
-        status: "Draft",
-        firmType: existing.firmType,
-        contactName: existing.contactName,
-        email: existing.email,
-        address: existing.address,
-        aadhaarToken: existing.aadhaarToken,
-        pan: existing.pan,
-        gstin: existing.gstin,
-        feeAmount: resolvedFee,
-        receiptId: null,
-        validFrom,
-        validTo,
-        isBlocked: false,
-        blockReason: null,
-        dvReturnRemarks: null,
-        workflowRevisionCount: 0,
-        govtGstExemptCategoryId: existing.govtGstExemptCategoryId,
-        isNonGstEntity: Boolean(existing.isNonGstEntity ?? false),
-        fatherSpouseName: existing.fatherSpouseName ?? null,
-        dateOfBirth: existing.dateOfBirth ?? null,
-        emergencyContactMobile: existing.emergencyContactMobile ?? null,
-        characterCertIssuer: existing.characterCertIssuer ?? null,
-        characterCertDate: existing.characterCertDate ?? null,
-        bmFormDocUrl: existing.bmFormDocUrl ?? null,
-        bmFormDocFile: childBmFile,
-        parentLicenceFeeSnapshot:
-          existing.feeAmount != null && Number.isFinite(Number(existing.feeAmount)) ? Number(existing.feeAmount) : null,
-        renewalNoArrearsDeclared: false,
-        doUser: req.user?.id ?? null,
-        dvUser: null,
-        daUser: null,
-        licenceNo: null,
-        createdAt: ts,
-        updatedAt: ts,
+      await db.transaction(async (tx) => {
+        await tx.insert(traderLicences).values({
+          id: newId,
+          parentLicenceId: existing.id,
+          applicationKind: "Renewal",
+          firmName: existing.firmName,
+          yardId: existing.yardId,
+          mobile: existing.mobile,
+          licenceType: existing.licenceType,
+          status: "Draft",
+          firmType: existing.firmType,
+          contactName: existing.contactName,
+          email: existing.email,
+          address: existing.address,
+          aadhaarToken: existing.aadhaarToken,
+          pan: existing.pan,
+          gstin: existing.gstin,
+          feeAmount: resolvedFee,
+          receiptId: null,
+          validFrom,
+          validTo,
+          isBlocked: false,
+          blockReason: null,
+          dvReturnRemarks: null,
+          workflowRevisionCount: 0,
+          govtGstExemptCategoryId: existing.govtGstExemptCategoryId,
+          isNonGstEntity: Boolean(existing.isNonGstEntity ?? false),
+          fatherSpouseName: existing.fatherSpouseName ?? null,
+          dateOfBirth: existing.dateOfBirth ?? null,
+          emergencyContactMobile: existing.emergencyContactMobile ?? null,
+          characterCertIssuer: existing.characterCertIssuer ?? null,
+          characterCertDate: existing.characterCertDate ?? null,
+          bmFormDocUrl: existing.bmFormDocUrl ?? null,
+          bmFormDocFile: childBmFile,
+          parentLicenceFeeSnapshot:
+            existing.feeAmount != null && Number.isFinite(Number(existing.feeAmount))
+              ? Number(existing.feeAmount)
+              : null,
+          renewalNoArrearsDeclared: false,
+          doUser: req.user?.id ?? null,
+          dvUser: null,
+          daUser: null,
+          licenceNo: null,
+          createdAt: ts,
+          updatedAt: ts,
+        });
+        await upsertActiveLicenceMappings(tx as any, {
+          traderLicenceId: newId,
+          yardIds: [existing.yardId].filter(Boolean),
+          createdBy: req.user?.id ?? null,
+          ts,
+          setHomeYard: false,
+        });
       });
 
       const [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, newId)).limit(1);
@@ -4081,6 +4240,19 @@ export function registerTradersAssetsRoutes(app: Express) {
           return sendApiError(res, 400, e.code, e.message);
         }
         throw e;
+      }
+
+      await ensureLicenceHomeMapping(traderLicenceId, lic.yardId, { createdBy: req.user?.id ?? null }).catch((e) => {
+        console.error("[licence-map] ensure home mapping on allotment failed:", e);
+      });
+      const mappedOk = await licenceHasActiveMapping(traderLicenceId, assetRow.yardId);
+      if (!mappedOk) {
+        return sendApiError(
+          res,
+          400,
+          "LICENCE_LOCATION_NOT_MAPPED",
+          "Premises location is not mapped to this licence. Add the location mapping first.",
+        );
       }
 
       const allotmentDate = String((body as Record<string, unknown>).allotmentDate ?? "").trim();

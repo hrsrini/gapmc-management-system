@@ -20,6 +20,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { UserCircle, ArrowLeft, User, Lock, Settings, Loader2, AlertCircle, KeyRound } from "lucide-react";
 import { EmployeeLoginAccessSection } from "@/components/hr/EmployeeLoginAccessSection";
 import { EmployeeSearchSelect } from "@/components/selects/employee-search-select";
@@ -185,6 +186,7 @@ export default function HrEmployeeForm() {
   const [createRoleIds, setCreateRoleIds] = useState<Set<string>>(new Set());
 
   const { data: yards = [] } = useQuery<Yard[]>({ queryKey: ["/api/yards"] });
+  const { getYardName } = useYardLabels();
   const { data: designationRows = [] } = useQuery<
     Array<{ id: string; code: string; name: string; hierarchyLevel: number; status: string }>
   >({
@@ -501,12 +503,7 @@ export default function HrEmployeeForm() {
       correspondenceAddress: correspondenceAddress.trim() || null,
       emergencyContactName: emergencyContactName.trim() || null,
       emergencyContactMobile: emMobile,
-      reportingOfficerEmployeeId: reportingOfficerEmployeeId.trim() || null,
       serviceBookNo: serviceBookNo.trim() || null,
-      section: sectionToSave,
-      yardId,
-      additionalChargeYardIds: additionalChargeYardIds.filter((id) => id && id !== yardId),
-      locationPosted: serializeAdditionalChargeYardIds(additionalChargeYardIds, yardId),
       payLevel: payLevel ? parseInt(payLevel, 10) : null,
       basicPayInr: (() => {
         const t = basicPayInr.trim().replace(/,/g, "");
@@ -527,7 +524,13 @@ export default function HrEmployeeForm() {
     } else if (isEdit && canM01Read) {
       payload.designationId = null;
     }
+    // Posting / charge / RO are set on create only; edits go through M-01 posting-update workflow.
     if (!isEdit) {
+      payload.reportingOfficerEmployeeId = reportingOfficerEmployeeId.trim() || null;
+      payload.section = sectionToSave;
+      payload.yardId = yardId;
+      payload.additionalChargeYardIds = additionalChargeYardIds.filter((id) => id && id !== yardId);
+      payload.locationPosted = serializeAdditionalChargeYardIds(additionalChargeYardIds, yardId);
       // Send raw Aadhaar digits for server-side masking + fingerprint; raw is never stored.
       payload.aadhaarRaw = aadhaarTrim || null;
     } else if (aadhaarTrim) {
@@ -830,47 +833,68 @@ export default function HrEmployeeForm() {
                   </div>
                   <div>
                     <Label>Primary Location Posted *</Label>
-                    <Select
-                      value={yardId}
-                      onValueChange={(v) => {
-                        setYardId(v);
-                        setAdditionalChargeYardIds((prev) => prev.filter((id) => id !== v));
-                        const y = (yards ?? []).find((row) => row.id === v);
-                        if (!isHeadOfficeYard(y)) setSection("");
-                      }}
-                      required
-                    >
-                      <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
-                      <SelectContent>
-                        {(yards ?? []).map((y) => (
-                          <SelectItem key={y.id} value={y.id}>{y.name ?? y.code ?? y.id}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {isEdit && employee?.userId ? (
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Changes also update Login &amp; roles → Locations (app yard scope).
-                      </p>
-                    ) : null}
+                    {isEdit ? (
+                      <>
+                        <Input
+                          value={(yards ?? []).find((y) => y.id === yardId)?.name
+                            ?? (yards ?? []).find((y) => y.id === yardId)?.code
+                            ?? yardId
+                            ?? "—"}
+                          readOnly
+                          className="bg-muted"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Posting location is updated via{" "}
+                          <Link href={`/hr/employees/${id}/posting-update`} className="font-medium text-primary underline">
+                            Update posting / charge
+                          </Link>
+                          .
+                        </p>
+                      </>
+                    ) : (
+                      <Select
+                        value={yardId}
+                        onValueChange={(v) => {
+                          setYardId(v);
+                          setAdditionalChargeYardIds((prev) => prev.filter((id) => id !== v));
+                          const y = (yards ?? []).find((row) => row.id === v);
+                          if (!isHeadOfficeYard(y)) setSection("");
+                        }}
+                        required
+                      >
+                        <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
+                        <SelectContent>
+                          {(yards ?? []).map((y) => (
+                            <SelectItem key={y.id} value={y.id}>{y.name ?? y.code ?? y.id}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
                   <div>
                     <Label>Section (HO employees)</Label>
-                    <Select
-                      value={section || "__none__"}
-                      onValueChange={(v) => setSection(v === "__none__" ? "" : v)}
-                      disabled={!isHeadOfficeYard((yards ?? []).find((y) => y.id === yardId))}
-                    >
-                      <SelectTrigger><SelectValue placeholder="N/A" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">N/A</SelectItem>
-                        <SelectItem value="Accounts Section">Accounts Section</SelectItem>
-                        <SelectItem value="Admin Section">Admin Section</SelectItem>
-                        <SelectItem value="Inspection Section">Inspection Section</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {!isHeadOfficeYard((yards ?? []).find((y) => y.id === yardId)) ? (
-                      <p className="text-xs text-muted-foreground mt-1">Enabled only when Primary Location Posted is Head Office.</p>
-                    ) : null}
+                    {isEdit ? (
+                      <Input value={section || "N/A"} readOnly className="bg-muted" />
+                    ) : (
+                      <>
+                        <Select
+                          value={section || "__none__"}
+                          onValueChange={(v) => setSection(v === "__none__" ? "" : v)}
+                          disabled={!isHeadOfficeYard((yards ?? []).find((y) => y.id === yardId))}
+                        >
+                          <SelectTrigger><SelectValue placeholder="N/A" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">N/A</SelectItem>
+                            <SelectItem value="Accounts Section">Accounts Section</SelectItem>
+                            <SelectItem value="Admin Section">Admin Section</SelectItem>
+                            <SelectItem value="Inspection Section">Inspection Section</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {!isHeadOfficeYard((yards ?? []).find((y) => y.id === yardId)) ? (
+                          <p className="text-xs text-muted-foreground mt-1">Enabled only when Primary Location Posted is Head Office.</p>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                   <div><Label>Employee type</Label>
                     <Select value={employeeType} onValueChange={setEmployeeType}>
@@ -884,45 +908,70 @@ export default function HrEmployeeForm() {
                   </div>
                   <div className="md:col-span-2">
                     <Label>Additional Charge Locations</Label>
-                    <p className="text-xs text-muted-foreground mt-1 mb-2">
-                      Optional. Select one or more locations in addition to Primary Location Posted. The primary
-                      location is excluded from this list.
-                      {isEdit && employee?.userId
-                        ? " These also sync to Login & roles → Locations."
-                        : ""}
-                    </p>
-                    <div className="max-h-48 overflow-y-auto rounded-md border p-3 space-y-2">
-                      {(yards ?? [])
-                        .filter((y) => y.id !== yardId)
-                        .slice()
-                        .sort((a, b) =>
-                          String(a.name ?? a.code ?? a.id).localeCompare(String(b.name ?? b.code ?? b.id), undefined, {
-                            sensitivity: "base",
-                          }),
-                        )
-                        .map((y) => {
-                          const checked = additionalChargeYardIds.includes(y.id);
-                          const label = y.name ?? y.code ?? y.id;
-                          return (
-                            <label key={y.id} className="flex items-center gap-2 text-sm cursor-pointer">
-                              <Checkbox
-                                checked={checked}
-                                onCheckedChange={(v) => {
-                                  const on = v === true;
-                                  setAdditionalChargeYardIds((prev) => {
-                                    if (on) return prev.includes(y.id) ? prev : [...prev, y.id];
-                                    return prev.filter((id) => id !== y.id);
-                                  });
-                                }}
-                              />
-                              <span>{label}</span>
-                            </label>
-                          );
-                        })}
-                      {(yards ?? []).filter((y) => y.id !== yardId).length === 0 ? (
-                        <p className="text-xs text-muted-foreground">Select a primary location first.</p>
-                      ) : null}
-                    </div>
+                    {isEdit ? (
+                      <>
+                        <Input
+                          value={
+                            additionalChargeYardIds.length > 0
+                              ? additionalChargeYardIds
+                                  .map((aid) => {
+                                    const y = (yards ?? []).find((row) => row.id === aid);
+                                    return y?.name ?? y?.code ?? aid;
+                                  })
+                                  .join("; ")
+                              : "None"
+                          }
+                          readOnly
+                          className="bg-muted"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Additional charges are managed via{" "}
+                          <Link href={`/hr/employees/${id}/posting-update`} className="font-medium text-primary underline">
+                            Update posting / charge
+                          </Link>
+                          .
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-xs text-muted-foreground mt-1 mb-2">
+                          Optional. Select one or more locations in addition to Primary Location Posted. The primary
+                          location is excluded from this list.
+                        </p>
+                        <div className="max-h-48 overflow-y-auto rounded-md border p-3 space-y-2">
+                          {(yards ?? [])
+                            .filter((y) => y.id !== yardId)
+                            .slice()
+                            .sort((a, b) =>
+                              String(a.name ?? a.code ?? a.id).localeCompare(String(b.name ?? b.code ?? b.id), undefined, {
+                                sensitivity: "base",
+                              }),
+                            )
+                            .map((y) => {
+                              const checked = additionalChargeYardIds.includes(y.id);
+                              const label = y.name ?? y.code ?? y.id;
+                              return (
+                                <label key={y.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                                  <Checkbox
+                                    checked={checked}
+                                    onCheckedChange={(v) => {
+                                      const on = v === true;
+                                      setAdditionalChargeYardIds((prev) => {
+                                        if (on) return prev.includes(y.id) ? prev : [...prev, y.id];
+                                        return prev.filter((id) => id !== y.id);
+                                      });
+                                    }}
+                                  />
+                                  <span>{label}</span>
+                                </label>
+                              );
+                            })}
+                          {(yards ?? []).filter((y) => y.id !== yardId).length === 0 ? (
+                            <p className="text-xs text-muted-foreground">Select a primary location first.</p>
+                          ) : null}
+                        </div>
+                      </>
+                    )}
                   </div>
                   <div>
                     <Label>Pay level</Label>
@@ -1134,14 +1183,34 @@ export default function HrEmployeeForm() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
                     <Label>Reporting officer</Label>
-                    <EmployeeSearchSelect
-                      value={reportingOfficerEmployeeId}
-                      onValueChange={setReportingOfficerEmployeeId}
-                      excludeId={isEdit ? id : undefined}
-                      allowClear
-                      clearLabel="None"
-                      placeholder="None"
-                    />
+                    {isEdit ? (
+                      <>
+                        <EmployeeSearchSelect
+                          value={reportingOfficerEmployeeId}
+                          onValueChange={setReportingOfficerEmployeeId}
+                          excludeId={id}
+                          allowClear
+                          clearLabel="None"
+                          placeholder="None"
+                          disabled
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Reporting officer changes go through{" "}
+                          <Link href={`/hr/employees/${id}/posting-update`} className="font-medium text-primary underline">
+                            Update posting / charge
+                          </Link>
+                          .
+                        </p>
+                      </>
+                    ) : (
+                      <EmployeeSearchSelect
+                        value={reportingOfficerEmployeeId}
+                        onValueChange={setReportingOfficerEmployeeId}
+                        allowClear
+                        clearLabel="None"
+                        placeholder="None"
+                      />
+                    )}
                   </div>
                   <div><Label>Service Book No.</Label><Input value={serviceBookNo} onChange={(e) => setServiceBookNo(e.target.value)} placeholder="e.g. 386" /></div>
                   <div><Label>Joining date *</Label><Input type="date" value={joiningDate} onChange={(e) => setJoiningDate(e.target.value)} required /></div>
@@ -1261,7 +1330,10 @@ export default function HrEmployeeForm() {
                                   ].filter(Boolean);
                                   const labels = ids.map((id) => {
                                     const y = (yards ?? []).find((row) => row.id === id);
-                                    return { id, label: y?.name ?? y?.code ?? id };
+                                    return {
+                                      id,
+                                      label: y?.name ?? y?.code ?? getYardName(id),
+                                    };
                                   });
                                   if (labels.length === 0) {
                                     return (

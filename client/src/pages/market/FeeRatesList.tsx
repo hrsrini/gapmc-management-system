@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { Percent, AlertCircle, Plus } from "lucide-react";
 import { SYSTEM_CONFIG_DEFAULTS } from "@shared/system-config-defaults";
 
@@ -57,8 +58,8 @@ export default function FeeRatesList() {
   const { data: yards = [] } = useQuery<Array<{ id: string; name: string; code: string }>>({
     queryKey: ["/api/yards"],
   });
+  const { getYardName } = useYardLabels();
   const commodityMap = Object.fromEntries((commodities ?? []).map((c) => [c.id, c.name ?? c.id]));
-  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y])), [yards]);
   const commodityIds = useMemo(() => new Set(commodities.map((c) => c.id)), [commodities]);
   const yardIds = useMemo(() => new Set(yards.map((y) => y.id)), [yards]);
   const createError = useMemo(() => {
@@ -123,9 +124,9 @@ export default function FeeRatesList() {
       validTo: r.validTo ? r.validTo.slice(0, 10) : null,
       feePercent: r.feePercent,
       _feePct: `${r.feePercent}%`,
-      yardName: r.yardId ? (yardById.get(r.yardId)?.name ?? r.yardId) : "—",
+      yardName: r.yardId ? getYardName(r.yardId) : "—",
     }));
-  }, [list, commodityMap, yardById]);
+  }, [list, commodityMap, getYardName]);
 
   if (isError) {
     return (

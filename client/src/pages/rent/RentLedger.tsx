@@ -34,7 +34,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { formatInr } from "@/lib/formatInr";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/context/AuthContext";
-import { useScopedActiveYards } from "@/hooks/useScopedActiveYards";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { PaymentPreferenceForm } from "@/components/payments/PaymentPreferenceForm";
 import {
   buildCounterDuesPaymentApiBody,
@@ -138,7 +138,7 @@ type LedgerPayStep = "ledger" | "payment";
 
 export default function RentLedger() {
   const { user } = useAuth();
-  const { data: yards = [] } = useScopedActiveYards();
+  const { getYardName } = useYardLabels();
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const unifiedEntityFromUrl = searchParams.get("unifiedEntityId")?.trim() ?? "";
@@ -232,11 +232,10 @@ export default function RentLedger() {
   });
 
   const receivedByLabel = user?.name ? `${user.name} (Logged in user)` : "Logged in user";
-  const receivedAtLabel = useMemo(() => {
-    const yardId = paymentContext?.yardId ?? "";
-    if (!yardId) return "—";
-    return yards.find((y) => y.id === yardId)?.name ?? yardId;
-  }, [paymentContext?.yardId, yards]);
+  const receivedAtLabel = useMemo(
+    () => getYardName(paymentContext?.yardId),
+    [paymentContext?.yardId, getYardName],
+  );
 
   const unpaidInterestForInvoice = useMemo(() => {
     if (!payDialog) return [];

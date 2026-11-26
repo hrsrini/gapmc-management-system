@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import {
   Receipt,
   ArrowLeft,
@@ -77,10 +78,6 @@ interface Voucher {
   dvReturnRemarks?: string | null;
   supportingDocs?: string[] | null;
 }
-interface YardRef {
-  id: string;
-  name: string;
-}
 
 export default function VoucherDetail() {
   const { id } = useParams<{ id: string }>();
@@ -103,10 +100,7 @@ export default function VoucherDetail() {
     canUpdate &&
     (roles.includes("DO") || roles.includes("ADMIN")) &&
     Boolean(voucher?.status === "Draft" || voucher?.status === "Submitted");
-  const { data: yards = [] } = useQuery<YardRef[]>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = Object.fromEntries(yards.map((y) => [y.id, y.name]));
+  const { getYardName } = useYardLabels();
 
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectCode, setRejectCode] = useState<string>(REJECTION_REASON_CODES[0]);
@@ -271,7 +265,7 @@ export default function VoucherDetail() {
               )}
             </CardHeader>
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div><span className="text-muted-foreground">Yard</span><p className="font-medium">{yardById[voucher.yardId] ?? voucher.yardId}</p></div>
+              <div><span className="text-muted-foreground">Yard</span><p className="font-medium">{getYardName(voucher.yardId)}</p></div>
               <div><span className="text-muted-foreground">Type</span><p className="font-medium">{voucher.voucherType}</p></div>
               <div><span className="text-muted-foreground">Payee</span><p className="font-medium">{voucher.payeeName}</p></div>
               <div><span className="text-muted-foreground">Amount (gross)</span><p className="font-medium">{formatInr(voucher.amount)}</p></div>

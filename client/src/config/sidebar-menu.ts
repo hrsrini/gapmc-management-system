@@ -215,6 +215,7 @@ export const SIDEBAR_MENU_GROUPS: SidebarMenuGroup[] = [
     group: "HR (IOMS M-01)",
     items: [
       { title: "Employees", icon: UserCircle, href: "/hr/employees", requirePermission: { module: "M-01", action: "Read" } },
+      { title: "Posting updates", icon: MapPin, href: "/hr/posting-updates", requirePermission: { module: "M-01", action: "Read" } },
       { title: "Designation master", icon: Briefcase, href: "/hr/designations", requirePermission: { module: "M-01", action: "Read" } },
       { title: "Leave requests (M-01)", icon: Calendar, href: "/hr/leaves", requirePermission: { module: "M-01", action: "Read" } },
       { title: "Leave opening balances", icon: CalendarDays, href: "/hr/leave-balances", requirePermission: { module: "M-01", action: "Read" } },

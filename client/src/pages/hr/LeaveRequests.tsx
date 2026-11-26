@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { Calendar, AlertCircle, CheckCircle, XCircle, ShieldCheck, SendHorizontal, Plus, Download, Loader2, FileText, Pencil } from "lucide-react";
 import { REJECTION_REASON_CODES, MIN_WORKFLOW_REMARKS_LENGTH } from "@shared/workflow-rejection";
 import { localCalendarYmd } from "@shared/premises-allocation";
@@ -51,7 +52,7 @@ import {
   isSingleDayLeavePeriod,
   type LeaveYardKind,
 } from "@shared/hr-leave-display";
-import { formatAdditionalChargeLabels } from "@shared/hr-additional-charge-locations";
+import { parseAdditionalChargeYardIds } from "@shared/hr-additional-charge-locations";
 import { ClientDataGrid } from "@/components/reports/ClientDataGrid";
 import { EmployeeSearchSelect, formatEmployeeSelectLabel } from "@/components/selects/employee-search-select";
 import type { ReportTableColumn } from "@/components/reports/ReportDataTable";
@@ -714,10 +715,11 @@ export default function LeaveRequests() {
   const { data: employees = [] } = useQuery<Employee[]>({
     queryKey: ["/api/hr/employees"],
   });
-  const { data: yards = [] } = useQuery<YardRow[]>({
-    queryKey: ["/api/yards"],
-  });
-  const yardById = useMemo(() => Object.fromEntries(yards.map((y) => [y.id, y])), [yards]);
+  const { yards, getYardName } = useYardLabels();
+  const yardById = useMemo(
+    () => Object.fromEntries(yards.map((y) => [y.id, y as YardRow])),
+    [yards],
+  );
   const { data: balances = [] } = useQuery<LeaveBalanceRow[]>({
     queryKey: ["/api/hr/leave-balances"],
   });
@@ -1599,7 +1601,7 @@ export default function LeaveRequests() {
                   <div>
                     <p className="text-xs text-muted-foreground">Primary Location Posted</p>
                     <p className="font-medium">
-                      {selectedYard?.name ?? selectedYard?.code ?? selectedEmployee.yardId ?? "—"}
+                      {selectedYard?.name ?? selectedYard?.code ?? getYardName(selectedEmployee.yardId)}
                     </p>
                   </div>
                   {selectedIsHo ? (
@@ -1609,11 +1611,10 @@ export default function LeaveRequests() {
                     </div>
                   ) : null}
                   {(() => {
-                    const chargeLabels = formatAdditionalChargeLabels(
+                    const chargeLabels = parseAdditionalChargeYardIds(
                       selectedEmployee.locationPosted,
                       selectedEmployee.yardId,
-                      yardById,
-                    );
+                    ).map((id) => getYardName(id));
                     if (chargeLabels.length === 0) return null;
                     return (
                       <div className={selectedIsHo ? "sm:col-span-2" : undefined}>
@@ -2398,7 +2399,9 @@ export default function LeaveRequests() {
               pendingFileNo
               primaryLocation={
                 approveEmployee?.yardId
-                  ? (yardById[approveEmployee.yardId]?.name ?? yardById[approveEmployee.yardId]?.code ?? null)
+                  ? (yardById[approveEmployee.yardId]?.name ??
+                    yardById[approveEmployee.yardId]?.code ??
+                    getYardName(approveEmployee.yardId))
                   : null
               }
               yardIsHo={
@@ -2694,7 +2697,7 @@ export default function LeaveRequests() {
                 previewOrderEmployee?.yardId
                   ? (yardById[previewOrderEmployee.yardId]?.name ??
                     yardById[previewOrderEmployee.yardId]?.code ??
-                    null)
+                    getYardName(previewOrderEmployee.yardId))
                   : null
               }
               yardIsHo={

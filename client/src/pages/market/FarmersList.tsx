@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { useYardLabels } from "@/hooks/useYardLabels";
 import { Users, AlertCircle, Plus, Pencil } from "lucide-react";
 import { isStrictAadhaar12Digits, parseIndianMobile10Digits, sanitizeMobile10Input } from "@shared/india-validation";
 
@@ -65,7 +66,7 @@ export default function FarmersList() {
   const { data: yards = [] } = useQuery<Array<{ id: string; name: string; code: string }>>({
     queryKey: ["/api/yards"],
   });
-  const yardById = useMemo(() => new Map(yards.map((y) => [y.id, y])), [yards]);
+  const { getYardName } = useYardLabels();
   const yardIds = useMemo(() => new Set(yards.map((y) => y.id)), [yards]);
   const editingFarmer = useMemo(() => list?.find((f) => f.id === editId), [list, editId]);
 
@@ -203,7 +204,7 @@ export default function FarmersList() {
         taluk: f.taluk ?? "—",
         district: f.district ?? "—",
         state: f.state ?? "—",
-        yardName: yardById.get(f.yardId)?.name ?? f.yardId,
+        yardName: getYardName(f.yardId),
       };
       if (canUpdate) {
         row._actions = (
@@ -214,7 +215,7 @@ export default function FarmersList() {
       }
       return row;
     });
-  }, [list, yardById, canUpdate, openEdit]);
+  }, [list, getYardName, canUpdate, openEdit]);
 
   const farmerFields = (
     <>

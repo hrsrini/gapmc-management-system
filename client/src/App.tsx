@@ -51,6 +51,9 @@ import AdminMeasurementUnits from "@/pages/admin/AdminMeasurementUnits";
 import HrEmployees from "@/pages/hr/HrEmployees";
 import HrEmployeeDetail from "@/pages/hr/HrEmployeeDetail";
 import HrEmployeeForm from "@/pages/hr/HrEmployeeForm";
+import HrPostingUpdateForm from "@/pages/hr/HrPostingUpdateForm";
+import HrPostingUpdates from "@/pages/hr/HrPostingUpdates";
+import HrPostingUpdateDetail from "@/pages/hr/HrPostingUpdateDetail";
 import HrDesignationMaster from "@/pages/hr/HrDesignationMaster";
 import LeaveRequests from "@/pages/hr/LeaveRequests";
 import HrClaims from "@/pages/hr/HrClaims";
@@ -544,6 +547,13 @@ function Router() {
       <Route path="/hr/employees/new">
         <ProtectedRoute><RequirePermission module="M-01" action="Create"><HrEmployeeForm /></RequirePermission></ProtectedRoute>
       </Route>
+      <Route path="/hr/employees/:id/posting-update">
+        <ProtectedRoute>
+          <RequirePermission module="M-01" action="Read">
+            <HrPostingUpdateForm />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
       <Route path="/hr/employees/:id/edit">
         <ProtectedRoute><RequirePermission module="M-01" action="Update"><HrEmployeeForm /></RequirePermission></ProtectedRoute>
       </Route>
@@ -552,6 +562,20 @@ function Router() {
       </Route>
       <Route path="/hr/employees/:id">
         <ProtectedRoute><HrEmployeeDetail /></ProtectedRoute>
+      </Route>
+      <Route path="/hr/posting-updates/:id">
+        <ProtectedRoute>
+          <RequirePermission module="M-01" action="Read">
+            <HrPostingUpdateDetail />
+          </RequirePermission>
+        </ProtectedRoute>
+      </Route>
+      <Route path="/hr/posting-updates">
+        <ProtectedRoute>
+          <RequirePermission module="M-01" action="Read">
+            <HrPostingUpdates />
+          </RequirePermission>
+        </ProtectedRoute>
       </Route>
       <Route path="/hr/designations">
         <ProtectedRoute>
