@@ -112,7 +112,7 @@ async function dishonourRecomputationHint(
       asOfDateIso: today,
       percentPerAnnum: rate,
     });
-    let msg = `Rent dishonour: delayed-rent interest (due ${due}) as of ${today}: N=${computed.nMonths} month(s) at ${rate}% p.a. on ₹${principal.toFixed(2)} (rent base) → ₹${computed.interestRounded.toFixed(0)} rounded (exact ₹${computed.interestExact.toFixed(4)}; ongoing accrual posts via M-03 arrears cron when configured).`;
+    let msg = `Rent dishonour: delayed-rent interest (due ${due}) as of ${today}: N=${computed.nMonths} month(s) at ${rate}% p.a. on ₹${principal.toFixed(2)} (rent base) → ₹${computed.interestRounded.toFixed(0)} rounded up (exact ₹${computed.interestExact.toFixed(4)}; ongoing accrual posts via M-03 arrears cron when configured).`;
     if (bankChargeInr > 0) msg += ` Reference bank charge (config): ₹${bankChargeInr.toFixed(2)} (not posted).`;
     if (bankHint) msg += ` ${bankHint}`;
     return msg;

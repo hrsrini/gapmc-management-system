@@ -22,14 +22,30 @@ import {
   type MarketTransactionCaseId,
   type MarketTransactionWizardInput,
 } from "@shared/market-transaction-cases";
+import {
+  CASE_E_SD_ACCOUNTING_HEAD,
+  CASE_E_SD_REFUND_REVENUE_HEAD,
+  CASE_E_SD_REVENUE_HEAD,
+  CASE_E_SDEP_BREAKDOWN_KIND,
+  CASE_E_SDRF_BREAKDOWN_KIND,
+  buildCaseESdepBreakdownJson,
+  buildCaseESdrfBreakdownJson,
+  latestExitInstantIso,
+  parseCaseESdConfig,
+  type CaseECommodityPdfLine,
+  type CaseESdConfig,
+  type CaseESdDepositStatus,
+} from "@shared/case-e-security-deposit";
 import { db, pool } from "./db";
 import { financialYearFromIsoTransactionDate } from "./market-purchase-transaction-no";
 import { assertIsoTransactionDate, resolveMarketFeePercentForPurchase } from "./market-fee-resolve";
 import { resolvePurchaseTransactionTraderRef } from "./market-purchase-trader-resolve";
 import { createIomsReceipt } from "./routes-receipts-ioms";
+import { getMergedSystemConfig } from "./system-config";
 import { unifiedEntityIdFromTrackA } from "@shared/unified-entity-id";
 import { assertLmLicenceAllowsOperation, LmLicenceGuardError } from "@shared/lm-licence-guard";
 import { todayYmdIst } from "@shared/premises-allocation";
+import { writeAuditLogSystem } from "./audit";
 
 export async function generateNextMarketTransactionNo(params: {
   yardId: string;
@@ -111,10 +127,14 @@ export async function calculateMarketTransactionWizard(
 
   if (lines.length === 0) throw new Error("At least one commodity line is required");
 
+  const caseECfg = caseType === "E" ? await getCaseESdConfig() : null;
   return computeMarketTransactionTotals(caseType, lines, {
     fineAmount: input.fineAmount,
-    securityDepositAmount: input.securityDepositAmount,
-    adminChargesAmount: input.adminChargesAmount,
+    // Case E: SD/admin always from market fee + system_config (ignore client amounts).
+    securityDepositAmount: caseType === "E" ? undefined : input.securityDepositAmount,
+    adminChargesAmount: caseType === "E" ? undefined : input.adminChargesAmount,
+    caseESdCeiling: caseECfg?.sdCeiling,
+    caseEAdminCharges: caseECfg?.adminCharges,
     collectFine:
       input.collectFine === true ||
       caseType === "B" ||
@@ -329,38 +349,43 @@ export async function finalizeMarketTransaction(args: {
   }
   if (tx.status === "Voided") throw Object.assign(new Error("Transaction is voided"), { code: "MKT_TX_VOIDED" });
 
-  const totalPayable = Number(tx.totalPayable ?? 0);
+  const caseType = tx.caseType as MarketTransactionCaseId;
+  const lineRows = await db
+    .select({
+      line: marketTransactionCommodities,
+      commodityName: commodities.name,
+    })
+    .from(marketTransactionCommodities)
+    .leftJoin(commodities, eq(marketTransactionCommodities.commodityId, commodities.id))
+    .where(eq(marketTransactionCommodities.transactionId, tx.id));
+
+  const caseECfg = caseType === "E" ? await getCaseESdConfig() : null;
+  const mappedLines = lineRows.map((r) => ({
+    commodityId: r.line.commodityId,
+    quantity: Number(r.line.quantity),
+    unit: r.line.unit,
+    ratePerUnit: Number(r.line.ratePerUnit),
+    commodityValue: Number(r.line.commodityValue),
+    marketFeePercent: Number(r.line.marketFeePercent),
+    marketFeeAmount: Number(r.line.marketFeeAmount),
+  }));
+  const calc = computeMarketTransactionTotals(caseType, mappedLines, {
+    fineAmount: Number(tx.fineAmount ?? 0),
+    securityDepositAmount: caseType === "E" ? undefined : Number(tx.securityDepositAmount ?? 0),
+    adminChargesAmount: caseType === "E" ? undefined : Number(tx.adminChargesAmount ?? 0),
+    caseESdCeiling: caseECfg?.sdCeiling,
+    caseEAdminCharges: caseECfg?.adminCharges,
+    collectFine: Number(tx.fineAmount ?? 0) > 0,
+  });
+
+  // Prefer recomputed totals (config / formula) over stale draft amounts.
+  const totalPayable = Number(calc.totalPayable ?? 0);
   const paid = args.paidAmount != null ? Number(args.paidAmount) : totalPayable;
   if (!Number.isFinite(paid) || Math.abs(paid - totalPayable) > 0.02) {
     throw Object.assign(new Error(`Paid amount must equal total payable (${totalPayable.toFixed(2)})`), {
       code: "MKT_TX_PAID_AMOUNT",
     });
   }
-
-  const caseType = tx.caseType as MarketTransactionCaseId;
-  const lineRows = await db
-    .select()
-    .from(marketTransactionCommodities)
-    .where(eq(marketTransactionCommodities.transactionId, tx.id));
-
-  const calc = computeMarketTransactionTotals(
-    caseType,
-    lineRows.map((l) => ({
-      commodityId: l.commodityId,
-      quantity: Number(l.quantity),
-      unit: l.unit,
-      ratePerUnit: Number(l.ratePerUnit),
-      commodityValue: Number(l.commodityValue),
-      marketFeePercent: Number(l.marketFeePercent),
-      marketFeeAmount: Number(l.marketFeeAmount),
-    })),
-    {
-      fineAmount: Number(tx.fineAmount ?? 0),
-      securityDepositAmount: Number(tx.securityDepositAmount ?? 0),
-      adminChargesAmount: Number(tx.adminChargesAmount ?? 0),
-      collectFine: Number(tx.fineAmount ?? 0) > 0,
-    },
-  );
 
   const paymentMode = String(args.paymentMode ?? "Cash").trim() || "Cash";
   const isAdvancePay = paymentMode === "AdvanceDeposit" || paymentMode === "Advance";
@@ -399,6 +424,39 @@ export async function finalizeMarketTransaction(args: {
   const now = new Date().toISOString();
   const receiptPaymentMode = isAdvancePay ? "Cash" : paymentMode;
 
+  let m03BreakdownJson: string | undefined;
+  if (caseType === "E" && caseECfg) {
+    const [entryYard] = await db
+      .select({ name: yards.name })
+      .from(yards)
+      .where(eq(yards.id, tx.entryLocationId))
+      .limit(1);
+    const sd = Math.round(Number(calc.securityDepositAmount) * 100) / 100;
+    const admin = Math.round(Number(calc.adminChargesAmount) * 100) / 100;
+    const commodityLines: CaseECommodityPdfLine[] = lineRows.map((r) => ({
+      commodityName: (r.commodityName ?? "").trim() || r.line.commodityId,
+      unit: r.line.unit,
+      quantity: Number(r.line.quantity),
+      ratePerUnit: Number(r.line.ratePerUnit),
+      commodityValue: Number(r.line.commodityValue),
+      marketFee: Number(r.line.marketFeeAmount),
+    }));
+    m03BreakdownJson = buildCaseESdepBreakdownJson({
+      kind: CASE_E_SDEP_BREAKDOWN_KIND,
+      checkPostName: entryYard?.name ?? tx.entryLocationId,
+      vehicleNumber: tx.vehicleNumber,
+      vehicleType: tx.vehicleMake,
+      fromLabel: tx.originatingState,
+      toLabel: tx.destinationState,
+      securityDepositAmount: sd,
+      adminChargesAmount: admin,
+      totalCollected: Math.round((sd + admin) * 100) / 100,
+      validityLabel: caseECfg.validityLabel,
+      latestExitAtIso: latestExitInstantIso(new Date(now), caseECfg.validityMs),
+      commodities: commodityLines,
+    });
+  }
+
   const created = await createIomsReceipt({
     yardId: tx.entryLocationId,
     revenueHead: calc.receiptRevenueHead,
@@ -417,6 +475,7 @@ export async function finalizeMarketTransaction(args: {
     bankName: args.paymentDetail?.bankName != null ? String(args.paymentDetail.bankName) : undefined,
     chequeDate: args.paymentDetail?.chequeDate != null ? String(args.paymentDetail.chequeDate) : undefined,
     gatewayRef: args.paymentDetail?.utrNo != null ? String(args.paymentDetail.utrNo) : undefined,
+    m03BreakdownJson,
   });
 
   if (isAdvancePay && canonicalPayerLicenceId) {
@@ -449,6 +508,12 @@ export async function finalizeMarketTransaction(args: {
       paymentMode,
       paymentDetailJson: args.paymentDetail ? JSON.stringify(args.paymentDetail) : null,
       finalizedAt: now,
+      totalCommodityValue: calc.totalCommodityValue,
+      totalMarketFee: calc.totalMarketFee,
+      fineAmount: calc.fineAmount,
+      securityDepositAmount: calc.securityDepositAmount,
+      adminChargesAmount: calc.adminChargesAmount,
+      totalPayable: calc.totalPayable,
     })
     .where(eq(marketTransactions.id, tx.id));
 
@@ -727,8 +792,20 @@ export async function buildWizardTransactionReport(args: {
   return { from: args.from, to: args.to, count: rows.length, rows };
 }
 
-/** FRD: Case E SD refund selectable for 08 hours from receipt generation. */
-export const CASE_E_REFUND_WINDOW_HOURS = 8;
+/** Sync fallback only — prefer getCaseESdConfig() (default 6h from system_config). */
+export const CASE_E_REFUND_WINDOW_HOURS = 6;
+
+export async function getCaseESdConfig(): Promise<CaseESdConfig> {
+  return parseCaseESdConfig(await getMergedSystemConfig());
+}
+
+export async function getCaseERefundWindowMs(): Promise<number> {
+  return (await getCaseESdConfig()).validityMs;
+}
+
+function caseERefundWindowHoursFractional(cfg: CaseESdConfig): number {
+  return Math.round((cfg.validityHours + cfg.validityMinutes / 60) * 100) / 100;
+}
 
 function parseCaseEEntryInstant(tx: {
   transactionDate: string;
@@ -765,6 +842,13 @@ function formatTimeLeft(ms: number): string {
   return `${h}h ${String(m).padStart(2, "0")}m`;
 }
 
+function formatElapsedLabel(ms: number): string {
+  const totalMin = Math.floor(Math.max(0, ms) / 60000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${h}h ${String(m).padStart(2, "0")}m`;
+}
+
 function isCaseENotYetRefundedSql() {
   return and(
     eq(marketTransactions.caseType, "E"),
@@ -772,6 +856,95 @@ function isCaseENotYetRefundedSql() {
     isNull(marketTransactions.sdRefundReceiptId),
     sql`coalesce(${marketTransactions.sdRefundTxnRef}, '') = ''`,
   )!;
+}
+
+/**
+ * Mark Finalized Case E deposits past validity with no refund as expired / forfeited.
+ * Books the unrefunded Security Deposit under accounting head
+ * "Security Deposit (Market Fee)" (sdExpiredAt + sdExpiredBookedAt) for recon & audit.
+ */
+export async function markExpiredCaseESecurityDeposits(): Promise<number> {
+  const cfg = await getCaseESdConfig();
+  const windowMs = cfg.validityMs;
+  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+
+  const rows = await db
+    .select({
+      id: marketTransactions.id,
+      transactionNo: marketTransactions.transactionNo,
+      receiptId: marketTransactions.receiptId,
+      securityDepositAmount: marketTransactions.securityDepositAmount,
+      transactionDate: marketTransactions.transactionDate,
+      transactionTime: marketTransactions.transactionTime,
+      finalizedAt: marketTransactions.finalizedAt,
+      createdAt: marketTransactions.createdAt,
+    })
+    .from(marketTransactions)
+    .where(
+      and(
+        isCaseENotYetRefundedSql(),
+        isNull(marketTransactions.sdExpiredAt),
+      ),
+    )
+    .limit(8000);
+
+  const expired: Array<{
+    id: string;
+    transactionNo: string | null;
+    receiptId: string | null;
+    securityDepositAmount: number;
+  }> = [];
+  for (const row of rows) {
+    const entryAt = parseCaseEEntryInstant(row);
+    if (!entryAt) continue;
+    if (nowMs - entryAt.getTime() <= windowMs) continue;
+    expired.push({
+      id: row.id,
+      transactionNo: row.transactionNo,
+      receiptId: row.receiptId,
+      securityDepositAmount: Number(row.securityDepositAmount ?? 0),
+    });
+  }
+  if (expired.length === 0) return 0;
+
+  const expiredIds = expired.map((e) => e.id);
+  // Chunk updates to avoid oversized IN lists
+  const chunkSize = 200;
+  for (let i = 0; i < expiredIds.length; i += chunkSize) {
+    const chunk = expiredIds.slice(i, i + chunkSize);
+    await db
+      .update(marketTransactions)
+      .set({ sdExpiredAt: nowIso, sdExpiredBookedAt: nowIso })
+      .where(inArray(marketTransactions.id, chunk));
+  }
+
+  const totalForfeited = Math.round(
+    expired.reduce((s, e) => s + e.securityDepositAmount, 0) * 100,
+  ) / 100;
+  await writeAuditLogSystem({
+    module: "M-04",
+    action: "CaseE_SD_Forfeit_Book",
+    recordId: expiredIds.length === 1 ? expiredIds[0] : undefined,
+    afterValue: {
+      accountingHead: CASE_E_SD_ACCOUNTING_HEAD,
+      revenueHead: CASE_E_SD_REVENUE_HEAD,
+      bookedAt: nowIso,
+      count: expired.length,
+      totalForfeitedInr: totalForfeited,
+      validityLabel: cfg.validityLabel,
+      note:
+        "Unrefunded Check Post Security Deposit retained under accounting head Security Deposit (Market Fee).",
+      sample: expired.slice(0, 25).map((e) => ({
+        id: e.id,
+        transactionNo: e.transactionNo,
+        receiptId: e.receiptId,
+        securityDepositAmount: e.securityDepositAmount,
+      })),
+    },
+  }).catch((err) => console.error("Case E SD forfeit audit failed:", err));
+
+  return expired.length;
 }
 
 export type CaseEEligibleRefundRow = {
@@ -805,18 +978,25 @@ export type CaseEEligibleRefundRow = {
   remainingMs: number;
   timeLeft: string;
   expiringWithinOneHour: boolean;
+  /** Fractional hours from config (hours + minutes/60). */
   refundWindowHours: number;
+  refundWindowLabel: string;
   withinWindow: true;
 };
 
-/** Eligible Case E receipts only: not refunded and still within 8 hours of generation. */
+/** Eligible Case E receipts only: not refunded and still within configured validity from generation. */
 export async function listEligibleCaseEForRefund(args: {
   q?: string;
   vehicleNumber?: string;
   paymentMode?: string;
   limit?: number;
 }): Promise<CaseEEligibleRefundRow[]> {
-  const conds = [isCaseENotYetRefundedSql()];
+  await markExpiredCaseESecurityDeposits();
+  const cfg = await getCaseESdConfig();
+  const windowMs = cfg.validityMs;
+  const windowHours = caseERefundWindowHoursFractional(cfg);
+
+  const conds = [isCaseENotYetRefundedSql(), isNull(marketTransactions.sdExpiredAt)];
   const q = (args.q ?? "").trim();
   if (q.length >= 2) {
     const pattern = `%${q}%`;
@@ -860,7 +1040,6 @@ export async function listEligibleCaseEForRefund(args: {
     .limit(Math.min(args.limit ?? 200, 500));
 
   const now = Date.now();
-  const windowMs = CASE_E_REFUND_WINDOW_HOURS * 60 * 60 * 1000;
   const mapped: CaseEEligibleRefundRow[] = [];
   for (const r of rows) {
     const generatedAt = parseCaseEEntryInstant(r.tx);
@@ -901,7 +1080,8 @@ export async function listEligibleCaseEForRefund(args: {
       remainingMs,
       timeLeft: formatTimeLeft(remainingMs),
       expiringWithinOneHour: remainingMs <= 60 * 60 * 1000,
-      refundWindowHours: CASE_E_REFUND_WINDOW_HOURS,
+      refundWindowHours: windowHours,
+      refundWindowLabel: cfg.validityLabel,
       withinWindow: true,
     });
   }
@@ -920,6 +1100,7 @@ export async function searchRefundableCaseETransactions(args: {
 }
 
 export async function getCaseESdRefundDashboard(args: { checkPostId?: string; todayYmd: string }) {
+  const cfg = await getCaseESdConfig();
   const eligible = await listEligibleCaseEForRefund({ limit: 500 });
   const refundConds = [
     eq(marketTransactions.caseType, "E"),
@@ -938,7 +1119,8 @@ export async function getCaseESdRefundDashboard(args: { checkPostId?: string; to
     .where(and(...refundConds));
   const amountRefundedToday = todayRefunds.reduce((s, r) => s + Number(r.amount ?? 0), 0);
   return {
-    refundWindowHours: CASE_E_REFUND_WINDOW_HOURS,
+    refundWindowHours: caseERefundWindowHoursFractional(cfg),
+    refundWindowLabel: cfg.validityLabel,
     eligibleCount: eligible.length,
     expiringWithinOneHour: eligible.filter((e) => e.expiringWithinOneHour).length,
     refundsTodayCount: todayRefunds.length,
@@ -956,6 +1138,7 @@ export async function listCaseESecurityDepositRefunds(args: {
   processedBy?: string;
   q?: string;
 }) {
+  await markExpiredCaseESecurityDeposits();
   const conds = [
     eq(marketTransactions.caseType, "E"),
     sql`coalesce(${marketTransactions.sdRefundDate}, '') <> ''`,
@@ -1047,7 +1230,10 @@ export async function buildCaseESdRefundReconciliation(args: {
   to: string;
   scopedYardIds?: string[];
 }) {
-  const windowMs = CASE_E_REFUND_WINDOW_HOURS * 60 * 60 * 1000;
+  await markExpiredCaseESecurityDeposits();
+  const cfg = await getCaseESdConfig();
+  const windowMs = cfg.validityMs;
+  const windowHours = caseERefundWindowHoursFractional(cfg);
   const now = Date.now();
 
   const collectedConds = [
@@ -1093,6 +1279,10 @@ export async function buildCaseESdRefundReconciliation(args: {
     checkPostName: string;
     securityDepositAmount: number;
     expiredAt: string | null;
+    bookedAt: string | null;
+    accountingHead: typeof CASE_E_SD_ACCOUNTING_HEAD;
+    revenueHead: typeof CASE_E_SD_REVENUE_HEAD;
+    status: "Forfeited";
   }> = [];
 
   for (const r of collected) {
@@ -1127,9 +1317,14 @@ export async function buildCaseESdRefundReconciliation(args: {
       agg.notRefunded += sd;
       agg.notRefundedCount += 1;
       const generatedAt = parseCaseEEntryInstant(r.tx);
-      if (generatedAt && now - generatedAt.getTime() > windowMs) {
+      const pastWindow = Boolean(generatedAt && now - generatedAt.getTime() > windowMs);
+      const markedExpired = Boolean(r.tx.sdExpiredAt);
+      if (pastWindow || markedExpired) {
         agg.expiredNotRefunded += sd;
         agg.expiredNotRefundedCount += 1;
+        const windowEndIso = generatedAt
+          ? new Date(generatedAt.getTime() + windowMs).toISOString()
+          : null;
         expiredRows.push({
           id: r.tx.id,
           receiptNo: r.receiptNo,
@@ -1137,7 +1332,11 @@ export async function buildCaseESdRefundReconciliation(args: {
           vehicleNumber: r.tx.vehicleNumber,
           checkPostName: name,
           securityDepositAmount: sd,
-          expiredAt: new Date(generatedAt.getTime() + windowMs).toISOString(),
+          expiredAt: r.tx.sdExpiredAt ?? windowEndIso,
+          bookedAt: r.tx.sdExpiredBookedAt ?? r.tx.sdExpiredAt ?? null,
+          accountingHead: CASE_E_SD_ACCOUNTING_HEAD,
+          revenueHead: CASE_E_SD_REVENUE_HEAD,
+          status: "Forfeited",
         });
       }
     }
@@ -1177,7 +1376,10 @@ export async function buildCaseESdRefundReconciliation(args: {
   return {
     from: args.from,
     to: args.to,
-    refundWindowHours: CASE_E_REFUND_WINDOW_HOURS,
+    refundWindowHours: windowHours,
+    refundWindowLabel: cfg.validityLabel,
+    accountingHead: CASE_E_SD_ACCOUNTING_HEAD,
+    revenueHead: CASE_E_SD_REVENUE_HEAD,
     byCheckPost,
     totals: {
       ...totals,
@@ -1187,6 +1389,7 @@ export async function buildCaseESdRefundReconciliation(args: {
       expiredNotRefunded: Math.round(totals.expiredNotRefunded * 100) / 100,
       refundPct: totals.collected > 0 ? Math.round((totals.refunded / totals.collected) * 100) : 0,
     },
+    /** Unrefunded SD past validity — booked under Security Deposit (Market Fee). */
     expiredNotRefunded: expiredRows.slice(0, 100),
   };
 }
@@ -1194,6 +1397,8 @@ export async function buildCaseESdRefundReconciliation(args: {
 export async function getCaseESdRefundAudit(transactionId: string) {
   const loaded = await loadMarketTransactionWithLines(transactionId);
   if (!loaded || loaded.transaction.caseType !== "E") return null;
+  const cfg = await getCaseESdConfig();
+  const windowHours = caseERefundWindowHoursFractional(cfg);
   const tx = loaded.transaction;
   const [origReceipt] = tx.receiptId
     ? await db.select().from(iomsReceipts).where(eq(iomsReceipts.id, tx.receiptId)).limit(1)
@@ -1238,13 +1443,23 @@ export async function getCaseESdRefundAudit(transactionId: string) {
   const generatedAt = parseCaseEEntryInstant(tx);
   const refundedAt = tx.sdRefundRecordedAt ? new Date(tx.sdRefundRecordedAt) : null;
   let elapsedAtRefundHours: number | null = null;
+  let elapsedAtRefundMs: number | null = null;
   if (generatedAt && refundedAt && !Number.isNaN(refundedAt.getTime())) {
-    elapsedAtRefundHours = (refundedAt.getTime() - generatedAt.getTime()) / (1000 * 60 * 60);
+    elapsedAtRefundMs = refundedAt.getTime() - generatedAt.getTime();
+    elapsedAtRefundHours = elapsedAtRefundMs / (1000 * 60 * 60);
   }
   const collected = Number(tx.securityDepositAmount ?? 0);
   const refunded = Number(tx.sdRefundAmount ?? 0);
   const alreadyRefunded =
     Boolean(tx.sdRefundReceiptId) || (tx.sdRefundTxnRef != null && String(tx.sdRefundTxnRef).trim() !== "");
+  const pastWindow =
+    Boolean(generatedAt) && Date.now() - (generatedAt as Date).getTime() > cfg.validityMs;
+  const forfeited = !alreadyRefunded && (Boolean(tx.sdExpiredAt) || pastWindow);
+  const depositStatus: CaseESdDepositStatus = alreadyRefunded
+    ? "Refunded"
+    : forfeited
+      ? "Forfeited"
+      : "Open";
 
   return {
     id: tx.id,
@@ -1264,6 +1479,20 @@ export async function getCaseESdRefundAudit(transactionId: string) {
     securityDepositAmount: collected,
     adminChargesAmount: Number(tx.adminChargesAmount ?? 0),
     totalPayable: Number(tx.totalPayable ?? 0),
+    depositStatus,
+    accounting: {
+      head: CASE_E_SD_ACCOUNTING_HEAD,
+      revenueHead: CASE_E_SD_REVENUE_HEAD,
+      /** Unrefunded / forfeited SD remains classified under Security Deposit (Market Fee). */
+      classification:
+        depositStatus === "Forfeited"
+          ? `Forfeited — retained under ${CASE_E_SD_ACCOUNTING_HEAD}`
+          : depositStatus === "Refunded"
+            ? `Refunded via ${CASE_E_SD_REFUND_REVENUE_HEAD} against ${CASE_E_SD_ACCOUNTING_HEAD}`
+            : `Held under ${CASE_E_SD_ACCOUNTING_HEAD} pending exit within ${cfg.validityLabel}`,
+      expiredAt: tx.sdExpiredAt,
+      bookedAt: tx.sdExpiredBookedAt,
+    },
     lines: loaded.lines.map((l) => ({
       commodityName: l.commodityName,
       quantity: Number(l.line.quantity),
@@ -1280,6 +1509,8 @@ export async function getCaseESdRefundAudit(transactionId: string) {
       collectedBy: collector?.name ?? collector?.username ?? tx.createdBy,
       paymentMode: origReceipt?.paymentMode ?? tx.paymentMode,
       amount: collected,
+      revenueHead: origReceipt?.revenueHead ?? CASE_E_SD_REVENUE_HEAD,
+      accountingHead: CASE_E_SD_ACCOUNTING_HEAD,
     },
     refund: alreadyRefunded
       ? {
@@ -1296,19 +1527,23 @@ export async function getCaseESdRefundAudit(transactionId: string) {
           elapsedHours: elapsedAtRefundHours != null ? Math.round(elapsedAtRefundHours * 100) / 100 : null,
           timeSinceReceipt:
             elapsedAtRefundHours != null
-              ? `${Math.floor(elapsedAtRefundHours)}h ${String(Math.round((elapsedAtRefundHours % 1) * 60)).padStart(2, "0")}m (limit ${CASE_E_REFUND_WINDOW_HOURS}h)`
+              ? `${Math.floor(elapsedAtRefundHours)}h ${String(Math.round((elapsedAtRefundHours % 1) * 60)).padStart(2, "0")}m (limit ${cfg.validityLabel})`
               : null,
           netPosition: Math.round((collected - refunded) * 100) / 100,
           status: "Refunded" as const,
+          revenueHead: refundReceipt?.revenueHead ?? CASE_E_SD_REFUND_REVENUE_HEAD,
+          accountingHead: CASE_E_SD_ACCOUNTING_HEAD,
         }
       : null,
-    refundWindowHours: CASE_E_REFUND_WINDOW_HOURS,
+    refundWindowHours: windowHours,
+    refundWindowLabel: cfg.validityLabel,
     validations: {
       isCaseE: tx.caseType === "E",
       withinWindowAtRefund:
-        elapsedAtRefundHours == null ? null : elapsedAtRefundHours <= CASE_E_REFUND_WINDOW_HOURS + 1e-9,
+        elapsedAtRefundMs == null ? null : elapsedAtRefundMs <= cfg.validityMs + 1e-6,
       noDuplicate: alreadyRefunded,
       amountNotExceedingDeposit: !alreadyRefunded || refunded <= collected + 0.01,
+      forfeitedBookedUnderAccountingHead: depositStatus === "Forfeited",
     },
   };
 }
@@ -1379,36 +1614,40 @@ export async function recordSecurityDepositRefund(args: {
     }
   }
 
+  const cfg = await getCaseESdConfig();
+  const windowHours = caseERefundWindowHoursFractional(cfg);
   const entryAt = parseCaseEEntryInstant(tx);
   const nowMs = Date.now();
-  let elapsedHours: number | null = null;
   if (!entryAt) {
-    throw Object.assign(new Error("Cannot determine receipt generation time for 8-hour validity check"), {
+    throw Object.assign(new Error("Cannot determine receipt generation time for validity check"), {
       code: "MKT_TX_SD_REFUND_NO_GENERATED_AT",
     });
   }
-  elapsedHours = (nowMs - entryAt.getTime()) / (1000 * 60 * 60);
-  if (elapsedHours > CASE_E_REFUND_WINDOW_HOURS) {
+  const elapsedMs = nowMs - entryAt.getTime();
+  const elapsedHours = elapsedMs / (1000 * 60 * 60);
+  if (elapsedMs > cfg.validityMs) {
     throw Object.assign(
       new Error(
-        `This receipt is no longer available for refund. Validity is ${CASE_E_REFUND_WINDOW_HOURS} hours from receipt generation (elapsed ${elapsedHours.toFixed(2)} h).`,
+        `This receipt is no longer available for refund. Validity is ${cfg.validityLabel} from receipt generation (elapsed ${elapsedHours.toFixed(2)} h).`,
       ),
       { code: "MKT_TX_SD_REFUND_WINDOW", elapsedHours },
     );
   }
 
+  // SDRF refunds the full security deposit only (admin charges retained).
   const collectedSd = Math.round(Number(tx.securityDepositAmount ?? 0) * 100) / 100;
-  const amount =
-    args.refundAmount != null && Number.isFinite(Number(args.refundAmount))
-      ? Math.round(Number(args.refundAmount) * 100) / 100
-      : collectedSd;
+  const adminRetained = Math.round(Number(tx.adminChargesAmount ?? 0) * 100) / 100;
+  const amount = collectedSd;
   if (!(amount > 0)) {
     throw Object.assign(new Error("Refund amount must be greater than zero"), { code: "MKT_TX_SD_REFUND_AMOUNT" });
   }
-  if (amount > collectedSd + 0.01) {
-    throw Object.assign(new Error("Refund amount cannot exceed the Security Deposit collected"), {
-      code: "MKT_TX_SD_REFUND_EXCEEDS",
-    });
+  if (args.refundAmount != null && Number.isFinite(Number(args.refundAmount))) {
+    const requested = Math.round(Number(args.refundAmount) * 100) / 100;
+    if (Math.abs(requested - collectedSd) > 0.01) {
+      throw Object.assign(new Error("Case E security deposit refund must equal the full SD collected"), {
+        code: "MKT_TX_SD_REFUND_FULL_ONLY",
+      });
+    }
   }
 
   const [origReceipt] = tx.receiptId
@@ -1428,21 +1667,55 @@ export async function recordSecurityDepositRefund(args: {
     .where(eq(yards.id, tx.entryLocationId))
     .limit(1);
   const routeText = `From ${entryYard?.name ?? tx.entryLocationId} To ${cp.name}`;
+  const exitAtIso = new Date(nowMs).toISOString();
   const narration = [
     "PAYMENT-REFUND MKT FEE / Security Deposit (Market Fee equivalent)",
     `Original receipt: ${origReceipt?.receiptNo ?? "—"}`,
     `Txn: ${tx.transactionNo ?? tx.id}`,
     tx.vehicleNumber ? `Vehicle: ${tx.vehicleNumber}` : null,
     routeText,
-    `Elapsed: ${elapsedHours.toFixed(2)} h / ${CASE_E_REFUND_WINDOW_HOURS} h`,
+    `Elapsed: ${formatElapsedLabel(elapsedMs)} / ${cfg.validityLabel}`,
   ]
     .filter(Boolean)
     .join(" | ")
     .slice(0, 500);
 
+  const lineRows = await db
+    .select({
+      line: marketTransactionCommodities,
+      commodityName: commodities.name,
+    })
+    .from(marketTransactionCommodities)
+    .leftJoin(commodities, eq(marketTransactionCommodities.commodityId, commodities.id))
+    .where(eq(marketTransactionCommodities.transactionId, tx.id));
+  const commodityLines: CaseECommodityPdfLine[] = lineRows.map((r) => ({
+    commodityName: (r.commodityName ?? "").trim() || r.line.commodityId,
+    unit: r.line.unit,
+    quantity: Number(r.line.quantity),
+    ratePerUnit: Number(r.line.ratePerUnit),
+    commodityValue: Number(r.line.commodityValue),
+    marketFee: Number(r.line.marketFeeAmount),
+  }));
+  const m03BreakdownJson = buildCaseESdrfBreakdownJson({
+    kind: CASE_E_SDRF_BREAKDOWN_KIND,
+    refundCheckPostName: cp.name,
+    originalReceiptNo: origReceipt?.receiptNo ?? tx.transactionNo ?? tx.id,
+    entryCheckPostName: entryYard?.name ?? tx.entryLocationId,
+    entryAtIso: entryAt.toISOString(),
+    exitAtIso,
+    timeTakenLabel: formatElapsedLabel(elapsedMs),
+    validityLabel: cfg.validityLabel,
+    eligible: true,
+    securityDepositCollected: collectedSd,
+    securityDepositRefunded: amount,
+    adminChargesRetained: adminRetained,
+    totalCollected: Math.round((collectedSd + adminRetained) * 100) / 100,
+    commodities: commodityLines,
+  });
+
   const refundReceipt = await createIomsReceipt({
     yardId: args.checkPostId,
-    revenueHead: "SecurityDeposit",
+    revenueHead: CASE_E_SD_REFUND_REVENUE_HEAD,
     payerName: String(payerName),
     payerType: tx.traderLicenceId ? "TraderLicence" : "WalkIn",
     payerRefId: tx.traderLicenceId ?? undefined,
@@ -1455,10 +1728,12 @@ export async function recordSecurityDepositRefund(args: {
     paymentDateYmd: args.refundDate,
     applicationRef: origReceipt?.receiptNo ?? tx.transactionNo ?? tx.id,
     narration,
+    m03BreakdownJson,
   });
+  // Keep refund receipt as Paid (not Reversed) — SDRF is a positive refund document.
   await db
     .update(iomsReceipts)
-    .set({ status: "Reversed", gatewayRef: "CaseESdRefund" })
+    .set({ status: "Paid", gatewayRef: "CaseESdRefund" })
     .where(eq(iomsReceipts.id, refundReceipt.id));
 
   const refundTxnRef = (args.refundTxnRef ?? "").trim() || refundReceipt.receiptNo;
@@ -1500,6 +1775,7 @@ export async function recordSecurityDepositRefund(args: {
     routeText,
     processedById: args.recordedBy,
     processedByName: processor?.name ?? processor?.username ?? args.recordedBy,
-    refundWindowHours: CASE_E_REFUND_WINDOW_HOURS,
+    refundWindowHours: windowHours,
+    refundWindowLabel: cfg.validityLabel,
   };
 }

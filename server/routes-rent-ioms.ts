@@ -382,6 +382,8 @@ export function registerRentIomsRoutes(app: Express) {
         unpaidInterestLedgerEntryIds.push(row.id);
       }
       outstandingInterest = Math.round(outstandingInterest * 100) / 100;
+      const { roundInterestToNearestRupee } = await import("./rent-interest");
+      outstandingInterest = roundInterestToNearestRupee(outstandingInterest);
       res.json({
         invoiceId: id,
         invoiceNo: inv.invoiceNo ?? null,
@@ -1646,7 +1648,9 @@ export function registerRentIomsRoutes(app: Express) {
           }
           interestAmt += Number(row.debit ?? 0);
         }
-        interestAmt = Math.round(interestAmt * 100) / 100;
+        // Outstanding Dues collection: round interest up to the next whole rupee.
+        const { roundInterestToNearestRupee } = await import("./rent-interest");
+        interestAmt = roundInterestToNearestRupee(Math.round(interestAmt * 100) / 100);
       }
 
       if (mode === "rent_only") {

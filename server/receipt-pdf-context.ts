@@ -126,6 +126,12 @@ async function buildRemarks(receipt: ReceiptRow): Promise<string> {
   if (rh === "SecurityDepositRefund") {
     return "Refund of Security Deposit of Premises.";
   }
+  if (rh === "CaseESecurityDeposit") {
+    return "Security Deposit (Market Fee) and Administrative Charges for transit through Goa.";
+  }
+  if (rh === "CaseESecurityDepositRefund") {
+    return "Refund of Security Deposit (Market Fee).";
+  }
   return `${rh || "payment"}.`;
 }
 
@@ -246,6 +252,64 @@ async function buildParticularRows(receipt: ReceiptRow): Promise<ReceiptPdfParti
         amount: Number(receipt.totalAmount ?? receipt.amount ?? 0),
       });
     }
+  } else if (rh === "CaseESecurityDeposit") {
+    const { parseCaseESdepBreakdown } = await import("@shared/case-e-security-deposit");
+    const br = parseCaseESdepBreakdown(
+      (receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson,
+    );
+    if (br) {
+      rows.push({
+        label: "1. Security Deposit – Market Fee (refundable)",
+        amount: Number(br.securityDepositAmount) || 0,
+      });
+      for (const c of br.commodities ?? []) {
+        rows.push({
+          label: `   ${c.commodityName} · ${c.quantity} ${c.unit} · MF ₹${Number(c.marketFee).toFixed(2)}`,
+          amount: 0,
+        });
+      }
+      rows.push({
+        label: "2. Administrative Charges (non-refundable)",
+        amount: Number(br.adminChargesAmount) || 0,
+      });
+      rows.push({
+        label: `Validity ${br.validityLabel}; latest exit ${br.latestExitAtIso}`,
+        amount: 0,
+      });
+    } else {
+      rows.push({
+        label: "Security Deposit (Market Fee) + Administrative Charges",
+        amount: Number(receipt.totalAmount ?? receipt.amount ?? 0),
+      });
+    }
+  } else if (rh === "CaseESecurityDepositRefund") {
+    const { parseCaseESdrfBreakdown } = await import("@shared/case-e-security-deposit");
+    const br = parseCaseESdrfBreakdown(
+      (receipt as { m03BreakdownJson?: string | null }).m03BreakdownJson,
+    );
+    if (br) {
+      rows.push({
+        label: `1. Security Deposit – Market Fee Refunded (vs ${br.originalReceiptNo})`,
+        amount: Number(br.securityDepositRefunded) || 0,
+      });
+      rows.push({
+        label: `2. Administrative Charges retained (not refunded)`,
+        amount: Number(br.adminChargesRetained) || 0,
+      });
+      rows.push({
+        label: `Entry ${br.entryCheckPostName} → Exit ${br.refundCheckPostName} · ${br.timeTakenLabel} / ${br.validityLabel}`,
+        amount: 0,
+      });
+      rows.push({
+        label: `Collected ₹${Number(br.totalCollected).toFixed(2)} · Refunded ₹${Number(br.securityDepositRefunded).toFixed(2)} · Retained ₹${Number(br.adminChargesRetained).toFixed(2)}`,
+        amount: 0,
+      });
+    } else {
+      rows.push({
+        label: "Security Deposit (Market Fee) Refund",
+        amount: Number(receipt.totalAmount ?? receipt.amount ?? 0),
+      });
+    }
   } else if (rh === "RentArrearsInterest") {
     const interest = Number(receipt.amount ?? 0);
     if (interest > 0.005) rows.push({ label: "Interest on Rent", amount: interest });
@@ -305,6 +369,13 @@ function receiptTitle(receipt: ReceiptRow, yardCode: string | null, yardName: st
   if (rh === "MarketFee") return marketFeeReceiptTitleForYard(yardCode);
   if (rh === "Rent" || rh === "GSTInvoice" || rh === "RentArrearsInterest") {
     return rentReceiptTitleForYard(yardCode, yardName);
+  }
+  const cp = (yardName ?? yardCode ?? "Check Post").trim() || "Check Post";
+  if (rh === "CaseESecurityDeposit") {
+    return `${cp} - Security Deposit Receipt`;
+  }
+  if (rh === "CaseESecurityDepositRefund") {
+    return `${cp} - Security Deposit Refund Receipt`;
   }
   return otherReceiptTitleForYard(yardName, yardCode);
 }

@@ -20,6 +20,8 @@ const STANDARD_REVENUE_HEAD_LABELS: Record<StandardRevenueHead, string> = {
   LicenceFee: "Licence Fee",
   SecurityDeposit: "Security Deposit",
   SecurityDepositRefund: "Security Deposit Refund",
+  CaseESecurityDeposit: "Security Deposit (Market Fee) — Check Post",
+  CaseESecurityDepositRefund: "Security Deposit (Market Fee) Refund — Check Post",
   Miscellaneous: "Miscellaneous",
   Consolidated: "Consolidated (multi-head)",
 };

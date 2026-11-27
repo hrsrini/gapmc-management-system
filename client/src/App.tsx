@@ -45,6 +45,7 @@ import AdminSidebarMenuPage from "@/pages/admin/AdminSidebarMenuPage";
 import AdminAudit from "@/pages/admin/AdminAudit";
 import AdminPermissionMatrix from "@/pages/admin/AdminPermissionMatrix";
 import AdminSlaConfig from "@/pages/admin/AdminSlaConfig";
+import AdminCaseESdRefundConfig from "@/pages/admin/AdminCaseESdRefundConfig";
 import AdminRentBillingConfig from "@/pages/admin/AdminRentBillingConfig";
 import AdminFinanceMappings from "@/pages/admin/AdminFinanceMappings";
 import AdminMeasurementUnits from "@/pages/admin/AdminMeasurementUnits";
@@ -535,6 +536,9 @@ function Router() {
       </Route>
       <Route path="/admin/sla-config">
         <AdminRoute><AdminSlaConfig /></AdminRoute>
+      </Route>
+      <Route path="/admin/checkpost-sd-refund-config">
+        <AdminRoute><AdminCaseESdRefundConfig /></AdminRoute>
       </Route>
       <Route path="/admin/rent-billing-config">
         <AdminRoute><AdminRentBillingConfig /></AdminRoute>

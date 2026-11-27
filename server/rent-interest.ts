@@ -1,9 +1,9 @@
 /**
  * Delayed rent interest (GAPLMB):
  * Simple interest at configured % p.a. (default 15%), on monthly rent R,
- * using slab months N (0 / 0.5 / 1), then round the total once to the nearest rupee.
+ * using slab months N (0 / 0.5 / 1), then round the total once **up** to a whole rupee.
  *
- * Interest = ROUND(R × rate × N / 1200, 0)
+ * Interest = CEIL(R × rate × N / 1200)
  * Due date = 10th of the month after the rent period month.
  */
 
@@ -116,10 +116,13 @@ export function computeDelayedRentInterestMonthsN(
   return fullMonths + slab;
 }
 
-/** Round once to nearest whole rupee (0.50+ up, else down). */
+/**
+ * Round interest **up** to a whole rupee for accrual and Outstanding Dues collection.
+ * Any positive paise fraction is collected as the next whole rupee (e.g. 166.84 → 167).
+ */
 export function roundInterestToNearestRupee(amount: number): number {
   if (!Number.isFinite(amount) || amount <= 0) return 0;
-  return Math.round(amount);
+  return Math.ceil(amount - 1e-9);
 }
 
 export type DelayedRentInterestResult = {
@@ -133,8 +136,8 @@ export type DelayedRentInterestResult = {
 };
 
 /**
- * Delayed rent interest: add slab months first, round the total once.
- * Compact form: ROUND(R × rate × N / 1200, 0).
+ * Delayed rent interest: add slab months first, round the total once up to a whole rupee.
+ * Compact form: CEIL(R × rate × N / 1200).
  */
 export function computeDelayedRentInterest(params: {
   rentAmount: number;
@@ -212,5 +215,5 @@ export function computeRentArrearsSimpleInterest(params: {
     return { days: 0, interest: 0, nMonths: 0 };
   }
   const raw = (principal * (percentPerAnnum / 100) / 365) * days;
-  return { days, interest: Math.round(raw * 100) / 100, nMonths: 0 };
+  return { days, interest: roundInterestToNearestRupee(raw), nMonths: 0 };
 }

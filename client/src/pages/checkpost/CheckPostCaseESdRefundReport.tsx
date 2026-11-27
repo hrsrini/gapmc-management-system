@@ -52,6 +52,9 @@ interface RefundRow {
 interface Reconciliation {
   from: string;
   to: string;
+  refundWindowLabel?: string;
+  accountingHead?: string;
+  revenueHead?: string;
   totals: {
     receipts: number;
     collected: number;
@@ -81,6 +84,10 @@ interface Reconciliation {
     checkPostName: string;
     securityDepositAmount: number;
     expiredAt: string | null;
+    bookedAt?: string | null;
+    accountingHead?: string;
+    revenueHead?: string;
+    status?: string;
   }>;
 }
 
@@ -90,12 +97,23 @@ interface AuditDetail {
   transactionNo: string | null;
   vehicleNumber: string | null;
   securityDepositAmount: number;
+  depositStatus?: "Refunded" | "Forfeited" | "Open";
+  refundWindowLabel?: string;
+  accounting?: {
+    head: string;
+    revenueHead: string;
+    classification: string;
+    expiredAt: string | null;
+    bookedAt: string | null;
+  };
   originalReceipt: {
     receiptNo: string | null;
     generatedAt: string | null;
     collectedAt: string;
     collectedBy: string | null;
     paymentMode: string | null;
+    accountingHead?: string;
+    revenueHead?: string;
   };
   refund: {
     receiptNo: string | null;
@@ -108,12 +126,15 @@ interface AuditDetail {
     timeSinceReceipt: string | null;
     netPosition: number;
     status: string;
+    accountingHead?: string;
+    revenueHead?: string;
   } | null;
   validations: {
     isCaseE: boolean;
     withinWindowAtRefund: boolean | null;
     noDuplicate: boolean;
     amountNotExceedingDeposit: boolean;
+    forfeitedBookedUnderAccountingHead?: boolean;
   };
 }
 
@@ -229,20 +250,29 @@ export default function CheckPostCaseESdRefundReport() {
     }));
   }, [data?.rows]);
 
-  async function exportCsv() {
+  async function exportCsv(kind: "refunds" | "forfeited" = "refunds") {
     try {
-      const u = new URL("/api/ioms/market/transaction-wizard/case-e/refunds", window.location.origin);
+      const path =
+        kind === "forfeited"
+          ? "/api/ioms/market/transaction-wizard/case-e/reconciliation"
+          : "/api/ioms/market/transaction-wizard/case-e/refunds";
+      const u = new URL(path, window.location.origin);
       u.searchParams.set("from", applied.from);
       u.searchParams.set("to", applied.to);
-      if (applied.checkPostId) u.searchParams.set("checkPostId", applied.checkPostId);
-      if (applied.q) u.searchParams.set("q", applied.q);
+      if (kind === "refunds") {
+        if (applied.checkPostId) u.searchParams.set("checkPostId", applied.checkPostId);
+        if (applied.q) u.searchParams.set("q", applied.q);
+      }
       u.searchParams.set("format", "csv");
       const res = await fetch(u.pathname + u.search, { credentials: "include" });
       if (!res.ok) throw new Error("Export failed");
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `sd-refund-report-${applied.from}_${applied.to}.csv`;
+      a.download =
+        kind === "forfeited"
+          ? `sd-forfeited-accounting-${applied.from}_${applied.to}.csv`
+          : `sd-refund-report-${applied.from}_${applied.to}.csv`;
       a.click();
       URL.revokeObjectURL(a.href);
     } catch (e) {
@@ -344,9 +374,13 @@ export default function CheckPostCaseESdRefundReport() {
                 <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? "animate-spin" : ""}`} />
                 Refresh
               </Button>
-              <Button variant="secondary" onClick={exportCsv}>
+              <Button variant="secondary" onClick={() => exportCsv("refunds")}>
                 <Download className="h-4 w-4 mr-2" />
-                CSV
+                Refunds CSV
+              </Button>
+              <Button variant="outline" onClick={() => exportCsv("forfeited")}>
+                <Download className="h-4 w-4 mr-2" />
+                Forfeited CSV
               </Button>
             </div>
           </div>
@@ -366,11 +400,14 @@ export default function CheckPostCaseESdRefundReport() {
               <p className="text-xs text-muted-foreground">{recon?.totals.receipts ?? 0} receipts</p>
             </div>
             <div className="rounded-md border p-3">
-              <p className="text-xs text-muted-foreground">Expired, not refunded</p>
+              <p className="text-xs text-muted-foreground">Forfeited (unrefunded past limit)</p>
               <p className="text-2xl font-semibold text-amber-700 dark:text-amber-400">
                 {recon?.totals.expiredNotRefundedCount ?? "—"}
               </p>
-              <p className="text-xs text-muted-foreground">{formatInr(recon?.totals.expiredNotRefunded ?? 0)} retained</p>
+              <p className="text-xs text-muted-foreground">
+                {formatInr(recon?.totals.expiredNotRefunded ?? 0)} under{" "}
+                {recon?.accountingHead ?? "Security Deposit (Market Fee)"}
+              </p>
             </div>
           </div>
 
@@ -398,6 +435,12 @@ export default function CheckPostCaseESdRefundReport() {
             <h3 className="font-medium">Financial reconciliation by check post</h3>
             <p className="text-sm text-muted-foreground">
               Security Deposits collected under Case E versus refunds processed ({applied.from} – {applied.to}).
+              Unrefunded amounts past the permitted exit window (
+              {recon?.refundWindowLabel ?? "configured limit"}) are booked under{" "}
+              <span className="font-medium text-foreground">
+                {recon?.accountingHead ?? "Security Deposit (Market Fee)"}
+              </span>{" "}
+              for accounting and audit.
             </p>
             {reconLoading ? (
               <Skeleton className="h-32 w-full" />
@@ -446,9 +489,14 @@ export default function CheckPostCaseESdRefundReport() {
 
           {(recon?.expiredNotRefunded?.length ?? 0) > 0 && (
             <div className="space-y-2">
-              <h3 className="font-medium">Not refunded – validity expired</h3>
+              <h3 className="font-medium">Forfeited — booked under accounting head</h3>
               <p className="text-sm text-muted-foreground">
-                Receipts that passed the 8-hour window with no refund processed.
+                Vehicles that did not exit within {recon?.refundWindowLabel ?? "the permitted time limit"}. Unrefunded
+                Security Deposit is recorded under{" "}
+                <span className="font-medium text-foreground">
+                  {recon?.accountingHead ?? "Security Deposit (Market Fee)"}
+                </span>
+                .
               </p>
               <ul className="grid gap-2 sm:grid-cols-2">
                 {recon!.expiredNotRefunded.map((e) => (
@@ -457,10 +505,17 @@ export default function CheckPostCaseESdRefundReport() {
                     <p className="text-muted-foreground">
                       {e.vehicleNumber ?? "—"} · {e.checkPostName}
                     </p>
-                    <p>
-                      {formatInr(e.securityDepositAmount)} ·{" "}
-                      <Badge variant="outline">Expired</Badge>
+                    <p className="flex flex-wrap items-center gap-2">
+                      {formatInr(e.securityDepositAmount)}
+                      <Badge variant="outline">{e.status ?? "Forfeited"}</Badge>
                     </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Head: {e.accountingHead ?? recon?.accountingHead ?? "Security Deposit (Market Fee)"}
+                      {e.bookedAt ? ` · Booked ${new Date(e.bookedAt).toLocaleString("en-IN")}` : null}
+                    </p>
+                    <Button size="sm" variant="secondary" className="mt-2" onClick={() => setAuditId(e.id)}>
+                      Audit
+                    </Button>
                   </li>
                 ))}
               </ul>
@@ -472,16 +527,30 @@ export default function CheckPostCaseESdRefundReport() {
       <Dialog open={Boolean(auditId)} onOpenChange={(o) => !o && setAuditId(null)}>
         <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Refund audit record</DialogTitle>
+            <DialogTitle>SD accounting &amp; audit record</DialogTitle>
           </DialogHeader>
           {auditLoading || !audit ? (
             <Skeleton className="h-40 w-full" />
           ) : (
             <div className="space-y-4 text-sm">
-              <div className="flex flex-wrap gap-2">
-                <Badge>{audit.refund?.status ?? "Open"}</Badge>
-                <span className="font-mono">{audit.refund?.receiptNo ?? "—"}</span>
+              <div className="flex flex-wrap gap-2 items-center">
+                <Badge variant={audit.depositStatus === "Forfeited" ? "destructive" : "default"}>
+                  {audit.depositStatus ?? audit.refund?.status ?? "Open"}
+                </Badge>
+                <span className="font-mono">{audit.refund?.receiptNo ?? audit.originalReceipt.receiptNo ?? "—"}</span>
               </div>
+              {audit.accounting ? (
+                <div className="rounded-md border p-3 space-y-1">
+                  <p className="text-muted-foreground">Accounting head</p>
+                  <p className="font-medium">{audit.accounting.head}</p>
+                  <p className="text-xs text-muted-foreground">{audit.accounting.classification}</p>
+                  {audit.accounting.bookedAt ? (
+                    <p className="text-xs text-muted-foreground">
+                      Booked {new Date(audit.accounting.bookedAt).toLocaleString("en-IN")}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="grid gap-2 sm:grid-cols-2">
                 <div>
                   <p className="text-muted-foreground">Original receipt</p>
@@ -527,7 +596,7 @@ export default function CheckPostCaseESdRefundReport() {
                 <ul className="space-y-1 text-xs">
                   <li>Case E – Transit through Goa: {audit.validations.isCaseE ? "Passed" : "Failed"}</li>
                   <li>
-                    Within 8 hours:{" "}
+                    Within permitted time ({audit.refundWindowLabel ?? "configured limit"}):{" "}
                     {audit.validations.withinWindowAtRefund == null
                       ? "—"
                       : audit.validations.withinWindowAtRefund
@@ -537,6 +606,10 @@ export default function CheckPostCaseESdRefundReport() {
                   <li>Linked / no duplicate: {audit.validations.noDuplicate ? "Passed" : "—"}</li>
                   <li>
                     Amount ≤ deposit: {audit.validations.amountNotExceedingDeposit ? "Passed" : "Failed"}
+                  </li>
+                  <li>
+                    Forfeiture booked under Security Deposit (Market Fee):{" "}
+                    {audit.validations.forfeitedBookedUnderAccountingHead ? "Yes" : "—"}
                   </li>
                 </ul>
               </div>

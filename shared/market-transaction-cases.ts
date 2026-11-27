@@ -2,6 +2,7 @@
  * M-04 market transaction wizard — cases A–G (client mockups).
  */
 import { applyInvoiceNearestRupeeRounding, roundInr2 } from "./invoice-rounding";
+import { computeCaseESecurityDepositAmount } from "./case-e-security-deposit";
 
 export type MarketTransactionCaseId = "A" | "B" | "C" | "D" | "E" | "F" | "G";
 
@@ -119,7 +120,9 @@ export const MARKET_TRANSACTION_CASES: Record<MarketTransactionCaseId, MarketTra
     requiresTransitFields: true,
     allowsFine: false,
     usesSecurityDeposit: true,
-    defaultAdminCharges: 50,
+    /** Overridden by system_config case_e_admin_charges (default 100). */
+    defaultAdminCharges: 100,
+    /** Ceiling fallback; SD = min(market fee, system_config case_e_sd_ceiling). */
     defaultSecurityDeposit: 1000,
   },
   F: {
@@ -223,7 +226,7 @@ export type MarketTransactionCalculation = {
   securityDepositAmount: number;
   adminChargesAmount: number;
   totalPayable: number;
-  receiptRevenueHead: "MarketFee" | "Miscellaneous";
+  receiptRevenueHead: "MarketFee" | "Miscellaneous" | "CaseESecurityDeposit";
 };
 
 export function computeMarketTransactionTotals(
@@ -234,6 +237,10 @@ export function computeMarketTransactionTotals(
     securityDepositAmount?: number;
     adminChargesAmount?: number;
     collectFine?: boolean;
+    /** Case E: SD ceiling from system_config (default 1000). */
+    caseESdCeiling?: number;
+    /** Case E: admin charges from system_config (default 100). */
+    caseEAdminCharges?: number;
   },
 ): MarketTransactionCalculation {
   const meta = MARKET_TRANSACTION_CASES[caseType];
@@ -243,18 +250,27 @@ export function computeMarketTransactionTotals(
     meta.allowsFine && opts.collectFine !== false
       ? Math.round(Math.max(0, Number(opts.fineAmount ?? 0)) * 100) / 100
       : 0;
-  const securityDepositAmount = meta.usesSecurityDeposit
-    ? Math.round(Math.max(0, Number(opts.securityDepositAmount ?? meta.defaultSecurityDeposit)) * 100) / 100
-    : 0;
-  const adminChargesAmount = meta.usesSecurityDeposit
-    ? Math.round(Math.max(0, Number(opts.adminChargesAmount ?? meta.defaultAdminCharges)) * 100) / 100
-    : 0;
+
+  let securityDepositAmount = 0;
+  let adminChargesAmount = 0;
+  if (meta.usesSecurityDeposit) {
+    const ceiling =
+      opts.caseESdCeiling != null && Number.isFinite(Number(opts.caseESdCeiling))
+        ? Math.max(0, Number(opts.caseESdCeiling))
+        : meta.defaultSecurityDeposit;
+    // Always config-driven: ceil(min(market fee, ceiling)). Never honor client SD override.
+    securityDepositAmount = computeCaseESecurityDepositAmount(totalMarketFee, ceiling);
+    adminChargesAmount =
+      opts.caseEAdminCharges != null && Number.isFinite(Number(opts.caseEAdminCharges))
+        ? Math.round(Math.max(0, Number(opts.caseEAdminCharges)) * 100) / 100
+        : meta.defaultAdminCharges;
+  }
 
   let totalPayable = 0;
-  let receiptRevenueHead: "MarketFee" | "Miscellaneous" = "MarketFee";
+  let receiptRevenueHead: MarketTransactionCalculation["receiptRevenueHead"] = "MarketFee";
   if (meta.usesSecurityDeposit) {
     totalPayable = roundInr2(securityDepositAmount + adminChargesAmount);
-    receiptRevenueHead = "Miscellaneous";
+    receiptRevenueHead = "CaseESecurityDeposit";
   } else {
     // Market Fee receipt: nearest whole rupee (0.50 rounds up) for Total Amount Payable.
     const before = roundInr2(totalMarketFee + fineAmount);

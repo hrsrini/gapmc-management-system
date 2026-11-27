@@ -56,6 +56,8 @@ export function revenueHeadForLedgerName(name: string): string {
   if (n === "rent" || n.includes("interest on rent")) return "Rent";
   if (n.includes("market fee")) return "MarketFee";
   if (n.includes("license") || n.includes("licence") || n.includes("godown registration")) return "LicenceFee";
+  if (n.includes("security deposit (market fee)") && n.includes("refund")) return "CaseESecurityDepositRefund";
+  if (n.includes("security deposit (market fee)")) return "CaseESecurityDeposit";
   if (n.includes("security deposit") || n.includes("individual deposit")) return "SecurityDeposit";
   if (n === "cgst" || n === "sgst") return "GSTInvoice";
   return "Miscellaneous";
@@ -78,6 +80,10 @@ export const STANDARD_REVENUE_HEADS = [
   "SecurityDeposit",
   /** Godown SD refund payout receipt series (GAPLMB/…/SECREF/NNNN). */
   "SecurityDepositRefund",
+  /** Case E Check Post entry SD (Market Fee) series (GAPLMB/CP-…/SDEP/NNNN). */
+  "CaseESecurityDeposit",
+  /** Case E Check Post exit SD refund series (GAPLMB/CP-…/SDRF/NNNN). */
+  "CaseESecurityDepositRefund",
   "Miscellaneous",
   /** Multi-head consolidated manual receipt series (GAPLMB/…/CONS/NNNN). */
   "Consolidated",
@@ -107,6 +113,8 @@ export function abbreviateReceiptHeadCode(ledgerOrHead: string): string {
       LicenceFee: "LCFEE",
       SecurityDeposit: "SECDEP",
       SecurityDepositRefund: "SECREF",
+      CaseESecurityDeposit: "SDEP",
+      CaseESecurityDepositRefund: "SDRF",
       Miscellaneous: "MISC",
       Consolidated: "CONS",
     };

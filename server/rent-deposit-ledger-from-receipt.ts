@@ -156,8 +156,13 @@ async function recordInterestSettlementForM03Receipt(
   sumDebit = Math.round(sumDebit * 100) / 100;
   const interestAmount = Math.round(interestAmountIn * 100) / 100;
   if (interestAmount <= 0.01) return "Rent deposit ledger: interest amount invalid.";
-  if (Math.abs(sumDebit - interestAmount) > 0.02) {
-    return `Rent deposit ledger: interest total ₹${interestAmount.toFixed(2)} does not match ledger debits ₹${sumDebit.toFixed(2)}.`;
+  const { roundInterestToNearestRupee } = await import("./rent-interest");
+  const interestCeiled = roundInterestToNearestRupee(sumDebit);
+  // Exact ledger match, or collection of the whole-rupee rounded-up amount (Outstanding Dues policy).
+  const matchesLedger = Math.abs(sumDebit - interestAmount) <= 0.02;
+  const matchesCeil = Math.abs(interestCeiled - interestAmount) <= 0.02;
+  if (!matchesLedger && !matchesCeil) {
+    return `Rent deposit ledger: interest total ₹${interestAmount.toFixed(2)} does not match ledger debits ₹${sumDebit.toFixed(2)} (or rounded-up ₹${interestCeiled.toFixed(2)}).`;
   }
 
   const prev = await latestRentDepositLedgerRowForInvoice(inv);

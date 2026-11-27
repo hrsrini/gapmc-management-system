@@ -45,6 +45,13 @@ const LEDGERS: { id: string; ledgerName: string; primaryGroup: string; statement
   { id: "tl_tend", ledgerName: "Tender Form Fee", primaryGroup: "Indirect Income", statementClass: "PL_Income", sortOrder: 49 },
   { id: "tl_rti", ledgerName: "Application Fee under RTI", primaryGroup: "Indirect Income", statementClass: "PL_Income", sortOrder: 50 },
   { id: "tl_admin", ledgerName: "Administrative Charges", primaryGroup: "Indirect Income", statementClass: "PL_Income", sortOrder: 51 },
+  {
+    id: "tl_sec_mkt_fee",
+    ledgerName: "Security Deposit (Market Fee)",
+    primaryGroup: "Current Liabilities",
+    statementClass: "BS_Liability",
+    sortOrder: 60,
+  },
   { id: "tl_fine", ledgerName: "Fines/Penalty", primaryGroup: "Indirect Income", statementClass: "PL_Income", sortOrder: 52 },
   { id: "tl_park", ledgerName: "Parking Charges", primaryGroup: "Indirect Income", statementClass: "PL_Income", sortOrder: 53 },
   { id: "tl_bk_int", ledgerName: "Bank Interest", primaryGroup: "Income from investments", statementClass: "PL_Income", sortOrder: 54 },
@@ -77,6 +84,8 @@ const REVENUE_HEAD_MAP: { revenueHead: string; tallyLedgerId: string }[] = [
   { revenueHead: "LicenceFee", tallyLedgerId: "tl_lic" },
   { revenueHead: "SecurityDeposit", tallyLedgerId: "tl_sec_god" },
   { revenueHead: "SecurityDepositRefund", tallyLedgerId: "tl_sec_god" },
+  { revenueHead: "CaseESecurityDeposit", tallyLedgerId: "tl_sec_mkt_fee" },
+  { revenueHead: "CaseESecurityDepositRefund", tallyLedgerId: "tl_sec_mkt_fee" },
   { revenueHead: "Miscellaneous", tallyLedgerId: "tl_misc" },
   // CONS series parent head — Tally export expands to per-line ledgers; map is fallback only.
   { revenueHead: "Consolidated", tallyLedgerId: "tl_misc" },

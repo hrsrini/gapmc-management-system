@@ -38,6 +38,7 @@ import {
   type PaymentPreferenceValue,
 } from "@/lib/duesCounterPayment";
 import { useYardLabels } from "@/hooks/useYardLabels";
+import { splitM03RentPaymentGst } from "@shared/m03-receipt-breakdown";
 
 interface UnifiedEntityRow {
   id: string;
@@ -58,6 +59,9 @@ interface DueRentInvoice {
   assetId: string;
   yardId: string;
   totalAmount: number;
+  rentAmount?: number;
+  cgst?: number;
+  sgst?: number;
   paidAmount: number;
   outstandingAmount: number;
   outstandingRentAmount?: number;
@@ -220,15 +224,32 @@ export default function OutstandingDues() {
     if (payKind !== "rent" || rentPayTotal <= 0) return [];
     const rentPay = rentPayMode === "interest_only" ? 0 : Number(rentAmountInput) || 0;
     const interestPay = rentPayMode === "rent_only" ? 0 : interestDueForDialog;
-    const rows: Array<{ label: string; amount: number }> = [];
+    const rows: Array<{ label: string; amount: number; note?: string }> = [];
     if (rentPay > 0.005) {
-      rows.push({ label: "Rent", amount: rentPay });
-      rows.push({ label: "CGST", amount: 0 });
-      rows.push({ label: "SGST", amount: 0 });
+      const invTotal = Number(payInvoice?.totalAmount ?? 0);
+      const invRent = Number(payInvoice?.rentAmount ?? 0);
+      const invCgst = Number(payInvoice?.cgst ?? 0);
+      const invSgst = Number(payInvoice?.sgst ?? 0);
+      if (invTotal > 0.005 && (invCgst > 0.005 || invSgst > 0.005 || invRent > 0.005)) {
+        const parts = splitM03RentPaymentGst({
+          rentPay,
+          invoiceRentAmount: invRent,
+          invoiceCgst: invCgst,
+          invoiceSgst: invSgst,
+          invoiceTotalAmount: invTotal,
+        });
+        rows.push({ label: "Rent", amount: parts.amount });
+        if (parts.cgst > 0.005) rows.push({ label: "CGST", amount: parts.cgst });
+        if (parts.sgst > 0.005) rows.push({ label: "SGST", amount: parts.sgst });
+      } else {
+        rows.push({ label: "Rent", amount: rentPay });
+      }
     }
-    if (interestPay > 0.005) rows.push({ label: "Interest on Rent", amount: interestPay });
+    if (interestPay > 0.005) {
+      rows.push({ label: "Interest on Rent", amount: interestPay, note: "Rounded up to whole rupees" });
+    }
     return rows;
-  }, [payKind, rentPayTotal, rentPayMode, rentAmountInput, interestDueForDialog]);
+  }, [payKind, rentPayTotal, rentPayMode, rentAmountInput, interestDueForDialog, payInvoice]);
 
   const payMutation = useMutation({
     mutationFn: async () => {
@@ -683,12 +704,13 @@ export default function OutstandingDues() {
                       <p className="font-medium">Receipt particulars (preview)</p>
                       {receiptParticularsPreview.map((row) => (
                         <div key={row.label} className="flex justify-between gap-4">
-                          <span className="text-muted-foreground">{row.label}</span>
-                          <span className="tabular-nums">
-                            {row.label === "CGST" || row.label === "SGST"
-                              ? "As per rent split"
-                              : formatInr(row.amount)}
+                          <span className="text-muted-foreground">
+                            {row.label}
+                            {row.note ? (
+                              <span className="block text-xs font-normal">{row.note}</span>
+                            ) : null}
                           </span>
+                          <span className="tabular-nums">{formatInr(row.amount)}</span>
                         </div>
                       ))}
                       <div className="flex justify-between gap-4 border-t pt-2 font-medium">

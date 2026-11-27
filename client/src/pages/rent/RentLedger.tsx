@@ -263,9 +263,12 @@ export default function RentLedger() {
   const ledgerPayAmountDefault = useMemo(() => {
     if (!payDialog) return 0;
     if (payMode === "interest_only") {
-      return unpaidInterestForInvoice
+      const raw = unpaidInterestForInvoice
         .filter((r) => payDialog.selectedInterestIds.includes(r.id))
         .reduce((s, r) => s + Number(r.debit ?? 0), 0);
+      // Match Outstanding Dues / server: round interest up to whole rupees.
+      const rounded = Math.round(raw * 100) / 100;
+      return rounded > 0 ? Math.ceil(rounded - 1e-9) : 0;
     }
     return Number(rentAmountInput) || 0;
   }, [payDialog, payMode, rentAmountInput, unpaidInterestForInvoice]);

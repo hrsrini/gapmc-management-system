@@ -1759,6 +1759,13 @@ export const marketTransactions = gapmc.table("market_transactions", {
   sdRefundAmount: doublePrecision("sd_refund_amount"),
   sdRefundRecordedAt: text("sd_refund_recorded_at"),
   sdRefundRecordedBy: text("sd_refund_recorded_by"),
+  /**
+   * Case E: set when validity window ends without refund.
+   * Unrefunded amount is retained / classified under accounting head "Security Deposit (Market Fee)".
+   */
+  sdExpiredAt: text("sd_expired_at"),
+  /** Case E: when forfeiture was booked for accounting, reconciliation, and audit. */
+  sdExpiredBookedAt: text("sd_expired_booked_at"),
   createdBy: text("created_by"),
   createdAt: text("created_at"),
   finalizedAt: text("finalized_at"),

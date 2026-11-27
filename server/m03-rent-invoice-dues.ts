@@ -6,6 +6,7 @@ import { db } from "./db";
 import { iomsReceipts, rentDepositLedger, rentInvoices } from "@shared/db-schema";
 import { m03ReceiptPrincipalTowardInvoice } from "@shared/m03-receipt-breakdown";
 import { unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
+import { roundInterestToNearestRupee } from "./rent-interest";
 
 export type M03RentInvoiceDueRow = {
   kind: "RentInvoice";
@@ -15,10 +16,15 @@ export type M03RentInvoiceDueRow = {
   assetId: string;
   yardId: string;
   totalAmount: number;
+  /** Taxable rent on the invoice (ex-GST). */
+  rentAmount: number;
+  cgst: number;
+  sgst: number;
   paidAmount: number;
   /** Outstanding rent invoice principal (rent + GST), excluding arrears interest. */
   outstandingAmount: number;
   outstandingRentAmount: number;
+  /** Unpaid interest rounded **up** to whole rupees for collection. */
   outstandingInterestAmount: number;
   unpaidInterestLedgerEntryIds: string[];
   status: string;
@@ -69,7 +75,10 @@ async function unpaidInterestByInvoice(
     result[invId] = bucket;
   }
   for (const invId of Object.keys(result)) {
-    result[invId].amount = Math.round(result[invId].amount * 100) / 100;
+    // Collection policy: any fractional paise interest is rounded up to the next whole rupee.
+    result[invId].amount = roundInterestToNearestRupee(
+      Math.round(result[invId].amount * 100) / 100,
+    );
   }
   return result;
 }
@@ -145,6 +154,9 @@ async function invoiceRowsToDues(
     assetId: string;
     yardId: string;
     totalAmount: number | null;
+    rentAmount?: number | null;
+    cgst?: number | null;
+    sgst?: number | null;
     status: string | null;
   }>,
   paidByInvoice: Record<string, number>,
@@ -168,6 +180,9 @@ async function invoiceRowsToDues(
       assetId: i.assetId,
       yardId: i.yardId,
       totalAmount: total,
+      rentAmount: Number(i.rentAmount ?? 0),
+      cgst: Number(i.cgst ?? 0),
+      sgst: Number(i.sgst ?? 0),
       paidAmount: paid,
       outstandingAmount: outstandingRent,
       outstandingRentAmount: outstandingRent,

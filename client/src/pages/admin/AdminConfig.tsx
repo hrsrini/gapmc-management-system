@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Settings, AlertCircle, ImageIcon, Trash2, Upload, Calculator, Mail } from "lucide-react";
+import { Settings, AlertCircle, ImageIcon, Trash2, Upload, Calculator, Mail, Banknote } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
@@ -29,8 +29,19 @@ import { randomHexSecret } from "@/lib/randomHexSecret";
 import { useUploadFilePreview } from "@/hooks/useUploadFilePreview";
 
 /** Module scope (not inside the component) avoids production TDZ from useMemo + .map over shared config maps. */
+const CASE_E_SD_CONFIG_KEYS: SystemConfigKey[] = [
+  "case_e_sd_ceiling",
+  "case_e_admin_charges",
+  "case_e_sd_refund_validity_hours",
+  "case_e_sd_refund_validity_minutes",
+];
+const CASE_E_SD_CONFIG_KEY_SET = new Set<string>(CASE_E_SD_CONFIG_KEYS);
+
 const ADMIN_CONFIG_FIELDS: { key: SystemConfigKey; label: string }[] = SYSTEM_CONFIG_KEYS.filter(
-  (key) => key !== "ui_sidebar_hidden_hrefs_json" && key !== "ui_dashboard_show_kpi_cards",
+  (key) =>
+    key !== "ui_sidebar_hidden_hrefs_json" &&
+    key !== "ui_dashboard_show_kpi_cards" &&
+    !CASE_E_SD_CONFIG_KEY_SET.has(key),
 ).map((key) => ({
   key,
   label: SYSTEM_CONFIG_LABELS[key],
@@ -39,6 +50,10 @@ const LEAVE_CONFIG_FIELDS = ADMIN_CONFIG_FIELDS.filter(
   (f) => f.key.startsWith("leave_") && f.key !== "leave_ho_section_emails_json",
 );
 const GENERAL_CONFIG_FIELDS = ADMIN_CONFIG_FIELDS.filter((f) => !f.key.startsWith("leave_"));
+const CASE_E_SD_CONFIG_FIELDS = CASE_E_SD_CONFIG_KEYS.map((key) => ({
+  key,
+  label: SYSTEM_CONFIG_LABELS[key],
+}));
 
 const DEFAULT_HO_SECTIONS = ["Accounts Section", "Admin Section", "Inspection Section"] as const;
 
@@ -556,18 +571,51 @@ export default function AdminConfig() {
             <code className="text-xs bg-muted px-1 rounded">GET /api/admin/data-retention-summary</code> (no deletes).
           </p>
           </div>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/admin/rent-billing-config">
-              <Calculator className="h-4 w-4 mr-1" />
-              M-03 rent billing (prorata / overstay)
-            </Link>
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/admin/checkpost-sd-refund-config">
+                <Banknote className="h-4 w-4 mr-1" />
+                Check Post SD refund settings
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/admin/rent-billing-config">
+                <Calculator className="h-4 w-4 mr-1" />
+                M-03 rent billing (prorata / overstay)
+              </Link>
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           {isLoading ? (
             <Skeleton className="h-48 w-full" />
           ) : (
             <>
+              <div className="space-y-3 rounded-md border p-4">
+                <div>
+                  <p className="text-sm font-medium flex items-center gap-2">
+                    <Banknote className="h-4 w-4" />
+                    Check Post — Security Deposit (Market Fee) & Administrative Charges
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Applied automatically on Case E (Transit through Goa) entry. Security Deposit = min(commodity market
+                    fee, ceiling) and is refundable only if the vehicle exits within the configured hours and minutes of
+                    entry; otherwise it is forfeited. Administrative Charges are always non-refundable. Operators do not
+                    enter these amounts manually.
+                  </p>
+                </div>
+                {CASE_E_SD_CONFIG_FIELDS.map(({ key, label }) => (
+                  <ConfigFieldRow key={key} keyName={key} label={label} values={values} setValues={setValues} />
+                ))}
+                <p className="text-xs text-muted-foreground">
+                  Prefer the dedicated{" "}
+                  <Link href="/admin/checkpost-sd-refund-config" className="text-primary underline">
+                    Check Post SD refund settings
+                  </Link>{" "}
+                  page for hours/minutes validation and a clearer summary. Save with the main Config Save button below.
+                </p>
+              </div>
+
               <p className="text-sm font-medium">Leave module (M-01)</p>
               {LEAVE_CONFIG_FIELDS.map(({ key, label }) => (
                 <ConfigFieldRow key={key} keyName={key} label={label} values={values} setValues={setValues} />

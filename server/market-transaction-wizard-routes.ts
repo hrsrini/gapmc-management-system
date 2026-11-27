@@ -13,6 +13,7 @@ import {
   calculateMarketTransactionWizard,
   createMarketTransactionDraft,
   finalizeMarketTransaction,
+  getCaseESdConfig,
   getCaseESdRefundAudit,
   getCaseESdRefundDashboard,
   listCaseESecurityDepositRefunds,
@@ -107,7 +108,9 @@ function ensureMarketTransactionTables(): Promise<void> {
         ADD COLUMN IF NOT EXISTS sd_refund_date text,
         ADD COLUMN IF NOT EXISTS sd_refund_amount double precision,
         ADD COLUMN IF NOT EXISTS sd_refund_recorded_at text,
-        ADD COLUMN IF NOT EXISTS sd_refund_recorded_by text
+        ADD COLUMN IF NOT EXISTS sd_refund_recorded_by text,
+        ADD COLUMN IF NOT EXISTS sd_expired_at text,
+        ADD COLUMN IF NOT EXISTS sd_expired_booked_at text
     `);
   })();
   return ensureMarketTransactionTablesPromise;
@@ -158,8 +161,19 @@ function parseWizardBody(body: unknown): MarketTransactionWizardInput {
     exitCheckpostIds: Array.isArray(b.exitCheckpostIds) ? (b.exitCheckpostIds as unknown[]).map(String) : undefined,
     anyExitCheckpost: Boolean(b.anyExitCheckpost),
     fineAmount: b.fineAmount != null ? Number(b.fineAmount) : undefined,
-    securityDepositAmount: b.securityDepositAmount != null ? Number(b.securityDepositAmount) : undefined,
-    adminChargesAmount: b.adminChargesAmount != null ? Number(b.adminChargesAmount) : undefined,
+    // Case E SD/admin are always computed from market fee + system_config — ignore client values.
+    securityDepositAmount:
+      caseType === "E"
+        ? undefined
+        : b.securityDepositAmount != null
+          ? Number(b.securityDepositAmount)
+          : undefined,
+    adminChargesAmount:
+      caseType === "E"
+        ? undefined
+        : b.adminChargesAmount != null
+          ? Number(b.adminChargesAmount)
+          : undefined,
     collectFine: b.collectFine != null ? Boolean(b.collectFine) : undefined,
     commodities,
   };
@@ -462,7 +476,13 @@ export function registerMarketTransactionWizardRoutes(app: Express) {
         vehicleNumber: vehicleNumber || undefined,
         paymentMode: paymentMode || undefined,
       });
-      res.json({ count: rows.length, refundWindowHours: 8, rows });
+      const cfg = await getCaseESdConfig();
+      res.json({
+        count: rows.length,
+        refundWindowHours: Math.round((cfg.validityHours + cfg.validityMinutes / 60) * 100) / 100,
+        refundWindowLabel: cfg.validityLabel,
+        rows,
+      });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to list eligible Case E receipts");
@@ -502,11 +522,55 @@ export function registerMarketTransactionWizardRoutes(app: Express) {
       if (!from || !iso.test(from) || !to || !iso.test(to) || from > to) {
         return sendApiError(res, 400, "REPORT_DATE_RANGE_REQUIRED", "Valid from/to (YYYY-MM-DD) required");
       }
+      const format = String(req.query.format ?? "").trim().toLowerCase();
       const report = await buildCaseESdRefundReconciliation({
         from,
         to,
         scopedYardIds: req.scopedLocationIds,
       });
+      if (format === "csv") {
+        const esc = (v: unknown) => {
+          const s = v == null ? "" : String(v);
+          return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        };
+        const headers = [
+          "Receipt No",
+          "Txn No",
+          "Vehicle",
+          "Check Post",
+          "Security Deposit",
+          "Status",
+          "Accounting Head",
+          "Revenue Head",
+          "Expired At",
+          "Booked At",
+        ];
+        const lines = [headers.join(",")];
+        for (const e of report.expiredNotRefunded) {
+          lines.push(
+            [
+              e.receiptNo ?? "",
+              e.transactionNo ?? "",
+              e.vehicleNumber ?? "",
+              e.checkPostName,
+              e.securityDepositAmount,
+              e.status,
+              e.accountingHead,
+              e.revenueHead,
+              e.expiredAt ?? "",
+              e.bookedAt ?? "",
+            ]
+              .map(esc)
+              .join(","),
+          );
+        }
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename=case-e-sd-forfeited-${from}_${to}.csv`,
+        );
+        return res.send(lines.join("\n"));
+      }
       res.json(report);
     } catch (e) {
       console.error(e);

@@ -20,6 +20,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatInr } from "@/lib/formatInr";
 import { ApiUserError, fetchApiGet, readApiErrorEnvelope } from "@/lib/queryClient";
 import { localCalendarYmd } from "@shared/premises-allocation";
+import { downloadIomsReceiptPdf } from "@/lib/downloadIomsReceiptPdf";
 import { AlertCircle, FileBarChart, RefreshCw, Search, Undo2 } from "lucide-react";
 
 interface EligibleRow {
@@ -50,6 +51,7 @@ interface EligibleRow {
   timeLeft: string;
   expiringWithinOneHour: boolean;
   refundWindowHours: number;
+  refundWindowLabel?: string;
 }
 
 interface AuditDetail {
@@ -93,6 +95,7 @@ interface Dashboard {
   refundsTodayCount: number;
   amountRefundedToday: number;
   refundWindowHours: number;
+  refundWindowLabel?: string;
 }
 
 interface TodayRefundRow {
@@ -232,6 +235,7 @@ export default function CheckPostCaseESdRefund() {
         throw new ApiUserError(message, code);
       }
       return res.json() as Promise<{
+        sdRefundReceiptId?: string;
         sdRefundReceiptNo: string;
         sdRefundAmount: number;
         originalReceiptNo: string | null;
@@ -244,6 +248,9 @@ export default function CheckPostCaseESdRefund() {
         title: "Security deposit refunded",
         description: `${result.sdRefundReceiptNo} · ${formatInr(result.sdRefundAmount)} · ${result.routeText} · by ${result.processedByName}`,
       });
+      if (result.sdRefundReceiptId) {
+        void downloadIomsReceiptPdf(result.sdRefundReceiptId, result.sdRefundReceiptNo).catch(() => undefined);
+      }
       setSelectedId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/market/transaction-wizard/case-e/refundable"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ioms/market/transaction-wizard/case-e/dashboard"] });
@@ -287,7 +294,8 @@ export default function CheckPostCaseESdRefund() {
             </CardTitle>
             <p className="text-sm text-muted-foreground mt-1">
               Case E – Transit through Goa only. Receipts stay selectable for{" "}
-              {dashboard?.refundWindowHours ?? 8} hours from generation. Already refunded or expired receipts are not
+              {dashboard?.refundWindowLabel ?? `${dashboard?.refundWindowHours ?? 8} hours`} from generation. Already
+              refunded or expired receipts are not
               listed.
             </p>
           </div>
@@ -303,7 +311,7 @@ export default function CheckPostCaseESdRefund() {
             <div className="rounded-md border p-3">
               <p className="text-xs text-muted-foreground">Eligible receipts</p>
               <p className="text-2xl font-semibold">{dashboard?.eligibleCount ?? eligibleData?.count ?? "—"}</p>
-              <p className="text-xs text-muted-foreground">Case E, within 8 hours</p>
+              <p className="text-xs text-muted-foreground">Case E, within validity window</p>
             </div>
             <div className="rounded-md border p-3">
               <p className="text-xs text-muted-foreground">Expiring within 1 hour</p>
@@ -431,7 +439,7 @@ export default function CheckPostCaseESdRefund() {
                     {(eligibleData?.rows ?? []).length === 0 ? (
                       <tr>
                         <td colSpan={7} className="p-4 text-muted-foreground">
-                          No eligible Case E receipts within the 8-hour window.
+                          No eligible Case E receipts within the configured validity window.
                         </td>
                       </tr>
                     ) : (

@@ -234,6 +234,12 @@ export const SIDEBAR_MENU_GROUPS: SidebarMenuGroup[] = [
       { title: "Roles", icon: Shield, href: "/admin/roles" },
       { title: "Locations", icon: MapPin, href: "/admin/locations" },
       { title: "Config & PDF logo", icon: Settings, href: "/admin/config" },
+      {
+        title: "Check Post SD refund settings",
+        icon: Clock,
+        href: "/admin/checkpost-sd-refund-config",
+        requirePermission: { module: "M-10", action: "Read" },
+      },
       { title: "Sidebar menu visibility", icon: PanelLeft, href: "/admin/sidebar-menu" },
       { title: "Audit Log", icon: ScrollText, href: "/admin/audit" },
       { title: "Permission matrix", icon: Grid3X3, href: "/admin/permissions" },

@@ -26,6 +26,7 @@ import {
   type MarketTransactionCaseId,
   type MarketTransactionWizardInput,
 } from "@shared/market-transaction-cases";
+import { CASE_E_SD_ACCOUNTING_HEAD, parseCaseESdConfig } from "@shared/case-e-security-deposit";
 import { localCalendarYmd, localClockHm } from "@shared/premises-allocation";
 import {
   ArrowLeft,
@@ -35,7 +36,9 @@ import {
   Download,
   Loader2,
   Package,
+  Plus,
   Receipt,
+  Trash2,
   Truck,
   User,
 } from "lucide-react";
@@ -83,7 +86,6 @@ function buildPayload(args: {
   originatingState: string;
   destinationState: string;
   fineAmount: string;
-  securityDepositAmount: string;
   adminChargesAmount: string;
   collectFine: boolean;
   lines: CommodityLineDraft[];
@@ -116,10 +118,13 @@ function buildPayload(args: {
     originatingState: args.originatingState.trim() || null,
     destinationState: args.destinationState.trim() || null,
     fineAmount: args.fineAmount.trim() ? Number(args.fineAmount) : undefined,
-    securityDepositAmount: args.securityDepositAmount.trim()
-      ? Number(args.securityDepositAmount)
-      : meta.defaultSecurityDeposit,
-    adminChargesAmount: args.adminChargesAmount.trim() ? Number(args.adminChargesAmount) : meta.defaultAdminCharges,
+    // Case E: SD/admin come from market fee + system_config (not client entry).
+    securityDepositAmount: undefined,
+    adminChargesAmount: meta.usesSecurityDeposit
+      ? undefined
+      : args.adminChargesAmount.trim()
+        ? Number(args.adminChargesAmount)
+        : undefined,
     collectFine: args.collectFine,
     commodities: args.lines
       .filter((l) => l.commodityId.trim() && Number(l.quantity) > 0)
@@ -175,7 +180,6 @@ export default function MarketTransactionWizard() {
   const [originatingState, setOriginatingState] = useState("");
   const [destinationState, setDestinationState] = useState("");
   const [fineAmount, setFineAmount] = useState("");
-  const [securityDepositAmount, setSecurityDepositAmount] = useState("");
   const [adminChargesAmount, setAdminChargesAmount] = useState("");
   const [collectFine, setCollectFine] = useState(false);
   const [lines, setLines] = useState<CommodityLineDraft[]>([emptyLine()]);
@@ -255,13 +259,17 @@ export default function MarketTransactionWizard() {
     else if (captureMode === "FlyingSquad" || captureMode === "YardInspection") setCaptureMode("Normal");
   }, [caseType, captureMode]);
 
+  const { data: systemConfig } = useQuery<Record<string, string>>({
+    queryKey: ["/api/system/config"],
+  });
+  const caseECfg = useMemo(() => parseCaseESdConfig(systemConfig ?? {}), [systemConfig]);
+
   useEffect(() => {
     if (caseType === "B" || caseType === "C") setCollectFine(true);
     if (caseType === "E") {
-      if (!securityDepositAmount) setSecurityDepositAmount(String(meta.defaultSecurityDeposit));
-      if (!adminChargesAmount) setAdminChargesAmount(String(meta.defaultAdminCharges));
+      setAdminChargesAmount(String(caseECfg.adminCharges));
     }
-  }, [caseType, meta.defaultAdminCharges, meta.defaultSecurityDeposit, securityDepositAmount, adminChargesAmount]);
+  }, [caseType, caseECfg.adminCharges]);
 
   const { data: yards = [], isLoading: yardsLoading } = useQuery<
     Array<{ id: string; name: string; code: string }>
@@ -483,7 +491,6 @@ export default function MarketTransactionWizard() {
         originatingState,
         destinationState,
         fineAmount,
-        securityDepositAmount,
         adminChargesAmount,
         collectFine,
         lines,
@@ -515,7 +522,6 @@ export default function MarketTransactionWizard() {
       originatingState,
       destinationState,
       fineAmount,
-      securityDepositAmount,
       adminChargesAmount,
       collectFine,
       lines,
@@ -1088,15 +1094,23 @@ export default function MarketTransactionWizard() {
 
             {meta.requiresTransitFields && (
               <>
-                <div className="space-y-1 sm:col-span-2 border-t pt-4"><Label>Transit (Case E)</Label></div>
-                <div className="space-y-1"><Label>Originating state</Label><Input value={originatingState} onChange={(e) => setOriginatingState(e.target.value)} /></div>
-                <div className="space-y-1"><Label>Destination state</Label><Input value={destinationState} onChange={(e) => setDestinationState(e.target.value)} /></div>
-                <div className="space-y-1"><Label>Security deposit (₹)</Label><Input type="number" value={securityDepositAmount} onChange={(e) => setSecurityDepositAmount(e.target.value)} /></div>
-                <div className="space-y-1"><Label>Admin charges (₹)</Label><Input type="number" value={adminChargesAmount} onChange={(e) => setAdminChargesAmount(e.target.value)} /></div>
-                <p className="text-xs text-muted-foreground sm:col-span-2">
-                  Total payable = Security Deposit (refundable market-fee equivalent) + Administrative Charges. The security
-                  deposit is refunded at the exiting check post within 8 hours via Check Post → Security Deposit Refund,
-                  against this receipt.
+                <div className="space-y-1 sm:col-span-2 border-t pt-4">
+                  <Label>Transit (Case E)</Label>
+                </div>
+                <div className="space-y-1">
+                  <Label>Originating state</Label>
+                  <Input value={originatingState} onChange={(e) => setOriginatingState(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label>Destination state</Label>
+                  <Input value={destinationState} onChange={(e) => setDestinationState(e.target.value)} />
+                </div>
+                <p className="text-xs text-muted-foreground sm:col-span-2 rounded-md border bg-muted/40 p-3">
+                  <span className="font-medium text-foreground">Security Deposit (Market Fee)</span> and{" "}
+                  <span className="font-medium text-foreground">Administrative Charges</span> are calculated on the
+                  Commodities step from commodity market fee (capped at ₹{caseECfg.sdCeiling.toLocaleString("en-IN")},
+                  rounded up) plus configured admin charges (₹{caseECfg.adminCharges.toLocaleString("en-IN")}). Refund
+                  of the Security Deposit is available within {caseECfg.validityLabel} at the exit Check Post.
                 </p>
               </>
             )}
@@ -1123,12 +1137,18 @@ export default function MarketTransactionWizard() {
 
       {step === "commodities" && (
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader className="flex flex-row items-center justify-between gap-3 flex-wrap">
             <CardTitle className="flex items-center gap-2">
               <Package className="h-5 w-5" />
               Commodities
             </CardTitle>
-            <Button type="button" size="sm" variant="outline" onClick={() => setLines((p) => [...p, emptyLine()])}>
+            <Button
+              type="button"
+              size="sm"
+              className="bg-[#0D6EFD] hover:bg-[#0b5ed7] text-white"
+              onClick={() => setLines((p) => [...p, emptyLine()])}
+            >
+              <Plus className="h-4 w-4 mr-1" />
               Add line
             </Button>
           </CardHeader>
@@ -1160,7 +1180,14 @@ export default function MarketTransactionWizard() {
                 </div>
                 <div className="flex items-end">
                   {lines.length > 1 && (
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setLines((p) => p.filter((l) => l.key !== line.key))}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="border-[#DC3545] text-[#DC3545] hover:bg-[#DC3545]/10 hover:text-[#DC3545]"
+                      onClick={() => setLines((p) => p.filter((l) => l.key !== line.key))}
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" />
                       Remove
                     </Button>
                   )}
@@ -1175,19 +1202,122 @@ export default function MarketTransactionWizard() {
                 {calculation.fineAmount > 0 && <p>Fine: {formatInr(calculation.fineAmount)}</p>}
                 {meta.usesSecurityDeposit && (
                   <>
-                    <p>Security deposit: {formatInr(calculation.securityDepositAmount)}</p>
-                    <p>Admin charges: {formatInr(calculation.adminChargesAmount)}</p>
+                    <p>
+                      Security Deposit (Market Fee): {formatInr(calculation.securityDepositAmount)}
+                      <span className="text-muted-foreground">
+                        {" "}
+                        (min of market fee {formatInr(calculation.totalMarketFee)} and ceiling ₹
+                        {caseECfg.sdCeiling.toLocaleString("en-IN")}, rounded up)
+                      </span>
+                    </p>
+                    <p>Administrative Charges: {formatInr(calculation.adminChargesAmount)}</p>
                   </>
                 )}
                 <p className="font-semibold">Total payable: {formatInr(calculation.totalPayable)}</p>
               </div>
             )}
+            {meta.usesSecurityDeposit && !calculation && calculateMutation.isPending ? (
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Calculating Security Deposit and Administrative Charges…
+              </p>
+            ) : null}
           </CardContent>
         </Card>
       )}
 
       {step === "payment" && (
         <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Receipt className="h-5 w-5" />
+                Receipt preview
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm space-y-3">
+              {meta.usesSecurityDeposit ? (
+                <>
+                  <div>
+                    <p className="font-semibold text-base">Transit through Goa via Check Post</p>
+                    <p className="text-muted-foreground text-xs mt-0.5">Case E — {meta.title}</p>
+                  </div>
+                  {vehicleNumber.trim() ? (
+                    <p>
+                      <span className="text-muted-foreground">Vehicle No:</span>{" "}
+                      <span className="font-mono font-medium">{vehicleNumber.trim()}</span>
+                    </p>
+                  ) : null}
+                  <div className="space-y-1">
+                    <p className="text-muted-foreground">Revenue head</p>
+                    <p className="font-medium">{CASE_E_SD_ACCOUNTING_HEAD}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-muted-foreground">Commodity details</p>
+                    <ul className="space-y-1">
+                      {(calculation?.lines ?? []).map((l, i) => {
+                        const name = commodityById.get(l.commodityId)?.name ?? l.commodityId;
+                        return (
+                          <li key={i}>
+                            {name}: {l.quantity} {l.unit} @ {formatInr(l.ratePerUnit)} → fee{" "}
+                            {formatInr(l.marketFeeAmount)}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                  <div className="rounded-md border p-3 space-y-1">
+                    <div className="flex justify-between gap-4">
+                      <span>Security Deposit (Market Fee) Payable</span>
+                      <span className="tabular-nums font-medium">
+                        {formatInr(calculation?.securityDepositAmount ?? 0)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <span>Administrative Charges</span>
+                      <span className="tabular-nums font-medium">
+                        {formatInr(calculation?.adminChargesAmount ?? 0)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-4 border-t pt-2 font-semibold">
+                      <span>Total Payable</span>
+                      <span className="tabular-nums">{formatInr(calculation?.totalPayable ?? 0)}</span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Security Deposit is refundable within {caseECfg.validityLabel} at the exit Check Post.
+                    Administrative Charges are non-refundable.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    <span className="text-muted-foreground">Case:</span> {caseType} — {meta.title}
+                  </p>
+                  <p>
+                    <span className="text-muted-foreground">Revenue head:</span>{" "}
+                    {calculation?.receiptRevenueHead ?? meta.receiptSummary}
+                  </p>
+                  {calculation?.lines.map((l, i) => {
+                    const name = commodityById.get(l.commodityId)?.name ?? l.commodityId;
+                    return (
+                      <p key={i}>
+                        {name}: {l.quantity} {l.unit} @ {formatInr(l.ratePerUnit)} → fee{" "}
+                        {formatInr(l.marketFeeAmount)}
+                      </p>
+                    );
+                  })}
+                  {calculation && calculation.fineAmount > 0 ? (
+                    <p>Fine: {formatInr(calculation.fineAmount)}</p>
+                  ) : null}
+                  <div className="border-t pt-2 font-semibold">
+                    Total payable: {formatInr(calculation?.totalPayable ?? 0)}
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -1204,7 +1334,9 @@ export default function MarketTransactionWizard() {
                     <SelectItem value="Cash">Cash</SelectItem>
                     <SelectItem value="Cheque">Cheque</SelectItem>
                     <SelectItem value="Online">Online (UTR)</SelectItem>
-                    <SelectItem value="AdvanceDeposit">Advance deposit</SelectItem>
+                    {!meta.usesSecurityDeposit ? (
+                      <SelectItem value="AdvanceDeposit">Advance deposit</SelectItem>
+                    ) : null}
                   </SelectContent>
                 </Select>
               </div>
@@ -1218,33 +1350,23 @@ export default function MarketTransactionWizard() {
               {paymentMode === "Online" && (
                 <div className="space-y-1"><Label>UTR / reference</Label><Input value={utrNo} onChange={(e) => setUtrNo(e.target.value)} /></div>
               )}
+              <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Paid amount</span>
+                  <span className="font-medium tabular-nums">{formatInr(calculation?.totalPayable ?? 0)}</span>
+                </div>
+                <p className="text-xs text-muted-foreground">Auto-filled from calculated total payable.</p>
+              </div>
               {transactionNo && <p className="text-sm font-mono text-muted-foreground">Txn: {transactionNo}</p>}
               <Button
-                className="w-full"
+                className="w-full bg-[#0D6EFD] hover:bg-[#0b5ed7]"
                 disabled={finalizeMutation.isPending || !calculation}
                 onClick={() => finalizeMutation.mutate()}
               >
-                {finalizeMutation.isPending ? "Submitting…" : `Submit & issue receipt (${formatInr(calculation?.totalPayable ?? 0)})`}
+                {finalizeMutation.isPending
+                  ? "Submitting…"
+                  : `Submit & issue receipt ${formatInr(calculation?.totalPayable ?? 0)}`}
               </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader><CardTitle>Receipt preview</CardTitle></CardHeader>
-            <CardContent className="text-sm space-y-2">
-              <p><span className="text-muted-foreground">Case:</span> {caseType} — {meta.title}</p>
-              <p><span className="text-muted-foreground">Revenue head:</span> {calculation?.receiptRevenueHead ?? meta.receiptSummary}</p>
-              {calculation?.lines.map((l, i) => {
-                const name = commodityById.get(l.commodityId)?.name ?? l.commodityId;
-                return (
-                  <p key={i}>
-                    {name}: {l.quantity} {l.unit} @ {formatInr(l.ratePerUnit)} → fee {formatInr(l.marketFeeAmount)}
-                  </p>
-                );
-              })}
-              <div className="border-t pt-2 font-semibold">
-                Total payable: {formatInr(calculation?.totalPayable ?? 0)}
-              </div>
             </CardContent>
           </Card>
         </div>

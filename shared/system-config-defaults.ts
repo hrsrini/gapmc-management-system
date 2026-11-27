@@ -16,6 +16,14 @@ export const SYSTEM_CONFIG_DEFAULTS = {
   market_fee_advance_min_threshold_inr: "2000",
   msp_rate: "10.00",
   admin_charges: "0.00",
+  /** Case E Check Post: refund validity hours from entry receipt generation (default 6). */
+  case_e_sd_refund_validity_hours: "6",
+  /** Case E Check Post: additional minutes (0–59) on top of hours. */
+  case_e_sd_refund_validity_minutes: "0",
+  /** Case E: upper cut-off (INR) for refundable Security Deposit (Market Fee). */
+  case_e_sd_ceiling: "1000",
+  /** Case E: non-refundable administrative charges (INR). */
+  case_e_admin_charges: "100",
   licence_fee: "300.00",
   /** Legacy rent deposit opening balance migration: records on/before this date (ISO) are treated as migrated baseline (client: 31-Mar-2026). */
   rent_deposit_migration_cutoff: "2026-03-31",
@@ -164,6 +172,10 @@ export const SYSTEM_CONFIG_KEYS: SystemConfigKey[] = [
   "market_fee_advance_min_threshold_inr",
   "msp_rate",
   "admin_charges",
+  "case_e_sd_refund_validity_hours",
+  "case_e_sd_refund_validity_minutes",
+  "case_e_sd_ceiling",
+  "case_e_admin_charges",
   "licence_fee",
   "rent_deposit_migration_cutoff",
   "dak_diary_sequence_scope",
@@ -232,11 +244,15 @@ export const SYSTEM_CONFIG_LABELS: Record<SystemConfigKey, string> = {
   market_fee_advance_min_threshold_inr: "M-04 Advance: low-balance threshold (INR; default 2000)",
   msp_rate: "MSP Rate",
   admin_charges: "Admin Charges",
+  case_e_sd_refund_validity_hours: "Check Post SD (Market Fee): refund validity hours (default 6)",
+  case_e_sd_refund_validity_minutes: "Check Post SD (Market Fee): refund validity minutes 0–59",
+  case_e_sd_ceiling: "Check Post SD (Market Fee): max refundable deposit INR (default 1000)",
+  case_e_admin_charges: "Check Post: Administrative charges INR (non-refundable; default 100)",
   licence_fee: "Licence Fee",
   rent_deposit_migration_cutoff: "Rent deposit migration cut-off (ISO date)",
   dak_diary_sequence_scope: "Dak diary numbering (per_yard only; central disabled per policy)",
   rent_arrears_interest_percent_per_annum:
-    "Rent arrears interest % p.a. (simple; monthly 50%/100% slabs; round once; default 15)",
+    "Rent arrears interest % p.a. (simple; monthly 50%/100% slabs; round up to whole ₹; default 15)",
   rent_tds_annual_threshold_inr: "Rent TDS: annual threshold (INR; monthly rent × 12 vs this)",
   rent_tds_rate_percent: "Rent TDS: % on monthly rent when above threshold + valid PAN",
   rent_invoice_cgst_percent: "M-03 Rent invoice: CGST % on taxable rent (pre-GST base; default 9)",
