@@ -40,7 +40,7 @@ export type MarketTransactionCaseMeta = {
 export const MARKET_TRANSACTION_CASES: Record<MarketTransactionCaseId, MarketTransactionCaseMeta> = {
   A: {
     id: "A",
-    title: "Licensed purchase",
+    title: "Valid License",
     subtitle: "License holder purchase from farmer (local / outside) or trader from outside state",
     receiptSummary: "Market Fee",
     requiresTraderLicence: true,
@@ -57,8 +57,8 @@ export const MARKET_TRANSACTION_CASES: Record<MarketTransactionCaseId, MarketTra
   },
   B: {
     id: "B",
-    title: "Expired licence holder",
-    subtitle: "Expired licence holder — market fee + fine",
+    title: "Expired License",
+    subtitle: "Expired licence — market fee + fine",
     receiptSummary: "Market Fee + Fine",
     requiresTraderLicence: true,
     allowsExpiredLicence: true,
@@ -74,7 +74,7 @@ export const MARKET_TRANSACTION_CASES: Record<MarketTransactionCaseId, MarketTra
   },
   C: {
     id: "C",
-    title: "Unregistered trader",
+    title: "Unregistered Trader",
     subtitle: "Unregistered trader bringing notified commodities into Goa",
     receiptSummary: "Market Fee + Fine",
     requiresTraderLicence: false,
@@ -91,7 +91,7 @@ export const MARKET_TRANSACTION_CASES: Record<MarketTransactionCaseId, MarketTra
   },
   D: {
     id: "D",
-    title: "Trader to trader (within Goa)",
+    title: "Trader to Trader Transaction (Within Goa)",
     subtitle: "Trader purchase within Goa — origin and destination traders",
     receiptSummary: "Market Fee",
     requiresTraderLicence: true,
@@ -108,7 +108,7 @@ export const MARKET_TRANSACTION_CASES: Record<MarketTransactionCaseId, MarketTra
   },
   E: {
     id: "E",
-    title: "Transit through Goa",
+    title: "Agricultural Commodities Transported Through Goa via Checkposts",
     subtitle: "Transit through Goa — security deposit + administrative charges",
     receiptSummary: "Security Deposit + Admin Charges",
     requiresTraderLicence: false,

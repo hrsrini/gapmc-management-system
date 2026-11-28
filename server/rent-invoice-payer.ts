@@ -12,6 +12,55 @@ export type InvoicePayerResolved = {
   payerGstin: string | null;
 };
 
+/**
+ * Track A counterparty for receipts: when the licence was superseded, use the new number.
+ */
+export async function resolveTrackAOperationalPayer(
+  traderLicenceId: string,
+): Promise<InvoicePayerResolved | null> {
+  const traderId = String(traderLicenceId ?? "").trim();
+  if (!traderId) return null;
+  const [lic] = await db
+    .select({
+      id: traderLicences.id,
+      firmName: traderLicences.firmName,
+      gstin: traderLicences.gstin,
+      supersededByLicenceId: traderLicences.supersededByLicenceId,
+    })
+    .from(traderLicences)
+    .where(eq(traderLicences.id, traderId))
+    .limit(1);
+  if (!lic) return null;
+
+  let payerId = lic.id;
+  let payerName = (lic.firmName?.trim() && lic.firmName) || lic.id;
+  let payerGstin = lic.gstin != null ? String(lic.gstin).trim() : "";
+  const newId = String(lic.supersededByLicenceId ?? "").trim();
+  if (newId) {
+    const [neu] = await db
+      .select({
+        id: traderLicences.id,
+        firmName: traderLicences.firmName,
+        gstin: traderLicences.gstin,
+      })
+      .from(traderLicences)
+      .where(eq(traderLicences.id, newId))
+      .limit(1);
+    if (neu) {
+      payerId = neu.id;
+      payerName = (neu.firmName?.trim() && neu.firmName) || payerId;
+      payerGstin = neu.gstin != null ? String(neu.gstin).trim() : "";
+    }
+  }
+  return {
+    payerName,
+    payerType: "TenantLicence",
+    payerRefId: payerId,
+    unifiedEntityId: unifiedEntityIdFromTrackA(payerId),
+    payerGstin: payerGstin || null,
+  };
+}
+
 /** Counterparty naming for receipts / dues from `rent_invoices` (Track A licence id vs Track B unified id). */
 export async function resolveRentInvoiceCounterparty(inv: InferSelectModel<typeof rentInvoices>): Promise<InvoicePayerResolved> {
   const ue = parseUnifiedEntityId(inv.tenantLicenceId);
@@ -38,18 +87,14 @@ export async function resolveRentInvoiceCounterparty(inv: InferSelectModel<typeo
     };
   }
   const traderId = ue?.kind === "TA" ? ue.refId : inv.tenantLicenceId.trim();
-  const [lic] = await db
-    .select({ firmName: traderLicences.firmName, gstin: traderLicences.gstin })
-    .from(traderLicences)
-    .where(eq(traderLicences.id, traderId))
-    .limit(1);
-  const gstin = lic?.gstin != null ? String(lic.gstin).trim() : "";
+  const operational = await resolveTrackAOperationalPayer(traderId);
+  if (operational) return operational;
   return {
-    payerName: (lic?.firmName?.trim() && lic.firmName) || traderId,
+    payerName: traderId,
     payerType: "TenantLicence",
     payerRefId: traderId,
     unifiedEntityId: unifiedEntityIdFromTrackA(traderId),
-    payerGstin: gstin || null,
+    payerGstin: null,
   };
 }
 

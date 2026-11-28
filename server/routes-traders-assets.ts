@@ -5,7 +5,7 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import multer from "multer";
-import { eq, desc, and, inArray, sql, or, ilike, isNotNull, ne, type InferSelectModel } from "drizzle-orm";
+import { eq, desc, and, inArray, sql, or, ilike, isNotNull, isNull, ne, type InferSelectModel } from "drizzle-orm";
 import { db, pool } from "./db";
 import {
   traderLicences,
@@ -91,7 +91,7 @@ import {
   upsertActiveLicenceMappings,
 } from "./trader-licence-location-mappings";
 import { parseUnifiedEntityId, unifiedEntityIdFromTrackA, unifiedEntityIdFromTrackB } from "@shared/unified-entity-id";
-import { resolveRentInvoiceCounterparty } from "./rent-invoice-payer";
+import { resolveRentInvoiceCounterparty, resolveTrackAOperationalPayer } from "./rent-invoice-payer";
 import {
   TRACKB_SUBTYPES,
   normalizeTrackBSubType,
@@ -1137,7 +1137,10 @@ export function registerTradersAssetsRoutes(app: Express) {
       ]);
 
       const list = [
-        ...lics.map((l) => {
+        // Prefer Active new licences; hide superseded olds from operational pickers.
+        ...lics
+          .filter((l) => !l.supersededByLicenceId || String(l.supersededByLicenceId).trim() === "")
+          .map((l) => {
           const publicEntityCode = l.entityPublicCode?.trim() || null;
           return {
             id: `TA:${l.id}`,
@@ -1226,51 +1229,106 @@ export function registerTradersAssetsRoutes(app: Express) {
         if (!lic || !licenceYardAccessible(req, lic.yardId)) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
 
         const { listM03RentInvoiceDuesForTraderLicence } = await import("./m03-rent-invoice-dues");
-        dues.push(...(await listM03RentInvoiceDuesForTraderLicence(tenantLicenceId)));
-
-        // M-04: approved purchase market fee vs linked IOMS receipt (Pending = still due at counter).
-        const purchases = await db
-          .select()
-          .from(purchaseTransactions)
-          .where(and(eq(purchaseTransactions.traderLicenceId, tenantLicenceId), eq(purchaseTransactions.status, "Approved")));
-        const ptIds = purchases.map((p) => p.id).filter(Boolean);
-        const m04Receipts =
-          ptIds.length === 0
-            ? []
-            : await db
-                .select()
-                .from(iomsReceipts)
-                .where(and(eq(iomsReceipts.sourceModule, "M-04"), inArray(iomsReceipts.sourceRecordId, ptIds)));
-        const m04ByPurchaseId: Record<string, InferSelectModel<typeof iomsReceipts>[]> = {};
-        for (const r of m04Receipts) {
-          const sid = String(r.sourceRecordId ?? "");
-          if (!sid) continue;
-          if (!m04ByPurchaseId[sid]) m04ByPurchaseId[sid] = [];
-          m04ByPurchaseId[sid].push(r);
+        const { formatLicenceWithLinkedOldBracket } = await import("./licence-old-new-link");
+        const currentLicenceNo = lic.licenceNo ?? null;
+        const oldLicenceId = String(lic.linkedOldLicenceId ?? "").trim() || null;
+        let oldLicenceNo: string | null = null;
+        if (oldLicenceId) {
+          const [oldLic] = await db
+            .select({ licenceNo: traderLicences.licenceNo })
+            .from(traderLicences)
+            .where(eq(traderLicences.id, oldLicenceId))
+            .limit(1);
+          oldLicenceNo = oldLic?.licenceNo ?? null;
         }
-        for (const pt of purchases) {
-          const fee = Number(pt.marketFeeAmount ?? 0);
-          if (!Number.isFinite(fee) || fee <= 0) continue;
-          const recs = m04ByPurchaseId[pt.id] ?? [];
-          const paidSum = recs
-            .filter((r) => String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled")
-            .reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
-          const outstanding = Math.max(0, fee - paidSum);
-          if (outstanding <= 0) continue;
-          const pending = recs.find((r) => String(r.status ?? "") === "Pending");
-          dues.push({
-            kind: "MarketFeePurchase",
-            purchaseTransactionId: pt.id,
-            transactionNo: pt.transactionNo ?? null,
-            transactionDate: pt.transactionDate,
-            yardId: pt.yardId,
-            commodityId: pt.commodityId,
-            totalAmount: fee,
-            paidAmount: paidSum,
-            outstandingAmount: outstanding,
-            receiptId: pending?.id ?? recs[0]?.id ?? null,
-            receiptStatus: pending ? String(pending.status) : "Pending receipt",
+
+        const annotateOrigin = (
+          rows: Array<Record<string, unknown>>,
+          originLicenceId: string,
+          originLicenceNo: string | null,
+        ) =>
+          rows.map((row) => {
+            const isOldOrigin = Boolean(oldLicenceId && originLicenceId === oldLicenceId);
+            return {
+              ...row,
+              originLicenceId,
+              originLicenceNo,
+              displayLicenceLabel: formatLicenceWithLinkedOldBracket(
+                currentLicenceNo,
+                isOldOrigin ? originLicenceNo : currentLicenceNo,
+              ),
+            };
           });
+
+        const pushMarketFeeDuesForLicence = async (licenceId: string, originLicenceNo: string | null) => {
+          const purchases = await db
+            .select()
+            .from(purchaseTransactions)
+            .where(and(eq(purchaseTransactions.traderLicenceId, licenceId), eq(purchaseTransactions.status, "Approved")));
+          const ptIds = purchases.map((p) => p.id).filter(Boolean);
+          const m04Receipts =
+            ptIds.length === 0
+              ? []
+              : await db
+                  .select()
+                  .from(iomsReceipts)
+                  .where(and(eq(iomsReceipts.sourceModule, "M-04"), inArray(iomsReceipts.sourceRecordId, ptIds)));
+          const m04ByPurchaseId: Record<string, InferSelectModel<typeof iomsReceipts>[]> = {};
+          for (const r of m04Receipts) {
+            const sid = String(r.sourceRecordId ?? "");
+            if (!sid) continue;
+            if (!m04ByPurchaseId[sid]) m04ByPurchaseId[sid] = [];
+            m04ByPurchaseId[sid].push(r);
+          }
+          const rows: Array<Record<string, unknown>> = [];
+          for (const pt of purchases) {
+            const fee = Number(pt.marketFeeAmount ?? 0);
+            if (!Number.isFinite(fee) || fee <= 0) continue;
+            const recs = m04ByPurchaseId[pt.id] ?? [];
+            const paidSum = recs
+              .filter((r) => String(r.status ?? "") === "Paid" || String(r.status ?? "") === "Reconciled")
+              .reduce((s, r) => s + Number(r.totalAmount ?? 0), 0);
+            const outstanding = Math.max(0, fee - paidSum);
+            if (outstanding <= 0) continue;
+            const pending = recs.find((r) => String(r.status ?? "") === "Pending");
+            rows.push({
+              kind: "MarketFeePurchase",
+              purchaseTransactionId: pt.id,
+              transactionNo: pt.transactionNo ?? null,
+              transactionDate: pt.transactionDate,
+              yardId: pt.yardId,
+              commodityId: pt.commodityId,
+              totalAmount: fee,
+              paidAmount: paidSum,
+              outstandingAmount: outstanding,
+              receiptId: pending?.id ?? recs[0]?.id ?? null,
+              receiptStatus: pending ? String(pending.status) : "Pending receipt",
+            });
+          }
+          dues.push(...annotateOrigin(rows, licenceId, originLicenceNo));
+        };
+
+        dues.push(
+          ...annotateOrigin(
+            (await listM03RentInvoiceDuesForTraderLicence(tenantLicenceId)) as unknown as Array<Record<string, unknown>>,
+            tenantLicenceId,
+            currentLicenceNo,
+          ),
+        );
+        await pushMarketFeeDuesForLicence(tenantLicenceId, currentLicenceNo);
+
+        // Carry forward unpaid rent/MF from linked old licence under the new number.
+        if (oldLicenceId) {
+          dues.push(
+            ...annotateOrigin(
+              (await listM03RentInvoiceDuesForTraderLicence(oldLicenceId)) as unknown as Array<
+                Record<string, unknown>
+              >,
+              oldLicenceId,
+              oldLicenceNo,
+            ),
+          );
+          await pushMarketFeeDuesForLicence(oldLicenceId, oldLicenceNo);
         }
       } else if (parsed.kind === "TB") {
         let entityId = parsed.refId;
@@ -1559,17 +1617,21 @@ export function registerTradersAssetsRoutes(app: Express) {
             outstanding,
           });
         }
-        const [licOnlineMkt] = await db
-          .select({ firmName: traderLicences.firmName })
-          .from(traderLicences)
-          .where(eq(traderLicences.id, String(pt.traderLicenceId ?? "")))
-          .limit(1);
+        const mktPayer =
+          (await resolveTrackAOperationalPayer(String(pt.traderLicenceId ?? ""))) ??
+          ({
+            payerName: String(pt.traderLicenceId ?? ""),
+            payerType: "TraderLicence",
+            payerRefId: String(pt.traderLicenceId ?? ""),
+            unifiedEntityId: pt.traderLicenceId ? unifiedEntityIdFromTrackA(String(pt.traderLicenceId)) : "",
+            payerGstin: null,
+          } as const);
         const created = await createIomsReceipt({
           yardId: pt.yardId,
           revenueHead: "MarketFee",
-          payerName: (licOnlineMkt?.firmName?.trim() && licOnlineMkt.firmName) || String(pt.traderLicenceId ?? ""),
+          payerName: mktPayer.payerName,
           payerType: "TraderLicence",
-          payerRefId: String(pt.traderLicenceId ?? ""),
+          payerRefId: mktPayer.payerRefId,
           amount: payAmount,
           cgst: 0,
           sgst: 0,
@@ -1577,7 +1639,7 @@ export function registerTradersAssetsRoutes(app: Express) {
           paymentMode: "Online",
           sourceModule: "M-04",
           sourceRecordId: pt.id,
-          unifiedEntityId: pt.traderLicenceId ? unifiedEntityIdFromTrackA(String(pt.traderLicenceId)) : null,
+          unifiedEntityId: mktPayer.unifiedEntityId || null,
           createdBy,
         });
         return res.status(201).json({ receiptId: created.id, receiptNo: created.receiptNo, kind: "market" });
@@ -1657,6 +1719,15 @@ export function registerTradersAssetsRoutes(app: Express) {
       if (!lic || !licenceYardAccessible(req, lic.yardId)) {
         return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Trader licence not found");
       }
+      const mktPayer =
+        (await resolveTrackAOperationalPayer(String(pt.traderLicenceId))) ??
+        ({
+          payerName: lic.firmName ?? pt.traderLicenceId,
+          payerType: "TraderLicence",
+          payerRefId: pt.traderLicenceId,
+          unifiedEntityId: unifiedEntityIdFromTrackA(pt.traderLicenceId),
+          payerGstin: null,
+        } as const);
 
       const pendingRecs = allRecs.filter((r) => String(r.status ?? "") === "Pending");
       const createdBy = req.user?.id ?? "system";
@@ -1677,6 +1748,10 @@ export function registerTradersAssetsRoutes(app: Express) {
             chequeNo: counterPay.chequeNo,
             bankName: counterPay.bankName,
             chequeDate: counterPay.chequeDateYmd,
+            payerName: mktPayer.payerName,
+            payerType: "TraderLicence",
+            payerRefId: mktPayer.payerRefId,
+            unifiedEntityId: mktPayer.unifiedEntityId,
             ...(counterPay.gatewayRef != null ? { gatewayRef: counterPay.gatewayRef } : {}),
             ...(counterPay.paymentDateYmd ? { createdAt: `${counterPay.paymentDateYmd}T12:00:00.000Z` } : {}),
           })
@@ -1701,13 +1776,13 @@ export function registerTradersAssetsRoutes(app: Express) {
       const created = await createIomsReceipt({
         yardId: pt.yardId,
         revenueHead: "MarketFee",
-        payerName: lic.firmName ?? pt.traderLicenceId,
+        payerName: mktPayer.payerName,
         payerType: "TraderLicence",
-        payerRefId: pt.traderLicenceId,
+        payerRefId: mktPayer.payerRefId,
         amount: payAmount,
         sourceModule: "M-04",
         sourceRecordId: pt.id,
-        unifiedEntityId: unifiedEntityIdFromTrackA(pt.traderLicenceId),
+        unifiedEntityId: mktPayer.unifiedEntityId,
         createdBy,
         ...counterPaymentCreateParams(counterPay),
       });
@@ -2334,6 +2409,11 @@ export function registerTradersAssetsRoutes(app: Express) {
       const lmActive = String(req.query.lmActive ?? "").trim() === "1";
       if (lmLinked) conditions.push(isNotNull(traderLicences.lmSyncedAt));
       if (lmActive) conditions.push(eq(traderLicences.lmIsActive, true));
+      // Old/New License Number Management: hide superseded olds from operational lists/dropdowns/wizard.
+      const includeSuperseded = String(req.query.includeSuperseded ?? "").trim() === "1";
+      if (!includeSuperseded) {
+        conditions.push(isNull(traderLicences.supersededByLicenceId));
+      }
 
       if (paged) {
         const { page, pageSize, q } = parseReportPaging(req);
@@ -2437,7 +2517,7 @@ export function registerTradersAssetsRoutes(app: Express) {
 
   app.get("/api/ioms/traders/licences/:id", async (req, res) => {
     try {
-      const [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, req.params.id)).limit(1);
+      let [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, req.params.id)).limit(1);
       if (!row) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
       const adminOrBypass =
         Boolean(req.user?.roles.some((r) => r.tier === "ADMIN")) ||
@@ -2448,6 +2528,19 @@ export function registerTradersAssetsRoutes(app: Express) {
       await ensureLicenceHomeMapping(row.id, row.yardId, { createdBy: req.user?.id ?? null }).catch((e) => {
         console.error("[licence-map] ensure home mapping failed:", e);
       });
+      const {
+        reconcileLicenceOldNewLinkForLicenceId,
+        getLinkedOldLicenceSummary,
+        getSupersedingLicenceSummary,
+      } = await import("./licence-old-new-link");
+      const linkedChanged = await reconcileLicenceOldNewLinkForLicenceId(row.id).catch((e) => {
+        console.error("[licence-link] reconcile on read failed:", e);
+        return false;
+      });
+      if (linkedChanged) {
+        [row] = await db.select().from(traderLicences).where(eq(traderLicences.id, req.params.id)).limit(1);
+        if (!row) return sendApiError(res, 404, "LICENCE_NOT_FOUND", "Licence not found");
+      }
       const mappedYards = await listMappedYardsForLicence(row.id).catch((e) => {
         console.error("[licence-map] list mapped yards failed:", e);
         return [] as Awaited<ReturnType<typeof listMappedYardsForLicence>>;
@@ -2456,7 +2549,11 @@ export function registerTradersAssetsRoutes(app: Express) {
         console.error("[lm] fetch application profile failed:", e);
         return null;
       });
-      res.json({ ...row, lmProfile, mappedYards });
+      const [linkedOldLicence, supersededByLicence] = await Promise.all([
+        getLinkedOldLicenceSummary(row.id).catch(() => null),
+        getSupersedingLicenceSummary(row.id).catch(() => null),
+      ]);
+      res.json({ ...row, lmProfile, mappedYards, linkedOldLicence, supersededByLicence });
     } catch (e) {
       console.error(e);
       sendApiError(res, 500, "INTERNAL_ERROR", "Failed to fetch licence");

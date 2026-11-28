@@ -9,6 +9,8 @@ export type LmLinkedLicence = {
   commodities?: string[] | null;
   isBlocked?: boolean | null;
   status?: string | null;
+  /** When set, this licence was replaced by a new number — no new transactions. */
+  supersededByLicenceId?: string | null;
 };
 
 export class LmLicenceGuardError extends Error {
@@ -38,6 +40,15 @@ export function assertLmLicenceAllowsOperation(
   opts?: LmLicenceAssertOpts,
 ): void {
   const allowExpired = opts?.allowExpiredHolder === true;
+
+  // Old/New License Number Management: superseded old is never selectable for new ops
+  // (including Case B expired holder once linked to a new licence).
+  if (licence.supersededByLicenceId != null && String(licence.supersededByLicenceId).trim() !== "") {
+    throw new LmLicenceGuardError(
+      "LICENCE_SUPERSEDED",
+      "This licence number has been replaced by a new licence. Use the new licence number for all transactions.",
+    );
+  }
 
   if (!allowExpired && (licence.isBlocked || licence.status === "Blocked")) {
     throw new LmLicenceGuardError("LICENCE_BLOCKED", "Licence is blocked");

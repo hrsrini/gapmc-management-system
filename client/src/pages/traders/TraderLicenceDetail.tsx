@@ -125,6 +125,17 @@ interface Licence {
   lmSyncedAt?: string | null;
   lmProfile?: LmApplicationProfile | null;
   mappedYards?: MappedYard[];
+  linkedOldLicenceId?: string | null;
+  supersededByLicenceId?: string | null;
+  linkedOldLicence?: {
+    id: string;
+    licenceNo: string | null;
+    validTo: string | null;
+    yardId: string;
+    yardName: string | null;
+    status: string | null;
+  } | null;
+  supersededByLicence?: { id: string; licenceNo: string | null } | null;
   createdAt?: string | null;
   updatedAt?: string | null;
 }
@@ -247,6 +258,12 @@ export default function TraderLicenceDetail() {
     queryKey: ["/api/ioms/traders/licences", id],
     enabled: !!id,
   });
+  const historicalMode = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("historical") === "1") return true;
+    return Boolean(licence?.supersededByLicenceId);
+  }, [licence?.supersededByLicenceId]);
   const { data: scopedYards = [] } = useScopedActiveYards();
   const yardOptions = useMemo(() => filterYardTypeLocations(scopedYards), [scopedYards]);
   const activeMappedYards = useMemo(
@@ -320,7 +337,7 @@ export default function TraderLicenceDetail() {
     },
   });
   const licenceCanReceiveAllotment = Boolean(
-    licence && licence.status === "Active" && !licence.isBlocked,
+    licence && !historicalMode && licence.status === "Active" && !licence.isBlocked,
   );
   const { data: stockOpenings = [], isLoading: stockLoading } = useQuery<StockOpeningRow[]>({
     queryKey: ["/api/ioms/traders/licences", id, "stock-openings"],
@@ -644,10 +661,16 @@ export default function TraderLicenceDetail() {
   });
 
   const canRenew = Boolean(
-    !TRADER_LICENCE_CRUD_DISABLED && canUpdateLicence && licenceIssued && licence && !licence.isBlocked,
+    !historicalMode &&
+      !TRADER_LICENCE_CRUD_DISABLED &&
+      canUpdateLicence &&
+      licenceIssued &&
+      licence &&
+      !licence.isBlocked,
   );
   const canEditApplication = Boolean(
-    !TRADER_LICENCE_CRUD_DISABLED &&
+    !historicalMode &&
+      !TRADER_LICENCE_CRUD_DISABLED &&
       canUpdateLicence &&
       licence &&
       !licenceIssued &&
@@ -655,7 +678,8 @@ export default function TraderLicenceDetail() {
       licence.status !== "Rejected",
   );
   const canReturnForQuery = Boolean(
-    !TRADER_LICENCE_CRUD_DISABLED &&
+    !historicalMode &&
+      !TRADER_LICENCE_CRUD_DISABLED &&
       canUpdateLicence &&
       licence &&
       !licenceIssued &&
@@ -666,6 +690,7 @@ export default function TraderLicenceDetail() {
 
   /** Active → Case A; expired (status or validTo) → Case B. Other statuses / non-expiry blocks: no CTA. */
   const marketTxHref = useMemo(() => {
+    if (historicalMode) return null;
     if (!licence || !canCreateMarketTx || !licenceIssued) return null;
     const today = localCalendarYmd();
     const validTo = licence.validTo ? String(licence.validTo).trim().slice(0, 10) : "";
@@ -682,7 +707,7 @@ export default function TraderLicenceDetail() {
     });
     if (licence.yardId) sp.set("entryLocationId", licence.yardId);
     return `/market/transactions/new?${sp.toString()}`;
-  }, [licence, canCreateMarketTx, licenceIssued]);
+  }, [licence, canCreateMarketTx, licenceIssued, historicalMode]);
 
   if (!id) return null;
   if (isLoading || licence === undefined) {
@@ -721,7 +746,7 @@ export default function TraderLicenceDetail() {
               {licence.licenceNo ?? licence.id} — {licence.firmName}
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2">
-              {canReadRent ? (
+              {!historicalMode && canReadRent ? (
                 <Button variant="outline" size="sm" asChild>
                   <Link href={`/rent/ioms/advance-deposits?traderLicenceId=${encodeURIComponent(licence.id)}`}>
                     <Landmark className="h-4 w-4 mr-1" />
@@ -729,7 +754,7 @@ export default function TraderLicenceDetail() {
                   </Link>
                 </Button>
               ) : null}
-              {canReadMarket ? (
+              {!historicalMode && canReadMarket ? (
                 <Button
                   variant="outline"
                   size="sm"
@@ -742,7 +767,7 @@ export default function TraderLicenceDetail() {
                   </Link>
                 </Button>
               ) : null}
-              {canReadMarket ? (
+              {!historicalMode && canReadMarket ? (
                 <Button
                   variant="outline"
                   size="sm"
@@ -755,7 +780,7 @@ export default function TraderLicenceDetail() {
                   </Link>
                 </Button>
               ) : null}
-              {canCreateIomsReceipt ? (
+              {!historicalMode && canCreateIomsReceipt ? (
                 <Button variant="outline" size="sm" asChild>
                   <Link
                     href={`/receipts/ioms/new/consolidated?partyType=Trader&unifiedEntityId=${encodeURIComponent(`TA:${licence.id}`)}${
@@ -780,12 +805,14 @@ export default function TraderLicenceDetail() {
                   </Link>
                 </Button>
               ) : null}
-              <Button variant="outline" size="sm" asChild>
-                <Link href={`/traders/dues?unifiedId=${encodeURIComponent(`TA:${licence.id}`)}`}>
-                  <Wallet className="h-4 w-4 mr-1" />
-                  Outstanding dues
-                </Link>
-              </Button>
+              {!historicalMode ? (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/traders/dues?unifiedId=${encodeURIComponent(`TA:${licence.id}`)}`}>
+                    <Wallet className="h-4 w-4 mr-1" />
+                    Outstanding dues
+                  </Link>
+                </Button>
+              ) : null}
               <Button
                 variant="outline"
                 size="sm"
@@ -797,12 +824,12 @@ export default function TraderLicenceDetail() {
                   Ledger
                 </Link>
               </Button>
-              {canRenew ? (
+              {!historicalMode && canRenew ? (
                 <Button variant="outline" size="sm" onClick={() => setRenewDialogOpen(true)} disabled={renewMutation.isPending}>
                   Renew
                 </Button>
               ) : null}
-              {canEditApplication ? (
+              {!historicalMode && canEditApplication ? (
                 <Button variant="outline" size="sm" asChild>
                   <Link href={`/traders/licences/${licence.id}/edit`}>
                     <Pencil className="h-4 w-4 mr-1" />
@@ -810,7 +837,7 @@ export default function TraderLicenceDetail() {
                   </Link>
                 </Button>
               ) : null}
-              {canReturnForQuery ? (
+              {!historicalMode && canReturnForQuery ? (
                 <Button variant="secondary" size="sm" onClick={() => setQueryDialogOpen(true)}>
                   <MessageSquareWarning className="h-4 w-4 mr-1" />
                   Return for correction
@@ -822,6 +849,59 @@ export default function TraderLicenceDetail() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {historicalMode ? (
+              <Alert className="border-amber-600/40 bg-amber-500/10">
+                <ShieldAlert className="h-4 w-4" />
+                <AlertTitle>Read-only historical licence</AlertTitle>
+                <AlertDescription>
+                  This licence number has been replaced
+                  {licence.supersededByLicence ? (
+                    <>
+                      {" "}
+                      by{" "}
+                      <Link
+                        href={`/traders/licences/${encodeURIComponent(licence.supersededByLicence.id)}`}
+                        className="text-primary font-medium hover:underline"
+                      >
+                        {licence.supersededByLicence.licenceNo?.trim() || "the new licence"}
+                      </Link>
+                    </>
+                  ) : null}
+                  . Use the new licence for transactions.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {licence.linkedOldLicence ? (
+              <div className="rounded-md border border-sky-500/30 bg-sky-500/5 p-4 space-y-2">
+                <p className="text-sm font-medium">Linked Old License No.</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">License No.</span>
+                    <br />
+                    <Link
+                      href={`/traders/licences/${encodeURIComponent(licence.linkedOldLicence.id)}?historical=1`}
+                      className="text-primary font-mono font-medium hover:underline"
+                    >
+                      {licence.linkedOldLicence.licenceNo?.trim() || licence.linkedOldLicence.id}
+                    </Link>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Valid Upto</span>
+                    <br />
+                    {licence.linkedOldLicence.validTo
+                      ? formatYmdToDisplay(String(licence.linkedOldLicence.validTo).slice(0, 10))
+                      : "—"}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Yard</span>
+                    <br />
+                    {licence.linkedOldLicence.yardName?.trim() ||
+                      getYardName(licence.linkedOldLicence.yardId) ||
+                      "—"}
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {TRADER_LICENCE_CRUD_DISABLED ? (
               <Alert>
                 <AlertCircle className="h-4 w-4" />
@@ -1060,7 +1140,7 @@ export default function TraderLicenceDetail() {
           </CardContent>
         </Card>
 
-        {canUpdateLicence && (
+        {!historicalMode && canUpdateLicence && (
           <Card>
             <CardHeader>
               <CardTitle>GST exemption (M-02 / M-03)</CardTitle>
@@ -1108,7 +1188,7 @@ export default function TraderLicenceDetail() {
           </Card>
         )}
 
-        {canUpdateLicence && (
+        {!historicalMode && canUpdateLicence && (
           <Card>
             <CardHeader>
               <CardTitle>Non-GST trader (M-03)</CardTitle>
@@ -1136,7 +1216,7 @@ export default function TraderLicenceDetail() {
           </Card>
         )}
 
-        {canUpdateLicence && (
+        {!historicalMode && canUpdateLicence && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -1260,7 +1340,7 @@ export default function TraderLicenceDetail() {
                       ) : null}
                       <Badge className="ml-2">Active</Badge>
                     </div>
-                    {canUpdateLicence && activeMappedYards.length > 1 ? (
+                    {!historicalMode && canUpdateLicence && activeMappedYards.length > 1 ? (
                       <Button
                         type="button"
                         size="sm"
@@ -1290,7 +1370,7 @@ export default function TraderLicenceDetail() {
                 ))}
               </div>
             ) : null}
-            {canUpdateLicence && addableYards.length > 0 ? (
+            {!historicalMode && canUpdateLicence && addableYards.length > 0 ? (
               <div className="rounded-md border p-3 space-y-2">
                 <p className="text-sm font-medium">Add location mapping</p>
                 <div className="max-h-36 overflow-y-auto space-y-2">

@@ -2,6 +2,7 @@ import { eq, inArray, or } from "drizzle-orm";
 import {
   adHocEntities,
   entities,
+  purchaseTransactions,
   rentInvoices,
   traderLicences,
 } from "@shared/db-schema";
@@ -51,6 +52,8 @@ export type LicenceDisplayMaps = {
       entityPublicCode: string | null;
       provisionalLicenceNo: string | null;
       lmLicenseClass: string | null;
+      linkedOldLicenceId: string | null;
+      supersededByLicenceId: string | null;
     }
   >;
   entityCodeById: Map<string, string | null>;
@@ -141,6 +144,8 @@ export async function loadLicenceDisplayMaps(refs: ReceiptLicenceLookupRefs): Pr
       entityPublicCode: string | null;
       provisionalLicenceNo: string | null;
       lmLicenseClass: string | null;
+      linkedOldLicenceId: string | null;
+      supersededByLicenceId: string | null;
     }
   >();
   const entityCodeById = new Map<string, string | null>();
@@ -155,6 +160,8 @@ export async function loadLicenceDisplayMaps(refs: ReceiptLicenceLookupRefs): Pr
         entityPublicCode: traderLicences.entityPublicCode,
         provisionalLicenceNo: traderLicences.provisionalLicenceNo,
         lmLicenseClass: traderLicences.lmLicenseClass,
+        linkedOldLicenceId: traderLicences.linkedOldLicenceId,
+        supersededByLicenceId: traderLicences.supersededByLicenceId,
       })
       .from(traderLicences)
       .where(inArray(traderLicences.id, traderIds));
@@ -164,7 +171,40 @@ export async function loadLicenceDisplayMaps(refs: ReceiptLicenceLookupRefs): Pr
         entityPublicCode: row.entityPublicCode,
         provisionalLicenceNo: row.provisionalLicenceNo,
         lmLicenseClass: row.lmLicenseClass,
+        linkedOldLicenceId: row.linkedOldLicenceId,
+        supersededByLicenceId: row.supersededByLicenceId,
       });
+    }
+    // Ensure linked old/new rows are available for bracket labels on receipt face.
+    const linkedIds = new Set<string>();
+    for (const row of rows) {
+      if (row.linkedOldLicenceId) linkedIds.add(row.linkedOldLicenceId);
+      if (row.supersededByLicenceId) linkedIds.add(row.supersededByLicenceId);
+    }
+    const missingLinked = Array.from(linkedIds).filter((id) => !traderById.has(id));
+    if (missingLinked.length > 0) {
+      const linkedRows = await db
+        .select({
+          id: traderLicences.id,
+          licenceNo: traderLicences.licenceNo,
+          entityPublicCode: traderLicences.entityPublicCode,
+          provisionalLicenceNo: traderLicences.provisionalLicenceNo,
+          lmLicenseClass: traderLicences.lmLicenseClass,
+          linkedOldLicenceId: traderLicences.linkedOldLicenceId,
+          supersededByLicenceId: traderLicences.supersededByLicenceId,
+        })
+        .from(traderLicences)
+        .where(inArray(traderLicences.id, missingLinked));
+      for (const row of linkedRows) {
+        traderById.set(row.id, {
+          licenceNo: row.licenceNo,
+          entityPublicCode: row.entityPublicCode,
+          provisionalLicenceNo: row.provisionalLicenceNo,
+          lmLicenseClass: row.lmLicenseClass,
+          linkedOldLicenceId: row.linkedOldLicenceId,
+          supersededByLicenceId: row.supersededByLicenceId,
+        });
+      }
     }
   }
 
@@ -197,10 +237,95 @@ export async function loadLicenceDisplayMaps(refs: ReceiptLicenceLookupRefs): Pr
   return { traderById, entityCodeById, adHocCodeById };
 }
 
+type TraderLicenceDisplayRow = {
+  licenceNo: string | null;
+  entityPublicCode: string | null;
+  provisionalLicenceNo: string | null;
+  lmLicenseClass: string | null;
+  linkedOldLicenceId: string | null;
+  supersededByLicenceId: string | null;
+};
+
+function normalizeLicenceClass(raw: string | null | undefined): string {
+  const c = String(raw ?? "").trim().toUpperCase();
+  if (!c) return "";
+  const letter = c.replace(/^CLASS\s*/i, "").replace(/^\//, "").charAt(0);
+  return letter === "A" || letter === "B" || letter === "C" ? letter : "";
+}
+
+function formatLicenceNoWithClass(
+  licenceNo: string | null | undefined,
+  lmLicenseClass: string | null | undefined,
+): string {
+  const lic = String(licenceNo ?? "").trim();
+  if (!lic) return "";
+  const cls = normalizeLicenceClass(lmLicenseClass);
+  return cls && !lic.includes("/") ? `${lic}/${cls}` : lic;
+}
+
+/**
+ * When paying under a new licence for old-origin dues (or vice versa), show
+ * `10282 (9871/A)` on the receipt face.
+ */
+function resolveBracketedLicenceDisplay(
+  refs: ReceiptLicenceLookupRefs,
+  maps: LicenceDisplayMaps,
+): string | null {
+  const traderIds = Array.from(refs.traderIds);
+  if (traderIds.length === 0) return null;
+
+  let primaryId: string | null = null;
+  let primaryRow: TraderLicenceDisplayRow | null = null;
+  for (const id of traderIds) {
+    const row = maps.traderById.get(id);
+    if (!row) continue;
+    // Prefer the operational (new) licence when both are present.
+    if (row.linkedOldLicenceId) {
+      primaryId = id;
+      primaryRow = row;
+      break;
+    }
+    if (!primaryRow) {
+      primaryId = id;
+      primaryRow = row;
+    }
+  }
+  if (!primaryRow || !primaryId) return null;
+
+  const primaryNo = formatLicenceNoWithClass(primaryRow.licenceNo, primaryRow.lmLicenseClass);
+  if (!primaryNo) return null;
+
+  let originNo: string | null = null;
+  if (primaryRow.linkedOldLicenceId) {
+    const old = maps.traderById.get(primaryRow.linkedOldLicenceId);
+    const oldNo = formatLicenceNoWithClass(old?.licenceNo, old?.lmLicenseClass);
+    // Bracket when invoice/origin trader id is the linked old, or old is also in refs.
+    if (oldNo && (refs.traderIds.has(primaryRow.linkedOldLicenceId) || traderIds.some((id) => id !== primaryId))) {
+      originNo = oldNo;
+    }
+  }
+  if (!originNo && primaryRow.supersededByLicenceId) {
+    // Paying under old id while new exists — still prefer new (bracket old).
+    const neu = maps.traderById.get(primaryRow.supersededByLicenceId);
+    const newNo = formatLicenceNoWithClass(neu?.licenceNo, neu?.lmLicenseClass);
+    if (newNo) {
+      return `${newNo} (${primaryNo})`;
+    }
+  }
+
+  if (originNo && originNo !== primaryNo) {
+    return `${primaryNo} (${originNo})`;
+  }
+  return primaryNo;
+}
+
 export function resolveLicenceDisplayFromRefs(
   refs: ReceiptLicenceLookupRefs,
   maps: LicenceDisplayMaps,
 ): string | null {
+  const bracketed = resolveBracketedLicenceDisplay(refs, maps);
+  if (bracketed) return bracketed;
+
   for (const id of refs.traderIds) {
     const row = maps.traderById.get(id);
     if (!row) continue;
@@ -226,25 +351,21 @@ export function resolveLicenceDisplayFromRefs(
   return null;
 }
 
-function normalizeLicenceClass(raw: string | null | undefined): string {
-  const c = String(raw ?? "").trim().toUpperCase();
-  if (!c) return "";
-  const letter = c.replace(/^CLASS\s*/i, "").replace(/^\//, "").charAt(0);
-  return letter === "A" || letter === "B" || letter === "C" ? letter : "";
-}
-
 /** Resolve Licence No. (with /A|/B|/C) or Entity No. for receipt face — omit when absent. */
 export function resolvePartyIdLineFromRefs(
   refs: ReceiptLicenceLookupRefs,
   maps: LicenceDisplayMaps,
 ): ReceiptPartyIdLine | null {
+  const bracketed = resolveBracketedLicenceDisplay(refs, maps);
+  if (bracketed) {
+    return { kind: "licence", label: `Licence No: ${bracketed}` };
+  }
   for (const id of refs.traderIds) {
     const row = maps.traderById.get(id);
     if (!row) continue;
     const lic = String(row.licenceNo ?? "").trim();
     if (lic) {
-      const cls = normalizeLicenceClass(row.lmLicenseClass);
-      const no = cls && !lic.includes("/") ? `${lic}/${cls}` : lic;
+      const no = formatLicenceNoWithClass(row.licenceNo, row.lmLicenseClass);
       return { kind: "licence", label: `Licence No: ${no}` };
     }
     const entityCode = String(row.entityPublicCode ?? row.provisionalLicenceNo ?? "").trim();
@@ -272,7 +393,8 @@ export function resolvePartyIdLineFromRefs(
 
 async function loadRefsAndMapsForReceipt(receipt: ReceiptLicenceFields) {
   const refs = collectReceiptLicenceLookupRefs(receipt);
-  if (String(receipt.sourceModule ?? "").trim() === "M-03" && receipt.sourceRecordId) {
+  const sourceModule = String(receipt.sourceModule ?? "").trim();
+  if (sourceModule === "M-03" && receipt.sourceRecordId) {
     const [inv] = await db
       .select({
         tenantLicenceId: rentInvoices.tenantLicenceId,
@@ -282,6 +404,16 @@ async function loadRefsAndMapsForReceipt(receipt: ReceiptLicenceFields) {
       .where(eq(rentInvoices.id, receipt.sourceRecordId))
       .limit(1);
     if (inv) addInvoiceTenantLicenceRefs(inv.tenantLicenceId, inv.entityId, refs);
+  }
+  // M-04: include origin purchase trader licence so old→new bracket labels work when payer was remapped.
+  if (sourceModule === "M-04" && receipt.sourceRecordId) {
+    const [pt] = await db
+      .select({ traderLicenceId: purchaseTransactions.traderLicenceId })
+      .from(purchaseTransactions)
+      .where(eq(purchaseTransactions.id, receipt.sourceRecordId))
+      .limit(1);
+    const tid = String(pt?.traderLicenceId ?? "").trim();
+    if (tid) refs.traderIds.add(tid);
   }
   const maps = await loadLicenceDisplayMaps(refs);
   return { refs, maps };
@@ -315,6 +447,13 @@ export async function attachReceiptLicenceNos<T extends ReceiptLicenceFields>(
         .map((r) => String(r.sourceRecordId).trim()),
     ),
   );
+  const m04Ids = Array.from(
+    new Set(
+      rows
+        .filter((r) => String(r.sourceModule ?? "").trim() === "M-04" && (r.sourceRecordId ?? "").trim())
+        .map((r) => String(r.sourceRecordId).trim()),
+    ),
+  );
   const invoiceById = new Map<string, { tenantLicenceId: string; entityId: string | null }>();
   if (m03Ids.length > 0) {
     const invRows = await db
@@ -332,12 +471,31 @@ export async function attachReceiptLicenceNos<T extends ReceiptLicenceFields>(
       });
     }
   }
+  const purchaseTraderById = new Map<string, string>();
+  if (m04Ids.length > 0) {
+    const ptRows = await db
+      .select({
+        id: purchaseTransactions.id,
+        traderLicenceId: purchaseTransactions.traderLicenceId,
+      })
+      .from(purchaseTransactions)
+      .where(inArray(purchaseTransactions.id, m04Ids));
+    for (const pt of ptRows) {
+      const tid = String(pt.traderLicenceId ?? "").trim();
+      if (tid) purchaseTraderById.set(pt.id, tid);
+    }
+  }
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (String(row.sourceModule ?? "").trim() === "M-03" && row.sourceRecordId) {
+    const mod = String(row.sourceModule ?? "").trim();
+    if (mod === "M-03" && row.sourceRecordId) {
       const inv = invoiceById.get(String(row.sourceRecordId).trim());
       if (inv) addInvoiceTenantLicenceRefs(inv.tenantLicenceId, inv.entityId, refsByIndex[i]);
+    }
+    if (mod === "M-04" && row.sourceRecordId) {
+      const tid = purchaseTraderById.get(String(row.sourceRecordId).trim());
+      if (tid) refsByIndex[i].traderIds.add(tid);
     }
     mergeReceiptLicenceLookupRefs(merged, refsByIndex[i]);
   }

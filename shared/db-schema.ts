@@ -984,6 +984,16 @@ export const traderLicences = gapmc.table("trader_licences", {
   id: text("id").primaryKey(),
   licenceNo: text("licence_no").unique(),
   parentLicenceId: text("parent_licence_id"),
+  /**
+   * Old/New License Number Management: on the **new** licence, FK to the superseded old
+   * trader_licences.id (shown as Linked Old License No.).
+   */
+  linkedOldLicenceId: text("linked_old_licence_id"),
+  /**
+   * On the **old** licence once replaced: FK to the new trader_licences.id.
+   * When set, the old licence is hidden from operational lists/wizard and blocked for new txns.
+   */
+  supersededByLicenceId: text("superseded_by_licence_id"),
   applicationKind: text("application_kind"), // New | Renewal
   firmName: text("firm_name").notNull(),
   firmType: text("firm_type"),

@@ -68,6 +68,8 @@ interface DueRentInvoice {
   outstandingInterestAmount?: number;
   unpaidInterestLedgerEntryIds?: string[];
   status: string;
+  originLicenceNo?: string | null;
+  displayLicenceLabel?: string | null;
 }
 
 type RentPayMode = "rent_only" | "interest_only" | "combined";
@@ -92,6 +94,8 @@ interface DueMarketFeePurchase {
   outstandingAmount: number;
   receiptId?: string | null;
   receiptStatus?: string | null;
+  originLicenceNo?: string | null;
+  displayLicenceLabel?: string | null;
 }
 
 interface DuesApiResponse {
@@ -106,6 +110,7 @@ interface AssetRef {
 
 const columns: ReportTableColumn[] = [
   { key: "kind", header: "Type", sortField: "kind" },
+  { key: "displayLicenceLabel", header: "Licence" },
   { key: "_ref", header: "Reference" },
   { key: "periodMonth", header: "Period" },
   { key: "assetLabel", header: "Asset" },
@@ -391,6 +396,7 @@ export default function OutstandingDues() {
         return {
           id: `m04:${d.purchaseTransactionId}`,
           kind: "Market fee (M-04)",
+          displayLicenceLabel: d.displayLicenceLabel?.trim() || d.originLicenceNo?.trim() || "—",
           _ref: d.receiptId ? (
             <Link href={`/receipts/ioms/${encodeURIComponent(d.receiptId)}`} className="text-primary hover:underline font-mono text-sm">
               {d.transactionNo ?? d.purchaseTransactionId}
@@ -426,6 +432,7 @@ export default function OutstandingDues() {
         return {
           id: `pre:${d.preReceiptId}`,
           kind: "Pre-receipt",
+          displayLicenceLabel: "—",
           _ref: (
             <Link href={`/traders/pre-receipts/${encodeURIComponent(d.preReceiptId)}`} className="text-primary hover:underline font-mono text-sm">
               {d.preReceiptNo ?? d.preReceiptId}
@@ -444,6 +451,7 @@ export default function OutstandingDues() {
       return {
         id: `inv:${d.invoiceId}`,
         kind: "Rent invoice",
+        displayLicenceLabel: d.displayLicenceLabel?.trim() || d.originLicenceNo?.trim() || "—",
         _ref: (
           <Link href={`/rent/ioms/invoices/${d.invoiceId}`} className="text-primary hover:underline font-mono text-sm">
             {d.invoiceNo ?? d.invoiceId}
@@ -571,7 +579,7 @@ export default function OutstandingDues() {
             <ClientDataGrid
               columns={columns}
               sourceRows={rows}
-              searchKeys={["kind", "periodMonth", "assetLabel"]}
+              searchKeys={["kind", "periodMonth", "assetLabel", "displayLicenceLabel"]}
               searchPlaceholder="Search dues…"
               defaultSortKey="kind"
               defaultSortDir="asc"

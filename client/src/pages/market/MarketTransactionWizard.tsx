@@ -1372,18 +1372,19 @@ export default function MarketTransactionWizard() {
         </div>
       )}
 
-      <div className="mt-6 flex justify-between">
-        <Button
-          variant="outline"
-          disabled={step === "case"}
-          onClick={() => {
-            const prev = STEPS[stepIndex - 1];
-            if (prev) setStep(prev.id);
-          }}
-        >
-          <ArrowLeft className="h-4 w-4 mr-1" />
-          Back
-        </Button>
+      <div className={`mt-6 flex ${step === "case" ? "justify-end" : "justify-between"}`}>
+        {step !== "case" ? (
+          <Button
+            variant="outline"
+            onClick={() => {
+              const prev = STEPS[stepIndex - 1];
+              if (prev) setStep(prev.id);
+            }}
+          >
+            <ArrowLeft className="h-4 w-4 mr-1" />
+            Back
+          </Button>
+        ) : null}
         {step !== "payment" ? (
           <Button
             onClick={async () => {

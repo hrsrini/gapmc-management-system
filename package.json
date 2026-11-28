@@ -79,6 +79,8 @@
     "db:apply-trader-licence-location-mappings": "dotenv -e .env -- tsx scripts/apply-trader-licence-location-mappings.ts",
     "db:apply-premises-security-deposit-refund": "dotenv -e .env -- tsx scripts/apply-premises-security-deposit-refund.ts",
     "db:apply-case-e-sd-expired": "dotenv -e .env -- tsx scripts/apply-case-e-sd-expired.ts",
+    "db:apply-licence-old-new-link": "dotenv -e .env -- tsx scripts/apply-licence-old-new-link.ts",
+    "smoke:licence-old-new-link": "dotenv -e .env -- tsx scripts/smoke-licence-old-new-link.ts",
     "db:apply-users-force-password-change": "dotenv -e .env -- tsx scripts/apply-users-force-password-change.ts",
     "db:apply-m02-pre-receipts": "dotenv -e .env -- tsx scripts/apply-m02-pre-receipts.ts",
     "db:apply-pre-receipt-print-fields": "dotenv -e .env -- tsx scripts/apply-pre-receipt-print-fields.ts",
